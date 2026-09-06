@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788726578614,
+  "lastUpdate": 1788726580680,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "1459b4b094c37b2dd13657b05447d4a342cb6d1b",
-          "message": "Merge pull request #220 from LoveDaisy/feat/strong-randomization-downstream-contracts\n\nfix: strong-randomization downstream contracts (filter/render/consumer)",
-          "timestamp": "2026-07-24T18:21:13+08:00",
-          "tree_id": "418f71e6a27d0ed077d6af076ab0f1ef0f95ab01",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1459b4b094c37b2dd13657b05447d4a342cb6d1b"
-        },
-        "date": 1784888928118,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 87.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "85e12c4e4ae37fe7ffb660b9e22cce0eb96f71c3",
           "message": "Merge pull request #221 from LoveDaisy/feat/core-distribution-cleanup\n\nfeat: crystal shape randomization in GUI + first-class LUMICE_Distribution (BREAKING v4.10)",
           "timestamp": "2026-07-24T20:13:16+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59208e341a7a63e1f22366ec0fbc47211fd93950",
+          "message": "Merge pull request #318 from LoveDaisy/test/e2e-cost-and-oracle-audit\n\ntest(e2e): 按「每个测试为自己的开销举证」审计套件成本，恢复预算余量",
+          "timestamp": "2026-09-07T04:18:31+08:00",
+          "tree_id": "a180e65114ec4dbebe9febd562ebcb9d7dcb6dcd",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/59208e341a7a63e1f22366ec0fbc47211fd93950"
+        },
+        "date": 1788726580118,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 80.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 88.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.1,
             "unit": "%"
           }
         ]
