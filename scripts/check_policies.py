@@ -160,6 +160,11 @@ CXX_SUFFIXES = {".cpp", ".cc", ".hpp", ".h", ".mm", ".inl"}
 # pay it: a THIRD consumer. At that point a name that describes only the first
 # one has stopped being a historical accident and started being misleading, and
 # the rename should be done then rather than re-argued.
+#
+# That same trigger covers a second debt, so the two get settled in one pass
+# rather than being rediscovered separately: the two consumers also carry a
+# duplicated `sorted(SRC.rglob("*"))` + suffix-filter walk. Two inlined copies
+# are cheaper to read than a helper; a third is the point where the helper wins.
 PRINT_SCAN_SUFFIXES = CXX_SUFFIXES | {".cu", ".cuh", ".metal"}
 
 # The only two translation units under src/ allowed to write to a stdio stream.
@@ -1265,6 +1270,13 @@ MSVC_STRING_LITERAL_LIMIT = 16384
 #   - `R"` appearing inside a line comment or inside another string is read as a
 #     literal opener. That direction fails toward a false positive, which someone
 #     investigates; the misses above fail toward green, which nobody does.
+#   - the body is measured after the file has been decoded with
+#     errors="replace", the reading style every scanning check in this file uses.
+#     A byte sequence that is not valid UTF-8 becomes U+FFFD and re-encodes to
+#     three bytes, so a file carrying one would be measured against a count that
+#     is not its size on disk. Left as is rather than special-cased here: the
+#     divergence is shared with the other checks, and pinning it in one of them
+#     would leave the others reading differently from their sibling.
 RAW_STRING_LITERAL = re.compile(r'R"([A-Za-z0-9_]{0,16})\((.*?)\)\1"', re.DOTALL)
 
 

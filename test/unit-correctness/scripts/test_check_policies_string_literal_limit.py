@@ -58,6 +58,27 @@ def _raw(payload: str, delim: str = "glsl") -> str:
     return f'R"{delim}({payload}){delim}"'
 
 
+# --- the boundary value itself ----------------------------------------------
+
+
+def test_limit_constant_is_pinned_to_msvcs_observed_c2026_trigger() -> None:
+    """16384 is inside the net, not just the comparison drawn around it.
+
+    Every other case in this file builds its payload from `LIMIT`, read back out
+    of the module under test, so together they pin the *relative* behaviour of
+    that `<=` and nothing at all about the number it compares against. Change
+    `MSVC_STRING_LITERAL_LIMIT` to 8192, or add a digit to it, and all of them
+    stay green while the gate stops agreeing with MSVC — which is the exact
+    shape of the failure this rule exists to prevent: green CI, and a release
+    that still dies on the Windows leg.
+
+    The 16384 below is written out on purpose and must not be replaced by a
+    reference to the constant. It is the observed C2026 trigger point, the same
+    number recorded in this task's issue and plan.
+    """
+    assert check_policies.MSVC_STRING_LITERAL_LIMIT == 16384
+
+
 # --- must stay red: a literal over the cap ----------------------------------
 
 
@@ -151,11 +172,14 @@ def test_plain_string_literal_is_not_scanned(src_root: Path) -> None:
 def test_distinct_delimiters_do_not_close_each_other(src_root: Path) -> None:
     """The closing marker must match the opening delimiter.
 
-    Without the back-reference, the first `)…"` of any kind ends the literal, and
-    a body that contains one measures short.
+    The body opens with `)b"` — a well-formed closing marker for a *different*
+    delimiter — and only then runs past the cap before its own `)a"` arrives.
+    Drop the back-reference and the non-greedy body stops at that first `)b"`,
+    measuring an empty literal and reporting the file clean, so the oversized
+    body is missed entirely rather than mis-sized.
     """
-    payload = "x" * (LIMIT + 1)
-    body = f'const char* k = R"outer(){payload})outer";\n'
+    payload = ')b"' + "x" * (LIMIT + 1)
+    body = f'const char* k = R"a({payload})a";\n'
     assert len(_violations(src_root, body)) == 1
 
 
