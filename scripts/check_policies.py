@@ -1319,7 +1319,7 @@ def check_msvc_string_literal_limit() -> list[Violation]:
                     "(C2026: string too big, trailing characters truncated). Split it "
                     'into adjacent literals — `)delim"` on one line, `R"delim(` on the '
                     "next — which the compiler concatenates back into the identical "
-                    "bytes. See AGENTS.md.",
+                    "bytes. src/gui/preview_renderer.cpp carries a worked example.",
                 )
             )
     return out
