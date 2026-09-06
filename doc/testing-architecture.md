@@ -1453,3 +1453,42 @@ is: close the upstream ray-count shortfall first, re-measure on a real runner, t
 filter. Widening it is a measurement, not an edit. (`preview_export_parity` costs 0.2s wall on that
 same machine, process start included — it waits for no run — so its own cost never enters this
 question.)
+
+### §7.6 A red against the timeout budget: what to do, and what not to do
+
+The `e2e-test` job's `timeout-minutes: 10` (and `e2e-slow`'s `timeout-minutes: 15`) are **owner-set
+budgets, not hang detectors**. The distinction matters because the two call for opposite responses.
+A hang detector firing means something got stuck — a rerun is a reasonable first move. A budget
+firing means the suite it is timing no longer fits in the time allotted to it, which a rerun cannot
+fix: the suite is still that size on the next run, and rerunning a red without reading why only
+burns CI time to relearn the same fact. The intent of the budget is explicit: it exists to force
+"is this test worth its cost" to be answered when a suite grows, rather than never — see §7.3's
+budget rule for the mechanism that is supposed to ask that question before the timeout is ever hit.
+
+Both jobs' `pytest` invocations carry `--durations=20`, so the disposition rule has a concrete first
+step:
+
+1. **On a timeout red, read that run's `--durations=20` output before doing anything else.** It
+   ranks the slowest cases in the run that just failed, which is the only evidence that can turn
+   "the suite is too slow" into "these specific cases are why."
+2. **Do not rerun as a first response.** A rerun that happens to go green does not tell you the
+   budget has headroom — it tells you this run's noise didn't land on the wrong side of a margin
+   that is already gone. Rerunning without reading the durations is the failure mode this section
+   exists to name and stop.
+3. **Decide what to trim or fix from the ranked list**, using the same cost-vs-value reasoning as
+   §7.3 and the AGENTS.md completeness-claim discipline it points at: a slow case earns its place by
+   the defects it can catch, not by having existed since before the budget was tight.
+4. **Reach for the budget itself last, not first.** Raising `timeout-minutes` on either job is an
+   owner decision, not an implementer's call to make locally — it converts "our suite grew past what
+   we're willing to pay for it" into "we paid more," which is exactly the drift §7.3's opening
+   paragraph describes and the budget was added to stop.
+5. **Rerun only once you can name an external cause** unrelated to suite size or content — a runner
+   provisioning hiccup, a transient network fetch, a flaky shared dependency outside this repo's
+   control — and write down what that cause was. A rerun with no recorded cause is indistinguishable
+   from step 2's forbidden move after the fact.
+
+`nproc` is printed once near the top of the `e2e-test` job's log for the same reason `--durations=20`
+is there: "how many cores this run actually had" is otherwise a number nobody has, which makes any
+claim about the suite being CPU-starved a guess rather than a measurement. It is diagnostic-only —
+printing it does not imply the suite should or should not run under `pytest-xdist`; that is a
+separate, not-yet-made decision.

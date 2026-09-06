@@ -642,7 +642,19 @@ jobs:
         # `-m "not slow"` excludes shared-lib-based tests which require
         # BUILD_SHARED_LIBS=ON and a separate build flavor (see e2e-slow job).
         # Test paths come from pyproject.toml [tool.pytest.ini_options] testpaths.
-        run: pytest -v -m "not slow"
+        # `nproc` records this runner's actual core count once per run, so "how
+        # many cores are idle" is measured instead of inferred (this pytest
+        # invocation has no -n; whether to add one is a separate, not-yet-made
+        # decision). `--durations=20` makes the slowest cases visible in the log —
+        # see the timeout-minutes comment below for why that matters.
+        run: |
+          nproc
+          pytest -v -m "not slow" --durations=20
+        # This is an owner-set BUDGET, not a hang detector (see doc/testing-architecture.md
+        # §7): if the suite cannot fit in 10 minutes, that means the suite is too
+        # large, not that the timeout should grow. On red here, read this step's
+        # --durations=20 output first to decide what to trim or fix — do not just
+        # rerun; see doc/testing-architecture.md §7 for the full disposition rule.
         timeout-minutes: 10
 
   e2e-slow:
@@ -832,14 +844,14 @@ jobs:
               phase1_args="$phase1_args $arg"
             fi
           done
-          pytest $phase1_args -n 3 -v -m slow
+          pytest $phase1_args -n 3 -v -m slow --durations=20
           # Phase 2 — serial + GPU-isolated: the throughput gates run alone so the
           # measured rate is not deflated by concurrent tests. Only legs whose args
           # include test/performance run this (the leg named "parity" lists files
           # explicitly and has no perf tests → skipped). Cheap (~2 gates); no -n
           # on purpose.
           case "${{ matrix.pytest_args }}" in
-            *test/performance*) pytest test/performance -v -m slow ;;
+            *test/performance*) pytest test/performance -v -m slow --durations=20 ;;
           esac
         timeout-minutes: 15
 
