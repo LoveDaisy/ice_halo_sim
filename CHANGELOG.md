@@ -896,6 +896,388 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   were set at all (#131 — an unrelated fix carried on the same branch as the throughput-honesty
   work cited above, not a duplicate reference to it).
 
+## [4.2.8] - 2026-06-01
+
+### Changed
+- **The auto-EV brightness anchor moves from the 99.5th to the 99th percentile, and is now computed
+  on a coarse downsampled grid rather than the full-resolution frame** (#116). On the intentionally
+  sparse `77halo` scene (`ray_num: infinite`), the anchor statistic drifts monotonically with
+  accumulation because the lit-pixel set never saturates — this is an intrinsic property of a
+  percentile taken over an ever-growing lit set, not a bug, and no anchor choice makes it fully
+  stable. The downsampled, lower-percentile anchor is a mitigation, not a fix; ordinary scenes are
+  unaffected in practice (25-scene regression: 22/25 pixel-identical to the prior anchor).
+- **Adaptive Brightness no longer holds onto a filter-independent EV anchor** (#115). The F1
+  anchor lane introduced in 4.2.6 traded multi-scattering throughput for EV stability across
+  filter toggles; beta feedback found the stability rarely mattered while the throughput cost was
+  paid on every multi-scattering render. Brightness is now a straight per-frame P99 of the visible
+  framebuffer, so **the exposure can shift when you toggle a filter** — accepted as the right
+  trade since filter A/B brightness comparison is rare and multi-scattering is common. Filter-fail
+  rays terminate immediately instead of completing a full multi-scattering trajectory, restoring
+  the throughput a filter is supposed to buy: +74% at `ms_prob=0.5` and +114% at `ms_prob=0.8`
+  (multi-worker, filter-on vs filter-off, macOS).
+
+### Added
+- **Entry/Exit filters gain wildcards, multi-value OR, and path-length bounds** (#118). Leaving
+  the entry or exit face blank now means "any face" (previously `0` was indistinguishable from
+  "match face 0"); an entry or exit can match a set of faces (`entry={3,4}, exit={5,6}`); and a
+  filter can additionally require a minimum and/or maximum hit-path length (unbounded / exactly N
+  / at most N / a range). Existing single-value `{"entry": 3, "exit": 5}` configs are unaffected.
+
+### Removed
+- **The unused `norm_mode` config key is dropped** (#116). Its only live branch (`total_pix`) is
+  now unconditional; the other option (`effective_pix`) had never actually been wired up, so no
+  existing config's rendered output changes. A config that still sets `norm_mode` keeps loading —
+  nlohmann JSON ignores unknown keys — the key is just silently ignored from now on.
+
+### ⚠️ Breaking Changes
+- **`LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity` are removed** (#115),
+  shrinking the struct from 64 to 56 bytes on 64-bit platforms. These carried the F1 anchor lane's
+  filter-independent brightness statistic introduced in 4.2.6; there is no replacement field,
+  since the new normalization (above) is computed entirely from the already-published
+  `snapshot_intensity`. **What to do**: recompile against the new header; drop any code that reads
+  `anchor_p995_y` / `anchor_snapshot_intensity`.
+
+## [4.2.7] - 2026-05-28
+
+### Changed
+- **`max_hits` now accepts values up to 64, not just 8** (#110). A raypath filter or a scene that
+  needs to record a longer hit sequence than 8 can now ask for it; the config loader validates the
+  field stays within `[1, 64]`.
+- **The `Front` visibility option becomes an independent checkbox instead of one radio-button
+  choice among Upper/Lower/Full/Front** (#111), so it can be combined with the others (e.g.
+  "Upper + Front"). `RenderConfig::front` and a dedicated shader uniform now drive the clip; a
+  `.lmc`/JSON file with the old `"visible": "front"` value still loads, migrated on read to
+  `visible: full, front: true`.
+- **Clicking anywhere on an entry card's blank area opens its edit modal** (#111), instead of only
+  a specific button; clicking the already-open card's own area is a no-op so it can't discard an
+  in-progress edit.
+
+### Fixed
+- **The GUI preview at high resolution could lag well past one frame per VSync tick** (#113).
+  Uploading the rendered texture to the GPU and computing the P99.5 brightness statistic both ran
+  synchronously on the main thread every frame — at 4096×4096 the texture upload alone moved up to
+  384 MB — together blocking 25-45 ms against a 16 ms budget. The texture upload now goes through
+  an asynchronous double-buffered PBO, and the brightness statistic is computed on the background
+  polling thread instead of the main thread.
+- **A slider drag outside its own valid range could mark the document dirty without changing
+  anything** (#110). The dirty check now compares the slider's actual value instead of trusting
+  ImGui's raw `changed` flag.
+- **Toggling a filter could leave a stale brightness anchor in the live preview, and an
+  all-black frame could fail to display** (#110). The GUI now clears its anchor fields on a filter
+  change and accepts a legitimately zero-intensity frame from the poller instead of dropping it.
+- **A hover tooltip on a multi-part control only responded over its last sub-widget, not the whole
+  control** (#114). Affected sliders that combine a drag control with a text-entry box now show
+  their tooltip anywhere over the combined widget.
+- Several simulator-internal correctness gaps closed alongside the fixes above (#110): a stale
+  "ghost ray" left over from a previous batch could be read on the next one, a resumed ray's
+  `prev_ray_idx` bookkeeping was fragile across chunk boundaries, and one `CollectData` branch was
+  unreachable by any test. None of these had a demonstrated user-visible symptom on their own; they
+  are recorded here because the fix closed gaps an audit found in the exact code path the other
+  fixes in this release also touch.
+
+## [4.2.6] - 2026-05-25
+
+### Added
+- **Linked entries**: two or more entry cards can now explicitly share the same crystal and/or
+  filter definition, so editing one edits every linked sibling (#103). A `Link to...` action enters
+  a pick mode — click another card to bind to it — and a linked group shows a chain-link badge with
+  a shared-highlight while its edit modal is open. `Unlink` forks a linked card back to an
+  independent copy; `Duplicate` always creates an independent copy. `.lmc` files are unaffected —
+  linking is a GUI-session concept that gets flattened to inline values on save.
+- **Zenith/nadir marker overlay**: an optional ring marks straight up and straight down in the
+  preview, at a constant on-screen size regardless of lens type or zoom (#106).
+- **FontAwesome icons replace 12 single-character GUI buttons** (delete, duplicate, panel-toggle,
+  Run/Stop, info, OK/Cancel, and others) that previously fell back to an ASCII glyph like `×` or
+  `(i)` (#102).
+- **New public C API**: `LUMICE_XyzToSrgbUint8`, a batched XYZ-to-sRGB conversion entry point
+  (#101), factored out of an internal GUI helper so a caller no longer has to reimplement the
+  conversion to interpret raw XYZ results.
+
+### Changed
+- **Filter routing reverts to gating ray emission in the simulator, undoing 4.2.5's
+  consumer-side design** (#104). The consumer-side redesign introduced two regressions — a
+  layer with continuation probability 0 could leak rays past it, and a scene with more than one
+  active filter could render completely black — both traced to the same missing (layer, crystal)
+  binding. Reverting is the documented original design; see the new `doc/filter-architecture.md`
+  for the rationale this time, so the constraint doesn't have to be rediscovered again. As a
+  consequence, the "unfiltered" buffer's brief life as a genuinely filter-independent readout (see
+  4.2.5's breaking-change entry) ends here — see the ABI note below.
+- **Adaptive Brightness drops its on/off toggle and always applies** (#105). The dual on/off mode
+  added in 4.2.4 is replaced by one always-on pipeline (degenerating to a plain filtered readout
+  when no filter is active), and its brightness anchor moves from the 99th to the 99.5th
+  percentile with `target_white` changed from 200 to 135 — chosen after comparing 9
+  `(percentile, target)` combinations across 9 scenes for perceptual balance.
+- **A rendered scene exported via `Save → Screenshot` no longer comes out dimmer than what the
+  live preview showed** (#105) — see the Fixed entry below for the actual defect; grouped here
+  because it ships in the same brightness-pipeline rework.
+
+### Fixed
+- **A server process could crash after roughly 31 create/destroy cycles when alternating between
+  three different configs** (#100). Three `LUMICE_Get*Results` C API functions wrote one
+  `LUMICE_*Result` element past the end of the caller's array whenever the result count exactly
+  filled it, corrupting adjacent heap memory; confirmed by ASan as a stack-buffer-overflow and, in
+  production, a SIGSEGV once the heap had shuffled enough for the overwrite to land on a live
+  allocation.
+- **A screenshot exported via `Save` could be noticeably dimmer than the on-screen preview of the
+  same frame** (#105). The export path was missing the auto-EV and anchor/filtered path selection
+  that the live preview already applied; both paths are now built from the same brightness
+  pipeline.
+- **A ray that failed a filter partway through a multi-scattering sequence could still leak into
+  the final rendered image** (#108). The per-ray "failed a filter in an earlier layer" state
+  wasn't tracked across layers, so on a probability-based path continuation such a ray could still
+  land in the main output instead of being routed away from it.
+
+### ⚠️ Breaking Changes
+- **`LUMICE_RawXyzResult`'s `unfiltered_xyz_buffer` / `unfiltered_snapshot_intensity` fields are
+  replaced by `anchor_p995_y` / `anchor_snapshot_intensity`** (#104, #105). 4.2.5 made the
+  "unfiltered" buffer genuinely filter-independent by changing how the simulator routes
+  filter-failed rays; this release reverts that routing (see Changed above), which makes the old
+  "unfiltered" fields meaningless again — they are removed rather than left as dead weight. In
+  their place, an explicit brightness-only anchor (P99.5 over filter-pass + filter-fail
+  combined) drives the GUI's auto-EV so brightness still stays stable when toggling a filter.
+  **What to do**: recompile against the new header; a caller reading the old `unfiltered_*` fields
+  must move to the new `anchor_*` pair, which serves the brightness-stability use case only (it is
+  not a substitute readout of "what would this scene look like with no filter applied").
+- **`LUMICE_ServerConfig` gains a `sim_seed` field, and the `LUMICE_SIM_SEED` environment variable
+  is no longer read** (#109). A non-zero seed now forces single-worker execution for bit-stable
+  results, set through the C API instead of an environment variable. **What to do**: recompile
+  against the new header; a caller (or CI script) that previously relied on `LUMICE_SIM_SEED` for
+  a deterministic run must set `LUMICE_ServerConfig::sim_seed` instead — the environment variable
+  is now silently ignored, not an error.
+
+## [4.2.5] - 2026-05-20
+
+### Fixed
+- **A ray that grazed the shared edge between two faces after a total-internal-reflection off a
+  raypath `[1,3]` face could escape out the far side of the crystal instead of continuing to
+  reflect** (#92). The edge case was indistinguishable from a legitimate "ray floating off its own
+  source face" using the tolerance's sign alone, so fixing one direction of the ambiguity kept
+  reopening the other; resolved by tracking which face a ray actually came from and applying a
+  different tolerance to that face than to every other candidate face.
+- **A scene mixing a raypath filter with multi-scattering could render at roughly 1/6 the ray
+  throughput of an equivalent scene without the filter's `D` symmetry variant** (#98). Matching a
+  filter against a ray mutated shared per-crystal symmetry state on every single ray; filter
+  matching is now a pure, allocation-free comparison against a precomputed canonical form.
+- **A filter using the `D` (180°-roll-independent) symmetry variant against a pyramid crystal could
+  fail to match raypaths it should have** (#98), because the reflection it relies on was skipped
+  on pyramid (cone) faces.
+- **Two raypaths that are genuinely the same up to symmetry could reduce to two different
+  canonical forms** (#98) when reduction crossed a `D`-symmetry step, breaking the invariant that
+  the same orbit always reduces to the same representative.
+- **The Pyramid Upper/Lower Height slider rows were about 20px narrower than the Height row above
+  them** (#97), from a leftover width-adjustment term in the slider layout formula.
+
+### Changed
+- **A scattering entry's own filter is now also used to gate the simulator's live "unfiltered"
+  readout** (#93), so `LUMICE_RawXyzResult::unfiltered_xyz_buffer` genuinely reflects the full,
+  pre-filter ray set its documentation always claimed rather than the filtered set under a
+  different name. See the breaking-change note below for the display-side consequence, since this
+  entry is superseded by 4.2.6's revert.
+- **The crystal-card slider labeled `prop.` is now labeled `Weight`** (#99), and the Adaptive
+  Brightness panel's `Target` slider is removed — its value stayed at the default in practice, and
+  user feedback found it added a control without a useful range to tune.
+- **The raypath filter text field accepts up to 4096 characters, not 256** (#97), so a filter
+  OR-combining dozens of long raypaths no longer gets silently truncated at the input box.
+- **The Pyramid Upper/Lower Height preset combo shows three decimal places, not one** (#97), e.g.
+  `28.000°` instead of `28.0°`.
+
+### ⚠️ Breaking Changes
+- **A scene combining multi-scattering with a `scattering.entries[].filter` renders its "OFF-mode"
+  live-preview brightness from the unfiltered ray set instead of the filtered one** (#93), matching
+  the same anchor the auto-EV path already used. Most scenes are visually unaffected, but a scene
+  whose filter passes only a small fraction of rays (measured example: a `raypath=[4,6]` filter at
+  a ~0.1% pass rate) can darken by roughly 10 stops compared to 4.2.4. **What to do**: if a scene
+  looks unexpectedly dark after upgrading and uses a low-pass-rate filter, adjust EV manually; no
+  config change is needed to restore the old look, since 4.2.6 reverts this routing again.
+- **`LUMICE_CrystalMesh` gains 5 per-face fields** (`face_count`, `face_numbers_by_face`,
+  `face_vtx_offsets`, `face_vtx_counts`, `face_vtx_pool`) and two new `LUMICE_MAX_CRYSTAL_FACES` /
+  `LUMICE_MAX_CRYSTAL_VTXPOOL` constants (#95), letting a consumer read a crystal's faces (each as
+  a CCW-ordered vertex loop) directly instead of re-deriving them from the raw triangle soup.
+  **What to do**: recompile against the new header; a caller that doesn't read the new fields is
+  unaffected (`face_count == 0` is the old shape).
+
+## [4.2.4] - 2026-05-14
+
+### Added
+- **Adaptive Brightness (auto-EV)**: the GUI can automatically choose exposure from a P99
+  brightness anchor over the rendered frame, on by default, with a manual on/off toggle
+  (#89). When a filter is active, brightness is anchored against the unfiltered ray set so
+  toggling a filter on and off doesn't itself change perceived brightness — the dedicated
+  "unfiltered" C API fields this depends on ship in this release (see below).
+
+### Changed
+- **Raypath symmetry matching is redesigned for correctness**: the `D` (roll-mirror) filter
+  operator now uses a closed-form roll-bucket calculation instead of an approximate scheme, and a
+  GUI tooltip explains when `D` isn't applicable to the current crystal (#88).
+
+### Fixed
+- **The `B` (mirror) filter symmetry operator did not correctly swap pyramid faces** (#88), so a
+  filter relying on `B` symmetry against a pyramid crystal could match the wrong raypaths.
+- **Sampling a crystal orientation near the poles with a negative-mean Rayleigh (or a mean below
+  the equator) distribution could fold into the wrong hemisphere or the wrong azimuth** (#88), a
+  latent bug in the same routine that couples roll to latitude-folding.
+
+### ⚠️ Breaking Changes
+- **`LUMICE_RawXyzResult` gains `unfiltered_xyz_buffer` and `unfiltered_snapshot_intensity`
+  fields** (#89), the readout Adaptive Brightness's filter-independent anchor (above) is built on.
+  **What to do**: recompile against the new header; a caller that never uses Adaptive Brightness is
+  unaffected.
+- **New public C API**: `LUMICE_MAX_ID`, `LUMICE_CrystalKind` + `LUMICE_IsLegalFace`,
+  `LUMICE_RaypathValidationState` + `LUMICE_ValidateRaypathText`, `LUMICE_LensType` +
+  `LUMICE_MaxFov`, and a new `LUMICE_ERR_UNKNOWN` error code (#90) — pure additions, factored out
+  of internal GUI logic so it no longer needs to reach past the C API into core headers.
+  **What to do**: recompile against the new header; nothing else changes for an existing caller.
+
+## [4.2.3] - 2026-05-07
+
+### Added
+- **Globe lens**: a new full-sky projection with trackball-style drag to look around, azimuth wrap,
+  and overlay labels that respect back-hemisphere depth culling (#83).
+- **The filter editor splits into a dedicated subpanel per filter type** (Raypath / Entry-Exit /
+  Direction / Crystal) instead of one shared text buffer, so switching a filter's type no longer
+  discards values already entered for another type (#85). `.lmc` files gain a v2 track for the new
+  shape; existing v1 files still load.
+- **Overlay Line and Label are independent toggles per overlay** (Horizon / Grid / Angular
+  Distance), instead of one combined on/off switch, so you can show lines without labels or vice
+  versa (#82). "Sun Circles" is renamed "Angular Distance" in the UI (the underlying config key is
+  unchanged). A `.lmc` with the old combined key still loads, turning both Line and Label on.
+- **The entry card whose edit modal is currently open is visibly highlighted** (#84), so with
+  several cards open in sequence it's clear which one the modal belongs to.
+
+### Changed
+- **The View panel is regrouped into Lens / Visibility / Pose sections** (#86), and the
+  Visible selector becomes a row of checkboxes instead of a combo box; `Front` is disabled while
+  the Globe lens is active (Globe has no front/back distinction), and every visibility control is
+  disabled in Full-Sky mode.
+- **Switching between the Globe lens and any other lens keeps the camera pointed at the same real
+  direction** instead of jumping (#86): crossing the boundary applies a self-inverse
+  azimuth/elevation transform, with elevation clamped to ±89° on entering Globe to avoid a
+  degenerate view matrix.
+- **A combo box opened from inside a detached Edit Entry modal now renders above the modal**
+  instead of behind it (#81), a z-order gap specific to a modal dragged into its own OS window.
+- **The Visibility row lays out its four options on one horizontal line** instead of a 2×2 grid
+  (#87), and the Entry-Exit filter subpanel's field styling (validation coloring, labels, a
+  Remove Filter button) is aligned with the Raypath subpanel's.
+
+### Fixed
+- **The Entry-Exit filter's crystal-card summary showed `?` instead of an arrow** (`EE:2?5`
+  instead of `EE:2->5`) (#87). The bundled font has no glyph for `→` (U+2192); replaced with the
+  ASCII `->`.
+
+### Removed
+- **The Direction filter type is removed from the GUI's filter-type selector** (#87). The core
+  JSON path is unchanged — a hand-written `"type": "direction"` filter still loads and behaves the
+  same — but the GUI editor no longer offers it, and an existing `.lmc` containing one degrades to
+  an empty Raypath filter with a warning when reopened.
+
+## [4.2.2] - 2026-04-29
+
+### Added
+- **Orthographic lens projection** (#75): a new lens type alongside the existing fisheye/linear
+  family, wired through the core projection math, server dispatch, and GUI shader branch.
+- **The edit modal's Crystal/Axis/Filter tabs can switch between a horizontal and a vertical
+  layout** (#75), persisted per-document in `.lmc`.
+- **The Edit Entry modal can be dragged out into its own OS window** (#75), via ImGui multi-viewport
+  support; the previous docked-in-main-window behavior is unchanged when it isn't detached.
+- **A too-small window now shows an inline warning when a fixed aspect-ratio preset can't be
+  honored** (#79), instead of silently clamping to a different ratio than the one selected.
+- **Overlay labels gain an interior placement for wide-FOV, non-linear lenses** (#79): a
+  `fov=180` fisheye/rectangular/etc. scene now still shows latitude labels even where the
+  projected sky disc is smaller than the viewport.
+
+### Changed
+- **Crystal orientation follows the "HaloRay v1" rotation convention** instead of this project's
+  previous ad hoc chain (#76). The rotation chain becomes `Rz(azimuth − 180°) · Ry(−zenith) ·
+  Rz(roll)`, chosen so preset poses (e.g. Plate's default face-up, Parry's default column axis)
+  match the convention used by the HaloRay reference tool; the modal preview's Reset View and the
+  entry-card thumbnail now derive from one shared default-view formula instead of two.
+  `doc/coordinate-convention.md` documents the frame, the convention, and the `azimuth − 180°`
+  offset. See the breaking-change note below — **this changes what an existing config's
+  `crystal.axis.{zenith, azimuth, roll}` values produce**.
+- **The modal preview's trackball drag rotates the crystal in world coordinates** (#76), so a
+  horizontal drag always reads as a horizontal rotation regardless of the crystal's current pose,
+  matching the behavior of dragging in real space rather than in the crystal's local frame.
+- **Overlay labels stay anchored to the main viewport when the window is resized or moved** (#78),
+  instead of drifting relative to it.
+
+### ⚠️ Breaking Changes
+- **A crystal orientation config (`crystal.axis.zenith` / `azimuth` / `roll`) can render at a
+  different pose than before**, because the rotation convention itself changed (#76, see Changed
+  above). There is no simple per-field conversion — the chain's structure changed, not just an
+  offset on one axis — so **what to do**: after upgrading, re-check any saved orientation against
+  the new convention documented in `doc/coordinate-convention.md`, or re-pose visually in the GUI
+  and re-save. A distribution that samples azimuth and roll uniformly over the full circle (the
+  common case) renders statistically unchanged.
+
+## [4.2.1] - 2026-04-23
+
+### Added
+- **Crystal face numbers can be overlaid directly on the 3D preview mesh** while rotating a crystal
+  in the edit modal (#73), using the same numbering as raypath filters (basal 1/2, prism 3-8,
+  pyramidal 13-18/23-28), and hidden on faces pointed away from the camera.
+- **The Edit Entry modal can be popped out of the main window in Immediate mode** (#72, #73):
+  outside clicks pass through to the app underneath, and only an explicit close action dismisses
+  it, unlike a normal staged modal.
+
+### Changed
+- **The Crystal/Axis/Filter edit modal keeps a live 3D crystal preview visible next to whichever
+  tab is open** (#73), instead of the preview only appearing on the Crystal tab; the modal is
+  clamped to stay fully on-screen across multiple monitors.
+- **Every export path (Dual Fisheye, Equirectangular, `.lmc`/PNG/JSON `Save`) now renders through
+  one shared off-screen pipeline** (#72), replacing several separate ad hoc pixel-readback
+  implementations; the `Save` menu's `Panorama` option is renamed `Dual Fisheye Equal Area` and
+  gains a new `Equirectangular` choice, with `Include Texture` / `Include Overlay` checkboxes.
+- **Overlay labels no longer render behind an open modal** (#72): they now draw on the window's own
+  draw list instead of a layer a modal could occlude.
+- **The Face Distance and Pyramid Upper/Lower Height sliders cover a wider, purely linear range**
+  — `[0, 2]` and `[0, 1]` respectively (#73) — replacing a narrower, non-linear scale.
+- **Background panels no longer steal keyboard/mouse focus order from an open Edit modal** (#73).
+- **Removing a filter is simplified to clearing its text field** (#74): the previous multi-step
+  "pending removal" flow (with its own Undo state) is replaced by one rule — an empty raypath
+  field means no filter.
+- **A half-typed or invalid raypath can no longer be committed while editing in Immediate mode**
+  (#74): the commit path now rejects anything that isn't a fully valid raypath expression before
+  writing it into the model, instead of writing through on every keystroke and blanking the render.
+
+### Fixed
+- **Closing the detached (Immediate-mode) Edit Entry modal via ×, the Close button, or Esc could
+  leave an empty title bar behind** on screen (#74).
+- **"Reset All" on a Crystal only restored some of its shape parameters, not all of them** (#74).
+
+## [4.2.0] - 2026-04-19
+
+### Added
+- **Front-hemisphere visibility mode**: the visible-hemisphere selector gains a `Front` option
+  that clips the rear hemisphere in fisheye projections (#67), with `.lmc` serialization and
+  overlay-label support.
+- **The raypath filter text field validates as you type**, showing a three-state (valid /
+  incomplete / invalid) colored background instead of silently accepting arbitrary text (#67).
+- **The Pyramid crystal's height slider can reach exactly zero** (#67): a new mapping is linear
+  near zero and logarithmic for larger values, replacing a purely logarithmic scale that couldn't
+  represent zero.
+- **The filter editor rejects a face number that doesn't exist on the selected crystal kind**
+  (#69) — e.g. entering prism face `13` now shows an inline, crystal-specific error instead of
+  silently accepting it.
+
+### Changed
+- **The left and right panels are reorganized around collapsible layers of entry cards** (#68,
+  #71). Crystal/Scene/Filter used to be separate tabs referencing crystals and filters by ID;
+  entries are now cards (thumbnail, type, pose, filter, proportion) grouped into collapsible
+  layers, edited through Crystal (with a live 3D preview), Axis, and Filter modals that are later
+  unified into one tabbed dialog. Existing `.lmc` files still load; the underlying core JSON
+  format is unchanged.
+- **The EV slider's range widens from [-3, +7] to [-6, +6]** (#71).
+- **The multi-scattering layer probability slider is disabled, with an explanatory tooltip, when
+  only one layer exists** (#71), instead of accepting a value that has no effect.
+- **An edit-modal tab with unsaved changes shows a trailing `*`** (#71), so which tab has pending
+  edits is visible at a glance.
+
+### ⚠️ Breaking Changes
+- **The default ray count for a newly created GUI document changes from 1M to 5M** (#67). A config
+  file that already sets `ray_num` (or an existing `.lmc`) is unaffected — this only changes what a
+  brand-new document starts with. **What to do**: nothing, unless you rely on the previous 1M
+  starting point when creating a new document from scratch; set it explicitly after creating one.
+
 ## [4.1.3] - 2026-03-17
 
 ### Fixed
