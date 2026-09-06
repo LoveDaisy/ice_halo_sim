@@ -260,7 +260,10 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   was already not describing what you meant — the missing key is named in the message; add it.
   Colour-class `z_order` is now kept compact at the source, so a class dropped for a missing colour
   no longer leaves a hole in the ordering.
-- **Exporting over an existing config file asks first** (#265). Export used to overwrite silently.
+- **Exporting over an existing config file asks first** (#265). Export used to overwrite silently;
+  it now names the file and waits for a confirmation.
+  **What to do**: nothing, unless you script the GUI's export — an unattended run that relied on
+  the silent overwrite will now stop at the prompt.
 
 ### Fixed
 - **A full-sphere render ignored the crystal's roll** (#278). The full-sphere fast path took a
@@ -449,6 +452,8 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   per batch — but remains non-comparable across backends (CPU samples per ray-group, the GPU
   K-shape clock is off by default). See `doc/c_api.md` and the contract block on
   `TraceBackend::GetLastBatchStochasticCrystalSampleCount`.
+  **What to do**: nothing in code — the field name and type are unchanged. Do not compare a
+  `crystals=N` recorded before this release with one recorded after; they count different things.
 
 ## [4.4.0] - 2026-07-25
 
@@ -510,6 +515,10 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   LUMICE_CrystalMesh*)` — it builds the mesh from the parameters you already hold, with no server
   and no round trip through JSON, and takes a seed so a randomized crystal's mesh is reproducible.
   A crystal the geometry gate rejects yields an empty but valid mesh rather than an error.
+  **What to do**: drop the server argument, pass the `LUMICE_CrystalParam` you already built
+  instead of serialising it, and pass a seed (any fixed value reproduces one draw). Callers that
+  only had the JSON must parse it into a `LUMICE_CrystalParam` themselves, or go through
+  `LUMICE_SceneFromJson` — see the v4.4.1 entry.
 
 ### Fixed
 - **A randomized `face_distance` could crash the simulator** (#206). Vertex merging used a fixed
