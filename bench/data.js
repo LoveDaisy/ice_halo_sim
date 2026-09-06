@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788708808706,
+  "lastUpdate": 1788708811005,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "c527f60f46b67a4c4bb8bab34f73281efb072b65",
-          "message": "Merge pull request #218 from LoveDaisy/feat/cuda-degenerate-geometry-parity\n\nfeat(cuda): degenerate K-shape pool parity + crystal-count assertion (scrum-392)",
-          "timestamp": "2026-07-23T12:17:55+08:00",
-          "tree_id": "0127101471b6d7dd59e5faea4bc8329d73e60df3",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c527f60f46b67a4c4bb8bab34f73281efb072b65"
-        },
-        "date": 1784780746105,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 77.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.6,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "86b954890e231d91593eefe4a83ec335fe440227",
           "message": "Merge pull request #219 from LoveDaisy/feat/crystal-consumption-detriangulation\n\nfeat(core): detriangulate crystal consumption — polygon-granularity incidence sampling, remove triangle mesh from hot path",
           "timestamp": "2026-07-24T08:25:14+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c04ad137d42e4a3ed51cd137b75d2d97092b7864",
+          "message": "Merge pull request #316 from LoveDaisy/fix/msvc-string-literal-limit\n\nfix(gui,ci): 拆开超 MSVC 上限的 shader 字面量 + 立静态门禁 + CI 触发去重",
+          "timestamp": "2026-09-06T23:22:44+08:00",
+          "tree_id": "6cd1e5d94251d724205eb0763696031080e86c9d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c04ad137d42e4a3ed51cd137b75d2d97092b7864"
+        },
+        "date": 1788708810363,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 91.6,
             "unit": "%"
           }
         ]
