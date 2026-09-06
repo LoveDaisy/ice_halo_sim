@@ -1,6 +1,7 @@
 """Smoke tests for Lumice — run all configs and verify outputs."""
 
 import glob
+import json
 import os
 from pathlib import Path
 
@@ -121,11 +122,12 @@ def _discover_configs():
     The smoke leg runs on the fast (`-m "not slow"`) CI path with a 10-minute step
     budget. test/e2e/configs/ also holds heavy gate fixtures added for the Metal
     parity/throughput suites (ms3_*, ms_multi_crystal_complex_filter, parity_*, etc.)
-    at 2-5M rays — and since task-268.7 the CPU/CLI route is single-worker (~12x
-    slower), running those here blows the budget (the smoke leg timed out on
-    ms3_mixed_pyramid_heavy). Those fixtures are validated by their own dedicated
-    tests (test_metal_*, test_raypath_*, test_ms_filter_leak, test_cpu_backend_route),
-    so the smoke test scopes to the showcase configs — identified by having a
+    at 2-5M rays. Running those here would buy no coverage that is not already
+    bought: each is validated by the dedicated test it was added for (test_metal_*,
+    test_raypath_*, test_ms_filter_leak, test_cpu_backend_route), so a second run
+    under this discovery would be repeat coverage charged against the budget — and
+    the smoke leg has in fact timed out on one of them (ms3_mixed_pyramid_heavy).
+    The smoke test therefore scopes to the showcase configs — identified by having a
     reference image under references/ (exactly the PSNR_THRESHOLDS set).
     """
     return sorted(
@@ -187,6 +189,16 @@ class TestSmoke(LumiceTestCase):
         cfg = CONFIGS_DIR / "halo_22.json"
         if not cfg.exists():
             self.skipTest("halo_22.json not found")
+
+        # Both oracles below are substring matches on stdout, so neither one's
+        # verdict moves with the ray budget; the shipped 10M-ray count is paid
+        # for nothing here. Cut it to 20k, leaving the rest of the scene alone.
+        # The per-config PSNR tests above are the ones that need a real budget
+        # and keep it.
+        doc = json.loads(cfg.read_text())
+        doc["scene"]["ray_num"] = 20000
+        cfg = Path(self.output_dir) / "halo_22_cheap.json"
+        cfg.write_text(json.dumps(doc))
 
         result = self.run_lumice(
             ["-f", str(cfg), "-o", self.output_dir]

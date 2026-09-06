@@ -25,7 +25,11 @@ struct MsInfo {
 };
 
 struct SceneConfig {
-  size_t ray_num_;  // For every single wavelength.
+  // Total rays across the whole spectrum, not per wavelength: ServerImpl::GenerateScene
+  // derives the per-wavelength budget from this with PerWavelengthRayNum (ceil(total/n_wl),
+  // see server/ray_num_semantics.hpp). kInfSize is the "run until stopped" sentinel and is
+  // passed through undivided.
+  size_t ray_num_;
   size_t max_hits_;
   // GPU K-shape pool clock (0 = disabled/opt-in default). Affects Metal/CUDA GPU
   // backends only; CPU-legacy uses its own LUMICE_GEOM_CLOCK. Unlike ray_num_ /
