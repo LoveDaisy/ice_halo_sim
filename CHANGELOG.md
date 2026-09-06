@@ -1275,6 +1275,305 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   already sets `ray_num`, and any existing `.lmc`, is unaffected — only the starting point for a
   document created from scratch moves.
 
+## [4.1.14] - 2026-04-09
+
+### Added
+- **Pyramid crystals take a continuous wedge angle (0.1°–89.9°) instead of only discrete
+  Miller-index presets**, with a sqrt-scale GUI slider plus a Miller-index preset dropdown for the
+  old values; the prism-segment height slider can now reach exactly zero for a pure-cone crystal
+  (#53). A JSON config with the old `upper_indices`/`lower_indices` keys still loads unchanged.
+- **Auxiliary overlay lines**: horizon, altitude/azimuth grid, and sun angular-distance circles,
+  each with configurable color and opacity, laid out in a new collapsible right panel that
+  separates display options (View/Display/Overlay) from the config panels (#54, #55).
+- **Angle labels appear where an overlay line crosses the viewport edge or a hemisphere
+  boundary**, with collision avoidance between labels (#55).
+- **The toolbar gains a ray-count input, an Infinite toggle, and double-click renaming for
+  crystals and filters** (#58).
+- **`RenderConfig::overlap` becomes a real config field** (default `0.0`) instead of a
+  hardcoded GUI-only constant, so the CLI still produces exact hemispheres while the GUI's
+  equator-blend overlap is explicit and threaded through the C API and JSON (#60).
+- **A legacy Gaussian axis distribution** (`kGaussianLegacy`, without the Jacobian correction
+  from 4.1.13) is available for reproducing simulation results from before that correction (#61).
+- **Config crystal/filter/scattering-entry limits raise from 16 to 256** (#62).
+
+### Changed
+- **Face-distance labels in the GUI now match the crystal's internal face numbering** (3–8
+  instead of 1–6) (#58).
+- **Run/Stop toolbar buttons are colored green/red**, and the toolbar layout no longer jumps
+  between simulation states (#58).
+- **Left and right panel layouts are reorganized**: the sun-azimuth control is hidden, axis
+  distribution controls move into a collapsible Advanced group, the crystal preview stays fixed
+  at the bottom of the left panel with independently scrolling parameters, and combo/slider
+  controls align consistently across the right panel's tabs (#56).
+
+### Fixed
+- **Overlay labels could false-positively cluster near near-tangent sun circles**: the
+  crossing-detection epsilon tightens from 0.1 to 0.01, while still catching real fisheye
+  disc-edge crossings (#56).
+- **Ray allocation could starve a low-proportion crystal indefinitely**: a per-scalar rounding
+  scheme could leave a crystal with a small proportion (e.g. 0.5%) without a single ray for many
+  batches; allocation now carries a per-crystal remainder so every crystal gets rays within a
+  couple of batches (#62).
+- **A config with more than 16 scattering entries (or crystals, or filters) was silently
+  truncated in the GUI** (#62) — see the config-limit increase above.
+- **Deterministic ray allocation across crystals could occasionally miss the exact requested
+  total, or leave a crystal with zero rays**, from rounding in a single-scalar Bresenham scheme;
+  replaced with a cumulative-rounding scheme that guarantees an exact total (#59).
+- **A filter change could leave a stale rendered frame on screen even though the new filter
+  produced no results** (#59).
+- **The GUI could show a false "no data produced" warning on startup**, from a stats buffer that
+  was one element too small (#59).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_CrystalParam.upper_indices[3]`/`lower_indices[3]` (integer Miller indices) are
+  replaced with `upper_wedge_angle`/`lower_wedge_angle` (float degrees)** (#53). A Miller index
+  like `{1,0,-1,1}` corresponds to a wedge angle of 28.0°; the GUI's preset dropdown performs this
+  conversion for the common indices. **What to do**: recompile against the new header and set the
+  wedge-angle fields instead; a JSON config file is unaffected — the loader still accepts the old
+  `upper_indices`/`lower_indices` keys.
+- **`LUMICE_RenderParam` gains an `overlap` field** (#60), the dual-fisheye equator-blend
+  threshold. **What to do**: recompile against the new header; a caller that doesn't set it gets
+  `0.0` (no overlap), matching the previous CLI behavior.
+- **`LUMICE_MAX_CONFIG_CRYSTALS`, `LUMICE_MAX_CONFIG_FILTERS`, and
+  `LUMICE_MAX_CONFIG_SCATTER_ENTRIES` raise from 16 to 256** (#62), substantially growing the
+  in-memory size of `LUMICE_Config` and `LUMICE_ScatterLayer`. **What to do**: recompile against
+  the new header — any code that assumed the old sizes (e.g. a fixed-size buffer sized off the
+  old constant) needs updating.
+
+## [4.1.13] - 2026-04-06
+
+### Added
+- **`LUMICE_ParseConfigString`/`LUMICE_ParseConfigFile` C API**: parse JSON into a
+  `LUMICE_Config` struct for load-modify-commit workflows, for the subset of JSON that
+  round-trips through `ConfigToJson` (#49).
+- **`LUMICE_CreateServerEx` C API**: create a server with an explicit worker count via a new
+  `LUMICE_ServerConfig` struct (#45).
+- **CLI `--benchmark` flag**: prints a machine-readable `[BENCHMARK]` JSON line for a
+  single-worker and a multi-worker pass, including per-core parallel-scaling efficiency (#45).
+- **Two new crystal axis distribution types, zigzag (rectified arcsine) and Laplacian
+  (inverse-CDF)**, each with correct spherical-Jacobian rejection sampling; the C API gains named
+  `LUMICE_AXIS_DIST_*` constants for the existing and new distribution values (#52).
+
+### Changed
+- **The crystal-type selector is a set of radio buttons instead of a combo box**, and the
+  face-distance editor becomes an inline collapsible "Advanced" group instead of a floating
+  popup; the crystal preview is now square (#43).
+
+### Fixed
+- **The mouse wheel over the crystal preview scrolled the parent panel instead of doing
+  nothing/scrolling the preview** (#43).
+- **A raypath filter could leak rays through that shouldn't match**: hit-triangle 0 (the top
+  basal face) was excluded by an off-by-one face-index check, truncating raypaths like
+  `{3,1,5}` to `{3,5}` and letting a 46° halo pass a filter meant for the 22° halo (#44).
+- **A filter's crystal-symmetry flags always serialized as `"PBD"` regardless of the actual
+  setting**, from a bitwise-OR where an AND was needed; a composite filter also failed to
+  propagate its symmetry setting to its sub-filters (#44).
+- **`DirectionFilter` silently failed to filter at the scene level**: a redundant state guard and
+  a coordinate-rotation ordering bug meant it never actually evaluated world-space directions
+  correctly (#50).
+- **Crystal orientation sampling (Gaussian, Rayleigh, and uniform axis distributions) lacked the
+  `cos(φ)` spherical-area correction**, over- or under-representing certain latitudes, and a
+  latitude-folding routine gave wrong results for large standard deviations. Existing configs
+  using axis distributions will render with statistically corrected crystal orientations (#51).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_InitLogger(LUMICE_Server*)` is removed from the C API** (#48) — it only ever set the
+  global log level to `kInfo`, which now happens automatically when the logger is first
+  constructed. **What to do**: remove any call to `LUMICE_InitLogger`; recompile against the
+  updated header.
+
+## [4.1.12] - 2026-04-04
+
+### Added
+- **The GUI's internal preview texture switches from equirectangular to dual equal-area
+  fisheye**, eliminating the brightness non-uniformity artifact equirectangular projection
+  produced near the zenith; CLI output is unaffected (#37).
+- **CLI `--format <jpg|png>` and `--quality <1-100>` options** select the output image format
+  and JPEG quality; the default (no-flag) output is unchanged (#38).
+- **A floating editor for a prism crystal's 6 individual face distances**, with a
+  live-updating 3D preview (#40).
+
+### Changed
+- **Field of view is measured against the frame's short edge instead of its diagonal**, with
+  per-lens-type maximum FOV limits and matching GUI slider clamping (#39).
+- **A fisheye projection fills the whole rectangular viewport instead of being cropped to a
+  circle** (#39).
+
+### Fixed
+- **The dual-fisheye projection showed a visible seam at the equator**, where the two
+  hemispheres met (#39).
+- **Changing only a crystal's face distance, with geometry otherwise unchanged, was silently
+  ignored** — a premature-optimization check skipped mesh regeneration in that case (#41).
+- **Pyramid face-plane equations mixed the face-distance offset into the face's tilt angle
+  instead of only shifting its position**, distorting the crystal shape whenever a non-default
+  face distance was set (#41).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_CrystalParam` gains a `face_distance[6]` field** (#40), carrying the new per-face
+  distance editor's values. **What to do**: recompile against the new header; a caller that
+  doesn't set it gets the previous default (uniform faces).
+
+## [4.1.11] - 2026-04-01
+
+### Changed
+- **Windows GUI compute throughput improves substantially during interactive use**: a persistent
+  thread pool, consumer reuse, pre-packed ray-filter data, and switching the app to the console
+  subsystem (the window itself stays hidden on a normal launch) together close most of the
+  throughput gap with the CLI (#33, #35).
+- **The EV (exposure) slider no longer restarts the simulation** — dragging it just re-tones the
+  accumulating frame (#31).
+- **The Render panel is reorganized into Projection / View / Display / File groups**, and the
+  resolution combo warns when a resolution may distort a projection (#31).
+- **The raypath filter's text field uses `-` instead of `,` to separate hit values** (e.g.
+  `3,5` → `3-5`); an old `.lmc` file using commas still loads (#36).
+- **Crystal height and pyramid prism-height sliders use a log scale** covering 0.01–100, instead
+  of a plain or sqrt scale (#36).
+
+### Fixed
+- **Rendered brightness depended on the output resolution and field of view, not just the
+  scene**: the normalization formula is rebuilt from first principles so it no longer scales
+  with `1/(width×height)` or counts culled rays in its intensity total. Existing configs will
+  render at a different brightness (#31, #32).
+- **An equirectangular render showed a visible seam at the ±180° longitude wrap** (#31).
+- **A pyramid crystal with a Miller index greater than 1 simulated the wrong geometry** — an
+  erroneous scaling factor is removed and Miller indices are normalized by their GCD (#32).
+- **Round-tripping a config with the `kNoRandom` axis distribution through JSON could crash**
+  (#32).
+- **A background image path containing non-ASCII characters could fail to load on Windows**
+  (#32).
+- **Save (and Save As) could visibly corrupt the render preview** — saving now only refreshes
+  the CPU-side texture cache instead of touching the GPU texture format (#36).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_LOG_VERBOSE` is inserted into the `LUMICE_LogLevel` enum between
+  `LUMICE_LOG_DEBUG` and `LUMICE_LOG_INFO`** (#33), shifting the integer value of every level
+  from `INFO` onward. **What to do**: recompile against the new header; a caller that references
+  levels by name is unaffected, one that hardcodes the old integer values is not.
+- **`LUMICE_RawXyzResult` gains an `effective_pixels` field, and `LUMICE_RenderParam` gains a
+  `norm_mode` field** (#32), backing a new (GUI-hidden, config-only) adaptive normalization mode.
+  **What to do**: recompile against the new header; a caller that doesn't set `norm_mode` keeps
+  the previous (absolute) normalization behavior.
+
+## [4.1.10] - 2026-03-25
+
+### Changed
+- **Slider dragging becomes visibly smoother**: persistent worker and poller thread pools
+  (replacing per-commit thread spawn/join) and reuse of the existing consumer when the renderer
+  layout is unchanged together raise texture uploads during a drag from about 1 in 10 frames to
+  roughly 1 in 2 (#30).
+
+### Fixed
+- **Clicking Stop and then Run again could leave the live preview stuck without resuming
+  updates** (#30).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_CommitConfigStruct` gains a third parameter, `int* out_reused`** (#30), reporting
+  whether the existing consumer/renderer was reused instead of rebuilt. **What to do**: recompile
+  against the new header and add a third argument to any existing call site — pass `NULL` if the
+  reuse signal isn't needed.
+
+## [4.1.9] - 2026-03-24
+
+### Added
+- **Ray count, Max hits, Probability, and Proportion sliders accept typed text input** for
+  precise values, instead of only drag interaction (#27).
+
+### Fixed
+- **The displayed log file path didn't match its actual location** on the Windows fallback, and
+  log writes could sit in the OS buffer for a while before appearing on disk — warnings now flush
+  immediately and other logs flush at least once a second (#28).
+- **The GUI could crash during fast slider dragging on Windows+NVIDIA** when VSync silently
+  stopped limiting the frame rate (a known GLFW/driver issue), causing a busy-wait loop and
+  event-queue buildup; a sleep-based fallback frame limiter now activates whenever VSync isn't
+  effectively limiting (#29).
+
+## [4.1.8] - 2026-03-23
+
+### Added
+- **`LUMICE_SetLogCallback` C API**: the GUI's logging is now sourced from the core via a
+  callback instead of a separate logger instance, unifying GUI and core logging under one
+  architecture (#26).
+- **A collapsible GUI log panel** with a per-component level filter and file output (#26).
+- **Axis Std/Range sliders use a sqrt-scale mapping**, giving about 6.7× more resolution at
+  small values (0–2°) (#25).
+
+### Fixed
+- **X-Ray wireframe mode showed the wrong solid/dashed edges on a zoomed-in pyramid crystal** —
+  edge front/back classification is now perspective-correct (#25).
+- **The crystal preview didn't refresh after changing a Miller index** (#25).
+- **Slider dragging could still show an occasional all-black preview frame**: the texture-hold
+  logic that skips sparse early snapshots ran on the poller thread and could consume its
+  generation counter without staging data; it now runs on the main thread with a GPU fence for
+  upload synchronization (#26).
+
+## [4.1.7] - 2026-03-21
+
+### Added
+- **`LUMICE_GetCachedStats` C API**: query the last simulation's stats without the overhead of a
+  full snapshot recompute (#24).
+
+### Changed
+- **The live preview updates roughly 4× more often outside of slider dragging** (about 6→23
+  FPS), by polling every 20ms instead of only once per 50ms commit cycle (#24).
+
+### Fixed
+- **Restarting a simulation via a slider drag could show a visibly flickering/dimmer frame**:
+  the preview now holds the previous texture for 30ms after a restart, skipping the sparse early
+  snapshots that caused the flicker (#24).
+- **The GUI could briefly show a "Done" state right after a restart, before the new simulation
+  had produced any rays** (#24).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_RawXyzResult` gains `has_valid_data` and `snapshot_generation` fields** (#24), which
+  the GUI uses to detect a genuinely new snapshot instead of guessing from polling cadence.
+  **What to do**: recompile against the new header; a caller that ignores the new fields is
+  unaffected.
+
+## [4.1.6] - 2026-03-20
+
+### Added
+- **GUI logging via spdlog**, with independently configurable core/GUI log levels and a
+  `--log-level` CLI option (#22).
+
+### Changed
+- **The Export button is disabled while a simulation is running** (#22).
+
+### Fixed
+- **Dragging a slider could starve the preview of new data and stutter**: the background
+  worker's sleep is now interruptible (so Stop takes ~1ms instead of ~50ms) and a fast poll
+  follows each restart (#22).
+- **An occasional black-frame flash could appear during slider dragging** (#22).
+
+## [4.1.5] - 2026-03-19
+
+### Added
+- **Export offers a format menu** — Screenshot, Panorama (equirect PNG), or Config JSON —
+  replacing the single Export button (#21).
+- **The Open dialog accepts `.json` config files** alongside `.lmc`, so a config exported as
+  JSON can be reloaded directly (#21).
+
+### Fixed
+- **Dragging a slider quickly could crash the GUI**, from a race between the background poller
+  and config commit (#21).
+- **Rendered colors had a green tint** — the tone-mapping shader used the XYZ→RGB matrix's
+  columns where it needed rows (#21).
+
+## [4.1.4] - 2026-03-19
+
+### Added
+- **The GUI stays interactive while a simulation is running**: parameter panels remain enabled
+  during a run and edits auto-commit instead of waiting for the run to finish (#20).
+
+### Changed
+- **Parameter edits during a running simulation take effect up to 4× faster**: the auto-commit
+  interval drops from 200ms to 50ms, and a new C API path (`LUMICE_CommitConfigStruct`) commits a
+  config struct directly instead of round-tripping through JSON — together raising slider-drag
+  restarts from 18 to 84 per 5 seconds (#20).
+
+### Fixed
+- **Infinite-ray-mode renders could flash an intermittent all-black frame**, from the snapshot
+  buffer being mutated between being read and being copied out (#20).
+
 ## [4.1.3] - 2026-03-17
 
 ### Fixed
