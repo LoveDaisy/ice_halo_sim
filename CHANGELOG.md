@@ -72,7 +72,10 @@ rather than re-decided per version:
 
 A bullet that bundles several sub-claims across this line should be split — unless the split
 would separate parts of one visual change a reader perceives as a single thing, in which case
-keep it whole and let the dominant claim pick the section. (This is a different question from
+keep it whole and let the dominant claim pick the section.
+
+One change is described in one section, once. When a change earns a `Breaking Changes` entry,
+that entry is the whole of it — do not also narrate it under `Added` or `Changed`. (This is a different question from
 the Granularity section's split-by-PR rule above: that one decides how many *entries* one PR
 becomes, this one decides which *section* one entry's sub-claims land in.)
 
@@ -101,6 +104,19 @@ git log <prev_tag>..<tag> --first-parent --no-merges                 # squashed 
 
 The second command is not redundant: dependabot bumps and admin-merged single-commit PRs land
 with no merge commit to grep for, and direct-to-main commits appear in no PR list at all.
+
+A PR's own description is not authoritative on whether it breaks the C API. Diff the header
+across each version boundary instead:
+
+```bash
+git diff <prev_tag> <tag> -- src/include/lumice.h
+```
+
+This is not a belt-and-braces check. Over the v4.1.4–v4.1.14 backfill it surfaced six ABI
+changes no PR description mentioned — a value inserted mid-enum, a signature that gained a
+parameter, three structs that grew fields, and an identifier whose meaning was replaced — one of
+them in a PR that called itself "backward compatible", which was true of the JSON config layer
+it was thinking of and false of the C struct beside it.
 
 </details>
 
