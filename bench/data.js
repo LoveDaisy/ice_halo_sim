@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788708805370,
+  "lastUpdate": 1788708808706,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4770,54 +4770,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "c527f60f46b67a4c4bb8bab34f73281efb072b65",
-          "message": "Merge pull request #218 from LoveDaisy/feat/cuda-degenerate-geometry-parity\n\nfeat(cuda): degenerate K-shape pool parity + crystal-count assertion (scrum-392)",
-          "timestamp": "2026-07-23T12:17:55+08:00",
-          "tree_id": "0127101471b6d7dd59e5faea4bc8329d73e60df3",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c527f60f46b67a4c4bb8bab34f73281efb072b65"
-        },
-        "date": 1784780744055,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 885629.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1195890.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 779638.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 654981.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "86b954890e231d91593eefe4a83ec335fe440227",
           "message": "Merge pull request #219 from LoveDaisy/feat/crystal-consumption-detriangulation\n\nfeat(core): detriangulate crystal consumption — polygon-granularity incidence sampling, remove triangle mesh from hot path",
           "timestamp": "2026-07-24T08:25:14+08:00",
@@ -9506,6 +9458,54 @@ window.BENCHMARK_DATA = {
             "value": 686534.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c04ad137d42e4a3ed51cd137b75d2d97092b7864",
+          "message": "Merge pull request #316 from LoveDaisy/fix/msvc-string-literal-limit\n\nfix(gui,ci): 拆开超 MSVC 上限的 shader 字面量 + 立静态门禁 + CI 触发去重",
+          "timestamp": "2026-09-06T23:22:44+08:00",
+          "tree_id": "6cd1e5d94251d724205eb0763696031080e86c9d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c04ad137d42e4a3ed51cd137b75d2d97092b7864"
+        },
+        "date": 1788708808149,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 835865.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1218279.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 829130,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 989983.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
           }
         ]
       }
