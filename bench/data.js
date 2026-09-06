@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788663723085,
+  "lastUpdate": 1788663725045,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7bd2f401246d724694c7c02bbce7a37b093f43d4",
-          "message": "Merge pull request #216 from LoveDaisy/feat/pyramid-oracle-contract-tests\n\ngeometry test: retire symbolic-α pyramid oracle for three contract-aligned tests",
-          "timestamp": "2026-07-22T17:35:30+08:00",
-          "tree_id": "316a03a93602e9c23a00832d413abf5c51648733",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7bd2f401246d724694c7c02bbce7a37b093f43d4"
-        },
-        "date": 1784713399375,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 75,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 96.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "de7b4571c336a6d6f4814657c8822c6f149fb091",
           "message": "Merge pull request #217 from LoveDaisy/feat/geom-pool-metal-landing\n\nfeat(geom-pool): wire K-shape pool geom_clock into config + Metal/CUDA backends",
           "timestamp": "2026-07-22T23:04:47+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa3ec3edc826ec5ba4b7cb59fb1e102222309889",
+          "message": "Merge pull request #314 from LoveDaisy/scrum/worker-and-batch-granularity\n\nperf(cpu): cap the automatic worker count at 10, expose --workers, and fix a hit-loop buffer overflow",
+          "timestamp": "2026-09-06T10:48:35+08:00",
+          "tree_id": "0f52437edfb35a55cb432bf05c2ba64797af8a5f",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/aa3ec3edc826ec5ba4b7cb59fb1e102222309889"
+        },
+        "date": 1788663724514,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 87.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.7,
             "unit": "%"
           }
         ]
