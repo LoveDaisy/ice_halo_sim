@@ -568,10 +568,11 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   classes smoothly instead of a hard winner-take-all.
   **What to do**: a scene that depends on the old winner-take-all look should set `"mode":
   "dominant"` explicitly; `dominant` itself is unchanged, and so is `additive`.
-- **`LUMICE_ComplexComposition` becomes a pointer-and-count** (#202), following the
-  `raypath_color` precedent from 4.3.5: the fixed-size sub-clause array is replaced by a
-  heap-allocated buffer managed through `Create`/`Release` calls, which is also what makes the
-  4096-clause ceiling above possible without inflating every config on the stack.
+- **`LUMICE_ComplexComposition` becomes a pointer-and-count** (#202). Its sub-clause array —
+  introduced as an independent, fixed-size pool by the Complex filter's flat reference encoding
+  in 4.3.4 — is replaced by a heap-allocated buffer managed through `Create`/`Release` calls, the
+  same pattern `raypath_color` established in 4.3.5, and what makes the 4096-clause ceiling above
+  possible without inflating every config on the stack.
   **What to do**: recompile against the new header; build a Complex filter's sub-clauses through
   the new `Create`/`Release` API instead of a fixed-size array.
 
