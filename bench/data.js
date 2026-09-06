@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788683897762,
+  "lastUpdate": 1788683900000,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "de7b4571c336a6d6f4814657c8822c6f149fb091",
-          "message": "Merge pull request #217 from LoveDaisy/feat/geom-pool-metal-landing\n\nfeat(geom-pool): wire K-shape pool geom_clock into config + Metal/CUDA backends",
-          "timestamp": "2026-07-22T23:04:47+08:00",
-          "tree_id": "69bd58055ec2bb19e867aaf6a9ac66a07a16cb55",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/de7b4571c336a6d6f4814657c8822c6f149fb091"
-        },
-        "date": 1784733126624,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 74.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 92.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c527f60f46b67a4c4bb8bab34f73281efb072b65",
           "message": "Merge pull request #218 from LoveDaisy/feat/cuda-degenerate-geometry-parity\n\nfeat(cuda): degenerate K-shape pool parity + crystal-count assertion (scrum-392)",
           "timestamp": "2026-07-23T12:17:55+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5cb81a9565ff0e1394a957d97ad2078d0d8f9310",
+          "message": "Merge pull request #315 from LoveDaisy/scrum/changelog-backfill-and-release-notes\n\ndocs(release): 回填 v4.1.4 起 31 个版本的 CHANGELOG，并把它接进发版链路",
+          "timestamp": "2026-09-06T16:24:48+08:00",
+          "tree_id": "079d5a016ac9ac51339233ba0779369c19e64745",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5cb81a9565ff0e1394a957d97ad2078d0d8f9310"
+        },
+        "date": 1788683899356,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 76.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.1,
             "unit": "%"
           }
         ]
