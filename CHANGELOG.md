@@ -670,16 +670,6 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   middle-layer probability shows a warning instead of passing silently, and adding a new layer
   promotes the old last layer's probability to a sane default (0.8) instead of leaving it at the
   near-zero value a final layer would have had.
-- **Filters with multiple OR'd raypaths or several entry/exit conditions no longer stall the GUI
-  while dragging** (#172). Programmatic filter commits had two paths — a fast typed-struct path
-  and a slow, string-based JSON path — and any filter beyond a single plain raypath fell onto the
-  slow path, which could not tell the GUI a lightweight update was possible; every slider drag
-  forced a full filter rebuild that stalled the live preview. All GUI filter commits now go
-  through the fast path.
-- **Switching between the CPU and GPU backend and clicking Run no longer leaves the previous
-  backend's stale frame on screen** (#172). Reconstructing the server for the new backend reset
-  its epoch counter to zero, but the GUI's anti-flicker display fence carried the old backend's
-  higher epoch across the swap and kept refusing the new backend's first frames as "stale."
 
 ### ⚠️ Breaking Changes
 - **`ray_num` now means the total ray count across all wavelengths of a discrete spectrum, not
@@ -696,6 +686,16 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   values directly.
 
 ### Fixed
+- **Filters with multiple OR'd raypaths or several entry/exit conditions stalled the GUI while
+  dragging** (#172). Programmatic filter commits had two paths — a fast typed-struct path and a
+  slow, string-based JSON path — and any filter beyond a single plain raypath fell onto the slow
+  path, which could not tell the GUI a lightweight update was possible; every slider drag forced a
+  full filter rebuild that stalled the live preview. All GUI filter commits now go through the
+  fast path.
+- **Switching between the CPU and GPU backend and clicking Run left the previous backend's stale
+  frame on screen** (#172). Reconstructing the server for the new backend reset its epoch counter
+  to zero, but the GUI's anti-flicker display fence carried the old backend's higher epoch across
+  the swap and kept refusing the new backend's first frames as "stale."
 - **Crystal orientations near the poles could render with an incorrect color tint, and GPU
   renders of near-pole-heavy scenes were slower than necessary** (#171). Near-pole orientation
   sampling on the GPU backends rejected 15-86% of its proposals depending on the distribution
@@ -864,7 +864,8 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   worker's "I'm done" notification landed in the narrow window while the stopping thread was about
   to go to sleep, the notification was lost and the wait never woke up.
 - **The GUI could silently drop a complex filter on import**, rendering the scene as if no filter
-  were set at all (#131).
+  were set at all (#131 — an unrelated fix carried on the same branch as the throughput-honesty
+  work cited above, not a duplicate reference to it).
 
 ## [4.1.3] - 2026-03-17
 
