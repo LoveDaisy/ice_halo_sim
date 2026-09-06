@@ -82,6 +82,12 @@ A change to a default value, to a config-file semantic, or to the C API's ABI or
 its own `### ⚠️ Breaking Changes` subsection inside that version, and states three things:
 what a user saw before, what they see now, and what they need to do about it.
 
+The qualifier is that something a user already has must behave differently: an existing config,
+`.lmc`, script, or compiled consumer. A default that only applies to newly created things — a
+GUI document started from scratch, a fresh config — breaks nothing, because nothing existing
+changes; it is `Changed`. The check is the entry's own third clause: if what a user needs to do
+is *nothing*, it does not belong in this subsection.
+
 ### Sourcing
 
 `gh release view <tag> --json body` lists a version's PRs but is **not authoritative on its
@@ -1265,12 +1271,9 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   only one layer exists** (#71), instead of accepting a value that has no effect.
 - **An edit-modal tab with unsaved changes shows a trailing `*`** (#71), so which tab has pending
   edits is visible at a glance.
-
-### ⚠️ Breaking Changes
-- **The default ray count for a newly created GUI document changes from 1M to 5M** (#67). A config
-  file that already sets `ray_num` (or an existing `.lmc`) is unaffected — this only changes what a
-  brand-new document starts with. **What to do**: nothing, unless you rely on the previous 1M
-  starting point when creating a new document from scratch; set it explicitly after creating one.
+- **A newly created GUI document starts at 5M rays instead of 1M** (#67). A config file that
+  already sets `ray_num`, and any existing `.lmc`, is unaffected — only the starting point for a
+  document created from scratch moves.
 
 ## [4.1.3] - 2026-03-17
 
