@@ -122,6 +122,8 @@ it was thinking of and false of the C struct beside it.
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-09-06
+
 ### Added
 - **Lens border ring for fisheye projections** (#283). Overlay gains a `Lens Border` row (colour +
   toggle, off by default) that draws the projection's own image-circle boundary — equal-area,
@@ -1908,7 +1910,8 @@ it was thinking of and false of the C struct beside it.
 - Basic ice crystal halo simulation
 - Support for common crystal types (hexagonal prism, plate, column)
 
-[Unreleased]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.3...HEAD
+[Unreleased]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.5.0...HEAD
+[4.5.0]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.3...v4.5.0
 [4.4.3]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.2...v4.4.3
 [4.4.2]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.1...v4.4.2
 [4.4.1]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.0...v4.4.1
