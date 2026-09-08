@@ -1462,6 +1462,18 @@ LUMICE_ErrorCode LUMICE_GetDrainStatus(LUMICE_Server* server, LUMICE_DrainResult
 // LUMICE_ERR_NULL_ARG if server or out is null.
 LUMICE_ErrorCode LUMICE_GetColorOverflowInfo(LUMICE_Server* server, LUMICE_ColorOverflowInfo* out);
 
+// Has the GPU backend stopped running partway through the current run?
+// Writes 1 to *out_fell_back once this server's GPU single-engine route has dropped
+// its trace backend (a device/PSO failure mid-run) or never obtained one, and tracing
+// has continued on the legacy CPU path; 0 otherwise. Always 0 on the CPU route, and 0
+// again after the next LUMICE_StartServer. The condition is discovered asynchronously
+// by the worker, so poll this each GUI tick the way LUMICE_GetColorOverflowInfo is
+// polled — it is a single cheap point read. Beyond the slowdown, the fallback also
+// changes what the frame looks like for the first seconds (already-queued GPU-sized
+// batches carry one wavelength each on the CPU path). LUMICE_OK on success;
+// LUMICE_ERR_NULL_ARG if server or out_fell_back is null.
+LUMICE_ErrorCode LUMICE_GetBackendFallbackFlag(LUMICE_Server* server, int* out_fell_back);
+
 void LUMICE_StopServer(LUMICE_Server* server);
 
 // =============== Crystal Mesh ===============

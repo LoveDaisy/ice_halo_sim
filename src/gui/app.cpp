@@ -64,6 +64,27 @@ std::atomic<bool> g_stop_inflight{ false };
 // epoch (a new Run mints a new epoch and re-arms, mirroring the DoRun modal's
 // re-warn-on-Run policy). Sentinel ~0ull = nothing warned yet.
 unsigned long long g_color_degrade_warned_epoch = ~0ull;
+
+// Latch for the "GPU backend fell back to the CPU mid-run" modal. Unlike
+// the color-degrade latch above, this condition has no committed-epoch key to dedup on
+// — it survives CommitConfig within one run and clears only when the next Start()
+// re-resolves the backend — so it is a plain rising-edge latch (see
+// BackendFallbackWarningEdge). File scope for the same reason as its neighbour: the
+// single GUI thread owns it, and no test drives SyncFromPoller.
+bool g_backend_fallback_warned = false;
+
+bool BackendFallbackWarningEdge(bool fell_back, bool& warned_latch) {
+  if (!fell_back) {
+    warned_latch = false;  // re-arm: the next fallback gets its own warning
+    return false;
+  }
+  if (warned_latch) {
+    return false;  // same fallback, already warned
+  }
+  warned_latch = true;
+  return true;
+}
+
 namespace {
 std::future<void> g_stop_future;
 }  // namespace
@@ -1655,6 +1676,26 @@ void SyncFromPoller() {
           "Affected rays render with missing or incomplete color. The filtering / geometry / raypath tracing is "
           "UNAFFECTED — only color assignment degrades. Simplify the color configuration to fix.";
       SetGuiWarning(msg);
+    }
+  }
+
+  // Poll the "GPU backend stopped partway through this run" flag. Without
+  // this the fallback surfaces only as a core WARN in the log, while the user watches a
+  // run that suddenly got slow and, for the first seconds, strongly miscoloured (the
+  // batches queued at GPU grain carry one wavelength each on the CPU path). Rising edge
+  // only — see BackendFallbackWarningEdge. Placed with the color-degrade poll above,
+  // before the snapshot early-return, because the flag comes from the C API rather than
+  // the poller snapshot.
+  {
+    int fell_back = 0;
+    if (LUMICE_GetBackendFallbackFlag(g_server, &fell_back) == LUMICE_OK &&
+        BackendFallbackWarningEdge(fell_back != 0, g_backend_fallback_warned)) {
+      SetGuiWarning(
+          "GPU acceleration stopped working partway through this run — tracing has fallen back to the CPU. "
+          "Rendering is slower from here on, and the frame may look unusually saturated for the first seconds "
+          "while the CPU path works through batches that were already queued at the GPU's size.\n"
+          "The geometry and the physics are UNAFFECTED; only speed and the early preview are. Stop and Run "
+          "again to retry the GPU backend.");
     }
   }
 

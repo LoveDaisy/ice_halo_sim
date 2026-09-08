@@ -274,6 +274,28 @@ struct ResultFrame {
  */
 bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger);
 
+/**
+ * @brief per-batch dispatch grain `GenerateScene` should actually use.
+ * @details `ResolveGpuRoute` answers a *preference*; whether the Simulator on the other
+ *          side of the queue is still driving a TraceBackend is a separate, runtime fact
+ *          (Simulator::BackendActive()). When the two disagree — GPU route selected, no
+ *          backend running — the legacy CPU path is being fed GPU-sized batches, and that
+ *          path samples ONE host wavelength per batch, so a 262144-ray batch paints the
+ *          frame with a single wavelength. Shrink to the legacy grain in exactly that case;
+ *          leave every other case (including a GPU route that is healthy) byte-identical.
+ *          Pure — no lock, no I/O, no thread — so the judgement is unit-testable without a
+ *          real backend. Parameter order: the NOMINAL cap first, the fallback cap second
+ *          (both `size_t`; the compiler cannot catch a swap).
+ * @param gpu_route      ResolveGpuRoute's verdict for this server.
+ * @param backend_active Simulator::BackendActive() for the simulator consuming these batches.
+ * @param nominal_cap    Grain the route asked for (env override, or the per-backend default).
+ * @param fallback_cap   Grain the legacy CPU path is sized for.
+ * @return `min(nominal_cap, fallback_cap)` iff the route is GPU and the backend is gone;
+ *         `nominal_cap` otherwise. Never raises the grain (an explicit
+ *         `LUMICE_DISPATCH_RAY_NUM` smaller than the legacy default stays honoured).
+ */
+size_t EffectiveDispatchCap(bool gpu_route, bool backend_active, size_t nominal_cap, size_t fallback_cap);
+
 // =============== Server Status ===============
 /**
  * @brief Server status enumeration
@@ -496,6 +518,20 @@ class Server {
    * @return all-zero iff nothing was dropped; else the per-cap drop counts.
    */
   ColorDegradeCounts GetLastColorDegradeCounts() const;
+
+  /**
+   * @brief Has the GPU single-engine route lost its TraceBackend mid-run?
+   * @details True once this server's one Simulator has dropped its backend for the rest
+   *          of the current Run() (a BackendUnavailableError), or never obtained
+   *          one despite the GPU route being selected. Always false on the CPU route —
+   *          there is no backend to lose — and false again after the next Start(), which
+   *          re-enters Run() and re-resolves the backend. Like GetLastColorDegradeCounts
+   *          this is discovered asynchronously by the worker, so the GUI polls it
+   *          (LUMICE_GetBackendFallbackFlag); the fallback otherwise surfaces only as a
+   *          core WARN log line. Cheap point read — safe to call every GUI tick.
+   * @return true iff the GPU route is currently running on the legacy CPU path.
+   */
+  bool BackendFellBack() const;
 
   /**
    * @brief task-345.3: display-time EV multiplier for the composite path only.

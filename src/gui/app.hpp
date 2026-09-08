@@ -505,6 +505,18 @@ std::string PeekGuiWarning();  // test accessor: current in-flight message ("" i
 // Run" contract without spinning up a full ImGui frame.
 bool IsGuiWarningPending();
 
+// Rising-edge gate for the "GPU backend fell back to the CPU mid-run"
+// warning. Returns true exactly once per false->true transition of `fell_back`,
+// re-arming `warned_latch` on the way back down (the next Start() re-resolves the
+// backend, so the flag clears on its own). An edge, not a level: SetGuiWarning is
+// idempotent only while the SAME message is still in flight, so calling it every
+// frame the condition holds would re-open a modal the user had just dismissed. The
+// color-degrade poll next to it keys its dedup on the committed epoch instead; this
+// condition has no such epoch — it persists across CommitConfig within one run and
+// clears only at the next Start(). Free function so it is testable without a window
+// or a GL context; the production caller is SyncFromPoller.
+bool BackendFallbackWarningEdge(bool fell_back, bool& warned_latch);
+
 namespace internal_test {
 // task-gui-feedback-affordances Step 2 (AC3) test helper: consume the pending
 // modal-open flag exactly as RenderGuiWarningPopup would on the next frame,
