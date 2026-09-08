@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788866203351,
+  "lastUpdate": 1788866205394,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "86adcd8f5fc57d211e201db64fb8d77f4bf37f88",
-          "message": "Merge pull request #224 from LoveDaisy/feat/capi-scene-opaque-handle\n\nrefactor(c_api): LUMICE_Config value struct → LUMICE_Scene opaque handle (BREAKING v4.12)",
-          "timestamp": "2026-07-25T21:38:42+08:00",
-          "tree_id": "c1c944a06dc5cd04ab420b22aae79f66f9a92ced",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/86adcd8f5fc57d211e201db64fb8d77f4bf37f88"
-        },
-        "date": 1784987166170,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 82.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 94.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 90.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "62ba3d6ba31990e43588d1b8c222716cc1a70d5d",
           "message": "Merge pull request #225 from LoveDaisy/feat/gui-visual-regression-coverage\n\ntest(gui): reference-image pixel regression for lens projections + modal layouts",
           "timestamp": "2026-07-25T22:04:33+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d66985dfc19d7e0a2ad278bfb29e8adec87f3adc",
+          "message": "Merge pull request #322 from LoveDaisy/test/random-source-exact-assertion-audit\n\ntest: audit random sources behind exact assertions, and refill the lost closed-form fuzz",
+          "timestamp": "2026-09-08T19:05:43+08:00",
+          "tree_id": "559a5d866b5f56b5751d9d1be56655c2412ea1a2",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d66985dfc19d7e0a2ad278bfb29e8adec87f3adc"
+        },
+        "date": 1788866204883,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 76.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.5,
             "unit": "%"
           }
         ]
