@@ -340,6 +340,11 @@ void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vecto
 // same width, or two same-width fields reordered. The size does not move, so the assert stays
 // quiet while the enumeration below silently reads the wrong member. These sentinels cover growth
 // and shrinkage only.
+//
+// A third gap, and this one has actually happened: a field ADDED into existing padding. The three
+// family line switches (v4.26) left sizeof(RenderConfig) at 224 because the bytes they needed were
+// already being wasted between ZenithNadirParam and markers_. So the assert below is a tripwire
+// for MOST additions, not for all of them, and adding a field is not licensed by it staying quiet.
 std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
   static_assert(sizeof(lumice::RenderConfig) == 224, "Update FieldDiff when RenderConfig fields change");
   static_assert(sizeof(lumice::GridLineParam) == 24, "Update AddGridLines when GridLineParam fields change");
@@ -366,6 +371,12 @@ std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig&
   AddGridLines("grid.elevation", a.elevation_grid_, b.elevation_grid_, &out);
   AddGridLines("grid.longitude", a.longitude_grid_, b.longitude_grid_, &out);
   AddScalar("grid.horizon", static_cast<int>(a.horizon_), static_cast<int>(b.horizon_), &out);
+  AddScalar("grid.elevation_line", static_cast<int>(a.elevation_grid_line_), static_cast<int>(b.elevation_grid_line_),
+            &out);
+  AddScalar("grid.longitude_line", static_cast<int>(a.longitude_grid_line_), static_cast<int>(b.longitude_grid_line_),
+            &out);
+  AddScalar("grid.angular_dist_line", static_cast<int>(a.angular_dist_grid_line_),
+            static_cast<int>(b.angular_dist_grid_line_), &out);
   AddScalar("zenith_nadir.enabled", static_cast<int>(a.zenith_nadir_.enabled_),
             static_cast<int>(b.zenith_nadir_.enabled_), &out);
   AddFloat("zenith_nadir.radius_px", a.zenith_nadir_.radius_px_, b.zenith_nadir_.radius_px_, &out);
@@ -1181,6 +1192,71 @@ TEST(JsonParserParity, GridMarkersNonArrayRejectedByBothParsers) {
   const std::string text = WrapRenderWithGrid(R"({ "markers": { "id": "sun" } })");
   EXPECT_FALSE(ParseWithCore(text).ok);
   EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
+// --- render.grid.{elevation,longitude,angular_dist}_line: the family line switches (v4.26) ---
+//
+// Structurally blind in the corpus for the reason grid.longitude is — no shipped config carries
+// the keys. What makes these need more than the present/absent pair every other grid key gets is
+// the DIRECTION of their default: alone among the annotation flags they default to TRUE, so an
+// absent key and a zero-initialized C API struct mean OPPOSITE things. That is exactly the shape
+// of divergence two independently written decoders produce — one seeding from core's struct, the
+// other from a memset — and it is invisible to a corpus sweep because no corpus document has an
+// opinion about the keys at all.
+
+TEST(JsonParserParity, GridFamilyLineSwitchesSurviveBothParsers) {
+  // Three different values in one document, so a decoder that read one key into all three fields
+  // (or the same key three times) cannot pass by accident.
+  const std::string text = WrapRenderWithGrid(
+      R"({ "elevation": [ { "value": 30.0 } ], "longitude": [ { "value": 90.0 } ],
+           "angular_dist": [ { "value": 22.0 } ],
+           "elevation_line": false, "longitude_line": true, "angular_dist_line": false })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_FALSE(renderer.elevation_grid_line_);
+  EXPECT_TRUE(renderer.longitude_grid_line_);
+  EXPECT_FALSE(renderer.angular_dist_grid_line_);
+  // The lists are untouched by their switches — the whole point of the fields is that "no lines"
+  // stopped meaning "no angles", so a decoder that cleared the list would undo the fix silently.
+  ASSERT_EQ(renderer.elevation_grid_.size(), 1u);
+  ASSERT_EQ(renderer.longitude_grid_.size(), 1u);
+  ASSERT_EQ(renderer.angular_dist_grid_.size(), 1u);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridFamilyLineSwitchesOmittedLeaveBothParsersDrawingLines) {
+  // The case the C API decoder can only pass by seeding a NON-ZERO default. A memset-shaped
+  // decoder answers false here, and every config written before v4.26 would then load through the
+  // C API with its grid missing and through core with its grid intact — the same document
+  // rendering two ways depending on which entry point read it.
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const auto& via_capi = p.via_capi.renderers_.begin()->second;
+  const auto& core = p.core.renderers_.begin()->second;
+  EXPECT_TRUE(via_capi.elevation_grid_line_);
+  EXPECT_TRUE(via_capi.longitude_grid_line_);
+  EXPECT_TRUE(via_capi.angular_dist_grid_line_);
+  EXPECT_TRUE(core.elevation_grid_line_);
+  EXPECT_TRUE(core.longitude_grid_line_);
+  EXPECT_TRUE(core.angular_dist_grid_line_);
+}
+
+TEST(JsonParserParity, GridFamilyLineSwitchesExplicitTrueIsNotConfusedWithOmitted) {
+  // Both mean "draw the lines", so this cannot be caught by comparing the parsed value — what it
+  // pins is that an explicit true is ACCEPTED by both rather than rejected as a type error by one,
+  // the same proposition FrontFalseIsNotConfusedWithFrontMissing pins for the opposite default.
+  const std::string text =
+      WrapRenderWithGrid(R"({ "elevation_line": true, "longitude_line": true, "angular_dist_line": true })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second == p.core.renderers_.begin()->second);
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second.elevation_grid_line_);
 }
 
 // --- render.front: the second clip dimension (v4.20) ---

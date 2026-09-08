@@ -675,6 +675,11 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["longitude"] = GridLinesToCore(r.longitude_grid, r.longitude_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
+  // The other three families' line switches, beside the lists they gate. Same key names core's own
+  // to_json writes, for the same reason the label block below states.
+  jr["grid"]["elevation_line"] = r.elevation_line != 0;
+  jr["grid"]["longitude_line"] = r.longitude_line != 0;
+  jr["grid"]["angular_dist_line"] = r.angular_dist_line != 0;
   // The three text-label switches, next to the lines they annotate. Same key names core's own
   // to_json writes (render_config.cpp), which is what test_json_parser_parity.cpp compares.
   jr["grid"]["horizon_label"] = r.horizon_label != 0;
@@ -2527,6 +2532,14 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     r.elevation_grid_count = 0;
     r.longitude_grid_count = 0;
     r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
+    // 1, NOT 0, and the only default in this block that is not zero-shaped: core's three
+    // *_grid_line_ members default to TRUE, because a document written before those keys existed
+    // already drew the lines its angle lists name. Zeroing them here instead would make the C API
+    // decoder render every legacy config without its grid — a divergence from ParseRenderConfig,
+    // which the parity gate compares whole RenderConfigs to catch.
+    r.elevation_line = 1;
+    r.longitude_line = 1;
+    r.angular_dist_line = 1;
     // Same default and same reason as `horizon` above: core's three *_label_ fields are opt-in.
     r.horizon_label = 0;
     r.grid_label = 0;
@@ -2593,6 +2606,28 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
         r.horizon = outline ? 1 : 0;
+      }
+      // The other three families' line switches, read the same way the label block below is and
+      // kept a SEPARATE array from it: the loop bodies are identical, but a line switch and a label
+      // switch are two different questions about a family, and one table holding both would have to
+      // be split again the first time either group grows or loses a member.
+      {
+        const std::pair<const char*, int*> kLineKeys[] = {
+          { "elevation_line", &r.elevation_line },
+          { "longitude_line", &r.longitude_line },
+          { "angular_dist_line", &r.angular_dist_line },
+        };
+        for (const auto& [key, field] : kLineKeys) {
+          if (!gj.contains(key)) {
+            continue;
+          }
+          bool on = false;
+          const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
+          if (err != LUMICE_OK) {
+            return err;
+          }
+          *field = on ? 1 : 0;
+        }
       }
       // The three text-label switches. One loop over (key, field) rather than three copies of the
       // same six lines: they differ only in which key names which int, and a fourth family would

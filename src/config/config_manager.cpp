@@ -124,6 +124,18 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("horizon")) {
       j_grid.at("horizon").get_to(render.horizon_);
     }
+    // The other three families' line switches. Nothing is written when the key is absent: the
+    // members already default to true, which is what makes a document that predates these keys
+    // render exactly as it did. Twin of the same three reads in c_api.cpp's decoder.
+    if (j_grid.contains("elevation_line")) {
+      j_grid.at("elevation_line").get_to(render.elevation_grid_line_);
+    }
+    if (j_grid.contains("longitude_line")) {
+      j_grid.at("longitude_line").get_to(render.longitude_grid_line_);
+    }
+    if (j_grid.contains("angular_dist_line")) {
+      j_grid.at("angular_dist_line").get_to(render.angular_dist_grid_line_);
+    }
     // The three text-label switches. Read next to the lines they annotate rather than under a
     // "labels" object of their own: "grid.label" is a property of the grid, and nesting it one
     // level deeper would give one concept two paths into the same object.

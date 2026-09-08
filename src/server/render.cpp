@@ -735,14 +735,27 @@ void RenderConsumer::PostSnapshot() {
   // The coordinate grid — parallels then meridians, both under the angular-distance circles.
   // One list, not two: the blend loop treats every line identically, and the two families' order
   // relative to each other is unobservable (they share an appearance model and a blend operator).
+  //
+  // Each family's own line switch gates it HERE and only here, the same place and for the same
+  // reason `config_.horizon_` gates the outline above: the masks and the label anchors are built
+  // regardless (RebuildLineFamilyMasks / RebuildAngularDistMasks read the angle list, never these
+  // flags), so a family with its line switched off still contributes its numbers through
+  // PaintLabels. That is the whole point of the flags — before them, "no lines" could only be said
+  // by emptying the angle list, which took the labels with it.
   std::vector<LineLayer> grid_layers;
   grid_layers.reserve(elevation_masks_.size() + longitude_masks_.size());
-  collect_layers(elevation_masks_, config_.elevation_grid_, grid_layers);
-  collect_layers(longitude_masks_, config_.longitude_grid_, grid_layers);
+  if (config_.elevation_grid_line_) {
+    collect_layers(elevation_masks_, config_.elevation_grid_, grid_layers);
+  }
+  if (config_.longitude_grid_line_) {
+    collect_layers(longitude_masks_, config_.longitude_grid_, grid_layers);
+  }
 
   std::vector<LineLayer> angular_dist_layers;
   angular_dist_layers.reserve(angular_dist_masks_.size());
-  collect_layers(angular_dist_masks_, config_.angular_dist_grid_, angular_dist_layers);
+  if (config_.angular_dist_grid_line_) {
+    collect_layers(angular_dist_masks_, config_.angular_dist_grid_, angular_dist_layers);
+  }
 
   // The ring markers, on top of everything else — the layer order the preview shader uses
   // (overlayAuxLines draws them last). No mask: the ring is a circle of a config-named radius
@@ -964,6 +977,13 @@ void RenderConsumer::PaintLabels() {
   // Turn one family's (labels, line list) pair into draws, dropping the ones whose line is fully
   // transparent. Mirrors PostSnapshot's collect_layers, and drops for the same reason: an alpha of
   // zero composites to a no-op, and skipping it up front also skips the rasterization.
+  //
+  // What it deliberately does NOT read is the family's LINE switch (elevation_grid_line_ and its
+  // two siblings, or horizon_ for the block below). A label survives its line being switched off —
+  // that is the independence the switches exist to make expressible — while it does not survive
+  // its line being made transparent, because opacity is the appearance a label inherits. The two
+  // look alike and are not: see render_config.hpp's *_label_ comment for why the second half is
+  // deliberate rather than an omission.
   const auto collect = [&draws](const std::vector<annotation::Label>& labels, const std::vector<GridLineParam>& lines) {
     for (const annotation::Label& label : labels) {
       const auto index = static_cast<size_t>(label.index);
