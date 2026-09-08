@@ -170,17 +170,25 @@ TEST(ClosedFormDistributionFuzz, PrismCornerCountTracksTheExactOracleAcrossTheSi
   // library. Whichever one drew such a sample first went red, and the fix at the time was to stop
   // drawing rather than to stop demanding zero.
   //
-  // The ceiling is one common value, 0.002, i.e. 8 divergences per 4000-sample tier. Deliberately
+  // The ceiling is one common value, 0.001, i.e. 4 divergences per 4000-sample tier. Deliberately
   // an absolute-count bar rather than a multiple of the measured rate: the measured rate is 0 in
   // three of four tiers, and 3x zero is zero, which would be the removed assertion wearing a
-  // ceiling's clothes. 8 leaves the single known event a factor of 8 of room while a structural
-  // regression — the closed form losing a corner class, or the merge tolerance drifting by an
-  // order of magnitude — moves the rate by percent, i.e. hundreds of counts.
+  // ceiling's clothes. It can be this tight because the sample source is deterministic on every
+  // platform — there is no sampling noise for the margin to absorb, so the only thing that moves
+  // these counts is a change in the code under test.
+  //
+  // Calibrated against a deliberate regression rather than guessed. Multiplying this evaluator's
+  // corner-merge tolerance by 20 — a drift small enough that all five existing prism tests stay
+  // green, because the fixed pools sit at 50x margin or inside 1x and a 20x shift lands between —
+  // moves these counts to 0 / 4 / 9 / 8 across the four tiers. At 4 per tier the ceiling catches
+  // that at three of the four sigmas; at 8 it would have caught it at one, barely. The gap between
+  // those two numbers is the whole reason this file exists: the band between 1x and 50x is
+  // invisible to every other test of this evaluator.
   static const PrismTier kTiers[] = {
-    { "sigma=0.15", 0xD15701u, 0.15f, 0.002, 0.002 },
-    { "sigma=0.30", 0xD15702u, 0.30f, 0.002, 0.002 },
-    { "sigma=0.50", 0xD15703u, 0.50f, 0.002, 0.002 },
-    { "sigma=0.80", 0xD15704u, 0.80f, 0.002, 0.002 },
+    { "sigma=0.15", 0xD15701u, 0.15f, 0.001, 0.001 },
+    { "sigma=0.30", 0xD15702u, 0.30f, 0.001, 0.001 },
+    { "sigma=0.50", 0xD15703u, 0.50f, 0.001, 0.001 },
+    { "sigma=0.80", 0xD15704u, 0.80f, 0.001, 0.001 },
   };
 
   for (const PrismTier& t : kTiers) {
