@@ -749,16 +749,17 @@ jobs:
         # WHEN to redo it. The trigger is NOT how far apart the two legs are.
         # A run's wall-clock is its longest job and nothing else, so evening the
         # legs out is only worth CI time while one of them IS that longest job.
-        # Measured on the commit that produced the grouping below, taking the
-        # push run and the pull_request run of the same SHA together (neither
-        # alone carries every job: `build` is push-only, `e2e-slow` is PR/main):
-        #   Windows MSVC x86_64       740s  <- longest, this sets the wall-clock
-        #   shared-gui-test-build     666s
-        #   Ubuntu x86_64             635s
-        #   E2E Slow (macOS parity)   597s
-        #   E2E Slow (macOS rest)     391s
-        # Both macOS legs sit under that ceiling, so packing them closer buys
-        # ZERO wall-clock — the ceiling is somewhere else entirely. Trigger to
+        # Re-measured 2026-09-08 on one pull_request run, which now carries
+        # every job (no job-level `if:` makes anything push-only any more):
+        #   shared-gui-test-build     734s  <- longest, this sets the wall-clock
+        #   E2E Slow (macOS parity)   556s
+        #   Ubuntu x86_64             530s
+        #   Windows MSVC x86_64       528s
+        #   E2E Slow (macOS rest)     456s
+        # The Windows leg used to hold the top of this list at 740s; sccache as
+        # a compiler launcher moved it to 528-605s and the ceiling moved with
+        # it. Both macOS legs still sit under the ceiling, so packing them
+        # closer buys ZERO wall-clock — the ceiling is somewhere else. Trigger to
         # redo the packing: either macOS leg becoming the longest job of a run.
         # The ratio between the legs is a bad proxy for that and is recorded
         # here only as a fact, not as a target: this grouping measured 1.28x and

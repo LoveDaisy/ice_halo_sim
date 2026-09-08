@@ -1194,13 +1194,13 @@ the cheap scope first is only followed by someone who knows what the cheap scope
 This is **not** an audit of the suite, and must not be cited as one. It looks at the head of the
 cost distribution and states the tail it did not look at:
 
-- **Covered in depth**: the three local scopes end to end, and the 8 CI jobs of 391s or longer —
-  4427s of the 5089s of machine time in §7.1's table, i.e. **87%**.
-- **Listed but not analyzed**: the 8 remaining CI jobs, together 662s, i.e. **13%**. Four are
-  second-scale gates (`policy` 24s, `format-check` 13s, `new-refs` 8s, `benchmark-summary` 7s) and
-  three are compile-only jobs (`windows-cuda-compile` 225s, `cuda-compile` 141s, `bench-compile`
-  63s) whose duration says nothing about which tests should run, plus `Ubuntu ARM64` (181s), the
-  cheapest leg of the build matrix. Both proportions are recomputable from that table.
+- **Covered in depth**: the three local scopes end to end, and the 8 CI jobs of 456s or longer —
+  4246s of the 4950s of machine time in §7.1's table, i.e. **86%**.
+- **Listed but not analyzed**: the 7 remaining CI jobs, together 704s, i.e. **14%**. Three are
+  second-scale gates (`policy` 27s, `format-check` 13s, `new-refs` 7s) and three are compile-only
+  jobs (`windows-cuda-compile` 221s, `cuda-compile` 164s, `bench-compile` 85s) whose duration says
+  nothing about which tests should run, plus `Ubuntu ARM64` (187s), the cheapest leg of the build
+  matrix. Both proportions are recomputable from that table.
 - **Not enumerated at all**: the individual cases inside a scope. `gui_test` runs 344 cases across
   38 categories (338 in its correctness pool, 6 in the real-timing pool, per the binary's own run
   summary); the fast e2e set collects 105; neither was gone through case by case. One
@@ -1260,54 +1260,94 @@ rebuild after touching one leaf `.cpp` is **33s**; after touching `src/core/math
 350s, and its steady-state cost during an edit-test loop is about 210s.
 
 **CI.** Runners: GitHub-hosted, per job (`ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`,
-`windows-2025`; the CUDA compile leg uses `windows-2022`). Cache state:
-CPM dependencies come from `actions/cache`, so warmth **depends on that run's cache hit** and is
-not guaranteed; nothing else is cached between runs. Concurrency: the jobs below run in parallel as
-a matrix, so the run's wall clock is its **longest job**, not the sum; within a job, the fast e2e
-leg runs `pytest` serially and the slow e2e legs run `-n 3` (with the throughput gates re-run
-serially afterwards, so they do not measure under load).
+`windows-2022`). Cache state: CPM dependencies come from `actions/cache` on every leg, so warmth
+**depends on that run's cache hit** and is not guaranteed. `Windows MSVC x86_64` additionally runs
+its compiler through **sccache**, whose disk cache is a second `actions/cache` entry in a key
+namespace of its own — so that one leg's duration is a function of cache state in a way the others
+are not, and the table below says which state it was measured in. Concurrency: the jobs below run
+in parallel as a matrix, so the run's wall clock is its **longest job**, not the sum; within a job,
+the fast e2e leg runs `pytest` serially and the slow e2e legs run `-n 3` (with the throughput gates
+re-run serially afterwards, so they do not measure under load).
 
-The figures are the union of a push run and a pull-request run of the same commit (`495c6f6b`),
-because neither event alone runs every job: the build matrix, `policy` and `format-check` are
-push-only, while `e2e-test`, the `E2E Slow` legs and `new-refs` run on pull requests and `main`.
+The figures are one pull-request run (`9656077f`, 2026-09-08), read off the GitHub Actions job and
+step timestamps. One run rather than the union of two, which earlier editions of this table needed:
+every job in the workflow now runs on a `pull_request` event, so a single run yields every row and
+the rows can be added up. `benchmark-summary` is the exception and is absent below — it is guarded
+to `push` on `main` because it writes the gh-pages benchmark history.
 
 | CI job | Seconds | In §7.0's covered head? |
 |---|---|---|
-| Windows MSVC x86_64 | **740** | yes — longest job, sets the run's wall clock |
-| shared-gui-test-build | 666 | yes |
-| Ubuntu x86_64 | 635 | yes |
-| E2E Slow (macOS ARM64 parity) | 597 | yes |
-| e2e-test | 512 | yes |
-| macOS ARM64 | 464 | yes |
-| E2E Slow (Ubuntu x86_64) | 422 | yes |
-| E2E Slow (macOS ARM64 rest) | 391 | yes |
-| windows-cuda-compile | 225 | no — compile-only |
-| Ubuntu ARM64 | 181 | no |
-| cuda-compile | 141 | no — compile-only |
-| bench-compile | 63 | no — compile-only |
-| policy | 24 | no — second-scale gate |
+| shared-gui-test-build | **734** | yes — longest job, sets the run's wall clock |
+| E2E Slow (macOS ARM64 parity) | 556 | yes |
+| Ubuntu x86_64 | 530 | yes |
+| Windows MSVC x86_64 | 528 | yes — sccache warm; see the two cache states below |
+| macOS ARM64 | 507 | yes |
+| e2e-test | 473 | yes |
+| E2E Slow (Ubuntu x86_64) | 462 | yes |
+| E2E Slow (macOS ARM64 rest) | 456 | yes |
+| windows-cuda-compile | 221 | no — compile-only |
+| Ubuntu ARM64 | 187 | no |
+| cuda-compile | 164 | no — compile-only |
+| bench-compile | 85 | no — compile-only |
+| policy | 27 | no — second-scale gate |
 | format-check | 13 | no — second-scale gate |
-| new-refs | 8 | no — second-scale gate |
-| benchmark-summary | 7 | no — second-scale gate |
-| | **5089s total machine time** | head = 4427s (87%) |
+| new-refs | 7 | no — second-scale gate |
+| | **4950s total machine time** | head = 4246s (86%) |
 
-Where a job's time goes differs by job, and the split cannot be assumed. Step-level timestamps
-from an earlier run of the same shape: `Windows MSVC x86_64` was 78% compile (568s of 726s);
-`shared-gui-test-build`, which runs nothing, 92% compile (589s of 641s); `E2E Slow (macOS rest)`
-was 8% compile and **89% test execution** (612s of 686s); `e2e-test` 84% test execution (377s of
-450s). Those percentages come from a different run than the totals above and are shape, not
-precision.
+**`Windows MSVC x86_64` has two durations now, and quoting one of them alone is a mistake.** Its
+compiler cache is keyed per commit with a prefix fallback, so the exact key essentially never hits
+in normal operation — every run restores the *previous* commit's cache and recompiles whatever the
+change touched. Four runs, all on `windows-2022`, all read off step timestamps:
+
+| Cache state | sccache hit rate | `Build` | Job total |
+|---|---|---|---|
+| Before sccache (14 `main` runs) | — | mean **574s** (sd 64, 434–637) | mean **736s** (sd 71, 598–832) |
+| Cold — neither key nor prefix hits | 0.00% (0/290) | 531s | 684s |
+| Prefix hit, ~20 files changed | 36.99% (108/292) | 426s | 605s |
+| Prefix hit, a smaller change | 86.64% (253/292) | 374s | 528s |
+| Exact-key hit (a re-run of one commit) | 99.66% (289/290) | 317s | — |
+
+Three things that table is for, none of which the headline "−28%" says on its own:
+
+- **`Build` has a floor sccache cannot go under.** Fitting the two extremes gives
+  `Build ≈ 316s + 0.74s × (missed translation units)` — the 36.99% row lands at 426s against a
+  predicted 452s, i.e. within run-to-run noise. The 316s is linking, cache lookups and writing
+  292 object files; only the marginal 0.74s per unit is cacheable. So the most sccache can ever
+  take off this step is about 214s, and a proposal that assumes it scales further is wrong.
+- **The cold row costs nothing measurable.** 531s and 684s both sit inside the pre-sccache range,
+  so a first run on a branch with no cache to restore is not a regression — it just does not win.
+- **Transfer is not the bottleneck anyone expected it to be.** Restoring the 385 MiB directory took
+  4–6s (150 MB/s) and saving it 3–27s as it grew to 793 MiB across four runs. `SCCACHE_CACHE_SIZE`
+  is set to 2G; the directory reached 793 MiB after four runs, because a cache restored through the
+  prefix keeps both the old objects and the new ones. That growth is worth watching against the
+  repository's 10 GB `actions/cache` quota, where it competes with the `cpm-*` entries (~175 MB
+  each, restored in 4–6s in these same runs).
+
+Where a job's time goes differs by job, and the split cannot be assumed. From the same run as the
+table: `Windows MSVC x86_64` is 71% compile (374s of 528s) — down from 78% before sccache, which is
+what a cache that only touches compilation does to a ratio. Step-level timestamps from an earlier
+run for the rest: `shared-gui-test-build`, which runs nothing, 92% compile (589s of 641s);
+`E2E Slow (macOS rest)` 8% compile and **89% test execution** (612s of 686s); `e2e-test` 84% test
+execution (377s of 450s). Those three come from a different run than the totals above and are
+shape, not precision.
 
 **Two facts about this table that any CI-time proposal has to answer to.**
 
-1. **The critical path is `Windows MSVC x86_64` (740s) and, behind it, `shared-gui-test-build`
-   (666s).** A run's wall clock is its longest job and nothing else. Therefore: *any proposal to
-   "shorten CI" that does not touch those two jobs buys zero wall clock*, however much machine time
-   it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a plan, a PR
-   description, or a review comment — it must first answer **"does it shorten the longest job?"**.
+1. **The critical path is `shared-gui-test-build` (734s) and, behind it, `E2E Slow (macOS ARM64
+   parity)` (556s).** A run's wall clock is its longest job and nothing else. Therefore: *any
+   proposal to "shorten CI" that does not touch those two jobs buys zero wall clock*, however much
+   machine time it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a
+   plan, a PR description, or a review comment — it must first answer **"does it shorten the longest
+   job?"**.
+   This is the second job to hold that title, and the handover is the argument for re-reading the
+   table rather than remembering it. `Windows MSVC x86_64` used to be the ceiling at 736s mean
+   (n=14) against `shared-gui-test-build`'s 674s mean (n=14, sd 38); sccache moved it to 528–605s
+   across two runs with real change sets, which puts it fifth. Anything written against the old
+   ordering — "the Windows leg is the ceiling", "this is free because it lands on Ubuntu" — has to
+   be re-derived, not carried forward.
    The corollary that keeps catching people: rebalancing two shards against each other is worth CI
-   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs sit 143s and
-   349s under the ceiling, so packing them closer is currently worth nothing (`ci.yml`'s `e2e-slow`
+   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs sit 178s and
+   278s under the ceiling, so packing them closer is currently worth nothing (`ci.yml`'s `e2e-slow`
    matrix comment carries the same statement next to the code it constrains).
 2. **A floor sits under the `E2E Slow (macOS ARM64 parity)` leg that no repacking removes.**
    `test_capi_sentinel_overflow` is **one indivisible pytest case** (3 configs × 12 rounds inside a
@@ -1447,8 +1487,8 @@ filter to it is a measurement someone still has to take rather than a free win. 
 if `export_parity` were enabled is not the blocker either: its
 filter takes 24.6s on the 12-core machine of §7.1, which extrapolates to roughly 70–90s on
 a 4-vCPU runner — **an extrapolation, not a measurement** — and it would land inside the
-`Ubuntu x86_64` leg, which sits at 635s — 105s below the `Windows MSVC` ceiling — so by §7.1's
-fact 1 it would still cost close to zero wall clock. The blocker is the known red, so the sequence
+`Ubuntu x86_64` leg, which sits at 530s — 204s below the `shared-gui-test-build` ceiling — so by
+§7.1's fact 1 it would still cost close to zero wall clock. The blocker is the known red, so the sequence
 is: close the upstream ray-count shortfall first, re-measure on a real runner, then widen the
 filter. Widening it is a measurement, not an edit. (`preview_export_parity` costs 0.2s wall on that
 same machine, process start included — it waits for no run — so its own cost never enters this
