@@ -73,6 +73,33 @@ TEST(QueueTest, EmptyReflectsQueueContents) {
   EXPECT_TRUE(q.Empty()) << "drained back to empty";
 }
 
+TEST(QueueTest, DrainAllReturnsEverythingInFifoOrder) {
+  Queue<int> q;
+  for (int i = 0; i < 5; ++i) {
+    q.Emplace(i);
+  }
+  auto drained = q.DrainAll();
+  ASSERT_EQ(drained.size(), 5u);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(drained[static_cast<size_t>(i)], i) << "DrainAll must preserve queue order";
+  }
+  EXPECT_TRUE(q.Empty());
+  EXPECT_TRUE(q.DrainAll().empty()) << "draining an empty queue yields nothing";
+}
+
+TEST(QueueTest, DrainAllLeavesTheQueueOpen) {
+  // The distinction from Shutdown(), and the reason DrainAll exists as its own operation:
+  // the queue must still accept and deliver items afterwards. A DrainAll implemented as
+  // Shutdown()+Start() would silently drop this Emplace (Emplace is a no-op while shut
+  // down) and then deadlock the Get() below on the empty-queue predicate.
+  Queue<int> q;
+  q.Emplace(1);
+  EXPECT_EQ(q.DrainAll().size(), 1u);
+  q.Emplace(2);
+  EXPECT_FALSE(q.Empty());
+  EXPECT_EQ(q.Get(), 2);
+}
+
 TEST(QueueTest, GetBlocksUntilEmplace) {
   // Consumer thread calls Get() first; main thread Emplaces; consumer wakes.
   // Synchronization point is t.join(): if consumer never unblocks, join hangs the test.

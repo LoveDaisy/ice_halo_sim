@@ -1597,6 +1597,17 @@ void ServerImpl::ConsumeData() {
     sim_scene_cnt_ -= static_cast<int>(sim_data.sim_scene_credit_);
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
       scene_cv_.notify_one();
+    } else if (gpu_route_ && !ReadBackendActive()) {
+      // The queue is still deep, so the throttle above would keep the producer parked for
+      // as long as the backlog takes to render — precisely the window GenerateScene's
+      // batch invalidation exists to cut short. Wake it now instead. Fired per consumed
+      // SimData rather than once, deliberately: the store this reads and this notify are
+      // not synchronised with the producer's predicate evaluation, so a single notify
+      // could be lost in that window; repeating it every batch closes the gap without a
+      // second piece of state. It costs one spurious wakeup per batch, only while
+      // degraded, and stops as soon as the invalidation drops the count below the branch
+      // above.
+      scene_cv_.notify_one();
     }
     // The consumer is one of the two threads that can complete the
     // last transition into "this epoch is fully drained" — publish from here,
@@ -1718,7 +1729,37 @@ void ServerImpl::GenerateScene() {
     per_wl_ray_num = PerWavelengthRayNum(per_wl_ray_num, kNsimdataPerBatch);
   }
   size_t committed_num = 0;
+  // One-shot, because backend_active_ only ever goes true -> false inside one Run():
+  // the batches queued at the GPU grain are invalidated the first time the backend is
+  // seen gone, and never again.
+  bool queue_invalidated_on_fallback = false;
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
+    const bool backend_active = ReadBackendActive();
+    // Shrinking the grain only sizes the batches queued FROM HERE ON, and by the time a
+    // fallback is noticed the queue is already full of batches sized for the GPU
+    // (kMaxSceneCnt counts batches, not rays, so the backlog at the CUDA grain is
+    // ~128 x 262144 rays — tens of seconds of single-wavelength frames on the legacy CPU
+    // path, i.e. the whole of the symptom this shrink exists to remove). Those batches are
+    // stale in size, not in content: drop them and re-emit the same ray budget at the new
+    // grain. Under ray_num == "infinite" (the GUI default) they carry no budget at all,
+    // just "trace N more rays", so nothing is lost either way.
+    if (kGpuRoute && !backend_active && !queue_invalidated_on_fallback) {
+      queue_invalidated_on_fallback = true;
+      size_t dropped_batches = 0;
+      const size_t refunded_rays = DiscardQueuedBatchesThenRefund(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch),
+                                                                  *scene_queue_, &dropped_batches);
+      // Hand the dropped batches' budget back to the ledger, or a finite ray_num run
+      // would trace exactly this many rays fewer than the config asked for. The clamp
+      // cannot bind: every batch that can be in the queue was enqueued by this same loop
+      // and added to committed_num at the bottom of its own iteration, so the refund is
+      // always a subset of what was committed. It is here because the underflow it would
+      // guard against is silent (size_t) and would read as an enormous outstanding budget.
+      committed_num -= std::min(committed_num, refunded_rays);
+      ILOG_WARN(logger_,
+                "GenerateScene: backend dropped mid-run; discarded {} queued batches ({} rays refunded to the "
+                "budget) sized for the GPU grain, re-emitting at the legacy grain",
+                dropped_batches, refunded_rays);
+    }
     // Re-decide the grain every iteration. A mid-Run() BackendUnavailableError
     // leaves the GPU route feeding the legacy CPU path, which samples ONE host
     // wavelength per batch — at the GPU grain that is one wavelength per 262144 rays,
@@ -1727,7 +1768,7 @@ void ServerImpl::GenerateScene() {
     // size_t and a swap would not be a compile error.
     const size_t nominal_cap = kBatchCap;
     const size_t fallback_cap = kDefaultRayNum;
-    const size_t iter_cap = EffectiveDispatchCap(kGpuRoute, ReadBackendActive(), nominal_cap, fallback_cap);
+    const size_t iter_cap = EffectiveDispatchCap(kGpuRoute, backend_active, nominal_cap, fallback_cap);
     size_t batch_ray_num = std::min(iter_cap, per_wl_ray_num - committed_num);
     AccountThenPublishBatch(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch), *scene_queue_,
                             SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
@@ -1743,8 +1784,17 @@ void ServerImpl::GenerateScene() {
     if (sim_scene_cnt_ >= kMaxSceneCnt) {
       ILOG_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
       std::unique_lock<std::mutex> lock(scene_mutex_);
-      scene_cv_.wait(lock,
-                     [this]() { return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt; });
+      // The third term is what makes the invalidation above reachable in time. Without it
+      // this wait only ends when the consumer has drained the queue to kMaxSceneCnt/2 —
+      // which, once every batch runs on the legacy CPU path at the GPU grain, is the
+      // backlog itself, rendered in full before the producer ever wakes.
+      // ReadBackendActive() takes prod_mutex_ while scene_mutex_ is held; that nesting is
+      // safe in one direction only — prod_mutex_ is a leaf (its holders call nothing but
+      // Simulator accessors) and nothing takes scene_mutex_ under it. Keep it that way.
+      scene_cv_.wait(lock, [this, kGpuRoute, &queue_invalidated_on_fallback]() {
+        return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt ||
+               (kGpuRoute && !queue_invalidated_on_fallback && !ReadBackendActive());
+      });
       ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
     CHECK_STOP
