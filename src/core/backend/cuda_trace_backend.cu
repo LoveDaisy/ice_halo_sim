@@ -3967,7 +3967,16 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     return std::make_unique<CudaLayerHandle>(0u, LayerStats{0u, 0.0f});
   }
 
-  // Local helper: Reset() + BackendUnavailableError for CUDA call failures.
+  // Local helper: Reset() + BackendUnavailableError for CUDA call failures. FATAL —
+  // contrast elapsed_ms_nonfatal() further down, which is the file's only non-fatal
+  // CUDA error path.
+  // Sticky-error discipline: every kernel-launch check fed into this helper must read
+  // the sticky state with cudaGetLastError(), never cudaPeekAtLastError(). Peek leaves
+  // the error set, so a launch check reporting "clean" still hands whatever it saw to
+  // the NEXT check, which then blames a call that never failed — the exact mechanism
+  // that turned an unrecorded timing event into a bogus "gen_root_kernel launch:
+  // invalid resource handle". Get consumes what it reads, so each check answers only
+  // for the launch it guards.
   auto ck_reset = [this](cudaError_t e, const char* ctx) {
     if (e != cudaSuccess) {
       impl_->Reset();
@@ -4076,6 +4085,12 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   // ci_start + count, where `count` is the layer's total ray count `n` — so
   // base + sum(ci_n) never exceeds the allocation.
   size_t probe_win_off = 0;
+  // All-zero-partition guard: tracks whether ANY ci reached a real dispatch, i.e.
+  // whether the ev_end_h2d_ / ev_end_kernel_ pair below actually got recorded this
+  // call. The `continue` right underneath is what makes that conditional: a layer
+  // whose every ci drew zero rays skips the whole body. See the backfill after the
+  // loop for why an unrecorded event is not merely a missing log number.
+  bool any_ci_dispatched = false;
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
     const size_t ci_n = crystal_ray_num[ci];
     if (ci_n == 0u) {
@@ -4218,7 +4233,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                      static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
                                      impl_->d_lat_attempts_,
                                      static_cast<uint32_t>(impl_->lat_attempts_ci_start_ + probe_win_off));
-      ck_reset(cudaPeekAtLastError(), "gen_root_kernel launch");
+      ck_reset(cudaGetLastError(), "gen_root_kernel launch");
       impl_->gen_ray_count_ += ci_n;
       if (!ms_setting.crystal_.axis_.IsAxisDeterministic()) {
         impl_->orientation_count_this_batch_ += ci_n;
@@ -4321,7 +4336,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           static_cast<uint32_t>(impl_->probe_ci_start_ + probe_win_off),
           // task-331.6: carry the component mask cont[in_slot] slice → root.
           impl_->d_cont_component_[in_slot] + ci_start, impl_->d_root_component_);
-      ck_reset(cudaPeekAtLastError(), "transit kernel launch");
+      ck_reset(cudaGetLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
       if (!ms_setting.crystal_.axis_.IsAxisDeterministic()) {
         impl_->orientation_count_this_batch_ += ci_n;
@@ -4442,12 +4457,16 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         // Exposure anchor: a session-constant plane + its session-constant projection.
         impl_->d_anchor_buf_,
         impl_->anchor_proj_params_);
-    ck_reset(cudaPeekAtLastError(), "kernel launch");
+    ck_reset(cudaGetLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
     // kernel_ms to ~0ms after the multi-CI rewrite — they recorded back-to-back
     // before any compute observed by the timer.
     cudaEventRecord(impl_->ev_end_kernel_, impl_->stream_);
+    // All-zero-partition guard: set only here, i.e. once BOTH events of the pair
+    // are recorded — the flag's meaning is "the pair is recorded", not "the loop
+    // body was entered".
+    any_ci_dispatched = true;
     // S2: gate_ray_count_ is advanced for BOTH ms_modes now — the ms_mode==0
     // path also draws prob via the gate stream so every dispatch (final or
     // not) must consume a disjoint global_idx range to avoid stream collision
@@ -4455,6 +4474,25 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->gate_ray_count_ += ci_n;
     probe_win_off += ci_n;
   }  // ci-loop
+
+  // All-zero-partition guard: the ev_end_h2d_ / ev_end_kernel_ pair is recorded
+  // INSIDE the loop on purpose (S2, see the comment at its record site) — but that
+  // makes the record CONDITIONAL on at least one ci dispatching, and
+  // PartitionCrystalRayNum returns all-zero whenever every crystal_proportion_ in
+  // this layer is 0 (simulator.cpp: total_prop <= 0 short-circuits). The events are
+  // created once per backend INSTANCE (events_created_) while a backend is built per
+  // Run(), so on a Run whose FIRST TraceLayer is all-zero these two events have never
+  // been recorded at all. cudaEventElapsedTime on an unrecorded event then returns
+  // cudaErrorInvalidResourceHandle AND leaves it on the sticky error state, where the
+  // next batch's kernel-launch check reads it back and blames gen_root_kernel —
+  // dropping the whole GPU backend to legacy CPU for the rest of the Run. Backfilling
+  // the pair here makes every TraceLayer exit leave both events recorded. Dead code on
+  // the normal path (any ci dispatched); the timings it produces for an all-zero layer
+  // are ~0 ms, which is the truth for a layer that dispatched nothing.
+  if (!any_ci_dispatched) {
+    cudaEventRecord(impl_->ev_end_h2d_, impl_->stream_);
+    cudaEventRecord(impl_->ev_end_kernel_, impl_->stream_);
+  }
 
   // 4B readback (synchronous on the default stream — also the first sync
   // point that surfaces async kernel errors: check the return value).
@@ -4486,12 +4524,32 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     }
   }
 
-  float h2d_ms = 0.0f;
-  float kernel_ms = 0.0f;
-  float d2h_ms = 0.0f;
-  cudaEventElapsedTime(&h2d_ms, impl_->ev_start_h2d_, impl_->ev_end_h2d_);
-  cudaEventElapsedTime(&kernel_ms, impl_->ev_end_h2d_, impl_->ev_end_kernel_);
-  cudaEventElapsedTime(&d2h_ms, impl_->ev_end_kernel_, impl_->ev_end_d2h_);
+  // Timing reads are NON-FATAL: reading a timing event is DIAGNOSTIC ONLY — the three
+  // values below feed nothing but the ILOG_DEBUG line directly underneath. This helper
+  // is therefore deliberately NON-FATAL, unlike the three fatal error helpers in this
+  // file (CheckCuda / TraceLayer's ck_reset / Recombine's ck): it warns, CLEARS the
+  // sticky error so a failed timer read cannot be mis-attributed to the next
+  // kernel-launch check, and reports 0 ms for that segment. Letting a failed *timer
+  // read* discard the whole GPU backend is the diagnostic-failure-amplified-into-
+  // functional-failure mistake this task exists to remove. A genuine CUDA fault does
+  // not hide here: every other call site checks its own direct return value.
+  auto elapsed_ms_nonfatal = [this](cudaEvent_t begin, cudaEvent_t end, const char* ctx) -> float {
+    float ms = 0.0f;
+    const cudaError_t e = cudaEventElapsedTime(&ms, begin, end);
+    if (e != cudaSuccess) {
+      if (impl_->logger != nullptr) {
+        ILOG_WARN(*impl_->logger,
+                  "CudaTraceBackend::TraceLayer: {} timing read failed: {}; reporting 0ms",
+                  ctx, cudaGetErrorString(e));
+      }
+      (void)cudaGetLastError();  // consume it here; do not leave it for the next check
+      return 0.0f;
+    }
+    return ms;
+  };
+  const float h2d_ms    = elapsed_ms_nonfatal(impl_->ev_start_h2d_,  impl_->ev_end_h2d_,    "H2D");
+  const float kernel_ms = elapsed_ms_nonfatal(impl_->ev_end_h2d_,    impl_->ev_end_kernel_, "kernel");
+  const float d2h_ms    = elapsed_ms_nonfatal(impl_->ev_end_kernel_, impl_->ev_end_d2h_,    "D2H");
 
   if (impl_->logger != nullptr) {
     ILOG_DEBUG(*impl_->logger,
@@ -4630,7 +4688,11 @@ RootRaySource CudaTraceBackend::Recombine(LayerHandlePtr handle, const Recombine
                                        impl_->d_cont_component_[written_slot],
                                        impl_->d_cont_component_[other_slot],
                                        cont_n, shuf_seed);
-    cudaError_t launch_err = cudaPeekAtLastError();
+    // Sticky-error discipline: cudaGetLastError, not Peek — this check must consume
+    // what it reads so it cannot leak state into the next one. Same rule as TraceLayer's
+    // ck_reset (see its comment); this call site is hand-written and does not route
+    // through that helper.
+    cudaError_t launch_err = cudaGetLastError();
     if (launch_err != cudaSuccess) {
       impl_->Reset();
       throw BackendUnavailableError(std::string{"CudaTraceBackend::Recombine: shuffle_cont_kernel launch: "} +
