@@ -8,13 +8,6 @@
 
 namespace lumice {
 
-// TEMPORARY measurement probe — the very next commit removes it.
-// sccache hashes preprocessor OUTPUT, so a comment-only edit is invisible to it and would
-// measure nothing. This is a real declaration in a header 33 files include directly, which is
-// what makes the next CI run land where every real change lands: the exact cache key misses,
-// restore-keys supplies the previous commit's cache, and part of it is stale.
-inline constexpr int kSccacheStalenessProbe = 0;
-
 class Rotation {
  public:
   Rotation();
