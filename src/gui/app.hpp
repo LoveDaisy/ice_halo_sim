@@ -269,15 +269,25 @@ void CalibrateQualityThreshold();
 // Callers that mirror main.cpp's 70ms throttle (dirty-clear / restart accounting)
 // MUST gate those side effects on the returned bool — see main.cpp,
 // test/gui/test_gui_main.cpp, test/gui/responsiveness/test_gui_perf.cpp.
-// Callers outside the auto-commit throttle (button clicks, DoOpen/DoNew paths)
-// are expected to run when the current Run is not RUNNING, so the gate
-// short-circuits open and they may discard the return value. This expectation is
-// NOT code-enforced: a non-throttle DoRun racing into the narrow
-// RUNNING-but-first-batch-not-yet-landed window would be gated and its commit
-// dropped with no automatic retry. That window is transient (first batch is
-// ~O(100ms)) and no current non-throttle caller is reachable during it; revisit
-// (add an explicit retry or assert) if a future UI path can trigger DoRun
-// mid-first-batch.
+//
+// That gate applies to `user_initiated == false` ONLY, so `false` can never be
+// returned to a user-initiated caller: an explicit Run always reaches either a
+// commit or a pre-commit validation failure, and both of those are `true`. The
+// gate defends against a machine cadence (a continuous 70ms re-submit while a
+// slider is dragged), which a click does not have; and gating a click has a cost
+// of its own — the commit is dropped silently, so a user who dismissed the
+// overflow modal and deliberately pressed Run again would get nothing back at
+// all. The mechanism is spelled out at the gate itself in app.cpp.
+//
+// The obligation that moves onto the caller: because nothing inside this function
+// throttles a user-initiated call any more, a NEW user-initiated call site must
+// itself ensure it cannot fire back-to-back into a Run that is still RUNNING with
+// no batch consumed. Both call sites today do that the same way and it is the
+// pattern to follow — the top-bar Run button and the Save-Modified popup's "Run
+// first" are drawn only while no Run is in flight (see IsSimulating / IsStopping
+// in sim_state_rules.hpp), so neither is clickable during that window. A caller
+// that cannot make that guarantee (a key repeat, a scripted or batch entry point)
+// needs its own throttle before it calls here; this function will not supply one.
 //
 // task-gui-feedback-affordances Step 2 (AC3) — `user_initiated` distinguishes
 // user-clicked Run (top-bar Run button, "Run first" in the Save-Modified

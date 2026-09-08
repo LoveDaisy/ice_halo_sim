@@ -15,8 +15,8 @@
 // message, dismisses it, presses Run deliberately, and nothing happens at all.
 //
 // So the rule has two halves that pull against each other, and both are pinned here per trigger.
-// They do not resolve the same way on both branches — the table below says which, and says so
-// explicitly rather than asserting the symmetry a reader would assume.
+// They resolve the same way on both branches: which limit was hit decides what the message says,
+// not whether the modal comes back.
 
 #include <gtest/gtest.h>
 
@@ -129,19 +129,21 @@ TEST(RunWarningChain, ARepeatedOverflowReopensOnlyWhenTheUserAsksAgain) {
     { "a rejected filter, re-committed automatically", SeedClauseOverflowFilter, false, false },
     { "a rejected filter, Run pressed again", SeedClauseOverflowFilter, true, true },
     { "a degraded colour set, re-committed automatically", SeedColourPredicateOverflow, false, false },
-    // ⚠ The two branches DISAGREE here, and this row records the disagreement rather than the
-    // symmetry one would expect. On the rejection branch a deliberate Run clears the in-flight
-    // message first, so the modal opens again; on the degradation branch the commit succeeds and
-    // that clear does not happen, so a user who dismissed the notice and pressed Run again sees
-    // nothing at all. Measured, not assumed — this row was written expecting `true` and the
-    // product said otherwise.
+    // This row used to be pinned at `false`, on the reading that the degradation branch skips the
+    // clear-then-set that the rejection branch performs. It does not: both branches end in the
+    // same two statements, `if (user_initiated) ClearGuiWarning();` followed by
+    // `SetGuiWarning(msg)`. What actually differed was upstream of them — the rejection branch
+    // returns before LUMICE_CommitScene, so no simulation ever starts and DoRun's backpressure
+    // gate is never armed, while the degradation branch commits and leaves a Run in flight. The
+    // second DoRun then met a gate that swallowed the whole commit, and whether it did was a race
+    // against a background poller consuming the first batch, so the row was pinning a coincidence
+    // of scheduling and not a property of either branch.
     //
-    // Whether that is the intended behaviour is a product question and is deliberately not
-    // decided here: this file's job is to state what the collaboration does, and an asymmetry
-    // stated is an asymmetry someone can now argue about. Before this row existed the case was
-    // simply uncovered — the old suite pinned re-fire for the rejection branch and de-duplication
-    // for the degradation branch, and never crossed them.
-    { "a degraded colour set, Run pressed again", SeedColourPredicateOverflow, true, false },
+    // The gate now applies to the auto-commit path only (see DoRun in app.cpp), which is what
+    // makes this row decidable at all: a deliberate Run reaches its branch whatever the running
+    // simulation is doing. Both branches then reopen, which is the half of the rule this file's
+    // header calls "the user reads the message, dismisses it, presses Run, and nothing happens".
+    { "a degraded colour set, Run pressed again", SeedColourPredicateOverflow, true, true },
   };
 
   for (const Case& c : kCases) {
