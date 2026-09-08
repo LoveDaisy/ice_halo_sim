@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788879786429,
+  "lastUpdate": 1788879789564,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "28e5a9de538df35ed7b5b980592cd051c1109e71",
-          "message": "Merge pull request #226 from LoveDaisy/chore/dead-weight-closeout\n\nchore(dead-weight-closeout): delete orphaned Server::CommitConfigFromFile, fix stale ExitRayRecord size comments",
-          "timestamp": "2026-07-25T23:16:52+08:00",
-          "tree_id": "6622931ec23b0c2436e0728a5bdcc31f2e48b31d",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/28e5a9de538df35ed7b5b980592cd051c1109e71"
-        },
-        "date": 1784993018004,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 84.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 87.6,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "b8248749346e73a9c28c6d9b8c8e68d688f477bc",
           "message": "Merge pull request #227 from LoveDaisy/chore/unified-logging-gate\n\nchore: route src/ diagnostics through the logger, gate bare prints",
           "timestamp": "2026-07-26T00:33:32+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 91.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e06d6f8ee003f53159f4265e0a60478c3912298f",
+          "message": "Merge pull request #324 from LoveDaisy/perf/cli-render-poll-floor\n\nperf(cli): poll completion before sleeping, so a render is not floored at 1s",
+          "timestamp": "2026-09-08T22:52:18+08:00",
+          "tree_id": "0e0c25fa9ce2a27fc0554ad989a39b2c64786891",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e06d6f8ee003f53159f4265e0a60478c3912298f"
+        },
+        "date": 1788879788663,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 80.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.3,
             "unit": "%"
           }
         ]
