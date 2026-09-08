@@ -119,6 +119,19 @@ Checks:
      a single byte of the program — which is exactly why the cap is worth
      pinning mechanically instead of remembering.
 
+  16. no-render-in-benchmark-poll — RunBenchmarkPass (src/main.cpp) must not
+     call LUMICE_AcquireResultFrame, nor the file's three wrappers around it
+     (SaveRenderResults / SaveCompositeResults / PrintStats). Acquiring a frame
+     runs a full DoSnapshot plus per-pixel sRGB conversion; doing that once per
+     poll is charged to the throughput number the pass exists to report. It has
+     happened once (retired in f717a8f5): the render tax dominated wall time,
+     starved drain-window closure, and on CUDA kept an unbounded session alive
+     long enough to trip the 32-bit device PCG ray-index cap, i.e. a silent
+     fallback to legacy plus a hang. The rule is a source scan and not a timing
+     test because putting the defect back was *measured* to move CPU wall time
+     by 1.01x and Metal by 0.88x — no wall-clock oracle in this repo can see it,
+     while "did the pass acquire a frame at all" is answerable without a run.
+
 Add a new check as a function returning a list of Violation and append it to
 CHECKS, and add a numbered entry above. Keep each check deterministic and
 artifact-inspecting.
@@ -1745,6 +1758,82 @@ def check_pytest_invocation_marker() -> list[Violation]:
     return out
 
 
+# --- no-render-in-benchmark-poll ---------------------------------------------
+#
+# `RunBenchmarkPass` measures throughput, so anything it does per poll is charged
+# to the rate it reports. Materializing a result frame is the expensive thing the
+# CLI can do: LUMICE_AcquireResultFrame runs a full DoSnapshot plus the
+# RenderConsumer's per-pixel sRGB conversion. Doing it once per poll in the
+# drain-count loop dominated wall time, starved drain-window closure, and on CUDA
+# let the unbounded session run long enough to trip the 32-bit device PCG
+# ray-index cap — a silent fallback to legacy plus a hang. That is not a
+# hypothetical: it is what the retired f717a8f5 did, and the fix is the comment
+# above LUMICE_GetSimRayCount saying to read the cheap O(1) counter instead.
+#
+# Why this is a checker rather than a wall-clock test: putting the defect back
+# was measured to move CPU wall time by 1.01x and Metal by 0.88x. Every
+# timing-based oracle in this repo has zero detection power against it. The
+# observable that does separate the two states is "did the pass acquire a frame
+# at all", and a source scan answers that at commit time without a run.
+#
+# The banned names are the C API chokepoint plus this file's own three wrappers
+# around it. Since the legacy result getters were removed in favour of the
+# LUMICE_ResultFrame handle (see src/include/lumice.h), acquiring a frame is the
+# only way to reach a render, so the list is closed rather than a sample.
+BENCHMARK_PASS_SIGNATURE = re.compile(r"^void RunBenchmarkPass\s*\(", re.MULTILINE)
+RENDER_TRIGGERING_CALLS = (
+    "LUMICE_AcquireResultFrame",
+    "SaveRenderResults",
+    "SaveCompositeResults",
+    "PrintStats",
+)
+
+
+def check_no_render_in_benchmark_poll() -> list[Violation]:
+    """`RunBenchmarkPass` in src/main.cpp must not materialize a result frame.
+
+    Locates the function by a column-0 `void RunBenchmarkPass(` line and ends it
+    at the next column-0 `}` — the brace style every top-level function in this
+    file uses. Comments are blanked first (code_lines), so the constant docs that
+    *name* LUMICE_AcquireResultFrame do not trip the rule.
+
+    Known limitation, stated rather than papered over: if the function is renamed
+    or split into helpers, the signature regex matches nothing and this check
+    returns empty forever. That is a loss of detection power, not a false
+    positive — the same shape as the gaps recorded on the two rules above, and
+    the reason test_check_policies_no_render_in_benchmark_poll.py pins the
+    boundary-finding behaviour rather than the wording of the pattern.
+    """
+    out: list[Violation] = []
+    path = SRC / "main.cpp"
+    if not path.is_file():
+        return out
+    lines = list(code_lines(path))
+    start = None
+    for lineno, _orig, code in lines:
+        if start is None:
+            if BENCHMARK_PASS_SIGNATURE.match(code):
+                start = lineno
+            continue
+        if code.startswith("}"):
+            break
+        for name in RENDER_TRIGGERING_CALLS:
+            if re.search(rf"\b{name}\s*\(", code):
+                out.append(
+                    Violation(
+                        path,
+                        lineno,
+                        "no-render-in-benchmark-poll",
+                        f"`{name}` materializes a result frame (full DoSnapshot + sRGB "
+                        "conversion) inside the throughput measurement. Read the live "
+                        "counters instead (LUMICE_GetSimRayCount / LUMICE_QueryServerState / "
+                        "LUMICE_GetDrainStatus); see the comment above the "
+                        "LUMICE_GetSimRayCount call.",
+                    )
+                )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -1761,6 +1850,7 @@ CHECKS = [
     check_msvc_string_literal_limit,
     check_user_defaults_single_write_path,
     check_pytest_invocation_marker,
+    check_no_render_in_benchmark_poll,
 ]
 
 
@@ -1786,7 +1876,7 @@ def main() -> int:
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
         "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print, "
         "msvc-string-literal-limit, user-defaults-single-write-path, "
-        "pytest-invocation-marker)."
+        "pytest-invocation-marker, no-render-in-benchmark-poll)."
     )
     return 0
 
