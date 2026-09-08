@@ -39,6 +39,25 @@ struct EditModalTarget {
 };
 EditModalTarget GetEditModalTarget();
 
+// Keep the open modal's (layer_idx, entry_idx) binding meaning the same ENTRY across a delete.
+//
+// The binding names a position, so the one operation that can change what it means is an erase:
+// every later element shifts up one and the same numbers now denote a different entry. Call the
+// matching function immediately after erasing, from the delete site itself — that is the only place
+// that knows which index went away, and routing it through here keeps the rule in one function
+// instead of a bounds check at each of the places that read the binding.
+//
+// Three outcomes, in both flavours: the deleted item IS the bound one (close the modal — it has
+// nothing left to edit), the deleted item sat BEFORE it (decrement, so the binding follows its
+// entry down), or after it (nothing to do). A no-op when no modal is open: the stale indices left
+// behind are overwritten wholesale by the next OpenEditModal.
+//
+// Only the modal's own bounds guard in RenderEditModals catches the remaining case, the binding
+// falling off the end of the vector; everything short of that is in range and silently wrong,
+// because Immediate mode writes the edit buffers into the bound entry's pool slots every frame.
+void NotifyEntryDeleted(int layer_idx, int deleted_entry_idx);
+void NotifyLayerDeleted(int deleted_layer_idx);
+
 // Returns the EditTarget corresponding to the currently active tab. Returns
 // EditTarget::kCrystal when no modal is open because ResetModalState() resets
 // g_active_tab to kCrystal on close. Intended solely for resolving the tab in

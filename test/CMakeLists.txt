@@ -293,6 +293,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_identity_formatting.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_semantic_colors.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_edit_modal_delete_binding.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_view_look_at.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})

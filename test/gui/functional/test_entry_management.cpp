@@ -45,7 +45,7 @@
 #include <vector>
 
 #include "IconsFontAwesome6.h"
-#include "gui/edit_modals.hpp"  // IsEditModalOpen — the toggle must not also trip the card's click handler
+#include "gui/edit_modals.hpp"  // IsEditModalOpen / OpenEditModal / GetEditModalTarget — the toggle must not also trip the card's click handler, and the delete cases below read the editor's binding
 #include "gui/gui_state.hpp"
 #include "imgui_internal.h"  // ImGuiWindow — a card's widgets are not addressable by path; see CardWindow
 #include "test_gui_shared.hpp"
@@ -67,6 +67,51 @@ void AddSecondEntryOnItsOwnSlot(ImGuiTestContext* ctx) {
   gui::g_state.layers[0].entries.push_back(card);
   gui::g_thumbnail_cache.OnLayerStructureChanged();
   ctx->Yield(3);
+}
+
+// Three entries in layer 0, each on a crystal slot and a filter slot of its own, with values
+// distinct enough that a slot written with the wrong entry's buffer cannot compare equal.
+//
+// Independent slots are the point: with two cards sharing a pool slot, "the survivor's crystal was
+// overwritten" and "the survivor legitimately sees its own linked slot change" are the same pixels.
+void MakeThreeIndependentEntries(ImGuiTestContext* ctx) {
+  auto& entries = gui::g_state.layers[0].entries;
+  static const char* const kRaypaths[] = { "3-5-7", "3-1-5", "3-2-6" };
+  for (int i = 0; i < 3; ++i) {
+    if (i > 0) {
+      gui::EntryCard card;
+      card.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::g_state.crystals.emplace_back();
+      entries.push_back(card);
+    }
+    gui::g_state.crystals[entries[i].crystal_id].height = 1.0f + static_cast<float>(i);
+    gui::FilterConfig f;
+    f.SetRaypath(gui::RaypathParams{ kRaypaths[i] });
+    gui::SetFilter(gui::g_state, entries[i], f);
+  }
+  gui::g_thumbnail_cache.OnLayerStructureChanged();
+  ctx->Yield(3);
+  IM_CHECK_SILENT(entries.size() == 3);
+}
+
+// Open the editor on one entry the way the production default leaves it: Immediate mode, so it is a
+// plain window and the cards behind it stay clickable, parked off to the right so the rail is not
+// covered — which is how a user who dragged it aside (or onto a second display, this window can
+// become its own OS viewport) leaves it without noticing it is still open.
+//
+// Driven through OpenEditModal rather than by clicking the card, because a click on the card is
+// itself one of the things the editor's presence changes; what these cases are about starts once it
+// is open.
+void OpenImmediateEditorOnEntry(ImGuiTestContext* ctx, int entry_idx, int layer_idx = 0) {
+  gui::g_state.modal_immediate_mode = true;
+  gui::EditRequest req{ gui::EditTarget::kCrystal, layer_idx, entry_idx };
+  gui::OpenEditModal(req, gui::g_state);
+  ctx->Yield(4);
+  IM_CHECK_SILENT(gui::IsEditModalOpen());
+  if (ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry")) {
+    ctx->WindowMove("Edit Entry", ImVec2(ImGui::GetIO().DisplaySize.x - w->Size.x, 0.0f));
+    ctx->Yield(2);
+  }
 }
 
 // The Colors window one case parks over the cards, closed on every exit path.
@@ -1256,6 +1301,140 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
                     ref.name, ref.value_left, rows[i].value_left - ref.value_left);
         }
       }
+    };
+  }
+
+  // ===================================================================================
+  // Deleting a card while the Edit Entry editor is open.
+  //
+  // The editor binds its target by INDEX (g_modal_layer_idx / g_modal_entry_idx), and a delete is
+  // the one operation that changes what an index means: erase() shifts every later element up one.
+  // In Immediate mode the editor is an ordinary window rather than a blocking popup, so the rail's
+  // x is reachable while it is open, and its per-frame CommitAllBuffersImmediate keeps writing the
+  // buffers into whatever entry now sits at the bound index. The only case the pre-existing bounds
+  // guard in RenderEditModals catches is the bound index falling off the END of the vector; delete
+  // anything before it and the index stays in range while pointing at a different entry, so the
+  // deleted card's crystal and filter get written over its neighbour's pool slots. That is what the
+  // beta report "whatever lmc I open, the card below will be closed" actually is: the card was not
+  // closed, its contents were overwritten with the deleted card's.
+  //
+  // Both cases assert on the POOL slots (crystals[...] / filters[...]), not on the cards, because
+  // the entry struct only carries ids — a card that kept its id while its slot was rewritten looks
+  // untouched from the card side and is exactly the defect.
+  // ===================================================================================
+
+  // Delete the very card the editor is bound to. The editor must close, and the entry that shifts
+  // up into the freed index must keep its own crystal and filter.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "deleting_the_bound_card_closes_the_editor_it_belongs_to");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+      MakeThreeIndependentEntries(ctx);
+
+      const int cid1 = gui::g_state.layers[0].entries[1].crystal_id;
+      const int fid1 = *gui::g_state.layers[0].entries[1].filter_id;
+      const gui::CrystalConfig crystal_before = gui::g_state.crystals[cid1];
+      const gui::FilterConfig filter_before = gui::g_state.filters[fid1];
+
+      OpenImmediateEditorOnEntry(ctx, 0);
+      if (ctx->IsError()) {
+        return;
+      }
+
+      ctx->ItemClick("**/" ICON_FA_XMARK "##del_0_0");
+      ctx->Yield(6);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      // The survivor kept its identity...
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, cid1);
+      IM_CHECK_EQ(*gui::g_state.layers[0].entries[0].filter_id, fid1);
+      // ...and both of its pool slots still hold what they held. Crystal and filter are asserted
+      // separately: they are written by two different limbs of ApplyBuffersToEntry, and a fix that
+      // only reached one of them would pass a crystal-only check.
+      IM_CHECK(gui::g_state.crystals[cid1] == crystal_before);
+      IM_CHECK(gui::g_state.filters[fid1] == filter_before);
+      // The editor has nothing left to edit, so it is closed rather than silently re-aimed.
+      IM_CHECK(!gui::IsEditModalOpen());
+    };
+  }
+
+  // Delete a card ABOVE the one being edited. The editor must follow its entry down to the new
+  // index rather than stay on the number and start writing into the entry below.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "deleting_a_card_above_the_editor_keeps_it_on_the_same_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+      MakeThreeIndependentEntries(ctx);
+
+      const int edited_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      // Entry 2 is the one the stale binding would land on once entry 0 is gone.
+      const int cid2 = gui::g_state.layers[0].entries[2].crystal_id;
+      const int fid2 = *gui::g_state.layers[0].entries[2].filter_id;
+      const gui::CrystalConfig crystal_before = gui::g_state.crystals[cid2];
+      const gui::FilterConfig filter_before = gui::g_state.filters[fid2];
+
+      OpenImmediateEditorOnEntry(ctx, 1);
+      if (ctx->IsError()) {
+        return;
+      }
+
+      ctx->ItemClick("**/" ICON_FA_XMARK "##del_0_0");
+      ctx->Yield(6);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK(gui::IsEditModalOpen());
+      // Same entry, new index.
+      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, edited_cid);
+      // The entry below it was never the editor's business.
+      IM_CHECK(gui::g_state.crystals[cid2] == crystal_before);
+      IM_CHECK(gui::g_state.filters[fid2] == filter_before);
+    };
+  }
+
+  // The same NotifyLayerDeleted rule, on the LAYER axis and through the real production call site
+  // (RenderLayer's per-layer x -> state.layers.erase -> NotifyLayerDeleted at
+  // src/gui/panels.cpp:1695) rather than a direct function call — the two cases above cover the
+  // entry axis this way, and unit-correctness/gui/test_edit_modal_delete_binding.cpp already pins
+  // the index arithmetic in isolation, so what is missing without this case is proof that the
+  // wiring at the real button is correct. Deleting the layer BEFORE the bound one is the
+  // discriminator: it needs the decrement to be right, where deleting the bound layer itself would
+  // only need a close.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "deleting_a_layer_above_the_editor_keeps_it_on_the_same_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
+
+      const int edited_cid = gui::g_state.layers[1].entries[0].crystal_id;
+
+      OpenImmediateEditorOnEntry(ctx, /*entry_idx=*/0, /*layer_idx=*/1);
+      if (ctx->IsError()) {
+        return;
+      }
+
+      ctx->ItemClick("**/" ICON_FA_XMARK "##layer_0");
+      ctx->Yield(6);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK(gui::IsEditModalOpen());
+      // Same entry, new layer index — the layer that held it shifted up one when layer 0 was
+      // erased.
+      IM_CHECK_EQ(gui::GetEditModalTarget().layer_idx, 0);
+      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, edited_cid);
     };
   }
 }
