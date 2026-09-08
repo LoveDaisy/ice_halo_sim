@@ -1081,9 +1081,24 @@ bool DoRun(bool user_initiated) {
   // (~150ms cold, ~50-80ms after the O2 PSO cache) — without a gate, continuous slider drag
   // restarts the sim before StatsConsumer processes a single batch, starving the preview.
   // Design:
-  //   - Gate only fires when a Run is actively RUNNING AND has not yet consumed any rays.
+  //   - Gate only fires on the auto-commit path (`user_initiated == false`), and only when a Run
+  //     is actively RUNNING AND has not yet consumed any rays.
   //     (LiveSimRays counts root rays consumed by StatsConsumer, reset in CommitConfig on both
   //     rebuild and reuse branches, so `> 0` is equivalent to "first batch landed".)
+  //   - Why an explicit Run is exempt: what this gate defends against is a MACHINE cadence —
+  //     kCommitIntervalMs re-submits every 70ms, continuously and without gaps, for as long as a
+  //     slider is being dragged, which is what outruns the first-batch consume. A click is a
+  //     discrete human event and does not have that shape, so exempting it cannot reopen the
+  //     starvation this gate was built for. The reverse cost is real and is the reason the
+  //     exemption exists at all: gating an explicit Run drops the whole commit silently, so a
+  //     user who read the overflow modal, dismissed it and deliberately pressed Run again would
+  //     get nothing back — no re-run, no modal, no log line. Not gating it costs nothing today,
+  //     because the two user-initiated call sites (the top-bar Run button and the Save-Modified
+  //     popup's "Run first") are both drawn only while no Run is in flight, so back-to-back
+  //     explicit Runs into the RUNNING-but-unconsumed window are not reachable through the UI at
+  //     all; the exemption makes that already-true property hold by construction instead of by
+  //     the button-disabling convention alone. See DoRun's declaration in app.hpp for the
+  //     obligation this places on any NEW user-initiated caller.
   //   - Timer is keyed by lifecycle.epoch, not a raw wall-clock static. Epoch changes → timer
   //     resets, so a stale timer from a previous gui_test scenario cannot leak into a new one.
   //     Contract (task-364 review): this relies on lifecycle.epoch being a per-server monotonic
@@ -1103,7 +1118,7 @@ bool DoRun(bool user_initiated) {
   static std::optional<std::chrono::steady_clock::time_point> gate_since;
   LUMICE_SimLifecycleResult lc0{};
   LUMICE_GetSimLifecycle(g_server, &lc0);
-  if (lc0.lifecycle == LUMICE_LIFECYCLE_RUNNING) {
+  if (!user_initiated && lc0.lifecycle == LUMICE_LIFECYCLE_RUNNING) {
     LUMICE_RayCount live_rays = 0;
     LUMICE_GetSimRayCount(g_server, &live_rays);
     if (live_rays == 0) {
