@@ -172,10 +172,14 @@ TEST(Projection, FisheyeEqualAreaEqualAreaProperty) {
   // the draw either passed or it did not, once and for all. But the standard pins only the law of
   // a distribution adaptor, not its algorithm or its engine consumption, so every standard library
   // draws a DIFFERENT 100000 samples from this seed, and each one is an independent roll of that
-  // 1% die. Measured on this tree's own code path: over 1000 independent resamples the statistic
-  // ranged 1.25 to 32.54 and exceeded the threshold 12 times, i.e. 1.2%. mt19937's output sequence,
-  // by contrast, is fixed by the standard, so drawing straight from it makes all platforms score
-  // the one statistic printed below.
+  // 1% die. How costly a reroll is was measured on this code path, though not by running another
+  // standard library — that cannot be done from here. It was measured by rerolling the way a
+  // different implementation would: 1000 fresh seeds through the same arithmetic, on this machine.
+  // The statistic ranged 1.25 to 32.54 and exceeded the threshold 12 times, i.e. 1.2%, against the
+  // 1% the critical value predicts. The claim that another stdlib rerolls at all is the
+  // specification one above, not a measurement. mt19937's output sequence, by contrast, IS fixed by
+  // the standard, so drawing straight from it makes every platform score the one statistic printed
+  // below.
   //
   // Deliberately NOT fixed by widening the threshold: p = 0.01 is where this test's power to
   // detect a broken equal-area mapping lives, and loosening the ruler to fit the sampling noise
