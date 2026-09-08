@@ -578,6 +578,14 @@ ParityFixture BuildFixture(bool d_applicable_axis) {
 
 // Random raw poly-index sequence generator: ensures each byte is a valid
 // polygon-face index for the hex crystal.
+//
+// The distribution adaptors below are safe because this is a differential test: every generated
+// ray is evaluated by both the host FilterSpec and the Metal kernel, and the assertion is that
+// they agree, which holds for any ray. The draw picks coverage, not verdict. Two things that
+// follow: the adaptors' non-portable sample sequences cannot make this test wrong, and this file
+// is NOT evidence of cross-stdlib agreement — it compares host against device inside one process
+// on one platform. A test asserting against a constant instead of a second implementation needs
+// support/portable_random.hpp.
 std::vector<ParityRay> GenerateRays(const ParityFixture& fx, std::mt19937& rng,
                                     size_t n_rays, size_t face_seq_cap,
                                     bool sweep_check_mode) {

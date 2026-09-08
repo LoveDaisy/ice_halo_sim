@@ -41,6 +41,9 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_crystal.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_crystal_sync_group_sampling.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_rng.cpp"
+  # Portable sampling helpers (support/portable_random.hpp): the mt19937-direct replacements
+  # for std::*_distribution used wherever a test must draw the same samples on every stdlib.
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_portable_random.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_distribution_slots.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
@@ -229,6 +232,9 @@ add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/golden-analytic/core/test_annotation_marker_equivalence.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_pyramid.cpp"
+  # Distribution-level fuzz over unselected shapes: refills the random-sweep coverage the fixed
+  # pools structurally cannot hold, using a portable sample source and ratio ceilings.
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_distribution_fuzz.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_triangulation_swap_spike.cpp")
 target_include_directories(golden_analytic_test

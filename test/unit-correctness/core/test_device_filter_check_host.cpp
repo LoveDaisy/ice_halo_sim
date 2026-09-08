@@ -255,6 +255,15 @@ struct Ray {
   uint32_t filter_idx = 0;
 };
 
+// Distribution adaptors are safe HERE, and the reason is worth stating because it does not
+// transfer. Their sample sequences differ between standard libraries from the same seed, so an
+// assertion that depends on WHICH samples were drawn is not portable. This generator feeds a
+// differential test: every ray it produces goes to both HostCheck and DeviceCheck, and the
+// assertion is that the two agree — true for any ray, so the draw selects coverage, not verdict.
+// What does change across platforms is which 100000 rays get covered. That is acceptable here
+// (three platforms sampling independently covers more, not less) but it means a red on one
+// platform need not reproduce on another. Copy this shape only to another differential test; a
+// test comparing against a constant needs support/portable_random.hpp instead.
 std::vector<Ray> GenerateRays(const Fixture& fx, std::mt19937& rng, size_t n_rays, size_t cap) {
   std::vector<Ray> out;
   out.reserve(n_rays);

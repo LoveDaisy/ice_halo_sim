@@ -160,6 +160,55 @@ vertices satisfy its own half-space inequalities under a scale-relative toleranc
 `DegenerateContractSafe` (degenerate inputs stay bounded, finite, and collapse to
 near-zero area — the graceful-degradation contract, not an exact apex).
 
+### 9. **A random sample source and a tolerant assertion are two separate fixes** (test design)
+
+A geometry test that draws random shapes has two independent ways to be non-portable, and
+fixing one does not fix the other. Both have gone red in this repository.
+
+**Layer one — the sample source.** `std::mt19937`'s output sequence is fixed by the standard
+for a given seed; the distribution adaptors on top of it are pinned only in *law*.
+`[rand.dist.uni.real]` and `[rand.dist.norm.normal]` give the pdf and stop, leaving the
+algorithm and the number of engine draws per sample to the implementation. So the same seed
+draws different samples under libc++, libstdc++ and the MSVC STL. Three divergences are
+recorded in-tree, each from a real incident: opposite Box-Muller pair ordering
+(`test_distribution_slots.cpp`), `uniform_real_distribution<float>` returning its upper bound
+under the MSVC STL (`test_geo3d.cpp`), and `normal_distribution`'s cached second value
+surviving a reseed (`test_distribution_slots.cpp`). Where a test needs random inputs drawn
+alike everywhere, draw from the engine and transform by hand:
+`test/support/portable_random.hpp` is the single owner of that transform.
+
+**Layer two — what the assertion depends on.** Classify before writing `EXPECT_*`:
+
+| | The assertion depends on | Portable? |
+|---|---|---|
+| L1 | the specific values drawn | **No.** Resampling can flip it. |
+| L2 | the distribution's law (a band on a statistic) | **Quantitatively.** Depends on the band width in sigma. |
+| L3 | nothing about the draw — a universal invariant | **Yes.** The draw selects coverage, not verdict. |
+
+L3 keeps `EXPECT_EQ(count, 0)`: finiteness, index bounds, a convex-polygon identity, or a
+differential check feeding one input to two implementations are true for every legal input, so
+sampling only decides how many chances they get to fire. L2 is where judgement is needed, and
+it is arithmetic, not taste — measure the band in sigma. A proportion band at `+-5 sigma`
+fails once in 1.7 million resamples; a chi-squared test against its `p = 0.01` critical value
+fails once in a hundred, and switching standard library **is** a resample. Both look like
+"a tolerant assertion" while differing by four orders of magnitude.
+
+**The two layers compose, and neither alone is enough.** Fixing only the source leaves an L1
+assertion pinned to one arbitrary sample — green, but for no reason. Fixing only the assertion
+leaves each platform drawing its own inputs, so a red does not reproduce where it was reported.
+Note also what a portable source does *not* buy: it pins the sample sequence, not the libm
+arithmetic performed on it (this tree has a measured 1-ULP case from FMA contraction), so
+assertions on computed floats still need tolerances.
+
+**Corollary for golden pools.** A pool selected by structural margin — every sample either
+well clear of a tolerance boundary or well inside it — is what makes an exact assertion
+legitimate on it, and by the same construction it can never contain the band in between. That
+band needs its own fuzz layer with ratio ceilings, kept out of the exact gate:
+`test_closed_form_distribution_fuzz.cpp` beside the fixed-pool tests in
+`test_closed_form_{prism,pyramid}.cpp`. Measured: a 20x drift in the closed-form prism's merge
+tolerance leaves all five fixed-pool prism tests green and is caught only by the fuzz.
+
+
 ## Where the absolute tolerances live (audit pointers)
 
 See `scratchpad/explore-geometry-numerical-robustness-audit/catalog.md` for the full
@@ -181,4 +230,5 @@ files, pointing the author here. Scope TBD in the hardening backlog.
 - **八条约定**：①匹配用 argmax 不用绝对阈值 ②尺度可变量用相对/归一化容差 ③几何生成走 double、热追踪保 float ④谓词单一真源(防漏网兄弟) ⑤归一化/除法加零保护、用 `<eps` 不用 `==0` ⑥信 ground truth 不信 proxy 指标、哨兵要反向验证有检测力 ⑦测试覆盖极端尾部(wedge 89°+、近退化) ⑧自由符号代数结构性盲于退化——选错代数模型，任何容差救不了。
 - **第 8 条（选模型，不是调 ε）**：自由/超越符号是"通用点"的代数，只判"对所有取值成立的恒等式"(`p(α)≡0 ⟺ p 是零多项式`)；几何退化是"特定取值下的巧合"(`a1=a2 ⟹ α=β`、三面共点、某边先消失)，自由符号模型按定义看不见——这是**范畴错误**，不是可打补丁的实现 bug。病例：pyramid oracle 把锥角当自由符号 α/β，正规锥体 `k·(α−β)` 真零却判不出，落到内嵌 double-Horner + 128-ULP refuse 滤波器，其 ambiguous→refuse 受 FMA 收缩影响、平台相关(同码 macOS 出 14 顶点、Ampere ARM64 出全错 18；前三平台绿是舍入侥幸)。**判据 = 二选一**：要么把参数**钉进对运算封闭且零测试可判定的数域**(六方族 = `QS3 = ℚ(√3)`，且输入参数本身也须落域内)做精确整数/有理算术；要么**老实认 double 近似**、按约定②用尺度相对容差 + fixture 离精确边界。中间"自由符号假装精确"两头不占。**绕不开精确计算的两种正解**：测试/构建期 → 离线 CAS(sympy 真·代数数)一次算死存盘；运行时生产 → 钉数域精确整数 or 认近似(本仓库生产 `geo3d_closedform.*` 全 double、退化产近零面积面即可，从未需运行时精确)。落地示例：`test_closed_form_pyramid.cpp` 的三件契约测试(`TopologyMatchesGoldenConstants`/`VertexPlaneSelfConsistency`/`DegenerateContractSafe`)各断言生产真持有的契约，均不对退化情形仲裁"谁更精确"。
 - **金标准模板**：`crystal.cpp:699` 相对面积仍在；`BuildPolygonFaceData`/`PolygonFaceOfTri`/`FillHexFnMap` pri 的 argmax **三者均已被闭式表达重构删除**（PR #214 起收尾于 PR #219，`135bca77`/`0d6413f0`/`b53eca1f`）——它们做的三角→面/面号反推整类需求已消失，非它们各自被换了新实现；约定①本身仍适用于任何新写的匹配代码，只是当前树内已无该模式的在场例子。
+- **第 9 条（随机测试的两层，缺一不可）**：①**样本源**——`std::mt19937` 的输出序列由标准钉死，但 `std::*_distribution` 只被规定**分布律**，算法与每次抽样消耗几个引擎输出都未规定 ⇒ 同 seed 在 libc++/libstdc++/MSVC STL 上抽出不同样本（本仓已记录三例实测分歧）。要跨 stdlib 一致就**引擎直出 + 手写变换**，单一 owner = `test/support/portable_random.hpp`。②**断言依赖什么**——L1 依赖具体抽样值（换 stdlib 即翻车，PR #214 的形态）／L2 依赖分布律（安全与否**是算术不是品味**：带宽折合 5σ（双侧）⇒ 一百七十万次一次，而卡方 p=0.01 ⇒ **一百次一次**，二者外观都像"容忍性断言"却差四个数量级）／L3 与抽样无关（普遍不变量、往返恒等、同输入喂两条实现的差分——抽样只决定**覆盖**不决定**判定**，该保持 `EXPECT_EQ(...,0)`）。⭐ 两层**正交**：只修样本源＝把一条 L1 断言钉在某个任意样本上（绿得没有理由）；只修断言＝各平台抽各自的输入，红态不在报告它的地方复现。⚠️ 可移植样本源**不**保证跨平台比特级浮点相同（libm 末位不受规范约束，本仓有 FMA 收缩 1-ULP 实测），故基于它的断言仍须带容差。**推论（golden 池）**：按结构裕度挑选的固定池（样本要么远离容差边界要么深在其内）——正是这个选取规则使精确断言合法，也正是它使**中间带永远进不了池**；中间带需要独立的比率天花板 fuzz 层且**不得并入精确门禁**。实测：闭式 prism 合并容差漂移 ×20，五个固定池 prism 闸**全绿**，只有 `test_closed_form_distribution_fuzz.cpp` 红。
 - **已知欠账**：SolvePlanes 系列 det 绝对阈值未归一化(脆但当前未触发)。

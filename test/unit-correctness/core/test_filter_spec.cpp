@@ -522,6 +522,11 @@ TEST(FilterSpec_MultiCrystal, IndependentCanonical) {
 
 TEST(FilterSpecReduceRecorder, Random1000_AllSymmetries) {
   // Fixed seed: reproducibility hard-requirement (AC-3 no flaky risk).
+  // The distribution adaptors below draw different samples under different standard libraries from
+  // this seed, and that is harmless here: VerifyReduceRecorderOracle hands the SAME raypath to
+  // Crystal::ReduceRaypath and to detail::ReduceBuffer and asserts the two agree, so the draw
+  // chooses which raypaths get covered, not whether the assertion holds. A test that compared a
+  // drawn sample against a constant would need support/portable_random.hpp instead.
   constexpr uint32_t kSeed = 20260519u;
   std::mt19937 rng(kSeed);
   Crystal prism = Crystal::CreatePrism(1.0f);

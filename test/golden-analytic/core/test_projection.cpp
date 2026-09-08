@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iostream>
 #include <random>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include "core/projection.hpp"
 #include "core/scatter_accum.hpp"  // MakeCameraRotation
 #include "core/shared/projection_shared.h"
+#include "support/portable_random.hpp"
 
 namespace lumice {
 namespace projection {
@@ -24,6 +26,15 @@ namespace {
 constexpr float kEps = 1e-6f;
 constexpr float kEpsPolar = 5e-6f;  // Relaxed for polar-path projections (atan2/asin/sin/cos chain)
 
+// A note on the random draws in this file, since std::*_distribution sample sequences differ
+// between standard libraries from the same seed. Almost every use below is a round trip:
+// Forward -> Inverse -> EXPECT_NEAR(recovered, the drawn value). The expectation IS the drawn
+// value, so resampling moves both sides together and the proposition — Inverse . Forward ~ id over
+// the domain — is what is actually being asserted. Same for the past_equator counters, which sit
+// ~30 sigma clear of their thresholds. The one exception is FisheyeEqualAreaEqualAreaProperty,
+// whose threshold is a p = 0.01 critical value and therefore only ~2.3 sigma wide; it draws
+// through support/portable_random.hpp instead, and says why at the call site.
+//
 // Helper: check unit vector
 void ExpectUnitVector(const Dir3& d) {
   float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
@@ -153,16 +164,35 @@ TEST(Projection, FisheyeEqualAreaRoundTrip) {
 TEST(Projection, FisheyeEqualAreaEqualAreaProperty) {
   // Verify equal-area property: uniform sphere sampling -> uniform disc distribution.
   // Sample many uniform directions, project, bin by radius^2 (should be uniform for equal-area).
+  //
+  // The samples are drawn through test::PortableCanonicalFloat rather than
+  // std::uniform_real_distribution, and the reason is specific to this test rather than general
+  // hygiene. The threshold below is the chi-squared critical value at p = 0.01, so this assertion
+  // is *designed* to fail on 1% of samples. A fixed seed makes that harmless on any one platform —
+  // the draw either passed or it did not, once and for all. But the standard pins only the law of
+  // a distribution adaptor, not its algorithm or its engine consumption, so every standard library
+  // draws a DIFFERENT 100000 samples from this seed, and each one is an independent roll of that
+  // 1% die. How costly a reroll is was measured on this code path, though not by running another
+  // standard library — that cannot be done from here. It was measured by rerolling the way a
+  // different implementation would: 1000 fresh seeds through the same arithmetic, on this machine.
+  // The statistic ranged 1.25 to 32.54 and exceeded the threshold 12 times, i.e. 1.2%, against the
+  // 1% the critical value predicts. The claim that another stdlib rerolls at all is the
+  // specification one above, not a measurement. mt19937's output sequence, by contrast, IS fixed by
+  // the standard, so drawing straight from it makes every platform score the one statistic printed
+  // below.
+  //
+  // Deliberately NOT fixed by widening the threshold: p = 0.01 is where this test's power to
+  // detect a broken equal-area mapping lives, and loosening the ruler to fit the sampling noise
+  // would trade the defect away rather than the flake.
   constexpr int kSamples = 100000;
   constexpr int kBins = 10;
   int bins[kBins] = {};
 
   std::mt19937 rng(46);
-  std::uniform_real_distribution<float> u01(0.0f, 1.0f);
   for (int i = 0; i < kSamples; i++) {
     // Uniform sphere sampling (upper hemisphere only for simplicity)
-    float z = u01(rng);  // z in [0, 1] for upper hemisphere
-    float phi = 2.0f * math::kPi * u01(rng);
+    float z = test::PortableCanonicalFloat(rng);  // z in [0, 1) for upper hemisphere
+    float phi = 2.0f * math::kPi * test::PortableCanonicalFloat(rng);
     float rho = std::sqrt(1.0f - z * z);
     float dx = rho * std::cos(phi);
     float dy = rho * std::sin(phi);
@@ -180,7 +210,10 @@ TEST(Projection, FisheyeEqualAreaEqualAreaProperty) {
     float diff = bins[i] - expected;
     chi2 += diff * diff / expected;
   }
-  // Chi-squared critical value for 9 dof at p=0.01 is 21.67
+  // Chi-squared critical value for 9 dof at p=0.01 is 21.67. Logged unconditionally: this is now
+  // one statistic shared by every platform, so a drift in it is a real signal about the projection
+  // rather than a different machine's luck, and it is only visible if it is printed when green.
+  std::cerr << "[observability] equal-area chi2=" << chi2 << " (9 dof, reject at 21.67)\n";
   EXPECT_LT(chi2, 21.67f) << "Equal-area property violated: chi2=" << chi2;
 }
 
