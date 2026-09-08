@@ -192,6 +192,34 @@ struct RenderConfig {
   // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
   // nobody has made, so the default states the one thing that is certain: draw it when asked.
   bool horizon_ = false;
+  // The other three families' LINE switches — the parallels, the meridians and the
+  // angular-distance circles — one per list beside it, and the same kind of flag `horizon_` is.
+  //
+  // WHY THEY EXIST AT ALL: without them "is this family drawn" was the same question as "is its
+  // angle list non-empty", so a caller that wanted the family's NUMBERS but not its LINES had no
+  // way to say so — filling the list to get the labels drew the lines too. Only the horizon could
+  // express that combination, and the GUI's exporter had to choose between drawing lines the user
+  // had switched off and dropping text the user had switched on (src/gui/file_io.cpp).
+  //
+  // TRUE by default, the opposite of `horizon_` above, and the difference is not an inconsistency:
+  // an absent `horizon` key used to draw NOTHING (the flag is what turns the annotation on), while
+  // an absent `elevation_line` key belongs to a config whose non-empty `elevation` list already
+  // drew its lines. Opt-in there preserves "no annotation nobody asked for"; default-on here
+  // preserves "every config written before this field renders exactly as it did".
+  //
+  // WHAT THEY GATE, stated so core and the GUI do not each infer it (the *_label_ block below
+  // makes the same statement for the text): the LINE's own compositing in
+  // RenderConsumer::PostSnapshot, and nothing else. The label geometry is NOT gated by them — a
+  // `grid_label_` with `elevation_grid_line_` false still produces the parallels' anchors, exactly
+  // as `horizon_label_` with `horizon_` false produces the horizon's.
+  //
+  // THE TWO WAYS A FAMILY CAN BE ABSENT are not a priority rule, because they never contradict:
+  // an EMPTY list has no line to draw whatever this flag says (the flag is then unobservable), and
+  // a non-empty list with the flag false draws no line but keeps its labels. There is no third
+  // reading for a consumer to pick.
+  bool elevation_grid_line_ = true;
+  bool longitude_grid_line_ = true;
+  bool angular_dist_grid_line_ = true;
   // Draw the TEXT labels — the angle each line stands for, "22\u00b0" and the like — next to the
   // three line families. One switch per family, mirroring the GUI's three
   // (show_horizon_label / show_grid_label / show_sun_circles_label, gui_state.hpp), because those
@@ -200,7 +228,9 @@ struct RenderConfig {
   //
   // TWO LAYERS, and they are not the same statement. Whether the label GEOMETRY is computed is
   // what these fields decide, independently of whether the family's own line is drawn: a
-  // horizon_label_ with horizon_ false still produces the anchors. Whether the label is VISIBLE
+  // horizon_label_ with horizon_ false still produces the anchors, and since the three line
+  // switches above exist the same holds for every other family (grid_label_ with
+  // elevation_grid_line_ false, and so on). Whether the label is VISIBLE
   // once drawn is NOT independent — the compositor gives a label its family's own colour and
   // opacity (GridLineParam::opacity_ for the grid families, the horizon's fixed constants for the
   // horizon), so a line at opacity 0 takes its labels with it. That is the GUI's behaviour too

@@ -186,6 +186,25 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "horizon";
   }
 
+  // The three family line switches, same classification as `horizon` above and for the same
+  // reason: they decide whether a line is composited onto the finished image, never the shape of
+  // the buffer it is composited onto.
+  {
+    auto mod = base;
+    mod.elevation_grid_line_ = false;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "elevation_grid_line";
+  }
+  {
+    auto mod = base;
+    mod.longitude_grid_line_ = false;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "longitude_grid_line";
+  }
+  {
+    auto mod = base;
+    mod.angular_dist_grid_line_ = false;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "angular_dist_grid_line";
+  }
+
   // ev_mode: it selects WHICH exposure formula PostSnapshot uses, not the accumulation layout,
   // so it must NOT force a consumer rebuild (same classification as intensity_factor above).
   {
@@ -596,6 +615,99 @@ TEST(RenderConfigFrontTest, OperatorEq_ComparesFront) {
   // Not aliased onto visible_: two configs that differ ONLY in front must still compare unequal
   // while their visible_ agree.
   EXPECT_EQ(a.visible_, b.visible_);
+}
+
+// ===== The three family LINE switches (v4.26) =====
+//
+// One per angle list — the parallels, the meridians, the angular-distance circles — and the thing
+// that makes them unlike every other annotation field in this struct is the DIRECTION of their
+// default. `horizon_`, the three *_label_ switches, `zenith_nadir_` and `markers_` are all opt-in,
+// because each of them turns an annotation on that a config predating the field never asked for.
+// These three turn one OFF: the config that predates them was already drawing the lines its
+// non-empty angle list names, and a false default would silently stop it.
+TEST(RenderConfigFamilyLineSwitchTest, DefaultIsOnUnlikeEveryOtherAnnotationSwitch) {
+  const lumice::RenderConfig defaults;
+  EXPECT_TRUE(defaults.elevation_grid_line_);
+  EXPECT_TRUE(defaults.longitude_grid_line_);
+  EXPECT_TRUE(defaults.angular_dist_grid_line_);
+  // Read together with the opt-in neighbours, because "true" is only meaningful here as the
+  // deliberate opposite of what sits beside it — a copy-paste that gave these the same default as
+  // `horizon_` would look perfectly consistent in isolation.
+  EXPECT_FALSE(defaults.horizon_);
+  EXPECT_FALSE(defaults.horizon_label_);
+  EXPECT_FALSE(defaults.grid_label_);
+  EXPECT_FALSE(defaults.angular_dist_label_);
+}
+
+TEST(RenderConfigFamilyLineSwitchTest, ToJson_EmitsOneKeyPerFamilyUnderGrid) {
+  auto cfg = MakeBaseline();
+  cfg.elevation_grid_line_ = false;
+  cfg.longitude_grid_line_ = true;
+  cfg.angular_dist_grid_line_ = false;
+
+  const nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("elevation_line"));
+  ASSERT_TRUE(j["grid"].contains("longitude_line"));
+  ASSERT_TRUE(j["grid"].contains("angular_dist_line"));
+  // Three distinct values in one document: a writer that emitted the same member three times
+  // passes any test that sets them all alike.
+  EXPECT_FALSE(j["grid"]["elevation_line"].get<bool>());
+  EXPECT_TRUE(j["grid"]["longitude_line"].get<bool>());
+  EXPECT_FALSE(j["grid"]["angular_dist_line"].get<bool>());
+}
+
+// The key names carry no "grid" of their own — they already sit under "grid", exactly as
+// "elevation" / "longitude" / "angular_dist" do while their C++ members are *_grid_. Pinned
+// because the C++ spelling and the JSON spelling deliberately differ, so a rename on one side
+// that "fixed" the asymmetry would be a silent schema break.
+TEST(RenderConfigFamilyLineSwitchTest, ToJson_UsesTheListsOwnKeySpelling) {
+  const nlohmann::json j = MakeBaseline();
+  EXPECT_FALSE(j["grid"].contains("elevation_grid_line"));
+  EXPECT_FALSE(j["grid"].contains("longitude_grid_line"));
+  EXPECT_FALSE(j["grid"].contains("angular_dist_grid_line"));
+}
+
+// The switch does not touch the list it gates. Stated because the alternative encoding — "no lines"
+// meaning "empty list" — is what this field replaced, and a decoder or a writer that still cleared
+// the list would take the family's LABELS with it, which is the whole defect being fixed.
+TEST(RenderConfigFamilyLineSwitchTest, TheSwitchLeavesItsAngleListAlone) {
+  auto cfg = MakeBaseline();
+  cfg.elevation_grid_.push_back(lumice::GridLineParam{ 30.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+  cfg.angular_dist_grid_.push_back(lumice::GridLineParam{ 22.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+  cfg.elevation_grid_line_ = false;
+  cfg.angular_dist_grid_line_ = false;
+
+  const nlohmann::json j = cfg;
+  ASSERT_EQ(j["grid"]["elevation"].size(), 1u);
+  ASSERT_EQ(j["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(j["grid"]["elevation"][0]["value"].get<float>(), 30.0f, 1e-5f);
+  EXPECT_NEAR(j["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+}
+
+TEST(RenderConfigFamilyLineSwitchTest, OperatorEq_ComparesEachOfTheThree) {
+  // One case per field rather than one flipping all three: a comparison that reads the same member
+  // three times, or that reads only one of them, passes the combined form.
+  {
+    auto a = MakeBaseline();
+    auto b = MakeBaseline();
+    ASSERT_TRUE(a == b);
+    b.elevation_grid_line_ = false;
+    EXPECT_FALSE(a == b) << "elevation_grid_line";
+  }
+  {
+    auto a = MakeBaseline();
+    auto b = MakeBaseline();
+    b.longitude_grid_line_ = false;
+    EXPECT_FALSE(a == b) << "longitude_grid_line";
+  }
+  {
+    auto a = MakeBaseline();
+    auto b = MakeBaseline();
+    b.angular_dist_grid_line_ = false;
+    EXPECT_FALSE(a == b) << "angular_dist_grid_line";
+  }
 }
 
 }  // namespace

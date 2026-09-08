@@ -203,7 +203,23 @@ extern "C" {
 // positions are recomputed on ResetWith as well. That second half is not tidiness — four of the six
 // directions are defined relative to the sun, and the sun is exactly what ResetWith can change.
 // A caller that leaves markers_count at 0 sees no change at all.
-#define LUMICE_API_VERSION 425
+//
+// BREAKING (v4.26): LUMICE_RenderParam gains a trailing block of three fields — `elevation_line`,
+// `longitude_line` and `angular_dist_line`, whether the CLI renderer draws each of those three
+// families' LINES. They are APPENDED after `markers_radius_px`, so every existing field keeps its
+// offset while sizeof() grows; a caller that was NOT recompiled hands the API a shorter struct and
+// the new fields are read past the end of it. Recompile against this header. The JSON keys are
+// "grid.elevation_line", "grid.longitude_line" and "grid.angular_dist_line".
+// This completes what v4.21 started. That version made the TEXT independent of the LINE at the
+// geometry layer, but only the horizon could actually be asked for text without its line: it was
+// the one family with a line switch (`horizon`) separate from its angle list. For the other three,
+// "draw this family" WAS "is the angle list non-empty", so a producer wanting their numbers had to
+// fill the list and get the lines with it. The GUI's exporter took the other horn and dropped the
+// numbers (src/gui/file_io.cpp), which is the defect this closes.
+// DEFAULT TRUE on the JSON side, unlike every other annotation flag in this struct — see the
+// WARNING at the fields themselves. Nothing is removed and nothing changes meaning: a config that
+// carries none of the three keys renders the pixels it always did.
+#define LUMICE_API_VERSION 426
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1007,7 +1023,10 @@ typedef struct LUMICE_RenderParam_ {
   // line stands for, formatted by core ("22\u00b0"). Opt-in, like every annotation field above.
   //
   // INDEPENDENT OF THE LINE SWITCHES, at the geometry layer only: `horizon_label` with `horizon`
-  // zero draws the horizon's numbers without its line. NOT independent at the compositing layer —
+  // zero draws the horizon's numbers without its line, and since v4.26 gave the other three
+  // families a line switch of their own the same now holds for them (`grid_label` with
+  // `elevation_line` / `longitude_line` zero, `angular_dist_label` with `angular_dist_line` zero).
+  // NOT independent at the compositing layer —
   // a label is painted in its family's own colour and opacity (each LUMICE_GridLine's `opacity` /
   // `color` for the two grid families and the circles; the horizon's fixed constants for the
   // horizon), so a line at opacity 0 is invisible together with its labels. See the v4.21 note at
@@ -1050,6 +1069,27 @@ typedef struct LUMICE_RenderParam_ {
   int markers_count;
   float markers_opacity;
   float markers_radius_px;
+  // ADDED (v4.26). Non-zero = draw that family's LINES. One per angle list: `elevation_line` gates
+  // elevation_grid[], `longitude_line` gates longitude_grid[], `angular_dist_line` gates
+  // angular_dist[]. The horizon's equivalent is `horizon` above, which these three are modelled on.
+  //
+  // WARNING, and it is the reverse of every other annotation flag in this struct: their JSON
+  // default is TRUE, so a ZERO-INITIALIZED struct asks for no lines even where it carries a full
+  // angle list — while a document with no such key gets lines. `horizon` has no such trap (false on
+  // both sides). Set all three, or go through JSON.
+  // The direction is deliberate rather than an oversight. An absent `horizon` key drew nothing
+  // because that flag is what turns the annotation on at all; an absent `elevation_line` key
+  // belongs to a config whose non-empty `elevation` list was ALREADY drawing lines, so defaulting
+  // it off would silently change what every existing config renders.
+  //
+  // WHAT THEY GATE is the LINE only, which is the half that makes "labels without lines"
+  // expressible: the label geometry is decided by `grid_label` / `angular_dist_label` above and is
+  // NOT affected by these, exactly as `horizon_label` is not affected by `horizon`. An EMPTY angle
+  // list has no line to draw whatever the flag says, so the two ways a family can be absent never
+  // contradict and there is no priority rule to learn.
+  int elevation_line;
+  int longitude_line;
+  int angular_dist_line;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============

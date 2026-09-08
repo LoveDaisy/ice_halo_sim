@@ -122,6 +122,21 @@ it was thinking of and false of the C struct beside it.
 
 ## [Unreleased]
 
+### Added
+- **A config can now ask for a grid family's numbers without its lines.** The parallels, the
+  meridians and the sun's angular-distance circles each gain a line switch of their own —
+  `grid.elevation_line`, `grid.longitude_line`, `grid.angular_dist_line`, all defaulting to true, so
+  every existing config renders exactly as before. Previously only the horizon could be asked for
+  text without a line; for the other three, "do not draw me" could only be said by removing their
+  angles, which removed their labels too. The GUI's exported config follows suit: turning grid or
+  circle **lines** off while leaving their **labels** on used to drop the numbers from the CLI
+  render with no warning, and now exports exactly what the preview shows.
+- **`LUMICE_RenderParam` gains `elevation_line` / `longitude_line` / `angular_dist_line`**
+  (`LUMICE_API_VERSION` 425 → 426, appended at the end of the struct — recompile against the new
+  header). Note the defaults run the other way from every other annotation flag: the JSON default is
+  *on*, so a zero-initialized struct asks for no lines even when it carries a full angle list. Set
+  the three fields, or go through JSON.
+
 ## [4.5.0] - 2026-09-06
 
 ### Added

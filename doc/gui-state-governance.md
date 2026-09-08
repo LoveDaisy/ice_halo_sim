@@ -262,10 +262,19 @@
 | `visible` | 半球裁剪：恒 `full` vs 用户的 |
 | `background` | 显示期合成 vs CLI 烤进图里 |
 | `resolution` | 2:1 纹理 vs 用户的画幅 |
+| `front` | 第二道裁剪：恒关 vs 用户的开关（与 `visible` 正交，见 §9.3） |
 | `grid.horizon` | 恒开 vs 用户的开关 |
+| `grid.angular_dist` / `grid.elevation` / `grid.longitude` | 角度表：commit 臂留空 vs export 臂写用户的表（理由见 §9.4） |
+| `grid.horizon_label` / `grid.label` / `grid.angular_dist_label` | 文字标注开关：commit 臂恒关 vs 用户的开关。文字烤进纹理会被重投影一起重采样，再被预览自己的 label 层画第二遍 |
+| `grid.elevation_line` / `grid.longitude_line` / `grid.angular_dist_line` | 三族各自的**线**开关：commit 臂恒 `true` vs 用户的开关 |
+| `grid.markers` / `grid.markers_opacity` / `grid.markers_radius_px` | 参考点标记：commit 臂留空表 vs export 臂写全六项 + 家族级外观 |
 
-⚠️ **`grid` 是按子键豁免的，不是整键。** 只有 `horizon` 分叉，其余 grid 子字段（counts、colors…）
-在两条臂上应当相同；整键 erase 会连带停止检查它们是否意外漂移。
+⚠️ **`grid` 是按子键豁免的，不是整键。** 上表列出的是 `grid` 下**已分叉**的十三个子键；其余 grid
+子字段（每条线的 colors / opacity…）在两条臂上应当相同，整键 erase 会连带停止检查它们是否意外漂移。
+
+⚠️ 三个 `*_line` 子键有一处**只靠声明成立**的特殊性：commit 臂恒 `true`、export 臂写用户开关，
+而那个用例的 fixture 恰好把两个 GUI 线开关都置为开 ⇒ 不把它们加进清单，比较照样通过。清单在这里
+不是「让红转绿」的补丁，而是唯一记录了「这三个键允许分叉」的地方。
 
 ### 9.3 三处具名例外（有意不分叉，且都不是遗漏）
 
@@ -283,8 +292,9 @@
 ### 9.4 改动纪律
 
 - 动分叉面（增/删/改一个键）时，**先在本节说明理由再改清单**。⛔ 不得因为那道闸红了就把键加进清单绕开。
-- **辅助线相关的键全部已经分叉：`grid.horizon` / `grid.angular_dist` / `grid.elevation` /
-  `grid.longitude` 四个子键在 `kDivergingKeys` 处按子键豁免。**
+- **辅助线相关的键全部已经分叉**：四个线族的角度表与开关（`grid.horizon` / `grid.angular_dist` /
+  `grid.elevation` / `grid.longitude`）、三个文字标注开关，以及后来补上的三个 `*_line` 开关，
+  在 `kDivergingKeys` 处一律按子键豁免。
   上一版这里写的是「`grid.angular_dist` 已分叉、`grid.elevation` 仍不分叉」，后半句已经过期。
   裁定结果是上面两个候选里的**第一个**：core 算注解几何（`LUMICE_ComputeAnnotationOverlay`），
   但 GUI 仍然自己画 overlay，因为标注属于**成品图**而不是那张全天纹理——往纹理里烤线会被重投影
@@ -300,6 +310,20 @@
   （附带一条仍然成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
   `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它；
   `angular_dist` 在 commit 臂留空是同一个理由的另一面。）
+- **`grid.elevation_line` / `grid.longitude_line` / `grid.angular_dist_line` 三个子键的加入理由**
+  （按本节纪律，先在这里说明再改清单）：在它们存在之前，这三族「画不画线」等价于「角度表空不空」，
+  于是 export 臂遇到「用户开着 label、关着 line」这个合法 GUI 状态时只有两条路——填表（画出用户
+  关掉的线）或不填（丢掉用户开着的字，core 的标注文字与线读同一张角度表）。当时选了后者。
+  `grid.horizon` 从来不用做这个取舍，因为它的线本来就有独立开关。补上这三个开关之后，
+  **export 臂改为「line 或 label 任一为真就填表」，再用新键忠实写出线开关本身**，取舍消失。
+  三个开关按 core 的表结构拆成三个（而不是仿 label 那样「grid 合并 + angular_dist 独立」两个）：
+  label 的合并粒度是被「GUI 只有一个 label 控件」这个下游事实反向决定的例外，不是 schema 通例；
+  GUI 侧今天仍只有一个 `show_grid_line` 控件，导出时把同一个值写进 `elevation_line` 与
+  `longitude_line` 两个字段。
+  ⭐ 由此**多出一处此前不可达的路径**：角度表的展开与 `LUMICE_MAX_CONFIG_GRID_LINES` 溢出检查
+  现在也发生在「只开 label、关 line」的场景下，所以那个场景也会触发「拒绝导出 + 告警」。方向是
+  对的（label 同样要用展开后的表，截断出来的是一批残缺的**数字**），但它是本次改动里唯一一处
+  行为变宽，单独有一条用例守着。
 - 两条臂**是否真的只在清单上分叉**由上面那个用例守；两条臂**各自是否正确**由跨进程的
   CLI↔GUI 出图对照守（`test/gui/parity/`，见 `doc/testing-architecture.md` §4.10）。
   两道闸问的是不同的问题，缺一不可。

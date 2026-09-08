@@ -265,6 +265,12 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["grid"].emplace("elevation", r.elevation_grid_);
   j["grid"].emplace("longitude", r.longitude_grid_);
   j["grid"].emplace("horizon", r.horizon_);
+  // The other three families' line switches, beside the lists they gate. No "grid" in the key
+  // names: they already sit under "grid", exactly as "elevation" / "longitude" / "angular_dist"
+  // above drop the suffix their C++ members carry.
+  j["grid"].emplace("elevation_line", r.elevation_grid_line_);
+  j["grid"].emplace("longitude_line", r.longitude_grid_line_);
+  j["grid"].emplace("angular_dist_line", r.angular_dist_grid_line_);
   j["grid"].emplace("horizon_label", r.horizon_label_);
   j["grid"].emplace("label", r.grid_label_);
   j["grid"].emplace("angular_dist_label", r.angular_dist_label_);
@@ -296,6 +302,15 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // accumulates into, so a config that edits them reaches an existing consumer through ResetWith()
   // with no rebuild — which is why RebuildMarkerPoints() is called from there as well as from the
   // constructor.
+  // Still 224 after the three family LINE switches (elevation_grid_line_ / longitude_grid_line_ /
+  // angular_dist_grid_line_), and the reason is worth stating because it is not the reason the
+  // label switches were free: the bool run grew from four bytes to eight, and the four bytes that
+  // paid for it came from the padding between ZenithNadirParam (4-byte aligned, 24 bytes) and
+  // markers_ (8-byte aligned), which the longer run now closes. So an UNCHANGED number here is
+  // once again only safe once the new fields have been classified — and these three are
+  // APPEARANCE, for the same reason the label switches are: they decide whether a line is
+  // composited onto the finished image, never the buffer it accumulates into, so a config that
+  // flips one reaches an existing consumer through ResetWith() with no rebuild.
   static_assert(sizeof(RenderConfig) == 224, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.

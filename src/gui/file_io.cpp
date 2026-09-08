@@ -1901,26 +1901,32 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // off. What differs from the horizon is that these carry data, not just a flag — the angles
       // are the user's own list.
       //
-      // The LINE switch gates the list, and the label switch above does NOT widen that gate — a
-      // known and accepted limit rather than an oversight. For the two grid families and the
-      // circles, core's "is this family drawn" question IS "is its angle list non-empty": there is
-      // no separate line flag to turn off. So a GUI state of "circles' labels on, circles' lines
-      // off" has no faithful encoding — filling the list to get the numbers would draw the lines
-      // the user switched off, which is strictly worse than dropping the numbers. Only the horizon,
-      // whose line has a flag of its own, can express that combination (`horizon_label` with
-      // `horizon` zero). Giving the other two families the same expressiveness means giving core a
-      // per-family line flag, which is a schema change, not a fill-site change.
+      // TWO SWITCHES, TWO FIELDS. The angle list is filled when EITHER switch is on, because the
+      // list is what both of them need — core draws a family's numbers off the same angles it draws
+      // its lines from — and `angular_dist_line` then says which of the two the user actually
+      // asked for. Reading only the line switch for the list is what this arm used to do, and it
+      // dropped the numbers of anyone who had turned the lines off and the labels on; filling the
+      // list unconditionally would instead draw lines they had switched off. Neither trade is
+      // needed any more: core grew a per-family line flag in v4.26, which is what makes "labels
+      // without lines" expressible at all.
       //
       // Every entry gets the SAME colour and opacity because the GUI has one colour picker and one
       // alpha slider for the whole set; core's schema styles each line individually and the GUI is
       // a restricted special case of it, not the other way round. The width field is left at its
       // default: nothing reads it (the mask generator derives its own half-width), so writing the
       // GUI's line width there would export a number that changes no pixel.
+      // No overflow check here, unlike the grid below: `state.sun_circle_angles` is not an expanded
+      // list, it is the user's own typed list, and it is capped at `kMaxSunCircles` (16) the moment
+      // an angle is added (gui_constants.hpp / sun_circle_rules.hpp) — well under
+      // `LUMICE_MAX_CONFIG_GRID_LINES` (64). Widening this gate to `|| label` therefore does not
+      // open a reachable overflow path the way it does for the grid, whose list is FOV-derived and
+      // can genuinely exceed the ABI cap; there is nothing to refuse here.
       dst.angular_dist_count = 0;
-      if (state.show_sun_circles_line) {
+      if (state.show_sun_circles_line || state.show_sun_circles_label) {
         FillGridLines(state.sun_circle_angles, state.sun_circles_color, state.sun_circles_alpha, dst.angular_dist,
                       &dst.angular_dist_count);
       }
+      dst.angular_dist_line = state.show_sun_circles_line ? 1 : 0;
       // The coordinate grid — parallels and meridians. Same gating and same shared-appearance
       // story as the circles above, with one difference that matters: the angles are NOT a list
       // the user typed. The GUI derives them from ONE FOV-adaptive step (ComputeGridStep), and
@@ -1929,7 +1935,13 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // request, so the exported list is the same list the screen is showing.
       dst.elevation_grid_count = 0;
       dst.longitude_grid_count = 0;
-      if (state.show_grid_line) {
+      dst.elevation_line = state.show_grid_line ? 1 : 0;
+      dst.longitude_line = state.show_grid_line ? 1 : 0;
+      // One GUI switch writes both core fields: the panel has a single grid line control, exactly
+      // as it has a single grid label control. Core splits the two families because its schema
+      // splits their angle lists; a hand-written config can therefore draw the parallels without
+      // the meridians, which is expressiveness the GUI does not offer and does not need to.
+      if (state.show_grid_line || state.show_grid_label) {
         const float step = ComputeGridStep(r.fov);
         const std::vector<float> elevation = ComputeGridElevationAngles(step);
         const std::vector<float> longitude = ComputeGridLongitudeAngles(step);
@@ -1937,6 +1949,10 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
         // overflows the ABI cap with no unusual document involved (72 lines at a 20 deg FOV), so
         // this is a reachable state, not a defensive branch — and a silently shortened grid would
         // be a CLI render that differs from the screen while reporting success.
+        // Inside the widened gate, so it also covers the state that gate made reachable: labels on,
+        // lines off. The list is expanded there too, so it can overflow there too, and a refusal is
+        // the same right answer — the alternative would be a truncated set of NUMBERS instead of a
+        // truncated set of lines.
         const GridOverflowInfo::Family over = elevation.size() > static_cast<size_t>(LUMICE_MAX_CONFIG_GRID_LINES) ?
                                                   GridOverflowInfo::Family::kElevation :
                                               longitude.size() > static_cast<size_t>(LUMICE_MAX_CONFIG_GRID_LINES) ?
@@ -2000,7 +2016,15 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // time (u_front). Stated rather than left to the zero-init, so the two arms read as one
       // deliberate divergence instead of an omission.
       dst.front = 0;
-      dst.horizon = 1;  // core RenderConfig::horizon_ default (true)
+      dst.horizon = 1;  // this arm annotates the texture itself; see kDivergingKeys
+      // Core's defaults for the three family line switches, stated rather than left to the
+      // zero-init — which would mean the opposite (see the WARNING at the fields in lumice.h).
+      // Unobservable on this arm either way: it writes no angle list, so there is no line for the
+      // flags to gate. Written for the same reason `front` and `visible` above are: so the two
+      // arms read as one deliberate divergence rather than as an omission on this one.
+      dst.elevation_line = 1;
+      dst.longitude_line = 1;
+      dst.angular_dist_line = 1;
       // view / background keep their zero-initialized values, matching both the pre-v4.11
       // hardcoded encoding and core's defaults.
     }

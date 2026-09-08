@@ -118,7 +118,9 @@ inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
          a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.ev_mode_ == b.ev_mode_ &&
          a.angular_dist_grid_ == b.angular_dist_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
-         a.longitude_grid_ == b.longitude_grid_ && a.horizon_ == b.horizon_ && a.zenith_nadir_ == b.zenith_nadir_ &&
+         a.longitude_grid_ == b.longitude_grid_ && a.horizon_ == b.horizon_ &&
+         a.elevation_grid_line_ == b.elevation_grid_line_ && a.longitude_grid_line_ == b.longitude_grid_line_ &&
+         a.angular_dist_grid_line_ == b.angular_dist_grid_line_ && a.zenith_nadir_ == b.zenith_nadir_ &&
          a.markers_ == b.markers_ && a.markers_opacity_ == b.markers_opacity_ &&
          a.markers_radius_px_ == b.markers_radius_px_;
 }

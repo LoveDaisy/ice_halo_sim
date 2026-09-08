@@ -239,6 +239,12 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
       << "the exported config dropped the horizon's numbers — most likely by reading the line switch";
   EXPECT_TRUE(r["grid"]["label"].get<bool>());
   EXPECT_TRUE(r["grid"]["angular_dist_label"].get<bool>());
+  // The three family LINE switches, the other half of each of those pairs. All three lines are on
+  // in this fixture, so what they pin here is only that the keys are emitted and carry the
+  // document's value; the off state is the two cases below, where it is the whole point.
+  EXPECT_TRUE(r["grid"]["elevation_line"].get<bool>());
+  EXPECT_TRUE(r["grid"]["longitude_line"].get<bool>());
+  EXPECT_TRUE(r["grid"]["angular_dist_line"].get<bool>());
   // The sun circles, which the CLI now draws. Angles are the user's list; the colour and opacity
   // are one shared pair repeated per entry, because that is all the GUI has controls for.
   ASSERT_EQ(r["grid"]["angular_dist"].size(), 3u) << "the exported config lost the user's sun circles";
@@ -292,8 +298,14 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
 // the user's switch, and a test that only ever seeds the switch on cannot see that: an emitter
 // ignoring the flag entirely, and one reading it correctly, produce the same document when the
 // flag happens to be on.
-TEST(SceneCommitChain, TheExportIntentOmitsCirclesTheUserTurnedOff) {
-  SeedNonDefaultView();
+//
+// What "off" encodes to changed with v4.26 and the change is the fix, not a regression: the angles
+// stay in the document and `angular_dist_line` carries the switch. The list is what the family's
+// LABELS are drawn from too, so emptying it — which is what this arm used to do — silently dropped
+// the numbers of every user who had the circles' labels on and their lines off. The two-arm split
+// below is what keeps both readings pinned: this case holds the label on, the next turns it off.
+TEST(SceneCommitChain, TheExportIntentTurnsOffCircleLinesWithoutDroppingTheirLabels) {
+  SeedNonDefaultView();  // leaves show_sun_circles_label true
   // Everything else about the circles stays as the fixture set it — only the switch moves, so a
   // difference in the output can be attributed to the switch and nothing else.
   g_state.show_sun_circles_line = false;
@@ -303,16 +315,66 @@ TEST(SceneCommitChain, TheExportIntentOmitsCirclesTheUserTurnedOff) {
   ASSERT_EQ(export_doc["render"].size(), 1u);
   const nlohmann::json& grid = export_doc["render"][0]["grid"];
 
+  ASSERT_TRUE(grid.contains("angular_dist_line"));
+  EXPECT_FALSE(grid["angular_dist_line"].get<bool>()) << "the exported config draws sun circles the user switched off";
+  // The angles survive, because the labels the user left ON are drawn from them. An empty list here
+  // is the pre-v4.26 encoding, and it renders no numbers at all.
+  ASSERT_EQ(grid["angular_dist"].size(), 3u) << "the exported config lost the angles its labels are drawn from";
+  EXPECT_TRUE(grid["angular_dist_label"].get<bool>());
+}
+
+// Both switches off, which is the one state that still encodes to an empty list — and the reason
+// the case above cannot be trusted to cover it: an emitter that had stopped reading
+// show_sun_circles_line altogether, and always filled the list, would pass everything up there
+// except the one boolean.
+TEST(SceneCommitChain, TheExportIntentOmitsCirclesTheUserTurnedOffEntirely) {
+  SeedNonDefaultView();
+  g_state.show_sun_circles_line = false;
+  g_state.show_sun_circles_label = false;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& grid = export_doc["render"][0]["grid"];
+
   ASSERT_TRUE(grid.contains("angular_dist"));
-  EXPECT_TRUE(grid["angular_dist"].empty()) << "the exported config draws sun circles the user switched off";
+  EXPECT_TRUE(grid["angular_dist"].empty()) << "the exported config carries angles nothing will draw";
+  EXPECT_FALSE(grid["angular_dist_line"].get<bool>());
+  EXPECT_FALSE(grid["angular_dist_label"].get<bool>());
 }
 
 // The grid's half of the same off-state check, and it is not redundant with the circles': the two
 // families read different switches, and an emitter that gated the grid on show_sun_circles_line —
 // or on nothing at all — passes the case above unchanged.
-TEST(SceneCommitChain, TheExportIntentOmitsTheGridTheUserTurnedOff) {
+TEST(SceneCommitChain, TheExportIntentTurnsOffGridLinesWithoutDroppingTheirLabels) {
+  SeedNonDefaultView();  // leaves show_grid_label true
+  g_state.show_grid_line = false;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& grid = export_doc["render"][0]["grid"];
+
+  ASSERT_TRUE(grid.contains("elevation_line"));
+  ASSERT_TRUE(grid.contains("longitude_line"));
+  // One GUI switch, two core fields — so both must move, and a wiring that fed only one of them
+  // would leave half the grid drawn.
+  EXPECT_FALSE(grid["elevation_line"].get<bool>()) << "the exported config draws parallels the user switched off";
+  EXPECT_FALSE(grid["longitude_line"].get<bool>()) << "the exported config draws meridians the user switched off";
+  // The expanded angle lists survive for the labels, which the fixture leaves on.
+  EXPECT_EQ(grid["elevation"].size(), 16u) << "the exported config lost the angles its labels are drawn from";
+  EXPECT_EQ(grid["longitude"].size(), 36u);
+  EXPECT_TRUE(grid["label"].get<bool>());
+  // The circles are untouched by that switch, which is what says the two families are gated
+  // separately rather than by one flag serving both.
+  EXPECT_EQ(grid["angular_dist"].size(), 3u);
+  EXPECT_TRUE(grid["angular_dist_line"].get<bool>());
+}
+
+TEST(SceneCommitChain, TheExportIntentOmitsTheGridTheUserTurnedOffEntirely) {
   SeedNonDefaultView();
   g_state.show_grid_line = false;
+  g_state.show_grid_label = false;
 
   nlohmann::json export_doc;
   ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
@@ -321,11 +383,10 @@ TEST(SceneCommitChain, TheExportIntentOmitsTheGridTheUserTurnedOff) {
 
   ASSERT_TRUE(grid.contains("elevation"));
   ASSERT_TRUE(grid.contains("longitude"));
-  EXPECT_TRUE(grid["elevation"].empty()) << "the exported config draws parallels the user switched off";
-  EXPECT_TRUE(grid["longitude"].empty()) << "the exported config draws meridians the user switched off";
-  // The circles are untouched by that switch, which is what says the two families are gated
-  // separately rather than by one flag serving both.
-  EXPECT_EQ(grid["angular_dist"].size(), 3u);
+  EXPECT_TRUE(grid["elevation"].empty()) << "the exported config carries angles nothing will draw";
+  EXPECT_TRUE(grid["longitude"].empty());
+  EXPECT_FALSE(grid["elevation_line"].get<bool>());
+  EXPECT_FALSE(grid["longitude_line"].get<bool>());
 }
 
 // The refusal the narrow end of the FOV range makes reachable. ComputeGridStep drops to 5 deg below
@@ -348,6 +409,38 @@ TEST(SceneCommitChain, AGridTooDenseToEncodeRefusesTheExportRatherThanTruncating
   // The positive control: the same document at a wider fov exports. Without it, an export that
   // refused unconditionally would satisfy everything above.
   g_state.renderer.fov = 55.0f;
+  warning.clear();
+  EXPECT_TRUE(BuildExportJsonOrWarn(g_state, &json, &warning)) << warning;
+  EXPECT_FALSE(json.empty());
+}
+
+// The same refusal from the state v4.26 made reachable: the grid's LINES are off and only its
+// LABELS are on. The list is expanded on this path too now — that is what lets the labels survive
+// a switched-off line — so it can overflow on this path too, and a truncated set of NUMBERS is no
+// better than a truncated set of lines.
+//
+// Before the line switches existed this branch could not be entered at all: "labels on, lines off"
+// skipped the expansion entirely, so the overflow check ran only when the lines were on. Widening
+// the fill condition without widening the check is the specific way this fix could have gone
+// wrong, which is why it is a case of its own rather than a row in the one above.
+TEST(SceneCommitChain, AGridTooDenseToEncodeIsRefusedEvenWhenOnlyItsLabelsAreOn) {
+  SeedNonDefaultView();
+  g_state.show_grid_line = false;
+  g_state.show_grid_label = true;
+  g_state.renderer.fov = 20.0f;  // 5 deg step -> 72 meridians against a cap of 64
+
+  std::string json;
+  std::string warning;
+  EXPECT_FALSE(BuildExportJsonOrWarn(g_state, &json, &warning))
+      << "a label-only grid dense enough to overflow the ABI cap was exported anyway";
+  EXPECT_TRUE(json.empty()) << "a refused export must write nothing at all";
+  EXPECT_NE(warning.find("72"), std::string::npos) << warning;
+  EXPECT_NE(warning.find("longitude"), std::string::npos) << warning;
+
+  // The positive control, and here it carries more than symmetry: with BOTH grid switches off the
+  // same dense document must export fine, because nothing expands the list at all. An overflow
+  // check that had been hoisted out of the fill condition entirely would refuse this too.
+  g_state.show_grid_label = false;
   warning.clear();
   EXPECT_TRUE(BuildExportJsonOrWarn(g_state, &json, &warning)) << warning;
   EXPECT_FALSE(json.empty());
@@ -545,7 +638,13 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     //   angular_dist_label
     //                   commit arm's texture would be re-projected with the sky and then drawn a
     //                   second time by the preview's own label pass, so that arm asks for none.
-    // All eight are the same divergence with eight spellings, which is why they share this note
+    //   elevation_line— the LINE switch beside each of those three families (v4.26). The commit arm
+    //   longitude_line  writes a constant true and the export arm the user's own switch, so they
+    //   angular_dist_line
+    //                   agree only when the user has the lines on — which this fixture happens to
+    //                   do, and which is exactly why the exemption has to be declared rather than
+    //                   left to a comparison that passes today.
+    // All eleven are the same divergence with eleven spellings, which is why they share this note
     // rather than each earning a bullet: an annotation belongs to the picture, and only one of the
     // two arms describes a picture.
   };
@@ -594,11 +693,12 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
-    // "grid" itself stays in the comparison below: only its ten diverging sub-fields are exempted
-    // here, by sub-key rather than by erasing the whole object, so any remaining grid sub-field
-    // keeps being checked for an accidental intent-dependent drift.
-    for (const char* sub : { "horizon", "angular_dist", "elevation", "longitude", "markers", "markers_opacity",
-                             "markers_radius_px", "horizon_label", "label", "angular_dist_label" }) {
+    // "grid" itself stays in the comparison below: only its thirteen diverging sub-fields are
+    // exempted here, by sub-key rather than by erasing the whole object, so any remaining grid
+    // sub-field keeps being checked for an accidental intent-dependent drift.
+    for (const char* sub :
+         { "horizon", "angular_dist", "elevation", "longitude", "markers", "markers_opacity", "markers_radius_px",
+           "horizon_label", "label", "angular_dist_label", "elevation_line", "longitude_line", "angular_dist_line" }) {
       EXPECT_TRUE(commit_doc["render"][0]["grid"].contains(sub))
           << "offset " << offset << ": \"grid." << sub << "\" is no longer emitted";
       commit_doc["render"][0]["grid"].erase(sub);
