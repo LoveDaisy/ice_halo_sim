@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788859469923,
+  "lastUpdate": 1788866200810,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "86adcd8f5fc57d211e201db64fb8d77f4bf37f88",
-          "message": "Merge pull request #224 from LoveDaisy/feat/capi-scene-opaque-handle\n\nrefactor(c_api): LUMICE_Config value struct → LUMICE_Scene opaque handle (BREAKING v4.12)",
-          "timestamp": "2026-07-25T21:38:42+08:00",
-          "tree_id": "c1c944a06dc5cd04ab420b22aae79f66f9a92ced",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/86adcd8f5fc57d211e201db64fb8d77f4bf37f88"
-        },
-        "date": 1784987158661,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 453743,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 586464.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 377483.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 392122.2,
-            "unit": "rays/sec",
-            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4750,6 +4702,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 335202.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d66985dfc19d7e0a2ad278bfb29e8adec87f3adc",
+          "message": "Merge pull request #322 from LoveDaisy/test/random-source-exact-assertion-audit\n\ntest: audit random sources behind exact assertions, and refill the lost closed-form fuzz",
+          "timestamp": "2026-09-08T19:05:43+08:00",
+          "tree_id": "559a5d866b5f56b5751d9d1be56655c2412ea1a2",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d66985dfc19d7e0a2ad278bfb29e8adec87f3adc"
+        },
+        "date": 1788866199114,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 380491.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 611147.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 433950.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 436283.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
