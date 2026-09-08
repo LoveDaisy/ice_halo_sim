@@ -1311,20 +1311,20 @@ TEST(SceneCommitChain, ExcludingAnEntryCommitsTheSameSceneAsZeroingItsWeightByHa
 // honest if the thing it describes actually commits. What this pins is that it does: the commit
 // produces a scene rather than a null, with the layer's entries all at zero.
 //
-// AllEntriesDisabled is checked in the same case because it is the predicate the panel's notice is
+// LayerProducesNoRays is checked in the same case because it is the predicate the panel's notice is
 // drawn from, and the notice itself is TextColored, which no gui_test assertion can reach. Its
-// empty-layer answer is pinned too: an empty layer holds no toggles, so reporting "you turned
+// empty-layer answer is pinned too: an empty layer holds no crystals, so reporting "you turned
 // everything off" about it would be a message about something the user never did.
 TEST(SceneCommitChain, ALayerWithEveryCrystalExcludedStillCommits) {
   SeedOneEntryDocument();
   EntryCard sibling = g_state.layers[0].entries[0];
   g_state.layers[0].entries.push_back(sibling);
-  EXPECT_FALSE(AllEntriesDisabled(g_state.layers[0])) << "a fully participating layer reported as all-excluded";
+  EXPECT_FALSE(LayerProducesNoRays(g_state.layers[0])) << "a fully participating layer reported as producing no rays";
 
   for (EntryCard& e : g_state.layers[0].entries) {
     e.enabled = false;
   }
-  EXPECT_TRUE(AllEntriesDisabled(g_state.layers[0])) << "every entry is excluded and the predicate disagrees";
+  EXPECT_TRUE(LayerProducesNoRays(g_state.layers[0])) << "every entry is excluded and the predicate disagrees";
 
   const nlohmann::json scene = CommitSceneJson(g_state);
   ASSERT_FALSE(scene.is_null()) << "a layer with everything excluded refused to commit";
@@ -1335,7 +1335,7 @@ TEST(SceneCommitChain, ALayerWithEveryCrystalExcludedStillCommits) {
   }
 
   Layer empty;
-  EXPECT_FALSE(AllEntriesDisabled(empty)) << "a layer with no entries at all was reported as all-excluded";
+  EXPECT_FALSE(LayerProducesNoRays(empty)) << "a layer with no entries at all was reported as producing no rays";
 }
 
 }  // namespace

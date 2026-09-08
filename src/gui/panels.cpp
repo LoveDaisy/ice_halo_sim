@@ -1742,17 +1742,20 @@ void RenderLayer(GuiState& state, int layer_idx) {
       }
     }
 
-    // Every crystal in this layer excluded: the layer contributes nothing to the next run.
-    // Non-blocking on purpose — it is a legitimate transient state while the user toggles cards
+    // No crystal in this layer contributes anything to the next run — whether the user excluded
+    // them all, dropped every Weight to zero, or did some of each. The three are one state to the
+    // engine (BuildScene emits `enabled ? proportion : 0`), so they get one notice; the text names
+    // both controls because the user cannot tell from the message alone which one they are holding.
+    // Non-blocking on purpose — it is a legitimate transient state while the user edits cards
     // one at a time, and the engine already handles it (PartitionCrystalRayNum returns an
     // all-zero allocation for a zero total; see its AllZeroProportions unit test), so there is
     // nothing to guard against, only something to point out.
-    if (AllEntriesDisabled(layer)) {
+    if (LayerProducesNoRays(layer)) {
       // Its own line rather than SameLine on the prob row: that row may already be showing a
       // CIRCLE_EXCLAMATION for the prob footguns, and two identical glyphs side by side saying
       // different things is worse than no icon at all.
-      ImGui::TextColored(WarningTextColor(),
-                         ICON_FA_CIRCLE_EXCLAMATION " All crystals excluded — layer produces no rays");
+      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION
+                         " Every crystal is excluded or has Weight 0 — layer produces no rays");
     }
 
     // Render entry cards with deferred deletion
