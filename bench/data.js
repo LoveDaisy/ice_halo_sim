@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788871603186,
+  "lastUpdate": 1788871605253,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9514,50 +9514,6 @@ window.BENCHMARK_DATA = {
       {
         "commit": {
           "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "62ba3d6ba31990e43588d1b8c222716cc1a70d5d",
-          "message": "Merge pull request #225 from LoveDaisy/feat/gui-visual-regression-coverage\n\ntest(gui): reference-image pixel regression for lens projections + modal layouts",
-          "timestamp": "2026-07-25T22:04:33+08:00",
-          "tree_id": "750dc3e4cce3891a10ee627c0a5fde4efbbc3a21",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/62ba3d6ba31990e43588d1b8c222716cc1a70d5d"
-        },
-        "date": 1784988682535,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 79.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
             "email": "49699333+dependabot[bot]@users.noreply.github.com",
             "name": "dependabot[bot]",
             "username": "dependabot[bot]"
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5d738bc07fade93832384583fd5655dda496ae4",
+          "message": "Merge pull request #321 from LoveDaisy/ci/organization-and-windows-testing\n\nci(windows): route MSVC compilation through sccache",
+          "timestamp": "2026-09-08T20:34:51+08:00",
+          "tree_id": "8cbe8c8f0a06164c7e6f448e8e1b9b8f2b5aeff3",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f5d738bc07fade93832384583fd5655dda496ae4"
+        },
+        "date": 1788871604718,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 81.9,
             "unit": "%"
           }
         ]
