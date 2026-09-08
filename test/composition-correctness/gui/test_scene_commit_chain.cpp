@@ -1338,5 +1338,65 @@ TEST(SceneCommitChain, ALayerWithEveryCrystalExcludedStillCommits) {
   EXPECT_FALSE(LayerProducesNoRays(empty)) << "a layer with no entries at all was reported as producing no rays";
 }
 
+// The three ways a user can stop a layer contributing are one run, and the notice about them is one
+// notice.
+//
+// ExcludingAnEntryCommitsTheSameSceneAsZeroingItsWeightByHand above pins the equivalence for a
+// single entry; what this adds is the whole layer, and the mixture — some crystals excluded, the
+// rest dragged to zero — which is the state neither of the two single-cause cases covers and the
+// state a user actually lands in while working card by card.
+//
+// The predicate is asserted next to the commit rather than on its own because that is the claim
+// being made: the notice is keyed to what reaches the engine, so if the three arms commit the same
+// bytes, the notice has to read the same for all three. The unit-correctness suite walks the
+// predicate's own domain (test_gui_widget_rules.cpp); what can only be checked here is that the
+// domain it walks is the one BuildScene actually produces.
+TEST(SceneCommitChain, ExcludingZeroingAndMixingAllCommitTheSameZeroContributionLayer) {
+  // Two entries so each arm has somewhere to put the mixture. The stored weights differ between
+  // the arms on purpose (100 and 58 survive an exclusion, 0 is what a zeroed slider holds); it is
+  // the committed scene that has to converge, not the document.
+  const auto seed = [](bool exclude_first, bool exclude_second) {
+    SeedOneEntryDocument();
+    EntryCard sibling = g_state.layers[0].entries[0];
+    sibling.proportion = 58.0f;
+    g_state.layers[0].entries.push_back(sibling);
+    EntryCard& first = g_state.layers[0].entries[0];
+    EntryCard& second = g_state.layers[0].entries[1];
+    first.enabled = !exclude_first;
+    first.proportion = exclude_first ? 100.0f : 0.0f;
+    second.enabled = !exclude_second;
+    second.proportion = exclude_second ? 58.0f : 0.0f;
+    EXPECT_TRUE(LayerProducesNoRays(g_state.layers[0]))
+        << "the notice would not fire for exclude_first=" << exclude_first << " exclude_second=" << exclude_second;
+  };
+
+  seed(/*exclude_first=*/true, /*exclude_second=*/true);
+  const nlohmann::json all_excluded = CommitSceneJson(g_state);
+  const std::string all_excluded_export = CoreJson(g_state);
+
+  seed(/*exclude_first=*/false, /*exclude_second=*/false);
+  const nlohmann::json all_zeroed = CommitSceneJson(g_state);
+  const std::string all_zeroed_export = CoreJson(g_state);
+
+  seed(/*exclude_first=*/true, /*exclude_second=*/false);
+  const nlohmann::json mixed = CommitSceneJson(g_state);
+  const std::string mixed_export = CoreJson(g_state);
+
+  ASSERT_FALSE(all_excluded.is_null()) << "the all-excluded document did not commit at all";
+  ASSERT_FALSE(all_zeroed.is_null()) << "the all-zeroed document did not commit at all";
+  ASSERT_FALSE(mixed.is_null()) << "the mixed document did not commit at all";
+
+  const nlohmann::json& entries = all_excluded["scene"]["scattering"][0]["entries"];
+  ASSERT_EQ(entries.size(), 2u) << "the zero-contribution entries were dropped rather than zeroed";
+  for (const nlohmann::json& je : entries) {
+    EXPECT_FLOAT_EQ(je["proportion"].get<float>(), 0.0f) << je.dump();
+  }
+
+  EXPECT_EQ(all_excluded, all_zeroed) << "excluding every crystal is not the same run as zeroing every weight";
+  EXPECT_EQ(all_excluded, mixed) << "excluding some and zeroing the rest is not the same run as excluding all";
+  EXPECT_EQ(all_excluded_export, all_zeroed_export) << "the two are the same run but export as different configs";
+  EXPECT_EQ(all_excluded_export, mixed_export) << "the two are the same run but export as different configs";
+}
+
 }  // namespace
 }  // namespace lumice::gui
