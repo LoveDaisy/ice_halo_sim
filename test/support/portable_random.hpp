@@ -37,6 +37,7 @@
 // is a separate one (its symptom is "the same config renders different pixels on different
 // platforms", not "a test goes red"), with a different contract and a different fix.
 
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <random>
@@ -67,6 +68,10 @@ inline float PortableUniformFloat(std::mt19937& rng, float lo, float hi) {
 // most thousands) it is under 1e-6 and irrelevant. It is NOT a uniform generator for spans near
 // 2^32, and nothing here should be pressed into that use.
 inline int PortableUniformInt(std::mt19937& rng, int lo, int hi) {
+  // `hi - lo` is computed in `int`; if a caller passes hi < lo it goes negative and the
+  // `static_cast<uint64_t>` below sign-extends that into a span near 2^64, silently returning a
+  // value nowhere near [lo, hi]. Catch the misuse at the contract boundary instead of downstream.
+  assert(hi >= lo);
   const auto span = static_cast<uint64_t>(hi - lo) + 1u;
   const auto offset = static_cast<uint64_t>(rng()) * span >> 32;
   return lo + static_cast<int>(offset);

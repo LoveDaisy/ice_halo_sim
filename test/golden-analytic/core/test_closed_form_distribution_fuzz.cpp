@@ -41,7 +41,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <memory>
 #include <random>
 #include <tuple>
 
@@ -64,6 +63,11 @@ constexpr int kPrismSideCnt = kClosedFormPrismSideCnt;
 constexpr int kPrismSamplesPerTier = 4000;
 constexpr int kPyramidSamples = 4000;
 
+// Shape note: this result struct and PyramidFuzzResult below are both "universal-invariant counts +
+// oracle/production comparison counts", differing only in field names and dimensionality (2D corner
+// vs 3D vertex/face). Two call sites do not clear this repo's bar for extracting a shared template —
+// leave them as they are. If a third closed-form geometry ever needs the same kind of distribution
+// fuzz, that is the trigger to fold this shape into one shared counter type instead of copying again.
 struct PrismTierResult {
   int drawn = 0;
   int evaluated = 0;    // oracle did not refuse
@@ -128,6 +132,11 @@ PrismTierResult RunPrismTier(uint32_t seed, float sigma, int n) {
       r.prod_empty++;
       continue;
     }
+    // `prod_vtx` is a std::unique_ptr<float[]> (src/core/math.hpp): owning, freshly heap-allocated
+    // per call and freed by RAII at scope exit — no leak, but this loop does pay one alloc/free per
+    // iteration since only the vertex count is compared below. Accepted at these tier sizes (this
+    // file's whole run measures well under a second); revisit only if this loop's N grows enough for
+    // the allocation cost to matter.
     auto [prod_vtx, prod_cnt] = SolveConvexPolyhedronVtxD(static_cast<int>(plane_cnt), coef);
     (void)prod_vtx;
     if (prod_cnt == 0) {
@@ -303,6 +312,11 @@ PyramidFuzzResult RunPyramidFuzz(uint32_t seed, int n) {
       r.prod_empty++;
       continue;
     }
+    // `prod_vtx` is a std::unique_ptr<float[]> (src/core/math.hpp): owning, freshly heap-allocated
+    // per call and freed by RAII at scope exit — no leak, but this loop does pay one alloc/free per
+    // iteration since only the vertex count is compared below. Accepted at these tier sizes (this
+    // file's whole run measures well under a second); revisit only if this loop's N grows enough for
+    // the allocation cost to matter.
     auto [prod_vtx, prod_cnt] = SolveConvexPolyhedronVtxD(static_cast<int>(plane_cnt), coef);
     (void)prod_vtx;
     if (prod_cnt == 0) {
