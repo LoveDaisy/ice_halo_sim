@@ -120,6 +120,38 @@ jobs:
         if: matrix.msvc
         uses: ilammy/msvc-dev-cmd@v1
 
+      # sccache as a compiler launcher, on the one leg where compilation is most of the job
+      # (doc/testing-architecture.md §7.1). Installed from a pinned mozilla/sccache release
+      # asset and checked against its published SHA-256, so a replaced, truncated or
+      # redirected download fails this step loudly rather than silently installing something
+      # else. The version is not a free parameter to bump: 0.17.0 is the version this repo's
+      # MSVC + Ninja + CPM combination was measured against, and moving it means re-measuring.
+      #
+      # LUMICE_SCCACHE_ARGS follows the LUMICE_PYTHON_ARGS pattern below: it is only ever
+      # written on this leg, and every other matrix entry evaluates the unset variable to an
+      # empty string, so the shared Configure step needs no branch of its own.
+      - name: Install sccache (Windows MSVC)
+        if: matrix.msvc
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '0.17.0'
+          $asset = "sccache-v$version-x86_64-pc-windows-msvc"
+          $expected = 'e94cfc5b58cbe439302f586c1d1bd7980c2cd371d47bdf385ade657411e6f3ac'
+          $zip = Join-Path $env:RUNNER_TEMP "$asset.zip"
+          Invoke-WebRequest -Uri "https://github.com/mozilla/sccache/releases/download/v$version/$asset.zip" -OutFile $zip
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+          if ($actual -ne $expected) {
+            throw "sccache archive SHA-256 mismatch: expected $expected, got $actual"
+          }
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+          $dir = Join-Path $env:RUNNER_TEMP $asset
+          & (Join-Path $dir 'sccache.exe') --version
+          echo $dir >> $env:GITHUB_PATH
+          echo "LUMICE_SCCACHE_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $env:GITHUB_ENV
+          echo "SCCACHE_DIR=$env:GITHUB_WORKSPACE\sccache_cache" >> $env:GITHUB_ENV
+          echo "SCCACHE_CACHE_SIZE=2G" >> $env:GITHUB_ENV
+
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       - name: Install GLAD2 Python dependencies (MSVC)
         if: matrix.msvc && matrix.build_gui == 'ON'
@@ -148,6 +180,23 @@ jobs:
           key: cpm-${{ matrix.cache_key }}-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-${{ matrix.cache_key }}-
 
+      # sccache's disk cache, in a key namespace of its own so it can neither collide with nor
+      # be confused for the `cpm-*` entries above — different content, different lifecycle.
+      # The CPM cache can be content-addressed because its key hashes the CMakeLists.txt files
+      # that fully determine what it holds; an sccache directory has no such key, since it
+      # accumulates whatever this run happened to compile. So the closest correct shape is
+      # "one entry per commit, falling back to the newest earlier one": the exact key never
+      # hits on a new commit, which is what makes the post-step save a fresh entry, and
+      # restore-keys then supplies the previous commit's directory, where the objects for
+      # every file this commit did not touch still hit.
+      - name: Cache sccache directory (Windows MSVC)
+        if: matrix.msvc
+        uses: actions/cache@v6
+        with:
+          path: sccache_cache
+          key: sccache-windows-msvc-x64-${{ github.sha }}
+          restore-keys: sccache-windows-msvc-x64-
+
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
@@ -156,9 +205,22 @@ jobs:
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
           ${{ env.LUMICE_PYTHON_ARGS }}
+          ${{ env.LUMICE_SCCACHE_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
+
+      # Diagnostics, never a gate — hence the `|| true` on both calls. The hit rate is the one
+      # number the step timestamps cannot supply: it is what tells a later reader whether a
+      # slow Build was a cold cache or a real regression. Stopping the server afterwards
+      # flushes its state to disk before actions/cache's post-step packs the directory; no
+      # compilation happens after this point in the job.
+      - name: sccache statistics (Windows MSVC)
+        if: always() && matrix.msvc
+        shell: bash
+        run: |
+          sccache --show-stats || true
+          sccache --stop-server || true
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -L "unit-correctness|composition-correctness|parity|golden-analytic"
@@ -687,16 +749,17 @@ jobs:
         # WHEN to redo it. The trigger is NOT how far apart the two legs are.
         # A run's wall-clock is its longest job and nothing else, so evening the
         # legs out is only worth CI time while one of them IS that longest job.
-        # Measured on the commit that produced the grouping below, taking the
-        # push run and the pull_request run of the same SHA together (neither
-        # alone carries every job: `build` is push-only, `e2e-slow` is PR/main):
-        #   Windows MSVC x86_64       740s  <- longest, this sets the wall-clock
-        #   shared-gui-test-build     666s
-        #   Ubuntu x86_64             635s
-        #   E2E Slow (macOS parity)   597s
-        #   E2E Slow (macOS rest)     391s
-        # Both macOS legs sit under that ceiling, so packing them closer buys
-        # ZERO wall-clock — the ceiling is somewhere else entirely. Trigger to
+        # Re-measured 2026-09-08 on one pull_request run, which now carries
+        # every job (no job-level `if:` makes anything push-only any more):
+        #   shared-gui-test-build     734s  <- longest, this sets the wall-clock
+        #   E2E Slow (macOS parity)   556s
+        #   Ubuntu x86_64             530s
+        #   Windows MSVC x86_64       528s
+        #   E2E Slow (macOS rest)     456s
+        # The Windows leg used to hold the top of this list at 740s; sccache as
+        # a compiler launcher moved it to 528-605s and the ceiling moved with
+        # it. Both macOS legs still sit under the ceiling, so packing them
+        # closer buys ZERO wall-clock — the ceiling is somewhere else. Trigger to
         # redo the packing: either macOS leg becoming the longest job of a run.
         # The ratio between the legs is a bad proxy for that and is recorded
         # here only as a fact, not as a target: this grouping measured 1.28x and
