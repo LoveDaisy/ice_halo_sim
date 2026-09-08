@@ -1121,14 +1121,28 @@ EditModalTarget GetEditModalTarget() {
 }
 
 void NotifyEntryDeleted(int layer_idx, int deleted_entry_idx) {
-  // TEMPORARY NO-OP (red-state probe): reproduces today's behaviour exactly.
-  (void)layer_idx;
-  (void)deleted_entry_idx;
+  if (g_active_modal != ActiveModal::kOpen || layer_idx != g_modal_layer_idx) {
+    return;
+  }
+  if (deleted_entry_idx == g_modal_entry_idx) {
+    // Same close as the bounds guard in RenderEditModals performs — one behaviour, reached from the
+    // two directions a delete can come from.
+    g_active_modal = ActiveModal::kNone;
+  } else if (deleted_entry_idx < g_modal_entry_idx) {
+    --g_modal_entry_idx;
+  }
 }
 
 void NotifyLayerDeleted(int deleted_layer_idx) {
-  // TEMPORARY NO-OP (red-state probe): reproduces today's behaviour exactly.
-  (void)deleted_layer_idx;
+  if (g_active_modal != ActiveModal::kOpen) {
+    return;
+  }
+  if (deleted_layer_idx == g_modal_layer_idx) {
+    // Every entry the modal could have been editing went with the layer.
+    g_active_modal = ActiveModal::kNone;
+  } else if (deleted_layer_idx < g_modal_layer_idx) {
+    --g_modal_layer_idx;
+  }
 }
 
 namespace {
