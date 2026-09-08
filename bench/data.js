@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788859467272,
+  "lastUpdate": 1788859469923,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "fa613fb092061df691f456e4ee68497590efe136",
-          "message": "Merge pull request #223 from LoveDaisy/feat/gui-shape-randomization-property-table\n\nfeat(gui): crystal shape randomization as a single uniform property table",
-          "timestamp": "2026-07-25T09:15:06+08:00",
-          "tree_id": "e97db9aed21e5466cd569d61f8ad02416099e8ee",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fa613fb092061df691f456e4ee68497590efe136"
-        },
-        "date": 1784942604996,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 90.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.8,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 89,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "86adcd8f5fc57d211e201db64fb8d77f4bf37f88",
           "message": "Merge pull request #224 from LoveDaisy/feat/capi-scene-opaque-handle\n\nrefactor(c_api): LUMICE_Config value struct → LUMICE_Scene opaque handle (BREAKING v4.12)",
           "timestamp": "2026-07-25T21:38:42+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "da9e5533acc8c01c61877b6613ddf40bdce9a8b4",
+          "message": "Merge pull request #320 from LoveDaisy/fix/cuda-zero-ray-batch-poisons-backend\n\nfix(cuda): stop a zero-ray layer from poisoning the CUDA backend",
+          "timestamp": "2026-09-08T17:13:37+08:00",
+          "tree_id": "915905aba2ebcbe1abe8eebe327b96458d905c22",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/da9e5533acc8c01c61877b6613ddf40bdce9a8b4"
+        },
+        "date": 1788859469241,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 73.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.3,
             "unit": "%"
           }
         ]
