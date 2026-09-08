@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -640,6 +640,66 @@ def _commit_config(lib, server, config_path: str) -> None:
         lib.LUMICE_SceneDestroy(scene)
 
 
+def _commit_and_wait_drained(lib, server, config_path: str, prev_epoch: int,
+                             timeout_sec: int) -> int:
+    """Commit `config_path` on an ALREADY-RUNNING server and block until the epoch it
+    mints has been fully consumed. Returns that epoch.
+
+    Only used for the NON-FINAL stages of a multi-config sequence — the final stage keeps
+    the has_valid_data/IDLE predicate the single-config path always used, because that is
+    the stage whose buffers get copied out.
+
+    Why the drain signal and not IDLE: IDLE is a producer-side verdict (see
+    _read_sample_counts' long comment for the measured consequence). Committing the next
+    config while the previous epoch's batches are still queued would make the sequence
+    stop saying what it claims to say — the point of a sequence fixture is that stage N+1
+    starts after stage N really ran. drained_epoch == current_epoch is the server's own
+    answer to exactly that question.
+
+    Why the epoch is required to advance: the whole wait is keyed on it. A commit that did
+    NOT mint a new epoch would leave the previous epoch's already-satisfied
+    `drained == current` standing, and this function would return immediately having
+    waited for nothing — a silently degenerate sequence. Fail loudly instead; a caller
+    whose consecutive configs are not reset-causing has a fixture bug.
+
+    An infinite `ray_num` never drains (production never ends), so it cannot be used for a
+    non-final stage; the timeout message says so.
+    """
+    _commit_config(lib, server, str(config_path))
+
+    drain = LUMICE_DrainResult()
+    err = lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain))
+    if err != 0:
+        raise RuntimeError(f"GetDrainStatus failed err={err}")
+    minted = int(drain.current_epoch)
+    if minted <= prev_epoch:
+        raise RuntimeError(
+            f"committing {config_path} did not mint a new epoch (epoch stayed at "
+            f"{minted}; the previous stage was {prev_epoch}). Every sequence stage must "
+            f"be a reset-causing commit, otherwise the drain wait below is a no-op."
+        )
+
+    deadline = time.time() + timeout_sec
+    while True:
+        err = lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain))
+        if err != 0:
+            raise RuntimeError(f"GetDrainStatus failed err={err}")
+        if int(drain.current_epoch) != minted:
+            raise RuntimeError(
+                f"epoch moved from {minted} to {int(drain.current_epoch)} while waiting "
+                f"for {config_path} to drain — something else committed to this server."
+            )
+        if int(drain.drained_epoch) == minted:
+            return minted
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"Timeout {timeout_sec}s waiting for {config_path} (epoch {minted}) to "
+                f"drain (drained_epoch={int(drain.drained_epoch)}). A non-final sequence "
+                f"stage must be a FINITE run: an infinite ray_num never drains."
+            )
+        time.sleep(_DRAIN_POLL_SEC)
+
+
 def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) -> SimResult:
     """Run a single Lumice simulation via the C API and return scalar intensity.
 
@@ -718,15 +778,36 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
 _BACKEND_MODES = ("legacy", "metal", "cpu_backend", "cuda")
 
 
-def run_scene_capi_buffered(
-    config_path: str,
+def run_scene_sequence_capi_buffered(
+    config_paths: Sequence[str],
     sim_seed: int = 0,
     timeout_sec: int = 180,
     backend: str = "legacy",
     preserve_dispatch_env: bool = False,
     num_workers: int = 0,
 ) -> BufferedSimResult:
-    """Run a Lumice sim via the C API and copy out XYZ + RGB buffers.
+    """Commit `config_paths` in order on ONE server, and copy out the LAST one's buffers.
+
+    This is the authoritative implementation; `run_scene_capi_buffered` is the
+    single-config spelling of it and does nothing this function does not.
+
+    A one-element sequence behaves exactly as a single run always did: create server,
+    commit, poll to has_valid_data + IDLE (twice consecutively), copy out, destroy.
+
+    With two or more, every stage but the last is committed and then waited on until the
+    epoch it minted is fully drained (`_commit_and_wait_drained`), and only then is the
+    next config committed. Two properties that only a sequence has, and that are the
+    reason it exists rather than N separate calls:
+      - the SERVER (and therefore the simulator thread, its backend lifetime, and any
+        thread-local device state that outlives one Run) is shared across the stages, so
+        a defect that leaks state from one Run into the next is reachable here and
+        structurally unreachable from N single-config runs;
+      - the log capture spans the WHOLE sequence, so `fell_back` / `routed_backend`
+        answer for the entire session, not just for its final stage.
+
+    Every non-final stage must be a FINITE run (an infinite `ray_num` never drains) and
+    must differ from its predecessor enough to be a reset-causing commit; both are
+    enforced, loudly, by `_commit_and_wait_drained`.
 
     `backend` selects the trace path:
       - "legacy"     : no env, preferred_backend = LUMICE_BACKEND_CPU. The C-API
@@ -768,6 +849,12 @@ def run_scene_capi_buffered(
     """
     if backend not in _BACKEND_MODES:
         raise ValueError(f"backend must be one of {_BACKEND_MODES}, got {backend!r}")
+    config_paths = [str(c) for c in config_paths]
+    if not config_paths:
+        raise ValueError("config_paths must contain at least one config")
+    # Every scalar/buffer this function returns comes from the last stage; the messages
+    # below name it so a failure points at the config that was actually being polled.
+    final_config = config_paths[-1]
 
     lib = _load_lib()
     _ensure_log_callback_registered(lib)
@@ -817,7 +904,15 @@ def run_scene_capi_buffered(
                     lib.LUMICE_SetPreferredBackend(server, LUMICE_BACKEND_CPU)
                 # cpu_backend: env handles routing; preferred is ignored.
 
-                _commit_config(lib, server, str(config_path))
+                # Non-final stages: commit, wait for that epoch to drain, move on. The
+                # final stage falls through to the poll loop below, which is the
+                # unchanged single-config predicate.
+                stage_epoch = 0
+                for stage_cfg in config_paths[:-1]:
+                    stage_epoch = _commit_and_wait_drained(
+                        lib, server, stage_cfg, stage_epoch, timeout_sec
+                    )
+                _commit_config(lib, server, final_config)
 
                 results = (LUMICE_RawXyzResult * 1)()
                 renders = (LUMICE_RenderResult * 1)()
@@ -833,7 +928,7 @@ def run_scene_capi_buffered(
                     elapsed = time.time() - t_start
                     if elapsed > timeout_sec:
                         raise RuntimeError(
-                            f"Timeout {elapsed:.1f}s waiting for {config_path} (backend={backend})"
+                            f"Timeout {elapsed:.1f}s waiting for {final_config} (backend={backend})"
                         )
 
                     # LUMICE_FrameGet* always returns LUMICE_OK (0) when args are
@@ -888,7 +983,7 @@ def run_scene_capi_buffered(
                     r_axis_omega = float(r.axis_solid_angle)
                     if r_xyz_addr is None:
                         raise RuntimeError(
-                            f"{config_path}: race — xyz pointer became NULL after IDLE check"
+                            f"{final_config}: race — xyz pointer became NULL after IDLE check"
                         )
 
                     n_xyz = r_w * r_h * 3
@@ -908,7 +1003,7 @@ def run_scene_capi_buffered(
                     rr_addr = ctypes.cast(rr.img_buffer, ctypes.c_void_p).value
                     if rr_addr is None or rr_w == 0 or rr_h == 0:
                         raise RuntimeError(
-                            f"{config_path}: LUMICE_FrameGetRender returned empty buffer"
+                            f"{final_config}: LUMICE_FrameGetRender returned empty buffer"
                         )
                     # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
                     n_rgb = rr_w * rr_h * 3
@@ -968,3 +1063,30 @@ def run_scene_capi_buffered(
             os.environ["LUMICE_DISPATCH_RAY_NUM"] = disp_old
         else:
             os.environ.pop("LUMICE_DISPATCH_RAY_NUM", None)
+
+
+def run_scene_capi_buffered(
+    config_path: str,
+    sim_seed: int = 0,
+    timeout_sec: int = 180,
+    backend: str = "legacy",
+    preserve_dispatch_env: bool = False,
+    num_workers: int = 0,
+) -> BufferedSimResult:
+    """Run ONE config via the C API and copy out XYZ + RGB buffers.
+
+    A one-element `run_scene_sequence_capi_buffered`, and nothing else — see that
+    function for every argument's meaning and for the routed_backend / fell_back
+    contract. Kept as a named entry point because the overwhelming majority of callers
+    run one config and should not have to spell a list to say so; kept as a delegation
+    rather than a copy because the alternative is two implementations of one semantics
+    that drift apart on the first fix that lands in only one of them.
+    """
+    return run_scene_sequence_capi_buffered(
+        [config_path],
+        sim_seed=sim_seed,
+        timeout_sec=timeout_sec,
+        backend=backend,
+        preserve_dispatch_env=preserve_dispatch_env,
+        num_workers=num_workers,
+    )

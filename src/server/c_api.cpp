@@ -3168,6 +3168,18 @@ LUMICE_ErrorCode LUMICE_GetColorOverflowInfo(LUMICE_Server* server, LUMICE_Color
 }
 
 
+// Readback of the "GPU route is now running on the legacy CPU path" flag.
+// Same poll contract as LUMICE_GetColorOverflowInfo above — the condition is raised by
+// the worker mid-run, so the GUI only ever sees it by polling.
+LUMICE_ErrorCode LUMICE_GetBackendFallbackFlag(LUMICE_Server* server, int* out_fell_back) {
+  if (!server || !out_fell_back) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  *out_fell_back = server->server_->BackendFellBack() ? 1 : 0;
+  return LUMICE_OK;
+}
+
+
 void LUMICE_StopServer(LUMICE_Server* server) {
   if (!server) {
     return;

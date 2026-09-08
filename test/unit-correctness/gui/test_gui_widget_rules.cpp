@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <string>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "gui/composite_exposure_push.hpp"
 #include "gui/edit_modal_rules.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/gui_state.hpp"
 #include "gui/shape_scalar_domain.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/slider_format_rules.hpp"
@@ -79,6 +81,78 @@ TEST(SimStateRules, RunFirstNeedsAServerAndAnIdleBackend) {
     // claim in sim_state_rules.hpp's header, asserted rather than asserted-in-prose.
     EXPECT_EQ(CanRunFromModal(/*has_server=*/true, s), !IsBusy(s)) << "SimState=" << static_cast<int>(s);
   }
+}
+
+// ---- Zero-contribution layer notice (panels.cpp scattering-layer header) ----
+
+// The notice under a scattering layer's header says the layer produces no rays. Three different
+// user actions reach that state — exclude every crystal, drag every Weight to zero, or do some of
+// each — and to the engine they are one config: BuildScene emits `enabled ? proportion : 0` per
+// entry, so all three commit the same bytes. The predicate therefore has to answer the same for
+// all three, which is the proposition this case is here to pin; a predicate reading `enabled`
+// alone (which is what this one replaced) passes the first row and fails the other two.
+//
+// The notice itself is TextColored, which no gui_test assertion can reach, so the predicate being
+// a pure function of a Layer is what makes the rule testable at all.
+
+// One entry, spelled by what it contributes rather than by which control produced it.
+EntryCard MakeEntry(bool enabled, float proportion) {
+  EntryCard e;
+  e.enabled = enabled;
+  e.proportion = proportion;
+  return e;
+}
+
+Layer MakeLayer(std::initializer_list<EntryCard> entries) {
+  Layer layer;
+  layer.entries.assign(entries);
+  return layer;
+}
+
+TEST(ZeroContributionLayer, EveryWayOfReachingZeroContributionReadsTheSame) {
+  // The three AC2 rows: exclusion, zero weight, and a mixture. The excluded entries deliberately
+  // keep a large stored weight — the toggle leaves `proportion` alone, so a predicate that read
+  // `proportion` without consulting `enabled` would call these layers participating.
+  EXPECT_TRUE(LayerProducesNoRays(MakeLayer({ MakeEntry(false, 100.0f), MakeEntry(false, 58.0f) })))
+      << "every crystal excluded";
+  EXPECT_TRUE(LayerProducesNoRays(MakeLayer({ MakeEntry(true, 0.0f), MakeEntry(true, 0.0f) })))
+      << "every weight at zero";
+  EXPECT_TRUE(LayerProducesNoRays(MakeLayer({ MakeEntry(false, 100.0f), MakeEntry(true, 0.0f) })))
+      << "one crystal excluded, the other's weight zeroed";
+
+  // A single surviving contributor is enough to make the layer participate, whichever slot it is
+  // in — this is what stops the predicate from being quietly rewritten into something always true.
+  EXPECT_FALSE(LayerProducesNoRays(MakeLayer({ MakeEntry(true, 42.0f), MakeEntry(true, 58.0f) })))
+      << "a fully participating layer";
+  EXPECT_FALSE(LayerProducesNoRays(MakeLayer({ MakeEntry(false, 100.0f), MakeEntry(true, 58.0f) })))
+      << "one crystal excluded, the other still weighted";
+  EXPECT_FALSE(LayerProducesNoRays(MakeLayer({ MakeEntry(true, 58.0f), MakeEntry(true, 0.0f) })))
+      << "one weight zeroed, the other still weighted";
+
+  // An empty layer holds no crystals, so a message about what the user turned off would be about
+  // something they never did.
+  EXPECT_FALSE(LayerProducesNoRays(Layer{})) << "a layer with no entries at all";
+}
+
+TEST(ZeroContributionLayer, ZeroIsWhatTheWeightSliderDisplaysAsZero) {
+  // kProportionZeroEps is half the Weight slider's "%.1f" step, so the boundary this walks is the
+  // one the user can see: a drag residue that reads "0.0" on screen counts as zero, and the first
+  // value that reads "0.1" does not.
+  EXPECT_TRUE(LayerProducesNoRays(MakeLayer({ MakeEntry(true, 0.03f) }))) << "displays as 0.0";
+  EXPECT_FALSE(LayerProducesNoRays(MakeLayer({ MakeEntry(true, 0.06f) }))) << "displays as 0.1";
+  // The comparison is strict, so the epsilon itself is NOT zero. Pinned rather than left to the
+  // reader: `<` and `<=` differ here on exactly one value, and nothing else in the suite says which.
+  EXPECT_FALSE(LayerProducesNoRays(MakeLayer({ MakeEntry(true, kProportionZeroEps) })))
+      << "the epsilon itself was treated as zero";
+
+  // Per-entry, not a layer-wide sum: three entries at 0.03 each total 0.09, which is above the
+  // epsilon, and the predicate still says the layer contributes nothing. That is the designed
+  // reading — each of the three shows "0.0" on its own slider, so a notice keyed to what the user
+  // sees has to fire. It is also the point where the per-entry form and a summed form part ways
+  // inside the reachable domain, which is why it is a case and not only a comment.
+  EXPECT_TRUE(
+      LayerProducesNoRays(MakeLayer({ MakeEntry(true, 0.03f), MakeEntry(true, 0.03f), MakeEntry(true, 0.03f) })))
+      << "three sub-epsilon weights summed their way out of the notice";
 }
 
 // ---- Aspect-ratio rules (app_panels.cpp Display group) ----

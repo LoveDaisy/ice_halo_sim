@@ -73,6 +73,17 @@ class Simulator {
   // the top of Run().
   void SetPreferredBackend(BackendKind backend);
 
+  // Is this Run() still driving a TraceBackend? False both when
+  // Run() never got one (CreateBackend returned nullptr — CPU preference, or a
+  // GPU preference this build/host cannot honour) and after a
+  // BackendUnavailableError dropped it mid-Run(). Read across threads by the
+  // server's producer (GenerateScene sizes its per-batch dispatch grain on it —
+  // a GPU-sized batch on the legacy path traces one host-sampled wavelength per
+  // 262144 rays), so it uses the same release/acquire pairing as
+  // preferred_backend_ above. Defaults to true so the window between the ctor
+  // and the worker thread reaching CreateBackend does not read as "fell back".
+  bool BackendActive() const { return backend_active_.load(std::memory_order_acquire); }
+
   // Returns the seed actually handed to the trace backend (task 260.6).
   // When `seed_ != 0` this equals `seed_`; when `seed_ == 0` this is a
   // per-instance non-zero value derived from a global atomic counter so the
@@ -242,6 +253,13 @@ class Simulator {
   // Preferred trace backend. release-write by ServerImpl::SetPreferredBackend,
   // acquire-read at Run() entry. env-var LUMICE_TRACE_BACKEND still wins.
   std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
+
+  // Backing store for BackendActive() (see its declaration above for
+  // the contract and the default's rationale). Written by the simulator thread at
+  // exactly two points inside Run() — right after CreateBackend, and in the
+  // BackendUnavailableError catch that resets `backend` — and nowhere else; those
+  // are the only two places `backend`'s nullness changes.
+  std::atomic_bool backend_active_{ true };
 };
 
 // Distributes ray_num rays across crystals proportionally using per-crystal carry with

@@ -1006,17 +1006,42 @@ inline bool IsProbZero(float p) {
   return p < kProbZeroEps;
 }
 
-// True when the layer has entries but every one of them is toggled out of the
-// simulation, i.e. the layer contributes nothing. Kept as a free function (same
-// pattern as IsProbZero above) so the panel's warning predicate is testable
-// without an ImGui context: the warning itself is drawn with TextColored, which
-// IsItemHovered/ItemExists cannot reach from a gui_test.
+// kProportionZeroEps is the entry-weight counterpart of kProbZeroEps above, and
+// is derived the same way: half the SliderWithInput "%.1f" step (0.1) used by
+// the entry card's Weight slider (panels.cpp), so any weight the UI displays as
+// "0.0" is treated as zero.
+constexpr float kProportionZeroEps = 0.05f;
+inline bool IsProportionZero(float p) {
+  return p < kProportionZeroEps;
+}
+
+// True when the layer has entries but not one of them contributes a non-zero
+// weight to the run, i.e. the layer produces no rays. Kept as a free function
+// (same pattern as IsProbZero above) so the panel's warning predicate is
+// testable without an ImGui context: the warning itself is drawn with
+// TextColored, which IsItemHovered/ItemExists cannot reach from a gui_test.
 //
-// An empty layer is deliberately NOT "all disabled" — it has no toggles in it,
-// so the "you turned everything off" message would be misleading.
-inline bool AllEntriesDisabled(const Layer& layer) {
-  return !layer.entries.empty() &&
-         std::all_of(layer.entries.begin(), layer.entries.end(), [](const EntryCard& e) { return !e.enabled; });
+// The predicate is built on the quantity that actually reaches the engine, not
+// on `enabled`: BuildScene emits `enabled ? proportion : 0` for every entry
+// (file_io.cpp), so "every crystal excluded" and "every weight at zero" are the
+// same core config byte for byte. A predicate reading only `enabled` gave the
+// user two different answers about one engine state, which is why there is one
+// predicate here rather than two.
+//
+// Per-entry rather than a layer-wide sum: `proportion` is non-negative over the
+// whole GUI-reachable domain (the Weight slider clamps to [0, 100]), and for
+// non-negative terms "the sum is zero" and "every term is zero" are the same
+// proposition. The two forms only diverge for a negative weight, which no
+// control can produce and only a hand-edited JSON can carry — an existing gap in
+// the load path, deliberately not addressed here.
+//
+// An empty layer is deliberately NOT "produces no rays" — it has no crystals in
+// it, so a message about what the user turned off would be about something they
+// never did.
+inline bool LayerProducesNoRays(const Layer& layer) {
+  return !layer.entries.empty() && std::all_of(layer.entries.begin(), layer.entries.end(), [](const EntryCard& e) {
+    return !e.enabled || IsProportionZero(e.proportion);
+  });
 }
 
 // ---- Sky reference-point markers ----
@@ -1580,7 +1605,7 @@ inline bool AnyMarkerRequested(const GuiState& s) {
 // is that no site types it.
 //
 // Placement note for whoever adds the next one: gui_state.hpp is "state structures", and
-// FormatCrystalIdentity is not a pure predicate on a struct the way IsProbZero / AllEntriesDisabled
+// FormatCrystalIdentity is not a pure predicate on a struct the way IsProbZero / LayerProducesNoRays
 // are — it reads GuiState and returns a display string. Four of them is still within what this file
 // carries comfortably. If a fifth and sixth formatting free function want in here, that is the
 // signal to split them out into a gui_formatting.{hpp,cpp} instead of letting this file become

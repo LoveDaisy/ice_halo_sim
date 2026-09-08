@@ -874,7 +874,8 @@ Simulator::Simulator(Simulator&& other) noexcept
       stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), effective_seed_(other.effective_seed_),
       all_data_observer_(other.all_data_observer_), all_data_observer_ctx_(other.all_data_observer_ctx_),
       rng_(other.rng_), logger_(std::move(other.logger_)),
-      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {
+      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)),
+      backend_active_(other.backend_active_.load(std::memory_order_acquire)) {
   // The observer is a raw function pointer plus a context that the test owns (typically a stack
   // object in the test body). Leaving it live on the moved-from object would let a later Run() on
   // that object call back into a context the mover has taken over.
@@ -900,6 +901,7 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   rng_ = other.rng_;
   logger_ = std::move(other.logger_);
   preferred_backend_.store(other.preferred_backend_.load(std::memory_order_acquire), std::memory_order_release);
+  backend_active_.store(other.backend_active_.load(std::memory_order_acquire), std::memory_order_release);
   return *this;
 }
 
@@ -1052,6 +1054,12 @@ void Simulator::Run() {
   // a backend pool, that gate's semantics must be revisited (cross-Run() PCG
   // determinism + counter rollover both depend on the per-Run() lifecycle here).
   auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
+  // Publish this Run()'s starting backend state. Covers both "GPU
+  // preference honoured" (true, overwriting the ctor default) and "no backend at
+  // all" (false — CPU preference, or a GPU preference CreateBackend could not
+  // honour). The server's producer reads this to decide whether its per-batch
+  // dispatch grain is still the right one; see Simulator::BackendActive().
+  backend_active_.store(backend != nullptr, std::memory_order_release);
   // scrum-312 third-clock drain cadence cap + fresh window per Run().
   xyz_drain_batches_ = env::XyzDrainBatches(logger_, kDefaultXyzDrainBatches);
   geom_clock_ = env::GeomClock(logger_, kSmallBatchRayNum);
@@ -1131,6 +1139,13 @@ void Simulator::Run() {
             "TraceBackend unavailable ({}); dropping backend and falling back to legacy CPU for the rest of this Run()",
             e.what());
         backend.reset();
+        // The second and last write point of this signal. The server's
+        // producer polls it so the batches it queues from here on shrink back to the
+        // legacy grain instead of feeding 262144-ray single-wavelength batches to the
+        // CPU path. Nothing synchronises this store with the producer's read — it only
+        // has to be seen eventually, which narrows the mis-sized window rather than
+        // closing it (batches already queued keep their size).
+        backend_active_.store(false, std::memory_order_release);
         SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
                               crystal_cache, workspace, generation, ray_alloc_carry);
         return false;

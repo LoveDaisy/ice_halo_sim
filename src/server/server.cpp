@@ -133,6 +133,15 @@ class ServerImpl {
              last_color_class_overflow_.load(std::memory_order_acquire) };
   }
 
+  // Has this server's GPU single-engine route lost its TraceBackend for
+  // the remainder of the current Run()? (a BackendUnavailableError, or a
+  // CreateBackend that could not honour the preference at all.) Always false on the
+  // CPU route, where there is no backend to lose. Like the color-degrade tally above
+  // this is an ASYNCHRONOUS fact discovered by the worker mid-run, so the GUI polls
+  // it (LUMICE_GetBackendFallbackFlag) instead of the fallback living only as a core
+  // WARN line no GUI user ever sees. Cheap: one atomic load under a short mutex.
+  bool BackendFellBack() const { return gpu_route_ && !ReadBackendActive(); }
+
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
@@ -366,6 +375,44 @@ class ServerImpl {
   // SetPreferredBackend(). Default is CPU.
   std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
 
+  // ResolveGpuRoute's verdict at CONSTRUCTION time — the route this
+  // server was actually sized for (worker_count, and hence simulators_.size()).
+  // GenerateScene re-derives its own kGpuRoute from the live preferred_backend_
+  // each call, deliberately: these are two call sites of the one ResolveGpuRoute
+  // (there is no second implementation of the routing rule), asking two different
+  // questions — "what was this server built as" vs "what does the current
+  // preference imply". Today they cannot disagree (SetPreferredBackend has no
+  // caller outside the C API; the GUI reconstructs the server on a backend
+  // toggle), and GenerateScene logs it if they ever do, so the drift cannot be
+  // silent. BackendFellBack must use THIS one: "fell back" is only meaningful
+  // against the route that sized simulators_ to a single Simulator.
+  bool gpu_route_ = false;
+
+  // Set once per Run() by GenerateScene, when it has dropped the batches it had
+  // queued at the GPU grain after the backend went away (see the invalidation there).
+  // Written by that one thread, read by ConsumeData, and cleared at GenerateScene's
+  // entry — so it is per-Run() the same way backend_active_ is. It exists to make the
+  // work it gates one-shot: both the extra wake-up ConsumeData sends and the producer's
+  // extra wait predicate are there only to get that invalidation to happen promptly,
+  // and both are pure overhead on every batch afterwards.
+  std::atomic_bool fallback_queue_invalidated_{ false };
+
+  // Single owner of "read the GPU route's Simulator's backend liveness".
+  // Both consumers (GenerateScene's per-batch grain, BackendFellBack's GUI signal)
+  // go through here so the guard and the locking discipline cannot drift apart.
+  // Returns true (i.e. "nothing has fallen back") whenever the question does not
+  // apply — no simulator, or a multi-worker CPU server where no single simulator
+  // owns the answer. Locking mirrors GetStatus(): simulators_ never changes size
+  // after construction and BackendActive() is itself an atomic load, so the mutex
+  // is for consistency with the surrounding code rather than for correctness.
+  bool ReadBackendActive() const {
+    std::lock_guard<std::mutex> lock(prod_mutex_);
+    if (simulators_.size() != 1) {
+      return true;
+    }
+    return simulators_[0].BackendActive();
+  }
+
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -474,6 +521,16 @@ bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
   return false;  // kCpu, or the requested GPU backend is unavailable in this build
 }
 
+// See the doc block on the declaration in server.hpp.
+size_t EffectiveDispatchCap(bool gpu_route, bool backend_active, size_t nominal_cap, size_t fallback_cap) {
+  if (gpu_route && !backend_active) {
+    // min(), not fallback_cap: an explicit LUMICE_DISPATCH_RAY_NUM below the legacy
+    // default is a deliberate request and must not be raised by a fallback.
+    return std::min(nominal_cap, fallback_cap);
+  }
+  return nominal_cap;
+}
+
 ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred_backend)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
@@ -484,10 +541,9 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
   // for the cached-stats read holds by construction.
   StorePublished(std::make_shared<const ResultFrame>());
   preferred_backend_.store(preferred_backend, std::memory_order_release);
-  // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for variables.
-  const bool gpu_route = ResolveGpuRoute(preferred_backend, logger_);
+  gpu_route_ = ResolveGpuRoute(preferred_backend, logger_);
   int worker_count = 1;
-  if (gpu_route) {
+  if (gpu_route_) {
     worker_count = 1;  // GPU route: single engine (task-268.7; CUDA joined 296.6)
   } else {
     worker_count = num_workers > 0 ? num_workers : std::min(PhysicalCoreCount(), kMaxDefaultWorkerCount);
@@ -496,7 +552,7 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
     }
   }
   // AC1 observability (296.6): the GPU single-engine route must run worker_count==1.
-  ILOG_INFO(logger_, "ServerImpl: gpu_route={} worker_count={} (preferred_backend={})", gpu_route, worker_count,
+  ILOG_INFO(logger_, "ServerImpl: gpu_route={} worker_count={} (preferred_backend={})", gpu_route_, worker_count,
             static_cast<int>(preferred_backend));
   for (int i = 0; i < worker_count; i++) {
     uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
@@ -1550,6 +1606,17 @@ void ServerImpl::ConsumeData() {
     sim_scene_cnt_ -= static_cast<int>(sim_data.sim_scene_credit_);
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
       scene_cv_.notify_one();
+    } else if (gpu_route_ && !fallback_queue_invalidated_.load(std::memory_order_acquire) && !ReadBackendActive()) {
+      // The queue is still deep, so the throttle above would keep the producer parked for
+      // as long as the backlog takes to render — precisely the window GenerateScene's
+      // batch invalidation exists to cut short. Wake it now instead. Repeated on every
+      // consumed SimData rather than sent once, deliberately: neither the store this reads
+      // nor this notify is synchronised with the producer's predicate evaluation, so a
+      // single notify can fall into that window and be lost. It stops the moment the
+      // producer reports the invalidation done, which is why that flag is read here — past
+      // that point this branch would be a wakeup per batch that the producer can only go
+      // back to sleep on.
+      scene_cv_.notify_one();
     }
     // The consumer is one of the two threads that can complete the
     // last transition into "this epoch is fully drained" — publish from here,
@@ -1620,6 +1687,16 @@ void ServerImpl::GenerateScene() {
                                                  kDefaultRayNum;
   const size_t kDispatchCap = env::DispatchRayNum(logger_, kDefaultDispatch);
   const size_t kBatchCap = kDispatchCap;  // local alias for the loop below
+  // The ctor-time route and this live re-derivation ask two different
+  // questions off the same ResolveGpuRoute (see gpu_route_'s declaration). They
+  // cannot disagree today; say so out loud if they ever do, rather than letting one
+  // silently size the batches while the other decides whether a fallback happened.
+  if (kGpuRoute != gpu_route_) {
+    ILOG_WARN(logger_,
+              "GenerateScene: live gpu_route ({}) disagrees with the construction-time route ({}); this server was "
+              "sized for the latter, so dispatch grain and the fallback signal are now keyed off different routes",
+              kGpuRoute, gpu_route_);
+  }
 
   // task-296.7: sim_scene_cnt_ semantic fix — count SimData (not SimBatch).
   // The simulator emits one SimData per wavelength inside SimulateOneWavelength*
@@ -1661,8 +1738,48 @@ void ServerImpl::GenerateScene() {
     per_wl_ray_num = PerWavelengthRayNum(per_wl_ray_num, kNsimdataPerBatch);
   }
   size_t committed_num = 0;
+  // One-shot, because backend_active_ only ever goes true -> false inside one Run():
+  // the batches queued at the GPU grain are invalidated the first time the backend is
+  // seen gone, and never again. Re-armed here rather than in Start() because this is the
+  // only writer, and this is the entry point of the Run() the flag describes.
+  fallback_queue_invalidated_.store(false, std::memory_order_release);
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
-    size_t batch_ray_num = std::min(kBatchCap, per_wl_ray_num - committed_num);
+    const bool backend_active = ReadBackendActive();
+    // Shrinking the grain only sizes the batches queued FROM HERE ON, and by the time a
+    // fallback is noticed the queue is already full of batches sized for the GPU
+    // (kMaxSceneCnt counts batches, not rays, so the backlog at the CUDA grain is
+    // ~128 x 262144 rays — tens of seconds of single-wavelength frames on the legacy CPU
+    // path, i.e. the whole of the symptom this shrink exists to remove). Those batches are
+    // stale in size, not in content: drop them and re-emit the same ray budget at the new
+    // grain. Under ray_num == "infinite" (the GUI default) they carry no budget at all,
+    // just "trace N more rays", so nothing is lost either way.
+    if (kGpuRoute && !backend_active && !fallback_queue_invalidated_.load(std::memory_order_acquire)) {
+      fallback_queue_invalidated_.store(true, std::memory_order_release);
+      size_t dropped_batches = 0;
+      const size_t refunded_rays = DiscardQueuedBatchesThenRefund(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch),
+                                                                  *scene_queue_, &dropped_batches);
+      // Hand the dropped batches' budget back to the ledger, or a finite ray_num run
+      // would trace exactly this many rays fewer than the config asked for. The clamp
+      // cannot bind: every batch that can be in the queue was enqueued by this same loop
+      // and added to committed_num at the bottom of its own iteration, so the refund is
+      // always a subset of what was committed. It is here because the underflow it would
+      // guard against is silent (size_t) and would read as an enormous outstanding budget.
+      committed_num -= std::min(committed_num, refunded_rays);
+      ILOG_WARN(logger_,
+                "GenerateScene: backend dropped mid-run; discarded {} queued batches ({} rays refunded to the "
+                "budget) sized for the GPU grain, re-emitting at the legacy grain",
+                dropped_batches, refunded_rays);
+    }
+    // Re-decide the grain every iteration. A mid-Run() BackendUnavailableError
+    // leaves the GPU route feeding the legacy CPU path, which samples ONE host
+    // wavelength per batch — at the GPU grain that is one wavelength per 262144 rays,
+    // i.e. seconds of strongly saturated single-colour frames. Named locals rather than
+    // inline constants because EffectiveDispatchCap's last two parameters are both
+    // size_t and a swap would not be a compile error.
+    const size_t nominal_cap = kBatchCap;
+    const size_t fallback_cap = kDefaultRayNum;
+    const size_t iter_cap = EffectiveDispatchCap(kGpuRoute, backend_active, nominal_cap, fallback_cap);
+    size_t batch_ray_num = std::min(iter_cap, per_wl_ray_num - committed_num);
     AccountThenPublishBatch(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch), *scene_queue_,
                             SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
     if (!first_batch_logged) {
@@ -1677,12 +1794,29 @@ void ServerImpl::GenerateScene() {
     if (sim_scene_cnt_ >= kMaxSceneCnt) {
       ILOG_DEBUG(logger_, "GenerateScene: too many scenes generated. wait for consumer");
       std::unique_lock<std::mutex> lock(scene_mutex_);
-      scene_cv_.wait(lock,
-                     [this]() { return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt; });
+      // The third term is what makes the invalidation above reachable in time. Without it
+      // this wait only ends when the consumer has drained the queue to kMaxSceneCnt/2 —
+      // which, once every batch runs on the legacy CPU path at the GPU grain, is the
+      // backlog itself, rendered in full before the producer ever wakes.
+      // ReadBackendActive() takes prod_mutex_ while scene_mutex_ is held; that nesting is
+      // safe in one direction only — prod_mutex_ is a leaf (its holders call nothing but
+      // Simulator accessors) and nothing takes scene_mutex_ under it. Keep it that way.
+      scene_cv_.wait(lock, [this, kGpuRoute]() {
+        return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt ||
+               (kGpuRoute && !fallback_queue_invalidated_.load(std::memory_order_acquire) && !ReadBackendActive());
+      });
       ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
     CHECK_STOP
-    committed_num += kBatchCap;
+    // Advance by what was ACTUALLY queued, not by the nominal cap. Required
+    // now that iter_cap can shrink mid-loop; equivalent to the former `+= kBatchCap` for
+    // every run where iter_cap stays constant (the only case that exists when no fallback
+    // happens): all iterations but the last have batch_ray_num == iter_cap == kBatchCap,
+    // and on the last one the old code's overshoot past per_wl_ray_num was never read
+    // again — the loop condition is already false either way, so the exit point, the
+    // number of batches and each batch's size are all unchanged (AC4). Under
+    // per_wl_ray_num == kInfSize the loop condition ignores committed_num entirely.
+    committed_num += batch_ray_num;
     ILOG_TRACE(logger_, "GenerateScene: finish wl");
   }
   scene_gen_active_ = false;  // All exit paths (normal + CHECK_STOP break) converge here
@@ -1967,6 +2101,13 @@ ColorDegradeCounts Server::GetLastColorDegradeCounts() const {
     return {};
   }
   return impl_->GetLastColorDegradeCounts();
+}
+
+bool Server::BackendFellBack() const {
+  if (!impl_) {
+    return false;
+  }
+  return impl_->BackendFellBack();
 }
 
 Error Server::SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order,

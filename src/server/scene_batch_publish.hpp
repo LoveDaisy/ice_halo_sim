@@ -2,6 +2,7 @@
 #define LUMICE_SERVER_SCENE_BATCH_PUBLISH_HPP
 
 #include <atomic>
+#include <cstddef>
 #include <utility>
 
 namespace lumice {
@@ -34,6 +35,38 @@ template <class QueueT, class BatchT>
 void AccountThenPublishBatch(std::atomic_int& sim_scene_cnt, int credit, QueueT& queue, BatchT&& batch) {
   sim_scene_cnt += credit;
   queue.Emplace(std::forward<BatchT>(batch));
+}
+
+// The inverse of AccountThenPublishBatch, and the single owner of that inverse: drops
+// every batch still waiting in `queue` and gives `sim_scene_cnt` back the credit those
+// batches were charged. Returns the total ray count of the dropped batches — their budget
+// was already spent against the producer's ray ledger, so a finite ray_num run would trace
+// that many rays fewer unless the caller hands it back (see GenerateScene's committed_num).
+// `out_batch_count`, when non-null, receives how many batches were dropped.
+//
+// Drain FIRST, discount SECOND — the mirror image of AccountThenPublishBatch's order, for
+// the mirror-image reason. Discounting first would leave the counter reading lower than the
+// work still dequeuable from the queue, which is exactly the window that lets a consumer
+// call the epoch drained while batches remain; this order errs the other way, briefly
+// over-reporting in-flight work, which costs nothing but a late "drained" verdict.
+//
+// The caller must know that every batch it is discarding was charged the same credit — true
+// for GenerateScene, whose scene snapshot (and hence per-batch SimData count) is fixed for
+// the whole invocation, and whose queue cannot hold a batch from any other invocation
+// (Stop() swap-clears the queue, and CommitConfig restarts through Stop/Start).
+template <class QueueT>
+size_t DiscardQueuedBatchesThenRefund(std::atomic_int& sim_scene_cnt, int credit_per_batch, QueueT& queue,
+                                      size_t* out_batch_count = nullptr) {
+  auto dropped = queue.DrainAll();
+  size_t ray_num = 0;
+  for (const auto& batch : dropped) {
+    ray_num += batch.ray_num_;
+  }
+  sim_scene_cnt -= static_cast<int>(dropped.size()) * credit_per_batch;
+  if (out_batch_count) {
+    *out_batch_count = dropped.size();
+  }
+  return ray_num;
 }
 
 }  // namespace lumice

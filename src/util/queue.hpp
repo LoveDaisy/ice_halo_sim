@@ -6,6 +6,7 @@
 #include <mutex>
 #include <queue>
 #include <utility>
+#include <vector>
 
 namespace lumice {
 
@@ -37,6 +38,25 @@ class Queue {
   bool Empty() {
     std::unique_lock lock(q_mutex_);
     return q_.empty();
+  }
+
+  // Removes every element still waiting and hands them to the caller in FIFO order.
+  // Deliberately NOT Shutdown(): the queue stays open, a blocked Get() stays blocked,
+  // and nothing about the queue's lifecycle changes — this only says "these particular
+  // items are no longer wanted". Its one caller is the server's producer, which drops
+  // the batches it queued at the GPU dispatch grain when the backend is dropped
+  // mid-run and re-emits the same budget at the legacy grain; the caller is the one
+  // that owns whatever accounting those items carried (see the server's
+  // DiscardQueuedBatchesThenRefund).
+  std::vector<T> DrainAll() {
+    std::unique_lock lock(q_mutex_);
+    std::vector<T> drained;
+    drained.reserve(q_.size());
+    while (!q_.empty()) {
+      drained.push_back(std::move(q_.front()));
+      q_.pop();
+    }
+    return drained;
   }
 
   template <class... Args>
