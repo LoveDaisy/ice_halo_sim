@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788837910920,
+  "lastUpdate": 1788837913469,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "85e12c4e4ae37fe7ffb660b9e22cce0eb96f71c3",
-          "message": "Merge pull request #221 from LoveDaisy/feat/core-distribution-cleanup\n\nfeat: crystal shape randomization in GUI + first-class LUMICE_Distribution (BREAKING v4.10)",
-          "timestamp": "2026-07-24T20:13:16+08:00",
-          "tree_id": "32f4fc909d8d071013c9f3cfd519a135f6cfca2d",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/85e12c4e4ae37fe7ffb660b9e22cce0eb96f71c3"
-        },
-        "date": 1784895680482,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 86.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 91,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "fa613fb092061df691f456e4ee68497590efe136",
           "message": "Merge pull request #223 from LoveDaisy/feat/gui-shape-randomization-property-table\n\nfeat(gui): crystal shape randomization as a single uniform property table",
           "timestamp": "2026-07-25T09:15:06+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e707b15d31a6676c8f4147a0b0cfe62dfc452995",
+          "message": "Merge pull request #319 from LoveDaisy/fix/gui-entry-delete-vs-open-editor\n\nfix(gui): keep the edit modal bound to its entry across a delete",
+          "timestamp": "2026-09-08T11:14:03+08:00",
+          "tree_id": "493abe69703c95a59432e4a6f6623947ade2f407",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e707b15d31a6676c8f4147a0b0cfe62dfc452995"
+        },
+        "date": 1788837912651,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 106.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.3,
             "unit": "%"
           }
         ]
