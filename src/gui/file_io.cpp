@@ -1915,6 +1915,12 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // a restricted special case of it, not the other way round. The width field is left at its
       // default: nothing reads it (the mask generator derives its own half-width), so writing the
       // GUI's line width there would export a number that changes no pixel.
+      // No overflow check here, unlike the grid below: `state.sun_circle_angles` is not an expanded
+      // list, it is the user's own typed list, and it is capped at `kMaxSunCircles` (16) the moment
+      // an angle is added (gui_constants.hpp / sun_circle_rules.hpp) — well under
+      // `LUMICE_MAX_CONFIG_GRID_LINES` (64). Widening this gate to `|| label` therefore does not
+      // open a reachable overflow path the way it does for the grid, whose list is FOV-derived and
+      // can genuinely exceed the ABI cap; there is nothing to refuse here.
       dst.angular_dist_count = 0;
       if (state.show_sun_circles_line || state.show_sun_circles_label) {
         FillGridLines(state.sun_circle_angles, state.sun_circles_color, state.sun_circles_alpha, dst.angular_dist,
