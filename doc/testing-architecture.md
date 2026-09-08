@@ -1297,7 +1297,7 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 **`Windows MSVC x86_64` has two durations now, and quoting one of them alone is a mistake.** Its
 compiler cache is keyed per commit with a prefix fallback, so the exact key essentially never hits
 in normal operation — every run restores the *previous* commit's cache and recompiles whatever the
-change touched. Four runs, all on `windows-2022`, all read off step timestamps:
+change touched. Five runs, all on `windows-2022`, all read off step timestamps:
 
 | Cache state | sccache hit rate | `Build` | Job total |
 |---|---|---|---|
@@ -1305,23 +1305,32 @@ change touched. Four runs, all on `windows-2022`, all read off step timestamps:
 | Cold — neither key nor prefix hits | 0.00% (0/290) | 531s | 684s |
 | Prefix hit, ~20 files changed | 36.99% (108/292) | 426s | 605s |
 | Prefix hit, a smaller change | 86.64% (253/292) | 374s | 528s |
-| Exact-key hit (a re-run of one commit) | 99.66% (289/290) | 317s | — |
+| Prefix hit, no compiled file changed | 99.66% (291/292) | 276s | 422s |
+| Exact-key hit (a re-run of one commit) | 99.66% (289/290) | 317s | not comparable¹ |
 
-Three things that table is for, none of which the headline "−28%" says on its own:
+¹ That run's `Cache CPM dependencies` step stalled for 137s against the GitHub cache service and
+then reported a miss, which also pushed `Configure` from 14s to 52s. The `Build` figure is
+unaffected and is quoted; the job total is not, and is withheld rather than quietly averaged in.
 
-- **`Build` has a floor sccache cannot go under.** Fitting the two extremes gives
-  `Build ≈ 316s + 0.74s × (missed translation units)` — the 36.99% row lands at 426s against a
-  predicted 452s, i.e. within run-to-run noise. The 316s is linking, cache lookups and writing
-  292 object files; only the marginal 0.74s per unit is cacheable. So the most sccache can ever
-  take off this step is about 214s, and a proposal that assumes it scales further is wrong.
+Four things that table is for, none of which a single headline percentage says on its own:
+
+- **`Build` has a floor sccache cannot go under.** A least-squares fit over the five runs gives
+  `Build ≈ 308s + 0.743s × (missed translation units)`, residuals within ±37s — which is the same
+  order as the leg's own run-to-run spread, so treat it as shape rather than precision. The two runs
+  that missed exactly one unit measured 317s and 276s, which is the honest width of that floor: it
+  is linking, cache lookups and writing 292 object files, and none of it is cacheable. **So the most
+  sccache can ever take off this step is about 216s**, and a proposal that assumes it scales past
+  that is wrong.
+- **The win depends on the change, and the range is wide.** Against the 736s pre-sccache mean, the
+  job totals above run −7% (cold), −18%, −28% and −43% (nothing to recompile). Quote the one that
+  matches the change being discussed; −43% is a doc-only commit and is not what a code PR gets.
 - **The cold row costs nothing measurable.** 531s and 684s both sit inside the pre-sccache range,
   so a first run on a branch with no cache to restore is not a regression — it just does not win.
-- **Transfer is not the bottleneck anyone expected it to be.** Restoring the 385 MiB directory took
-  4–6s (150 MB/s) and saving it 3–27s as it grew to 793 MiB across four runs. `SCCACHE_CACHE_SIZE`
-  is set to 2G; the directory reached 793 MiB after four runs, because a cache restored through the
-  prefix keeps both the old objects and the new ones. That growth is worth watching against the
-  repository's 10 GB `actions/cache` quota, where it competes with the `cpm-*` entries (~175 MB
-  each, restored in 4–6s in these same runs).
+- **Transfer is not the bottleneck anyone expected it to be.** Restoring the directory took 4–9s
+  (150 MB/s at 385 MiB) and saving it 3–27s. It reached 793 MiB over five runs, because a cache
+  restored through the prefix keeps the old objects alongside the new ones; `SCCACHE_CACHE_SIZE` is
+  set to 2G. That growth is worth watching against the repository's 10 GB `actions/cache` quota,
+  where it competes with the `cpm-*` entries (~175 MB each, restored in 4–6s in these same runs).
 
 Where a job's time goes differs by job, and the split cannot be assumed. From the same run as the
 table: `Windows MSVC x86_64` is 71% compile (374s of 528s) — down from 78% before sccache, which is
