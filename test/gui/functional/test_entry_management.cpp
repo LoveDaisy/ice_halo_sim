@@ -102,9 +102,9 @@ void MakeThreeIndependentEntries(ImGuiTestContext* ctx) {
 // Driven through OpenEditModal rather than by clicking the card, because a click on the card is
 // itself one of the things the editor's presence changes; what these cases are about starts once it
 // is open.
-void OpenImmediateEditorOnEntry(ImGuiTestContext* ctx, int entry_idx) {
+void OpenImmediateEditorOnEntry(ImGuiTestContext* ctx, int entry_idx, int layer_idx = 0) {
   gui::g_state.modal_immediate_mode = true;
-  gui::EditRequest req{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/entry_idx };
+  gui::EditRequest req{ gui::EditTarget::kCrystal, layer_idx, entry_idx };
   gui::OpenEditModal(req, gui::g_state);
   ctx->Yield(4);
   IM_CHECK_SILENT(gui::IsEditModalOpen());
@@ -1395,6 +1395,46 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       // The entry below it was never the editor's business.
       IM_CHECK(gui::g_state.crystals[cid2] == crystal_before);
       IM_CHECK(gui::g_state.filters[fid2] == filter_before);
+    };
+  }
+
+  // The same NotifyLayerDeleted rule, on the LAYER axis and through the real production call site
+  // (RenderLayer's per-layer x -> state.layers.erase -> NotifyLayerDeleted at
+  // src/gui/panels.cpp:1695) rather than a direct function call — the two cases above cover the
+  // entry axis this way, and unit-correctness/gui/test_edit_modal_delete_binding.cpp already pins
+  // the index arithmetic in isolation, so what is missing without this case is proof that the
+  // wiring at the real button is correct. Deleting the layer BEFORE the bound one is the
+  // discriminator: it needs the decrement to be right, where deleting the bound layer itself would
+  // only need a close.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "deleting_a_layer_above_the_editor_keeps_it_on_the_same_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield(2);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 2);
+
+      const int edited_cid = gui::g_state.layers[1].entries[0].crystal_id;
+
+      OpenImmediateEditorOnEntry(ctx, /*entry_idx=*/0, /*layer_idx=*/1);
+      if (ctx->IsError()) {
+        return;
+      }
+
+      ctx->ItemClick("**/" ICON_FA_XMARK "##layer_0");
+      ctx->Yield(6);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
+      IM_CHECK(gui::IsEditModalOpen());
+      // Same entry, new layer index — the layer that held it shifted up one when layer 0 was
+      // erased.
+      IM_CHECK_EQ(gui::GetEditModalTarget().layer_idx, 0);
+      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, edited_cid);
     };
   }
 }
