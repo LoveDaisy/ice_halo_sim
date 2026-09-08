@@ -33,7 +33,14 @@
 namespace {
 
 constexpr int kDefaultJpegQuality = 95;
-constexpr auto kPollInterval = std::chrono::seconds(1);
+// How often the render loop materializes a partial result to disk/stdout, NOT how
+// often it checks whether the run has finished. The two used to be the same number,
+// which put a hard 1s floor under every CLI render: the loop slept a whole interval
+// before its first completion check, so a 20k-ray run that finished in ~20ms still
+// cost 1.02s of wall time. Completion is now polled at kFinePollInterval; this
+// constant only paces the expensive half (SaveRenderResults / SaveCompositeResults /
+// PrintStats all go through LUMICE_AcquireResultFrame, i.e. a full render).
+constexpr auto kSaveInterval = std::chrono::seconds(1);
 
 // Owning wrapper for the short-lived LUMICE_Scene handles the CLI builds from JSON.
 // LUMICE_CommitScene reads the scene as const and keeps no reference to it, so each handle is
@@ -166,7 +173,18 @@ void PrintColorClassSignal(LUMICE_Server* server, const std::filesystem::path& c
 // whose run completes in ~0.2s that deflated rays_per_sec by >30%. 5ms caps the
 // trailing quantization at a few ms while staying sleep-based (negligible CPU
 // steal from trace workers). See task-fix-throughput-bench-honesty.
-constexpr auto kBenchmarkPollInterval = std::chrono::milliseconds(5);
+//
+// Shared by BOTH polling loops in this file — the benchmark pass and the render
+// loop in main() — because the reason for 5ms is the same on both sides: the
+// completion check itself is cheap (a mutex-guarded state read), and any coarser
+// interval quantizes the run's wall time up to a multiple of itself. Keeping one
+// constant is deliberate: two copies of the same "why 5ms" invite a one-sided
+// retune that silently reintroduces the quantization on the other side.
+// If the two loops ever need genuinely different granularities for genuinely
+// different reasons (e.g. the render loop wanting a coarser interval to save
+// power on long runs), split this back into two named constants — do NOT branch
+// on the caller inside one shared constant.
+constexpr auto kFinePollInterval = std::chrono::milliseconds(5);
 constexpr int kBenchmarkSingleRays = 2'000'000;
 // GPU-route warm-up pass ray count: sized to be the smallest value that still
 // reliably touches every one-time init path (CUDA context / Metal PSO compile /
@@ -428,7 +446,7 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   int n_drains_in_window = 0;
 
   while (true) {
-    std::this_thread::sleep_for(kBenchmarkPollInterval);
+    std::this_thread::sleep_for(kFinePollInterval);
     LUMICE_ServerState state{};
     if (LUMICE_QueryServerState(server, &state) != LUMICE_OK) {
       continue;
@@ -892,14 +910,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  auto t_start = std::chrono::steady_clock::now();
+  // Check completion FIRST, then sleep — the reverse order put a floor of one
+  // kSaveInterval under every render, however small. The two frequencies are
+  // deliberately separate: completion is cheap and polled at kFinePollInterval,
+  // while the materialization below is a full render and stays paced at
+  // kSaveInterval (so a run shorter than one interval now performs it exactly
+  // once, in the final fetch after the loop, instead of twice).
+  auto next_save_time = std::chrono::steady_clock::now() + kSaveInterval;
 
   while (true) {
-    std::this_thread::sleep_for(kPollInterval);
-    SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-    SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
-    PrintStats(server);
-
     // Completion via the explicit single-source lifecycle: COMPLETED = a finite
     // run drained clean (incl. zero-output convergence). Replaces the fragile
     // `IDLE && stats.sim_ray_num>0` side-signal (scrum-296.7 early-IDLE truncation
@@ -908,6 +927,16 @@ int main(int argc, char** argv) {
     if (LUMICE_GetSimLifecycle(server, &lifecycle) == LUMICE_OK && lifecycle.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
       break;
     }
+
+    auto now = std::chrono::steady_clock::now();
+    if (now >= next_save_time) {
+      SaveRenderResults(server, output_dir, image_format, jpeg_quality);
+      SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
+      PrintStats(server);
+      next_save_time = std::chrono::steady_clock::now() + kSaveInterval;
+    }
+
+    std::this_thread::sleep_for(kFinePollInterval);
   }
 
   // Final fetch after loop exit
