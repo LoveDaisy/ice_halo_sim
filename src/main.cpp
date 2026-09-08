@@ -457,6 +457,12 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
     // (many polls) that render tax dominated wall-time, starved drain-window
     // closure, and (on CUDA) let the unbounded session run long enough to trip
     // the 32-bit device PCG ray-index cap -> silent legacy fallback + hang.
+    // This is now a gate, not a comment: the `no-render-in-benchmark-poll` rule
+    // in scripts/check_policies.py rejects an acquire anywhere in this function.
+    // The same principle paces the render loop in main() — it polls completion
+    // at this same interval and materializes only once per kSaveInterval — so
+    // "cheap counter to decide, expensive frame only when publishing" is one
+    // rule with two call sites, not a benchmark-only precaution.
     LUMICE_RayCount cur_rays = 0;
     LUMICE_GetSimRayCount(server, &cur_rays);
     auto now = std::chrono::steady_clock::now();

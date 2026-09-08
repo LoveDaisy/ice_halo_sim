@@ -316,8 +316,18 @@ Behavior differences in benchmark mode:
 - **Reduced rays for single pass**: 2M rays (vs the config's original value) to limit CI
   runtime, since single-worker execution is slower
 - **No image I/O**: `SaveRenderResults` is skipped, so `wall_sec` reflects pure simulation time
-- **5ms poll interval** (vs default 1s): caps the IDLE-detection quantization at a few ms
-  (was 100ms; that alone added up to a full poll interval to a fast run's wall time)
+- **No periodic materialization**: the render path re-materializes a result frame every 1s
+  (`kSaveInterval`) to write partial images and print `Stats:`; the benchmark pass does none
+  of that, because `LUMICE_AcquireResultFrame` runs a full `DoSnapshot` + per-pixel sRGB
+  conversion and that cost would be charged to the rate being measured. Held mechanically by
+  the `no-render-in-benchmark-poll` rule in `scripts/check_policies.py`, not by convention —
+  a wall-clock test cannot hold it (reintroducing the defect moved CPU wall time by 1.01x and
+  Metal by 0.88x)
+- **Completion polled at 5ms** (`kFinePollInterval`, was 100ms): caps the IDLE-detection
+  quantization at a few ms; at 100ms the quantization alone added up to a full poll interval
+  to a fast run's wall time. Both polling loops in `src/main.cpp` share this constant now —
+  the render loop used to check completion only once per 1s save, which put a hard one-second
+  floor under every CLI render regardless of ray count
 
 ### Benchmark Scene Registry (canonical throughput scenes)
 
