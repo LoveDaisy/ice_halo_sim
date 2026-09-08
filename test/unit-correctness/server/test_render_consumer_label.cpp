@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -48,6 +49,17 @@ struct LabelSwitches {
   bool angular_dist = false;
 };
 
+// Which LINE switches a case wants on, the same shape and for the same reason. All four default to
+// ON because that is what the four config fields do — three of them literally (the *_grid_line_
+// triple defaults true) and `horizon_` because every case here that does not name it wants its
+// line drawn.
+struct LineSwitches {
+  bool horizon = true;
+  bool elevation = true;
+  bool longitude = true;
+  bool angular_dist = true;
+};
+
 // A linear 120 deg view centred 45 deg up: wide enough that the horizon, a 30 deg parallel, a
 // meridian and a 22 deg circle around the sun all cross the frame, so every family has somewhere
 // to put a label. Black background, so any non-black pixel is annotation or ray.
@@ -60,7 +72,7 @@ struct LabelSwitches {
 //
 // `line_opacity` is a parameter because the compositing-layer case needs to set it to zero while
 // leaving everything else — including the angle list, i.e. the geometry — untouched.
-RenderConfig MakeLabelConfig(LabelSwitches on, bool draw_horizon_line = true, float line_opacity = 1.0f) {
+RenderConfig MakeLabelConfig(LabelSwitches on, LineSwitches lines = {}, float line_opacity = 1.0f) {
   RenderConfig cfg;
   cfg.id_ = 0;
   cfg.lens_.type_ = LensParam::kLinear;
@@ -69,7 +81,10 @@ RenderConfig MakeLabelConfig(LabelSwitches on, bool draw_horizon_line = true, fl
   cfg.resolution_[1] = kH;
   cfg.view_.el_ = 45.0f;
   cfg.visible_ = RenderConfig::kFull;
-  cfg.horizon_ = draw_horizon_line;
+  cfg.horizon_ = lines.horizon;
+  cfg.elevation_grid_line_ = lines.elevation;
+  cfg.longitude_grid_line_ = lines.longitude;
+  cfg.angular_dist_grid_line_ = lines.angular_dist;
   cfg.horizon_label_ = on.horizon;
   cfg.grid_label_ = on.grid;
   cfg.angular_dist_label_ = on.angular_dist;
@@ -233,17 +248,19 @@ TEST(RenderConsumerLabel, TheThreeSwitchesDoNotReachEachOther) {
 }
 
 // (d) GEOMETRY LAYER. `horizon_label_` drives the anchors on its own: with `horizon_` false — no
-// line drawn at all — the numbers still appear. The horizon is the family this can be asked of,
-// because it is the only one whose line has a switch separate from its geometry (the other three
-// are "is the angle in the list").
+// line drawn at all — the numbers still appear. The horizon was the first family this could be
+// asked of, because for a long time it was the only one whose line had a switch separate from its
+// geometry; the other three said "no lines" by having an empty angle list, which took their
+// numbers with them. Case (d2) below is the same proposition for those three, now that they have
+// switches of their own.
 TEST(RenderConsumerLabel, TheHorizonLabelIsDrawnWithTheLineSwitchedOff) {
-  RenderConsumer no_line_no_label(MakeLabelConfig(LabelSwitches{}, /*draw_horizon_line=*/false), ColorClassTable{},
-                                  MakeSun());
+  RenderConsumer no_line_no_label(MakeLabelConfig(LabelSwitches{}, LineSwitches{ /*horizon=*/false }),
+                                  ColorClassTable{}, MakeSun());
   const std::vector<uint8_t> img_off = SnapshotOnce(&no_line_no_label);
   ASSERT_EQ(img_off.size(), static_cast<size_t>(kTotalPix) * 3);
   ASSERT_TRUE(HasAnyNonBlackPixel(img_off)) << "the reference frame is entirely black — see MakeLabelConfig";
 
-  RenderConsumer label_only(MakeLabelConfig(LabelSwitches{ true, false, false }, /*draw_horizon_line=*/false),
+  RenderConsumer label_only(MakeLabelConfig(LabelSwitches{ true, false, false }, LineSwitches{ /*horizon=*/false }),
                             ColorClassTable{}, MakeSun());
   const std::vector<uint8_t> img_on = SnapshotOnce(&label_only);
   ASSERT_EQ(img_on.size(), static_cast<size_t>(kTotalPix) * 3);
@@ -275,20 +292,186 @@ TEST(RenderConsumerLabel, TheHorizonLabelIsDrawnWithTheLineSwitchedOff) {
       << "most of the horizon mask came out red — the line was painted despite horizon_ being false";
 }
 
+// How many of a mask's own pixels changed between two frames. The judge for "was the LINE painted":
+// a line paints essentially every pixel its mask marks, while the family's labels sit ON that curve
+// and cover a handful of them, so the two are orders of magnitude apart rather than adjacent.
+int MaskedDifferingPixels(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b,
+                          const std::vector<uint8_t>& mask) {
+  if (mask.size() != static_cast<size_t>(kTotalPix)) {
+    return -1;
+  }
+  int n = 0;
+  for (int i = 0; i < kTotalPix; ++i) {
+    if (mask[static_cast<size_t>(i)] == 0) {
+      continue;
+    }
+    const size_t base = static_cast<size_t>(i) * 3;
+    if (a[base] != b[base] || a[base + 1] != b[base + 1] || a[base + 2] != b[base + 2]) {
+      ++n;
+    }
+  }
+  return n;
+}
+
+// (d2) GEOMETRY LAYER, for the three families that are not the horizon — the case this file could
+// not contain until they had line switches at all. With the family's line switched off and its
+// angle list INTACT, the numbers must still be computed and painted while the line is not.
+//
+// Three frames, because two cannot say the second half. The labels sit ON the curve they annotate,
+// so a fair slice of a family's own mask is glyph ink even when no line was drawn — measured, on
+// this fixture: 13 of 570 masked pixels for the parallels, 45 of 194 for the meridians, and 146 of
+// 291 for the circles, whose mask is short and carries four anchors. A "few masked pixels changed"
+// rule calibrated on the first would call the third a painted line. So the line is measured by
+// TURNING IT ON with the labels held on:
+//   all_off      — labels off, line off. The reference the label ink is counted against.
+//   labels_only  — labels on, line off. What the switch has to make possible.
+//   both         — labels on, line ON. Differs from labels_only by the LINE and nothing else.
+// The last comparison is also the red-state detector: without the gate in PostSnapshot the switch
+// is inert, `both` and `labels_only` are the same image, and the count is zero.
+TEST(RenderConsumerLabel, TheGridAndCircleLabelsAreDrawnWithTheirLinesSwitchedOff) {
+  struct Row {
+    const char* name;
+    LabelSwitches labels;
+    LineSwitches lines_off;  // this family's line off, the other two left as they are
+    LineSwitches lines_on;   // the same, with this family's line back on
+    const std::vector<std::vector<uint8_t>>& (RenderConsumer::*masks)() const;
+    const std::vector<annotation::Label>& (RenderConsumer::*anchors)() const;
+  };
+  // The horizon's line stays OFF in every arm: it is not the family under test, and a red line
+  // across the frame would put pixels into the difference that belong to no family's mask.
+  const Row rows[] = {
+    { "elevation", LabelSwitches{ false, true, false }, LineSwitches{ false, false, true, true },
+      LineSwitches{ false, true, true, true }, &RenderConsumer::ElevationMasksForTest,
+      &RenderConsumer::ElevationLabelsForTest },
+    { "longitude", LabelSwitches{ false, true, false }, LineSwitches{ false, true, false, true },
+      LineSwitches{ false, true, true, true }, &RenderConsumer::LongitudeMasksForTest,
+      &RenderConsumer::LongitudeLabelsForTest },
+    { "angular_dist", LabelSwitches{ false, false, true }, LineSwitches{ false, true, true, false },
+      LineSwitches{ false, true, true, true }, &RenderConsumer::AngularDistMasksForTest,
+      &RenderConsumer::AngularDistLabelsForTest },
+  };
+
+  for (const Row& row : rows) {
+    // Non-fatal throughout: one broken family must not take the other two's reports with it, and
+    // WHICH family is the whole diagnostic.
+    RenderConsumer all_off(MakeLabelConfig(LabelSwitches{}, row.lines_off), ColorClassTable{}, MakeSun());
+    const std::vector<uint8_t> img_all_off = SnapshotOnce(&all_off);
+    RenderConsumer labels_only(MakeLabelConfig(row.labels, row.lines_off), ColorClassTable{}, MakeSun());
+    const std::vector<uint8_t> img_labels_only = SnapshotOnce(&labels_only);
+    RenderConsumer both(MakeLabelConfig(row.labels, row.lines_on), ColorClassTable{}, MakeSun());
+    const std::vector<uint8_t> img_both = SnapshotOnce(&both);
+    if (img_all_off.size() != static_cast<size_t>(kTotalPix) * 3 ||
+        img_labels_only.size() != static_cast<size_t>(kTotalPix) * 3 ||
+        img_both.size() != static_cast<size_t>(kTotalPix) * 3) {
+      ADD_FAILURE() << row.name << ": a snapshot came back the wrong size";
+      continue;
+    }
+    if (!HasAnyNonBlackPixel(img_all_off)) {
+      ADD_FAILURE() << row.name << ": the reference frame is entirely black — see MakeLabelConfig";
+      continue;
+    }
+
+    // The angle list is untouched by the switch, so the mask is built either way — which is both
+    // what makes the counting below possible and the property the fix rests on.
+    const std::vector<std::vector<uint8_t>>& masks = (labels_only.*row.masks)();
+    if (masks.empty() || masks[0].size() != static_cast<size_t>(kTotalPix)) {
+      ADD_FAILURE() << row.name << ": no mask was built for a family whose angle list is non-empty";
+      continue;
+    }
+    const auto marked = static_cast<int>(std::count(masks[0].begin(), masks[0].end(), uint8_t{ 1 }));
+    if (marked <= 0) {
+      ADD_FAILURE() << row.name << ": an empty mask makes the counts below vacuous";
+      continue;
+    }
+
+    EXPECT_FALSE(((labels_only.*row.anchors)()).empty())
+        << row.name << ": no anchor was computed — the label switch was read as depending on the line switch";
+    EXPECT_GT(DifferingPixels(img_all_off, img_labels_only), 0) << row.name << ": the numbers did not reach the image";
+
+    // The line, isolated: the only difference between these two frames is this family's own switch.
+    // A third of the mask is well under the measured margins (527 / 570, 125 / 194 and 145 / 291
+    // masked pixels the line lights beyond the glyph ink) and well over the zero a missing gate
+    // produces.
+    const int added_by_line = MaskedDifferingPixels(img_labels_only, img_both, masks[0]);
+    EXPECT_GT(added_by_line, marked / 3)
+        << row.name << ": turning the line on changed only " << added_by_line << " of " << marked
+        << " masked pixels — the labels arm was already painting the line, i.e. the switch does not gate it";
+  }
+}
+
+// (d3) The three switches reach only their own family. One flag serving all three, or the wrong
+// flag wired to a family, passes (d2) — every arm there switches off the family it is measuring.
+TEST(RenderConsumerLabel, EachFamilyLineSwitchGatesOnlyItsOwnFamily) {
+  RenderConsumer all_on(MakeLabelConfig(LabelSwitches{}, LineSwitches{ false, true, true, true }), ColorClassTable{},
+                        MakeSun());
+  const std::vector<uint8_t> img_all_on = SnapshotOnce(&all_on);
+  ASSERT_EQ(img_all_on.size(), static_cast<size_t>(kTotalPix) * 3);
+
+  struct Row {
+    const char* name;
+    LineSwitches lines;
+    const std::vector<std::vector<uint8_t>>& (RenderConsumer::*off_masks)() const;
+    const std::vector<std::vector<uint8_t>>& (RenderConsumer::*other_masks)() const;
+  };
+  for (const Row& row : { Row{ "elevation", LineSwitches{ false, false, true, true },
+                               &RenderConsumer::ElevationMasksForTest, &RenderConsumer::LongitudeMasksForTest },
+                          Row{ "longitude", LineSwitches{ false, true, false, true },
+                               &RenderConsumer::LongitudeMasksForTest, &RenderConsumer::ElevationMasksForTest },
+                          Row{ "angular_dist", LineSwitches{ false, true, true, false },
+                               &RenderConsumer::AngularDistMasksForTest, &RenderConsumer::ElevationMasksForTest } }) {
+    RenderConsumer one_off(MakeLabelConfig(LabelSwitches{}, row.lines), ColorClassTable{}, MakeSun());
+    const std::vector<uint8_t> img_one_off = SnapshotOnce(&one_off);
+    if (img_one_off.size() != static_cast<size_t>(kTotalPix) * 3) {
+      ADD_FAILURE() << row.name << ": the snapshot came back the wrong size";
+      continue;
+    }
+    const std::vector<std::vector<uint8_t>>& off_masks = (one_off.*row.off_masks)();
+    const std::vector<std::vector<uint8_t>>& other_masks = (one_off.*row.other_masks)();
+    if (off_masks.empty() || other_masks.empty()) {
+      ADD_FAILURE() << row.name << ": a mask is missing, so the counts below say nothing";
+      continue;
+    }
+    // Its own family went dark...
+    const int own = MaskedDifferingPixels(img_all_on, img_one_off, off_masks[0]);
+    const auto own_marked = static_cast<int>(std::count(off_masks[0].begin(), off_masks[0].end(), uint8_t{ 1 }));
+    EXPECT_GT(own, own_marked / 2) << row.name << ": switching this family's line off changed almost nothing";
+    // ...and a family whose switch stayed on did not. Read on the OTHER family's mask minus the
+    // pixels the two masks share, since a crossing point belongs to both curves and would report
+    // as a change here for a reason that has nothing to do with this switch.
+    int other_changed = 0;
+    int other_exclusive = 0;
+    for (int i = 0; i < kTotalPix; ++i) {
+      const auto k = static_cast<size_t>(i);
+      if (other_masks[0][k] == 0 || off_masks[0][k] != 0) {
+        continue;
+      }
+      ++other_exclusive;
+      const size_t base = k * 3;
+      if (img_all_on[base] != img_one_off[base] || img_all_on[base + 1] != img_one_off[base + 1] ||
+          img_all_on[base + 2] != img_one_off[base + 2]) {
+        ++other_changed;
+      }
+    }
+    EXPECT_GT(other_exclusive, 0) << row.name << ": the two masks coincide entirely; the check below is vacuous";
+    EXPECT_EQ(other_changed, 0) << row.name << ": " << other_changed << " of " << other_exclusive
+                                << " pixels belonging only to another family's line changed — one switch reached "
+                                   "a family it does not own";
+  }
+}
+
 // (e) COMPOSITING LAYER, and the case that pins the decision this file's header explains. A grid
 // line at opacity 0 is invisible, and its labels go with it — even though the switch is on and the
 // anchors WERE computed. The two halves are asserted separately on purpose: "the anchors exist"
 // is what rules out the alternative explanation that the geometry was skipped, which would make
 // the image assertion pass for the wrong reason.
 TEST(RenderConsumerLabel, AZeroOpacityLineTakesItsLabelWithIt) {
-  RenderConsumer off(MakeLabelConfig(LabelSwitches{}, /*draw_horizon_line=*/true, /*line_opacity=*/0.0f),
-                     ColorClassTable{}, MakeSun());
+  RenderConsumer off(MakeLabelConfig(LabelSwitches{}, LineSwitches{}, /*line_opacity=*/0.0f), ColorClassTable{},
+                     MakeSun());
   const std::vector<uint8_t> img_off = SnapshotOnce(&off);
   ASSERT_EQ(img_off.size(), static_cast<size_t>(kTotalPix) * 3);
   ASSERT_TRUE(HasAnyNonBlackPixel(img_off)) << "the reference frame is entirely black — see MakeLabelConfig";
 
-  RenderConsumer on(MakeLabelConfig(LabelSwitches{ false, true, true }, /*draw_horizon_line=*/true,
-                                    /*line_opacity=*/0.0f),
+  RenderConsumer on(MakeLabelConfig(LabelSwitches{ false, true, true }, LineSwitches{}, /*line_opacity=*/0.0f),
                     ColorClassTable{}, MakeSun());
   const std::vector<uint8_t> img_on = SnapshotOnce(&on);
   ASSERT_EQ(img_on.size(), static_cast<size_t>(kTotalPix) * 3);
