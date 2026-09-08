@@ -1120,6 +1120,17 @@ EditModalTarget GetEditModalTarget() {
   return { g_modal_layer_idx, g_modal_entry_idx };
 }
 
+void NotifyEntryDeleted(int layer_idx, int deleted_entry_idx) {
+  // TEMPORARY NO-OP (red-state probe): reproduces today's behaviour exactly.
+  (void)layer_idx;
+  (void)deleted_entry_idx;
+}
+
+void NotifyLayerDeleted(int deleted_layer_idx) {
+  // TEMPORARY NO-OP (red-state probe): reproduces today's behaviour exactly.
+  (void)deleted_layer_idx;
+}
+
 namespace {
 // Defined further down, in the same anonymous namespace as the modal edit buffers it applies.
 void CommitAllBuffersImmediate(GuiState& state);
