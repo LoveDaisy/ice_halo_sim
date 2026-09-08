@@ -388,6 +388,15 @@ class ServerImpl {
   // against the route that sized simulators_ to a single Simulator.
   bool gpu_route_ = false;
 
+  // Set once per Run() by GenerateScene, when it has dropped the batches it had
+  // queued at the GPU grain after the backend went away (see the invalidation there).
+  // Written by that one thread, read by ConsumeData, and cleared at GenerateScene's
+  // entry — so it is per-Run() the same way backend_active_ is. It exists to make the
+  // work it gates one-shot: both the extra wake-up ConsumeData sends and the producer's
+  // extra wait predicate are there only to get that invalidation to happen promptly,
+  // and both are pure overhead on every batch afterwards.
+  std::atomic_bool fallback_queue_invalidated_{ false };
+
   // Single owner of "read the GPU route's Simulator's backend liveness".
   // Both consumers (GenerateScene's per-batch grain, BackendFellBack's GUI signal)
   // go through here so the guard and the locking discipline cannot drift apart.
@@ -1597,16 +1606,16 @@ void ServerImpl::ConsumeData() {
     sim_scene_cnt_ -= static_cast<int>(sim_data.sim_scene_credit_);
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
       scene_cv_.notify_one();
-    } else if (gpu_route_ && !ReadBackendActive()) {
+    } else if (gpu_route_ && !fallback_queue_invalidated_.load(std::memory_order_acquire) && !ReadBackendActive()) {
       // The queue is still deep, so the throttle above would keep the producer parked for
       // as long as the backlog takes to render — precisely the window GenerateScene's
-      // batch invalidation exists to cut short. Wake it now instead. Fired per consumed
-      // SimData rather than once, deliberately: the store this reads and this notify are
-      // not synchronised with the producer's predicate evaluation, so a single notify
-      // could be lost in that window; repeating it every batch closes the gap without a
-      // second piece of state. It costs one spurious wakeup per batch, only while
-      // degraded, and stops as soon as the invalidation drops the count below the branch
-      // above.
+      // batch invalidation exists to cut short. Wake it now instead. Repeated on every
+      // consumed SimData rather than sent once, deliberately: neither the store this reads
+      // nor this notify is synchronised with the producer's predicate evaluation, so a
+      // single notify can fall into that window and be lost. It stops the moment the
+      // producer reports the invalidation done, which is why that flag is read here — past
+      // that point this branch would be a wakeup per batch that the producer can only go
+      // back to sleep on.
       scene_cv_.notify_one();
     }
     // The consumer is one of the two threads that can complete the
@@ -1731,8 +1740,9 @@ void ServerImpl::GenerateScene() {
   size_t committed_num = 0;
   // One-shot, because backend_active_ only ever goes true -> false inside one Run():
   // the batches queued at the GPU grain are invalidated the first time the backend is
-  // seen gone, and never again.
-  bool queue_invalidated_on_fallback = false;
+  // seen gone, and never again. Re-armed here rather than in Start() because this is the
+  // only writer, and this is the entry point of the Run() the flag describes.
+  fallback_queue_invalidated_.store(false, std::memory_order_release);
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
     const bool backend_active = ReadBackendActive();
     // Shrinking the grain only sizes the batches queued FROM HERE ON, and by the time a
@@ -1743,8 +1753,8 @@ void ServerImpl::GenerateScene() {
     // stale in size, not in content: drop them and re-emit the same ray budget at the new
     // grain. Under ray_num == "infinite" (the GUI default) they carry no budget at all,
     // just "trace N more rays", so nothing is lost either way.
-    if (kGpuRoute && !backend_active && !queue_invalidated_on_fallback) {
-      queue_invalidated_on_fallback = true;
+    if (kGpuRoute && !backend_active && !fallback_queue_invalidated_.load(std::memory_order_acquire)) {
+      fallback_queue_invalidated_.store(true, std::memory_order_release);
       size_t dropped_batches = 0;
       const size_t refunded_rays = DiscardQueuedBatchesThenRefund(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch),
                                                                   *scene_queue_, &dropped_batches);
@@ -1791,9 +1801,9 @@ void ServerImpl::GenerateScene() {
       // ReadBackendActive() takes prod_mutex_ while scene_mutex_ is held; that nesting is
       // safe in one direction only — prod_mutex_ is a leaf (its holders call nothing but
       // Simulator accessors) and nothing takes scene_mutex_ under it. Keep it that way.
-      scene_cv_.wait(lock, [this, kGpuRoute, &queue_invalidated_on_fallback]() {
+      scene_cv_.wait(lock, [this, kGpuRoute]() {
         return state_.load() != ServerState::kRunning || sim_scene_cnt_ < kMaxSceneCnt ||
-               (kGpuRoute && !queue_invalidated_on_fallback && !ReadBackendActive());
+               (kGpuRoute && !fallback_queue_invalidated_.load(std::memory_order_acquire) && !ReadBackendActive());
       });
       ILOG_DEBUG(logger_, "GenerateScene: continue to generate scenes.");
     }
