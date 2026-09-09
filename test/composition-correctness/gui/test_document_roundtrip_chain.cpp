@@ -15,14 +15,19 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
+#include "support/scene_json_helpers.hpp"
 
 namespace lumice::gui {
 namespace {
@@ -933,6 +938,217 @@ TEST(DocumentRoundtripChain, SchemaVersionIsFour) {
   const nlohmann::json root = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
   ASSERT_TRUE(root.contains("schema_version"));
   EXPECT_EQ(root["schema_version"].get<int>(), 4);
+}
+
+// The .lmc reader's syntax gate.
+//
+// The GUI-native load path used to hand every `summands` row straight to ParseSummandText, which is
+// deliberately tolerant — it skips what it cannot read so a half-typed row in the editor still shows
+// the part that parses. The editor pairs that tolerance with ValidateSummandText on its OK button.
+// This reader had the tolerance and not the pairing, and an empty step in a face path is exactly the
+// shape that slips through it: the parser's flush() returns early on an empty token without marking
+// the row bad, so "3--5" parsed as {3, 5} and committed as the path 3-5. Not a crash, not a blank
+// picture — a path that looks entirely reasonable and is not the one the file states, with nothing
+// on screen saying so.
+//
+// Asserted through the committed scene rather than through the loaded rows, because the row is where
+// the defect is invisible: `param[0].text` came back as "3--5" verbatim in the broken build too. What
+// changed shape was the document handed to the simulator.
+//
+// The one-line fix this looks like it wants — mark the empty token invalid in ParseRaypathSegment —
+// is worse, and the reason is pinned in that function's comment: it makes the row lower to core's
+// match-all, i.e. from filtering one path the user did not write to filtering nothing at all, just as
+// silently. The gate belongs on this caller, which is the one that never had one.
+TEST(DocumentRoundtripChain, AMalformedSummandRowIsRejectedRatherThanReinterpreted) {
+  struct Case {
+    const char* name;
+    const char* summand;
+  };
+  const Case kCases[] = {
+    // The whole empty-token class, not just the middle one: the parser's flush() treats a leading,
+    // a trailing and an interior empty token identically, so all four spellings used to collapse
+    // onto the same wrong answer, {3, 5}.
+    { "an interior empty step", "3--5" },
+    { "a leading empty step", "-3-5" },
+    { "a trailing empty step", "3-5-" },
+    // Two empty steps in a row: the judgement is "any empty token", not "exactly one".
+    { "several empty steps", "3---5" },
+    // Not an AC of its own — reusing the editor's whole validator rather than writing a fresh
+    // empty-token predicate means face-number legality comes along with it. Pinned so that a later
+    // narrowing of the gate to "empty tokens only" is a visible choice rather than a silent loss.
+    { "a face number no crystal has", "99" },
+    { "a malformed entry: factor", "entry:abc & 3-5" },
+  };
+
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    TakeInvalidSummandRowCount();  // discard anything a previous case in this binary left
+    GuiState loaded;
+    if (!DeserializeGuiStateJson(V3DocWithSummand(c.summand), loaded)) {
+      ADD_FAILURE() << c.name << ": the document failed to deserialize";
+      continue;  // no load to check; the rest of the cases still get their turn
+    }
+
+    // The row is gone, not kept with an empty parse: a row whose text survives is a row the editor
+    // would show back to the user as if the file had said something valid.
+    EXPECT_TRUE(loaded.filters.empty() || loaded.filters.at(0).param.empty())
+        << c.name << ": the malformed row survived the load";
+
+    // What the simulator is handed. The empty-token cases used to arrive here as
+    // {"type": "raypath", "raypath": [3, 5]}; a fail-closed parser change would make them arrive as
+    // {"type": "none"}, which is core's match-all. Neither is the file's meaning, and asserting the
+    // absence of both is what separates this fix from that one.
+    const nlohmann::json committed = lumice::test::CommitSceneJson(loaded);
+    if (committed.is_null()) {
+      ADD_FAILURE() << c.name << ": the document did not commit at all";
+      continue;
+    }
+    const std::string emitted = committed.value("filter", nlohmann::json::array()).dump();
+    EXPECT_EQ(emitted.find("\"raypath\""), std::string::npos)
+        << c.name << ": a face path the file never stated reached the simulator: " << emitted;
+    EXPECT_EQ(emitted.find("\"none\""), std::string::npos)
+        << c.name << ": the row lowered to core's match-all, which filters nothing: " << emitted;
+
+    // Counted, and counted once — DoOpen reads this to decide whether to raise the import notice,
+    // so a row dropped without being counted is a row dropped in silence, which is the state this
+    // whole case exists to leave behind.
+    EXPECT_EQ(TakeInvalidSummandRowCount(), 1) << c.name << ": the dropped row was not counted";
+    EXPECT_EQ(TakeInvalidSummandRowCount(), 0)
+        << c.name << ": the counter did not clear on read, so the notice would never go away";
+  }
+}
+
+// The last link in the chain, and the one nothing above it covers: the count reaching the user.
+//
+// Every case above stops at the counter, which is the same place the two counters this one was
+// modelled on stop. That leaves the wiring in DoOpen — the drain before the load and the notice
+// after it — with no cover at all: drop the notice block, or drop the pre-load drain, and every
+// assertion above stays green while the user is told nothing, or told about someone else's load.
+// The whole point of the change is that the drop is not silent, so the silence is what has to be
+// asserted against.
+//
+// Driven through a real .lmc rather than DeserializeGuiStateJson, because DoOpen is the only caller
+// that reads the counter and it only reads it on that path. The malformed row is planted by writing
+// the row text directly: that is what a file written by a pre-gate build of this GUI holds, and the
+// editor will not produce one.
+struct RoundtripTempFile {
+  std::filesystem::path path;
+
+  explicit RoundtripTempFile(std::filesystem::path p) : path(std::move(p)) {}
+  RoundtripTempFile(const RoundtripTempFile&) = delete;
+  RoundtripTempFile& operator=(const RoundtripTempFile&) = delete;
+  ~RoundtripTempFile() {
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+  }
+};
+
+// A document whose one filter carries `rows`, written to disk as a .lmc. Rows go in verbatim
+// (SerializeFilterForGui writes SummandText::text as-is), so a row the gate will refuse can be
+// planted without going through the editor that would have refused it first.
+//
+// Callers plant a SECOND, valid row beside the bad one deliberately. A filter left with no rows at
+// all trips the no-predicate notice next door, which announces a different thing through the same
+// popup — and an earlier draft of these cases passed with the notice under test deleted, because it
+// was reading that neighbour's sentence. Keeping one row alive is what makes the popup attributable.
+void SaveDocumentWithSummandRows(const std::filesystem::path& path, const std::vector<std::string>& rows) {
+  DoNew();
+  g_state.filters.assign(1, FilterConfig{});
+  g_state.filters[0].param.clear();
+  for (const std::string& text : rows) {
+    g_state.filters[0].param.push_back(SummandText{ text, ParseSummandText(text) });
+  }
+  // The writer emits filters inline per entry, so an unreferenced one never reaches the file.
+  ASSERT_FALSE(g_state.layers.empty());
+  ASSERT_FALSE(g_state.layers[0].entries.empty());
+  g_state.layers[0].entries[0].filter_id = 0;
+  ASSERT_TRUE(SaveLmcFile(path, g_state, g_preview, /*save_texture=*/false));
+}
+
+TEST(DocumentRoundtripChain, ADroppedSummandRowIsAnnouncedWhenTheDocumentIsOpened) {
+  const RoundtripTempFile bad{ std::filesystem::temp_directory_path() / "lumice_roundtrip_bad_summand.lmc" };
+  ASSERT_NO_FATAL_FAILURE(SaveDocumentWithSummandRows(bad.path, { "3--5", "1-3" }));
+
+  ClearImportComplexFilterWarning();
+  DoOpen(bad.path);
+
+  ASSERT_EQ(g_state.filters.size(), 1u);
+  ASSERT_EQ(g_state.filters.at(0).param.size(), 1u)
+      << "premise: the bad row was dropped and the good one kept, so the filter still states a rule "
+         "and the no-predicate notice next door stays quiet";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the row was dropped and the user was told nothing about it";
+  EXPECT_NE(warning.find("not valid filter expressions"), std::string::npos)
+      << "the popup did not carry THIS notice's sentence, so something else raised it: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// ...and only about its own load. The counter is process-wide and take-on-read, so a count left by
+// an earlier read — MakeNewDocumentState running the user's personal defaults through the same
+// deserializer is the real instance — would be handed to the next document opened. This is the case
+// that fails for a fix that adds the notice without the drain before the load.
+TEST(DocumentRoundtripChain, ACleanDocumentDoesNotInheritAnEarlierReadsDroppedRow) {
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3--5"), scratch)) << "premise: the seeding read succeeds";
+  ASSERT_TRUE(scratch.filters.empty() || scratch.filters.at(0).param.empty())
+      << "premise: the seeding read dropped a row, i.e. left a count behind";
+
+  const RoundtripTempFile good{ std::filesystem::temp_directory_path() / "lumice_roundtrip_good_summand.lmc" };
+  ASSERT_NO_FATAL_FAILURE(SaveDocumentWithSummandRows(good.path, { "3-5" }));
+
+  ClearImportComplexFilterWarning();
+  DoOpen(good.path);
+
+  ASSERT_EQ(g_state.filters.size(), 1u);
+  EXPECT_EQ(g_state.filters.at(0).param.size(), 1u) << "premise: this document's row is valid and loaded";
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+      << "a clean load announced an earlier read's dropped row: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
+// The other half: the gate must not refuse anything the editor can write.
+//
+// Every .lmc this GUI saves has already been through ValidateSummandText on the way in, so a false
+// positive here would reject a file the program itself produced. Kept separate from the cases above
+// on purpose — those say "the bad input is caught", this says "the good input still loads", and a
+// gate can pass the first while failing the second.
+TEST(DocumentRoundtripChain, ValidSummandRowsStillLoadAndAreNotCounted) {
+  struct Case {
+    const char* name;
+    const char* summand;
+    const char* expected_text;
+  };
+  const Case kCases[] = {
+    { "a plain face path", "3-5", "3-5" },
+    { "several ORed segments", "3-5;1-3", "3-5;1-3" },
+    { "an entry facelist ANDed with a path", "entry:1,2 & 3-5", "entry:1,2 & 3-5" },
+    // Migration runs before the gate, so what is validated is the rewritten row. A gate placed
+    // before the rewrite would refuse every pre-retirement document.
+    { "a row the ',' migration rewrote", "3-5,1-2", "3-5-1-2" },
+    // The widest face number that is legal on some crystal. The gate validates against the pyramid
+    // set (the union over every kind) precisely so a pyramid-only face is not refused by a reader
+    // that has no crystal in hand.
+    { "a face legal only on a pyramid", "28", "28" },
+    { "a length factor", "len:<=4 & 3-5", "len:<=4 & 3-5" },
+  };
+
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    TakeInvalidSummandRowCount();
+    GuiState loaded;
+    if (!DeserializeGuiStateJson(V3DocWithSummand(c.summand), loaded)) {
+      ADD_FAILURE() << c.name << ": the document failed to deserialize";
+      continue;
+    }
+    if (loaded.filters.size() != 1u || loaded.filters.at(0).param.size() != 1u) {
+      ADD_FAILURE() << c.name << ": the row did not survive the load";
+      continue;  // the text read below would be out of bounds
+    }
+    EXPECT_EQ(loaded.filters.at(0).param[0].text, std::string(c.expected_text))
+        << c.name << ": the row came back saying something else";
+    EXPECT_EQ(TakeInvalidSummandRowCount(), 0) << c.name << ": a valid row was refused by the gate";
+  }
 }
 
 }  // namespace

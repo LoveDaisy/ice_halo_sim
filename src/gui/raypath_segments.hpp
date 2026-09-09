@@ -240,6 +240,24 @@ inline GuiValidationResult ValidateRaypathTextMultiSegment(const std::string& te
 // without setting the flag. That divergence predates this function's tightening and is untouched
 // by it — a different predicate on a different input class, left where it was rather than folded
 // in here.
+//
+// It stays split deliberately, and the obvious one-line closure — set has_invalid_token on the
+// empty token too — is worse than the split, measured rather than argued. It makes this function
+// return {} for the whole segment; ParseRaypathTextMultiSegment then drops that segment for having
+// an empty result; and a Factor left with no segments lowers, in file_io.cpp's FactorAlternatives,
+// to the one alternative that is an empty sequence — which is core's match-all. So "3--5" would go
+// from filtering one path the user did not write to filtering nothing at all, just as silently.
+// The ambiguity that makes that happen is that "no segments" today means both "the user wrote no
+// predicate" and "the text would not parse", and no fail-closed change here can be right until
+// those are two different things.
+//
+// So the gate is not here. This function is reached from exactly one place — through
+// ParseRaypathTextMultiSegment, from FactorAlternatives in file_io.cpp — and the text that arrives
+// there is a SummandText::text that entered the state through one of two doors: the editor, which
+// has always run ValidateSummandText before writing one, and the .lmc reader
+// (ParseFilterFromGuiJson), which did not and now does. Closing the second door is what makes the
+// tolerance here safe to keep, and it goes on serving what it was written for: showing the part of
+// a half-typed row that does parse, while the row is still being typed.
 inline std::vector<int> ParseRaypathSegment(const std::string& seg) {
   std::vector<int> ints;
   std::string tok;

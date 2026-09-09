@@ -231,6 +231,16 @@ int TakeFilterNoPredicateDowngradeCount();
 // above: drain once before a load to discard any stale count, and again after it.
 int TakeRaypathCommaMigratedCount();
 
+// Returns the number of `summands` rows dropped since the last call because the file's text was not
+// a valid filter expression, and resets the counter. The GUI-native load path used to hand every
+// row straight to the tolerant parser, which reads an empty face-path token as if it were not there
+// -- "3--5" came back as the path 3-5, a path the user never wrote, with nothing on screen saying
+// so. Rows are now validated with the same ValidateSummandText the editor gates its OK button on,
+// and a row that fails is dropped rather than reinterpreted. Same call discipline as the three
+// above: drain once before a load to discard any stale count, and again after it to decide whether
+// to show the notice.
+int TakeInvalidSummandRowCount();
+
 // Export preview as PNG (renders via FBO, must be called on GL thread).
 // Thin wrapper over RenderExportToRgba + WriteRgbaBufferToPng.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
