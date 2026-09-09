@@ -427,19 +427,37 @@ endif()
 # label that `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` selects.
 # Where these two actually run, which is not where a reader assumes:
 #
-# This find_program gates the whole block, and CI's four build-matrix jobs never install
-# pytest — so on those runners PYTEST_EXECUTABLE is not found, the if() body does not execute,
-# and neither test is ever REGISTERED. Their ctest step reports "out of 3"; the same selector
-# locally reports 5. The two missing ones are exactly CudaMultiMsParity and
+# This find_program gates the whole block, and no CI job that configures with BUILD_TEST=ON
+# installs pytest — not the four build-matrix jobs, and not the two CUDA compile jobs that
+# joined them. So on those runners PYTEST_EXECUTABLE is not found, the if() body does not
+# execute, and neither test is ever REGISTERED. The build-matrix ctest step reports "out of 3";
+# the same selector locally reports 5. The two missing ones are exactly CudaMultiMsParity and
 # CudaRandomGeometryParity.
 #
 # So the capture point for these is a local `./scripts/test.sh quick` (or a direct ctest on
 # a CUDA-capable host), NOT CI. Stated here because "it's an add_test, therefore CI runs it" is
 # the natural reading and it is wrong.
 #
-# Deliberately NOT resolved here: whether to install pytest in the build jobs (making them run)
-# or to accept the status quo (leaving them local-only) is a decision with cost on both sides
-# and is not this comment's to make. Both readings leave the paragraph above true.
+# RESOLVED (2026-09-09): the status quo stands — the build jobs do NOT install pytest, and these
+# two stay unregistered there. What settled it is that the signal installing pytest would buy is
+# already bought, by a job that has had pytest all along. `e2e-test` runs
+# `pytest -v -m "not slow"` over pyproject.toml's testpaths, which include test/parity-cross-backend,
+# and pytest IMPORTS a module before it can read its marks — deselection happens after collection.
+# So both files are imported on every PR today, and an ImportError, a syntax error, or a broken
+# `from test.e2e...` in either of them is already a red there. Measured rather than reasoned:
+# injecting `import __definitely_not_a_module__` into test_cuda_multi_ms_parity.py turns that exact
+# invocation into "1 error during collection", exit 2.
+#
+# What registering them in the build jobs would still buy is thin: a guard that these two add_test()
+# lines themselves stay well-formed (the `-m slow` above, the file paths). It cannot buy any test
+# execution — the pytest guard is `LUMICE_HAS_CUDA == "1"`, which no CI job sets, so every case
+# would report SKIPPED on every runner forever. Paying six `pip install` steps and a permanent
+# Python dependency in the build jobs for always-skipped rows is not worth it; the burden of proof
+# is on the side that adds.
+#
+# Two things would flip this: a CI runner that actually has a CUDA device (then these should run,
+# not just register), or `e2e-test` ceasing to collect test/parity-cross-backend (then the import
+# coverage above disappears and this paragraph is void).
 find_program(PYTEST_EXECUTABLE NAMES pytest pytest3 HINTS ENV PATH)
 if(PYTEST_EXECUTABLE)
   add_test(NAME "CudaMultiMsParity"

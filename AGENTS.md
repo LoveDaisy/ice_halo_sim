@@ -559,10 +559,18 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
     `LUMICE_HAS_CUDA` un-skip 闸（须与 `LUMICE_CUDA_ENABLED` **同设**，二者语义不同）、
     parity battery 三文件、验收口径 10/10、「别信 subprocess 自报」纪律，以及 Linux/Windows 两个
     参照机角色各自的 build / parity / 冒烟命令。主机绑定见 `machines.md`。
-    ⚠️ **Windows + CUDA + `BUILD_TEST=ON` 至今没有任何 CI job 走过**——主矩阵 Windows job 开
-    `BUILD_TEST` 但没开 CUDA、CUDA job 开 CUDA 但没开 `BUILD_TEST`，**两半都在、交集为空**。
-    这个缺口一次攒下三处 MSVC 不兼容、三周无信号；它们已修，但缺口本身还在 ⇒ 动 `test/` 或
-    `bench/` 后别拿 mac/Linux 的绿推断 Windows 也绿。
+    ⚠️ **CUDA + `BUILD_TEST=ON` 的编译缺口曾是全平台的，现已在 CI 上补掉（编译那一半）**——
+    旧状态：主矩阵四个 build job 开 `BUILD_TEST` 但没开 CUDA、两个 CUDA job 开 CUDA 但没开
+    `BUILD_TEST`，**两半都在、交集为空**，于是 `test/{unit-correctness,parity-cross-backend}/backend/`
+    下那 5 个包在 `#if defined(LUMICE_CUDA_ENABLED)` 里的 TU 在**每一个**平台的 CI 里都编成空文件
+    （⚠️ 这条以前被写成 Windows 特有，是错的：Windows 只是代价最先显形的那一侧）。
+    这个缺口一次攒下三处 MSVC 不兼容、三周无信号。现在 `cuda-compile` 与 `windows-cuda-compile`
+    都以 `BUILD_TEST=ON`（`BUILD_GUI=OFF`）配置，那 5 个 TU 真的被编译，
+    `scripts/ci_verify_cuda_test_tus.sh` 再断言它们至少选中一个 case（`gtest` 在 filter 匹配 0 个时
+    退出码是 0，所以裸跑 ctest 在「TU 仍为空」时照样绿——这条断言就是为堵这个假绿而存在）。
+    ⛔ **买到的只有编译覆盖**：CI runner 没有 GPU，那些 case 一律 SKIPPED；运行时 / parity 验证
+    仍然只在参照机上按本节协议手动跑 ⇒ 动 `test/` 或 `bench/` 后，语法与可移植性有自动信号了，
+    但别拿 CI 的绿推断 CUDA 运行时行为也验过。
     与 `windows-remote-testing.md`（GUI VSync 物理桌面）场景正交。
   - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. **§7 is the test-scope contract**: measured per-scope cost (local `quick`/`full`/`pr` and all 16 CI jobs), what each scope catches that the cheaper one structurally cannot, the budget rule (who declares expected test spend, and when they reconcile it), and why independent re-verification is a fixed-cost multiplier that makes cutting base suite cost worth more than its face value. Read before adding or reorganizing any test — and before claiming any change shortens CI.
 - **Engineering policy**: `env-var-policy.md` — **环境变量使用策略**: user-facing behavior switches must NOT live only in env vars (they cause silent per-machine drift / undebuggable bugs); use CLI/config/API instead. A-class runtime knobs (`LUMICE_TRACE_BACKEND` + 6 perf knobs, with file:line) vs B-class test/build infra (leave alone); three disposition rules; and the **decision gate to answer before adding any new `getenv`**. Read before introducing a new env knob.
