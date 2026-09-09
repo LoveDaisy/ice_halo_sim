@@ -48,6 +48,7 @@ ServerPoller g_server_poller;
 bool g_server_is_gpu = false;
 int g_server_worker_count = 0;
 PreviewViewport g_preview_vp;
+BgColorPickState g_bg_pick;
 
 // Async Stop plumbing (blueprint §5/§8, 1.6). DoStop offloads the blocking teardown sequence
 // (`poller.Stop() + LUMICE_StopServer`) onto this future so the UI thread returns immediately and
@@ -602,9 +603,25 @@ void CancelPendingConfigJsonExport() {
   g_pending_export_json_content.clear();
 }
 
-// Helper: load image from path, downsample if needed, upload to bg texture.
-// Returns true on success.
-static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
+bool BgPickerAvailable(const GuiState& state) {
+  return g_preview.HasBackground() && state.bg_show;
+}
+
+// The background photo lives in two places that must agree: the GL texture the shader samples and
+// the CPU byte copy the eyedropper samples. Clearing one without the other leaves the picker
+// reading an image that is no longer on screen, so the two clears are spelled once, here, and
+// every site that drops the background calls this instead of PreviewRenderer::ClearBackground.
+static void ClearBackgroundImage(GuiState& state) {
+  g_preview.ClearBackground();
+  state.bg_pixels.clear();
+  state.bg_pixels.shrink_to_fit();  // Up to ~50 MB; a cleared-but-reserved vector still holds it.
+  state.bg_pixel_w = 0;
+  state.bg_pixel_h = 0;
+}
+
+// Helper: load image from path, downsample if needed, upload to bg texture, and keep a CPU
+// copy of the uploaded bytes in `state` for the eyedropper to sample. Returns true on success.
+static bool LoadAndUploadBgImage(GuiState& state, const std::filesystem::path& path) {
   int w = 0;
   int h = 0;
   int channels = 0;
@@ -639,6 +656,11 @@ static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
   }
 
   g_preview.UploadBgTexture(data.data(), w, h);
+  // AFTER the upload, never before: UploadBgTexture's first line returns early on a null pointer,
+  // and a moved-from vector's data() is exactly that — the texture would silently stay empty.
+  state.bg_pixels = std::move(data);
+  state.bg_pixel_w = w;
+  state.bg_pixel_h = h;
   return true;
 }
 
@@ -649,7 +671,7 @@ void LoadBackgroundWithDegrade(GuiState& state) {
   if (state.bg_path.empty()) {
     return;
   }
-  if (LoadAndUploadBgImage(state.bg_path)) {
+  if (LoadAndUploadBgImage(state, state.bg_path)) {
     // bg_show and bg_alpha already restored from deserialization / personal defaults.
     return;
   }
@@ -682,7 +704,7 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
     case FrontendResetReason::kOpenLmcBlank:
     case FrontendResetReason::kOpenJson:
       g_preview.ClearTexture();
-      g_preview.ClearBackground();
+      ClearBackgroundImage(state);
       break;
     case FrontendResetReason::kOpenBaked:
       // Which upload entry point is decided by the file, not by this owner: a v>=4 .lmc carries
@@ -693,7 +715,7 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
       } else {
         g_preview.UploadTexture(baked->data, baked->width, baked->height);
       }
-      g_preview.ClearBackground();
+      ClearBackgroundImage(state);
       break;
     case FrontendResetReason::kRevert:
       // Revert preserves current preview — it is a config restore, not a document switch.
@@ -894,7 +916,7 @@ void DoLoadBackground(GLFWwindow* window) {
     return;
   }
 
-  if (!LoadAndUploadBgImage(path)) {
+  if (!LoadAndUploadBgImage(g_state, path)) {
     return;
   }
 
@@ -914,7 +936,7 @@ void DoLoadBackground(GLFWwindow* window) {
 }
 
 void DoClearBackground() {
-  g_preview.ClearBackground();
+  ClearBackgroundImage(g_state);
   g_state.bg_path.clear();
   g_state.bg_show = false;
   if (g_state.aspect_preset == AspectPreset::kMatchBg) {

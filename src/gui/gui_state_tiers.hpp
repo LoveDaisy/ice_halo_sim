@@ -209,6 +209,13 @@ inline constexpr const char* kDerivedFieldsExcludeList[] = {
     "dirty",
     // Runtime-derived aspect clamp info (populated by ApplyAspectRatio)
     "aspect_clamp",
+    // CPU-readable mirror of the background TEXTURE's pixels, written by LoadAndUploadBgImage
+    // right after the upload and cleared wherever the texture is. Derived from the file on disk,
+    // not from the document: bg_path is the governed field, these three are the decoded bytes it
+    // currently resolves to.
+    "bg_pixels",
+    "bg_pixel_w",
+    "bg_pixel_h",
 };
 // clang-format on
 

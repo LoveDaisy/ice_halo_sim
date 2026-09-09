@@ -49,6 +49,19 @@ struct PreviewViewport {
   std::vector<CurveLabelSet> curve_labels;
 };
 
+// Sky-Color eyedropper mode: while active, the preview shows the background photo alone and a
+// click on it samples that photo's pixel into renderer.background.
+//
+// Deliberately NOT a GuiState field: the mode is display-time only, and the document must come
+// out of it byte-identical to how it went in (the one write is the sampled colour, on confirm,
+// through the same field the Sky Color swatch writes). Deliberately not a PreviewViewport field
+// either, though that is the closest existing carrier: every member of that struct is republished
+// unconditionally by RenderPreviewPanel each frame (level-triggered, see its comment), whereas
+// this flag is edge-triggered by a user action and has to survive the frames in between.
+struct BgColorPickState {
+  bool active = false;
+};
+
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 
 // task-cleanup-hardening AC4 (Save-偏离-E owner ruling = 提示需 Run):
@@ -70,6 +83,13 @@ extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
 extern PreviewViewport g_preview_vp;
+extern BgColorPickState g_bg_pick;
+
+// "There is a background photo the eyedropper could sample right now." The single owner of that
+// judgement: the button's disabled state, the preview panel's pick branch and the mid-mode bail-out
+// all ask this one function, so a future third condition (a print mode that has no photo overlay,
+// say) is one edit rather than three that must be remembered together.
+bool BgPickerAvailable(const GuiState& state);
 // The construction-time properties the live g_server was actually built with (see app.cpp):
 // whether it is a GPU backend (Metal/CUDA) vs CPU, and how many CPU workers it holds. Together
 // they are what MaybeReconstructServerForConstructionProperties compares against to decide whether

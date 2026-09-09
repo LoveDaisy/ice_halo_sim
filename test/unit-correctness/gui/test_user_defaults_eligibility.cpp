@@ -54,7 +54,11 @@ namespace {
 // 73 since worker_count joined use_gpu_backend under the `app` root key: it is the second
 // construction-time server property with a personal-default channel of its own, and eligible for
 // the same reason — a machine property that must not travel inside a document.
-constexpr std::size_t kExpectedGovernedFieldCount = 73;
+// 76 with bg_pixels / bg_pixel_w / bg_pixel_h: the CPU-readable mirror of the background photo's
+// texture, added so the Sky Color eyedropper can sample the exact bytes that were uploaded. All
+// three are derived — decoded from whatever file bg_path names — so they carry no default of
+// their own; bg_path, the field that does, was already governed and is untouched.
+constexpr std::size_t kExpectedGovernedFieldCount = 76;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;

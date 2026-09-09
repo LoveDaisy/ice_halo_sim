@@ -1234,6 +1234,16 @@ struct GuiState {
   float bg_offset_x = 0.0f;
   float bg_offset_y = 0.0f;
   float bg_scale = 1.0f;
+  // CPU-readable copy of the pixels currently in the background TEXTURE — RGB, row-major,
+  // top-down (stbi's native order, which ComputeBgUvTransform's negative scale_y is the single
+  // owner of flipping), and the DOWNSAMPLED size, not the file's: it is the same buffer that was
+  // handed to UploadBgTexture, so what the eyedropper reads and what the screen shows can never
+  // be two different images. Derived runtime cache, not document state: never serialized, never
+  // diffed, cleared wherever the texture is (ResetFrontendState's document-switch branches and
+  // DoClearBackground). Bounded by the 4096 downsample cap at 4096*4096*3 ~= 50 MB.
+  std::vector<unsigned char> bg_pixels;
+  int bg_pixel_w = 0;
+  int bg_pixel_h = 0;
 
   // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot).
   // Each overlay has independent toggles for line and label visibility, allowing
