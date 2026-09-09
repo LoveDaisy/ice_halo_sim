@@ -609,12 +609,21 @@ jobs:
       # CUDA-enabled and CUDA-disabled configures cannot pollute either side.
       # Current CMakeLists.txt does not add CPM packages under
       # LUMICE_CUDA_ENABLED=ON, so this only costs one extra cache slot.
+      #
+      # The discriminator sits BEFORE the platform, not after it. `restore-keys`
+      # is a prefix match, so the older `cpm-windows-msvc-x64-cuda-` spelling was
+      # a *sub*namespace of the build job's `cpm-windows-msvc-x64-`: on any
+      # exact-key miss that job could fall back onto this 2.7 MB CUDA entry
+      # instead of its own ~175 MB one, silently re-downloading every dependency
+      # while the log still reads "Cache restored from key". Nothing about that
+      # failure is visible as a red — see the sibling comments on the two
+      # ubuntu-x64 sub-jobs below, which had the same shape.
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
           path: cpm_cache
-          key: cpm-windows-msvc-x64-cuda-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-windows-msvc-x64-cuda-
+          key: cpm-cuda-windows-msvc-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-cuda-windows-msvc-x64-
 
       # BUILD_GUI=OFF + BUILD_TEST=ON mirrors the Linux cuda-compile job: no
       # GLAD2/Python generator is invoked (that step is gated on
@@ -674,12 +683,22 @@ jobs:
       # Independent cache key: BUILD_BENCH=ON pulls in the google/benchmark CPM
       # package, so this configure's dependency set differs from the plain
       # ubuntu-x64 build job's. Sharing a key would let one pollute the other.
+      #
+      # "Independent" has to be spelled with the discriminator in FRONT of the
+      # platform. `restore-keys` matches by prefix, so `cpm-ubuntu-x64-bench-`
+      # was not a sibling of the build job's `cpm-ubuntu-x64-` but a subset of
+      # it, and the pollution the comment above rules out was reachable in the
+      # one direction that matters: this job's configure is the narrow one
+      # (BUILD_TEST=OFF, BUILD_GUI=OFF), so its entry is ~2.2 MB against the
+      # build job's ~171 MB. A `cpm-ubuntu-x64-` fallback landing here restores
+      # an almost-empty cpm_cache and re-downloads everything, reporting a hit
+      # the whole time.
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
           path: cpm_cache
-          key: cpm-ubuntu-x64-bench-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-ubuntu-x64-bench-
+          key: cpm-bench-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-bench-ubuntu-x64-
 
       # BUILD_TEST=OFF + BUILD_GUI=OFF keep this job narrow: the build job above
       # already covers those targets, and skipping them avoids the OpenGL/X11
@@ -738,13 +757,16 @@ jobs:
 
       # Independent cache key: BUILD_SHARED_LIBS=ON is a distinct configure, so its
       # dependency set may differ from the plain ubuntu-x64 build job's. Sharing a key
-      # would let one pollute the other.
+      # would let one pollute the other. The discriminator leads the platform for the
+      # same reason as the bench job above: under the older
+      # `cpm-ubuntu-x64-shared-gui-test-` spelling this namespace was a prefix-subset
+      # of `cpm-ubuntu-x64-`, so "independent" held in name only.
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
           path: cpm_cache
-          key: cpm-ubuntu-x64-shared-gui-test-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-ubuntu-x64-shared-gui-test-
+          key: cpm-sharedgui-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-sharedgui-ubuntu-x64-
 
       - name: Configure (shared + test + GUI)
         run: >
