@@ -1310,8 +1310,8 @@ comes from the ratio, in which two individually valid integers combine badly.
 The GUI's document import (`src/gui/file_io.cpp`) reports the same verdict as a sentence instead
 of a slug, so a reader does not need the `offending index` table above to know which field failed:
 ```text
-crystal id=0 shape.upper_indices states [1,0,-1,1], which is not a usable wedge angle: l must
-not be negative. Keeping 28.00 degrees.
+crystal id=0 shape.upper_indices states [1,0,-1], which is not a usable wedge angle: l must not
+be negative. Keeping 28.00 degrees.
 ```
 
 **How to respond**: the wedge angle keeps the value it already had — the field default of 28.0°,

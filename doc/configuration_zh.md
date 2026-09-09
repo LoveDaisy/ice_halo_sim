@@ -1255,8 +1255,8 @@ index -1); keeping 28.00.
 GUI 文档导入（`src/gui/file_io.cpp`）把同样的判定写成一整句话而不是短代号，读者不需要对照上面
 `offending index` 的编号表就能知道是哪个字段出了问题：
 ```text
-crystal id=0 shape.upper_indices states [1,0,-1,1], which is not a usable wedge angle: l must
-not be negative. Keeping 28.00 degrees.
+crystal id=0 shape.upper_indices states [1,0,-1], which is not a usable wedge angle: l must not
+be negative. Keeping 28.00 degrees.
 ```
 
 **如何处理**：wedge 角会保留它原有的取值——字段默认的 28.0°，或者此前 `upper_alpha`/`lower_alpha`
