@@ -1295,7 +1295,7 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 | policy | 33 | 29 | no — second-scale gate |
 | format-check | 16 | 10 | no — second-scale gate |
 | new-refs | 11 | 11 | no — second-scale gate |
-| | **4401s** | 5642s | warm head = 3365s (76%) |
+| | **4401s** | 5645s | warm head = 3365s (76%) |
 
 ⚠️ **The `Ubuntu x86_64` row is still settling, and its history is worth more than its number.**
 That leg went 650s uncached → 657s (cold, nothing to restore) → 567s → 479s → 353s across five

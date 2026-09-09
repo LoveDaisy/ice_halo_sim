@@ -190,12 +190,19 @@ jobs:
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
-      # Discriminator first, as everywhere else in this file: `ccache-ubuntu-x64-` would be
-      # a prefix of the shared-gui leg's namespace, which is the exact defect the cpm keys
-      # were renamed to fix and which cost a measured 99.66% -> 2.35% hit rate the first time
-      # a branch tried it. "static" is this leg's discriminator word, chosen to contrast with
-      # `shared-gui-test-build`'s `BUILD_SHARED_LIBS=ON` configure — this leg builds the
-      # static flavor, same sense as `-sj` meaning "shared flavor" in the build script docs.
+      # Discriminator first, as everywhere else in this file — but be precise about what that
+      # buys HERE, because it is not the collision the cpm keys were renamed to fix. The
+      # shared-gui leg is already keyed `ccache-sharedgui-ubuntu-x64-`, which
+      # `ccache-ubuntu-x64-` does not prefix: the two diverge at the first character after
+      # `ccache-`. So spelling this leg `ccache-ubuntu-x64-` would be safe against today's
+      # keys, and unsafe against tomorrow's — it is the one spelling that every future
+      # `ccache-ubuntu-x64-<anything>-` key would silently fall back into, which is exactly
+      # the shape that cost a measured 99.66% -> 2.35% hit rate when a branch tried it on the
+      # cpm keys. Discriminator-first is what makes that shape unreachable by construction
+      # instead of by nobody happening to add such a key. "static" is this leg's discriminator
+      # word, chosen to contrast with `shared-gui-test-build`'s `BUILD_SHARED_LIBS=ON`
+      # configure — this leg builds the static flavor, same sense as `-sj` meaning "shared
+      # flavor" in the build script docs.
       - name: Cache ccache directory (Ubuntu x86_64)
         if: matrix.cache_key == 'ubuntu-x64'
         uses: actions/cache@v6
@@ -732,9 +739,11 @@ jobs:
       # it, and the pollution the comment above rules out was reachable in the
       # one direction that matters: this job's configure is the narrow one
       # (BUILD_TEST=OFF, BUILD_GUI=OFF), so its entry is ~2.2 MB against the
-      # build job's ~171 MB. A `cpm-ubuntu-x64-` fallback landing here restores
-      # an almost-empty cpm_cache and re-downloads everything, reporting a hit
-      # the whole time.
+      # build job's ~171 MB. The direction that breaks is therefore the build
+      # job's, not this one's: its `cpm-ubuntu-x64-` fallback would land on this
+      # job's narrow entry, restore an almost-empty cpm_cache and re-download
+      # everything, reporting a hit the whole time. (This job's own restore-keys
+      # were never the problem — they have always been the narrower prefix.)
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
@@ -818,14 +827,20 @@ jobs:
       #
       # CCACHE_MAXSIZE is 200M, and that number is measured rather than copied. A full cold
       # compile of this configure — 291 objects, nothing restored — leaves a 37 MB directory,
-      # so the 800M this task sized the Windows leg's SCCACHE_CACHE_SIZE to (see the Install
-      # sccache step in the build job) is about four times the working set here, and the 2G
-      # that leg used before this task is about fifty times it. That difference is not a
-      # Linux-vs-Windows quirk to shrug at: the sccache directory used to reach its own 2 GiB
-      # ceiling on the MSVC leg before this change, which made that namespace ~1.5 GB per
-      # entry and 80% of the repository's cache quota at the time, while this one costs a
-      # rounding error. 200M leaves room for several generations of objects to accumulate
-      # through the restore-keys fallback.
+      # and 200M leaves room for several generations of objects to accumulate through the
+      # restore-keys fallback.
+      #
+      # Do NOT read this leg's 200M against the Windows leg's SCCACHE_CACHE_SIZE (800M today,
+      # 2G before this task) and take the ratio for a fact about either leg: those are caps,
+      # and a cache cap is not a footprint — the discipline stated in §7.1 of
+      # doc/testing-architecture.md, and the one an earlier draft of this very comment broke
+      # by calling 800M "about four times the working set here" (800/37 is ~22, and the 37 MB
+      # is this leg's directory, not that leg's). What the two legs actually differ by is
+      # measured working set, roughly six times apart, which is why each cap is sized from its
+      # own leg's measurement. The reason the Windows cap was worth touching at all is a
+      # measured footprint, not a ratio between caps: that directory used to reach its own
+      # 2 GiB ceiling, which made the namespace ~1.5 GB per entry and 80% of the repository's
+      # cache quota at the time, while this one costs a rounding error.
       #
       # If `ccache --show-stats` ever reports Cache size at Max cache size, the cap is
       # evicting live objects and has to go up. That shows up as a quietly lower hit rate and
