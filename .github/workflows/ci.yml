@@ -141,9 +141,11 @@ jobs:
       # else. The version is not a free parameter to bump: 0.17.0 is the version this repo's
       # MSVC + Ninja + CPM combination was measured against, and moving it means re-measuring.
       #
-      # LUMICE_SCCACHE_ARGS follows the LUMICE_PYTHON_ARGS pattern below: it is only ever
-      # written on this leg, and every other matrix entry evaluates the unset variable to an
-      # empty string, so the shared Configure step needs no branch of its own.
+      # LUMICE_COMPILER_LAUNCHER_ARGS follows the LUMICE_PYTHON_ARGS pattern below: matrix
+      # entries that write it get a launcher, every other entry evaluates the unset variable
+      # to an empty string, and the shared Configure step needs no branch of its own. The
+      # name is deliberately not tool-specific — the ubuntu-x64 entry writes the same
+      # variable with ccache, and two spellings for one thing is how they drift apart.
       - name: Install sccache (Windows MSVC)
         if: matrix.msvc
         shell: pwsh
@@ -162,9 +164,40 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP $asset
           & (Join-Path $dir 'sccache.exe') --version
           echo $dir >> $env:GITHUB_PATH
-          echo "LUMICE_SCCACHE_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $env:GITHUB_ENV
+          echo "LUMICE_COMPILER_LAUNCHER_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $env:GITHUB_ENV
           echo "SCCACHE_DIR=$env:GITHUB_WORKSPACE\sccache_cache" >> $env:GITHUB_ENV
-          echo "SCCACHE_CACHE_SIZE=2G" >> $env:GITHUB_ENV
+          echo "SCCACHE_CACHE_SIZE=800M" >> $env:GITHUB_ENV
+
+      # The same treatment for ubuntu-x64, which is this workflow's longest job once the
+      # shared-gui leg has a cache of its own. Deliberately the same shape as the sccache
+      # step above rather than a second invention: same launcher-via-env-var injection, and
+      # the same "one entry per commit with a prefix fallback" key. Only the ubuntu-x64
+      # matrix entry, because it is the only Linux entry in this job that is compile-bound.
+      #
+      # CCACHE_MAXSIZE is 200M on measured grounds — see the sibling step in
+      # shared-gui-test-build, whose configure leaves a 37 MB directory after a full cold
+      # build. A cap is not a footprint, and copying the Windows leg's number here would
+      # reserve fifty times the working set.
+      - name: Install ccache (Ubuntu x86_64)
+        if: matrix.cache_key == 'ubuntu-x64'
+        run: |
+          sudo apt-get install -y ccache
+          ccache --version
+          echo "LUMICE_COMPILER_LAUNCHER_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=200M" >> $GITHUB_ENV
+
+      # Discriminator first, as everywhere else in this file: `ccache-ubuntu-x64-` would be
+      # a prefix of the shared-gui leg's namespace, which is the exact defect the cpm keys
+      # were renamed to fix and which cost a measured 99.66% -> 2.35% hit rate the first time
+      # a branch tried it.
+      - name: Cache ccache directory (Ubuntu x86_64)
+        if: matrix.cache_key == 'ubuntu-x64'
+        uses: actions/cache@v6
+        with:
+          path: ccache_cache
+          key: ccache-static-ubuntu-x64-${{ github.sha }}
+          restore-keys: ccache-static-ubuntu-x64-
 
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       - name: Install GLAD2 Python dependencies (MSVC)
@@ -248,7 +281,7 @@ jobs:
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
           ${{ env.LUMICE_PYTHON_ARGS }}
-          ${{ env.LUMICE_SCCACHE_ARGS }}
+          ${{ env.LUMICE_COMPILER_LAUNCHER_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
@@ -258,6 +291,10 @@ jobs:
       # slow Build was a cold cache or a real regression. Stopping the server afterwards
       # flushes its state to disk before actions/cache's post-step packs the directory; no
       # compilation happens after this point in the job.
+      - name: ccache statistics (Ubuntu x86_64)
+        if: always() && matrix.cache_key == 'ubuntu-x64'
+        run: ccache --show-stats --verbose || true
+
       - name: sccache statistics (Windows MSVC)
         if: always() && matrix.msvc
         shell: bash
@@ -768,13 +805,16 @@ jobs:
           key: cpm-sharedgui-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-sharedgui-ubuntu-x64-
 
-      # ccache on this leg and no other, which is a budget decision before it is a
-      # performance one. A run's wall clock is its longest job, and this is that job; the
-      # plain `Ubuntu x86_64` leg already finishes under the next-longest one, so a compiler
-      # cache there would buy machine time and zero wall clock while claiming its share of a
-      # 10 GB repository-wide quota that is already full. The sccache comment in the build
-      # job says it was put "on the one leg where compilation is most of the job" — that was
-      # true when written, and this leg is what it means today.
+      # ccache on this leg and no other. A run's wall clock is its longest job, and this is
+      # that job — the sccache comment in the build job says it was put "on the one leg where
+      # compilation is most of the job", which was true when written and means this leg today.
+      # The plain `Ubuntu x86_64` leg deliberately does not get one: it already finishes under
+      # the next-longest job, whose own floor is an indivisible test case no compiler cache
+      # touches, so caching it would buy machine time and zero wall clock. That is the whole
+      # of the reason, and it is worth being precise about what is NOT part of it: quota is
+      # not the constraint here. A cold build of this configure leaves a 37 MB directory, so
+      # a second Linux leg would cost a rounding error against a 10 GB pool. Revisit this if
+      # the job ordering changes, not if the quota does.
       #
       # CCACHE_MAXSIZE is 200M, and that number is measured rather than copied. A full cold
       # compile of this configure — 291 objects, nothing restored — leaves a 37 MB directory,
