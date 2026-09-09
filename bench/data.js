@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788978634658,
+  "lastUpdate": 1788978637680,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "9955084a05d75819f74dff651c10a063ef2f5b65",
-          "message": "Merge pull request #234 from LoveDaisy/feat/panel-settings-editor\n\nfeat(gui): make the defaults panel a pure editor with one source of constraint truth",
-          "timestamp": "2026-07-29T09:36:30+08:00",
-          "tree_id": "8a4a79fac35d414f9774ddd237a09eb155ad5203",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9955084a05d75819f74dff651c10a063ef2f5b65"
-        },
-        "date": 1785289534321,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 79.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 91.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "92cc54c6635968e5797ada9b806b5f74ab0a8e93",
           "message": "Merge pull request #235 from LoveDaisy/fix/install-hooks-worktree\n\nfix(install-hooks): resolve the hooks dir via git rev-parse --git-path",
           "timestamp": "2026-07-29T09:53:29+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "258d9d34fde41b6c3c29d2818e91a4a20c13f2af",
+          "message": "Merge pull request #335 from LoveDaisy/ci/drop-unused-vendor-apt-source\n\nci: stop depending on a vendor apt source nothing here installs from",
+          "timestamp": "2026-09-10T02:19:42+08:00",
+          "tree_id": "0ec8ef1453363cf2a4e9bac9403be312d6a3d461",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/258d9d34fde41b6c3c29d2818e91a4a20c13f2af"
+        },
+        "date": 1788978637042,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 71.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.6,
             "unit": "%"
           }
         ]
