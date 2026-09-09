@@ -2509,4 +2509,136 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(CountDistinct(PrismFacePlaneOffsets(independent), 1e-5f), (size_t)6);
     };
   }
+
+  // ===================================================================================
+  // The wedge dropdown's custom Miller-index row.
+  // ===================================================================================
+
+  // The row lets a user reach a cone face the four built-in presets do not offer, by typing indices
+  // instead of degrees. What is asserted HERE is only the mechanical half — that the boxes drive the
+  // conversion, that Apply writes and closes, and that a refused triple writes nothing. WHAT the
+  // conversion answers, and what each refusal says, is
+  // unit-correctness/gui/test_custom_wedge_input.cpp, which puts every triple through both the C API
+  // and EvaluateCustomWedgeInput and demands they agree to the bit. Both halves read the same
+  // function, so neither can be right while the other is wrong.
+  //
+  // The expected angles below are read from EvaluateCustomWedgeInput rather than written as
+  // literals: a hand-copied 28.4 here would be a fourth transcription of the very formula this
+  // scrum removed three copies of.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "wedge_custom_input_applies_only_a_buildable_triple");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
+      ctx->Yield(4);
+      // The wedge rows exist on a Pyramid only; on a Prism there is no dropdown to open.
+      ctx->ItemClick("**/Pyramid##modal");
+      ctx->Yield(3);
+
+      const float before = EntryCrystal().upper_alpha;
+      ctx->ItemClick("**/##Upper A##modal_cr_arrow");
+      ctx->Yield(2);
+
+      // {3,0,-3,1} — the issue's own example of a face the built-in table cannot reach.
+      ctx->ItemInputValue("**/##custom_wedge_h", 3);
+      ctx->ItemInputValue("**/##custom_wedge_l", 1);
+      ctx->Yield(2);
+
+      // Previewing is not committing. A triple being typed through passes over half-finished states
+      // ({3,0,-3,0} on the way to {3,0,-3,1}, here), and none of them may reach the crystal.
+      IM_CHECK_EQ(EntryCrystal().upper_alpha, before);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/Apply##custom_wedge")));
+
+      const float expected = gui::EvaluateCustomWedgeInput(3, 0, 1).angle_deg;
+      ctx->ItemClick("**/Apply##custom_wedge");
+      ctx->Yield(3);
+      IM_CHECK_EQ(EntryCrystal().upper_alpha, expected);
+      // A Selectable closes its popup by itself and a Button does not, so this is the assertion that
+      // the explicit CloseCurrentPopup is still there. Without it the angle lands but the dropdown
+      // stays open, which reads as nothing having happened.
+      IM_CHECK(!ctx->ItemExists("**/##custom_wedge_h"));
+
+      // k != 0 is a second-order pyramidal face: well-formed input naming a shape this crystal model
+      // cannot express. It must be refused visibly, and refusing it must not disturb what is there.
+      ctx->ItemClick("**/##Upper A##modal_cr_arrow");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##custom_wedge_k", 1);
+      ctx->Yield(2);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/Apply##custom_wedge")));
+      IM_CHECK_EQ(EntryCrystal().upper_alpha, expected);
+
+      // h = 0 is the other refusal, and the one that would be silent if Apply were live for it: the
+      // owner's honest answer is 0 degrees, and this slider's domain starts at 0.1, so the write
+      // would be clamped up into a different crystal with nothing said.
+      ctx->ItemInputValue("**/##custom_wedge_k", 0);
+      ctx->ItemInputValue("**/##custom_wedge_h", 0);
+      ctx->Yield(2);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/Apply##custom_wedge")));
+      IM_CHECK_EQ(EntryCrystal().upper_alpha, expected);
+
+      ctx->PopupCloseAll();
+      ctx->Yield(2);
+      ctx->ItemClick(kClose);
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // SliderWithPresetEdit runs twice per frame, once for Upper A and once for Lower A, so anything it
+  // holds between frames in a plain static is one copy shared by both rows. That failure is invisible
+  // until somebody opens both dropdowns in one sitting — and then Lower silently offers whatever was
+  // typed under Upper.
+  //
+  // Asserted through Apply rather than by reading the boxes back: what the boxes contain is only
+  // interesting because of the angle it produces, and the angle is observable where the text is not.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "wedge_custom_input_is_per_row_not_shared");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
+      ctx->Yield(4);
+      ctx->ItemClick("**/Pyramid##modal");
+      ctx->Yield(3);
+
+      const float typed = gui::EvaluateCustomWedgeInput(3, 0, 1).angle_deg;
+      const float untouched = gui::EvaluateCustomWedgeInput(1, 0, 1).angle_deg;
+      // The control: with these two equal, a leak and an isolation would look identical below.
+      IM_CHECK(std::fabs(typed - untouched) > 0.5f);
+
+      // Type into Upper, then leave without applying.
+      ctx->ItemClick("**/##Upper A##modal_cr_arrow");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##custom_wedge_h", 3);
+      ctx->ItemInputValue("**/##custom_wedge_l", 1);
+      ctx->Yield(2);
+      ctx->PopupCloseAll();
+      ctx->Yield(2);
+
+      // Lower must still be on its own untouched boxes, so Apply here writes the row's own answer.
+      ctx->ItemClick("**/##Lower A##modal_cr_arrow");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Apply##custom_wedge");
+      ctx->Yield(3);
+      IM_CHECK_EQ(EntryCrystal().lower_alpha, untouched);
+
+      // ...and the other direction: Upper kept what was typed into it while Lower was being used.
+      ctx->ItemClick("**/##Upper A##modal_cr_arrow");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Apply##custom_wedge");
+      ctx->Yield(3);
+      IM_CHECK_EQ(EntryCrystal().upper_alpha, typed);
+
+      ctx->ItemClick(kClose);
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
 }
