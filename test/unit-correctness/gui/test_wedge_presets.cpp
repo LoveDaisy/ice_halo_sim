@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "gui/edit_modals.hpp"
@@ -67,3 +68,73 @@ TEST(WedgePresets, EveryPresetAngleIsWhatItsMillerIndicesMean) {
 }
 
 }  // namespace
+
+// The dropdown offers the user's saved shortcuts too (523.5). Two propositions, and neither is
+// about the four built-ins:
+//   - a saved triple reaches the list, with the label and angle its indices mean;
+//   - the built-ins are still all there, because the user's list APPENDS rather than replaces. That
+//     is what lets a future correction to a factory value follow through to everyone, and what
+//     stops a user emptying the dropdown into an unusable state.
+TEST(WedgePresets, ASavedPresetIsAppendedToTheBuiltInsRatherThanReplacingThem) {
+  gui::ResetUserWedgePresets();
+  const size_t built_in_count = gui::GetWedgePresets().size();
+  ASSERT_GT(built_in_count, 0u);
+
+  // {3,0,-3,2} is not one of the four; it converts, so the merge has no excuse to drop it.
+  gui::AdoptWedgePresetOverridesInMemory({ { 3, 0, 2 } });
+  const std::vector<gui::WedgePreset> merged = gui::GetWedgePresets();
+  ASSERT_EQ(merged.size(), built_in_count + 1);
+
+  const gui::WedgePreset& added = merged.back();
+  EXPECT_EQ(added.h, 3);
+  EXPECT_EQ(added.l, 2);
+
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+  float angle = 0.0f;
+  ASSERT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(3, 0, 2, 3, &state, &angle, nullptr), LUMICE_OK);
+  ASSERT_EQ(state, LUMICE_MILLER_VALID);
+  EXPECT_FLOAT_EQ(added.value, angle);
+  EXPECT_EQ(std::string(added.label), gui::FormatWedgePresetLabel(3, 2, angle));
+
+  gui::ResetUserWedgePresets();
+  EXPECT_EQ(gui::GetWedgePresets().size(), built_in_count);
+}
+
+// De-duplication, against the built-ins and within the user's own list. A file can hold either kind
+// of repeat (hand-edited, or written by a build whose factory table has since grown a row the user
+// had already saved), and showing one twice is a list the user cannot tell apart.
+TEST(WedgePresets, RepeatedIndicesAreListedOnce) {
+  gui::ResetUserWedgePresets();
+  const size_t built_in_count = gui::GetWedgePresets().size();
+  ASSERT_GT(built_in_count, 0u);
+
+  // {1,0,-1,1} is the first built-in; that is the point of picking it.
+  ASSERT_TRUE(gui::IsBuiltInWedgeMillerIndex(1, 0, 1));
+  gui::AdoptWedgePresetOverridesInMemory({ { 1, 0, 1 }, { 3, 0, 2 }, { 3, 0, 2 } });
+
+  const std::vector<gui::WedgePreset> merged = gui::GetWedgePresets();
+  EXPECT_EQ(merged.size(), built_in_count + 1);
+
+  int matches = 0;
+  for (const gui::WedgePreset& row : merged) {
+    if (row.h == 1 && row.l == 1) {
+      ++matches;
+    }
+  }
+  EXPECT_EQ(matches, 1);
+
+  gui::ResetUserWedgePresets();
+}
+
+// An unbuildable triple is skipped rather than asserted on: it can only come from a file a user can
+// edit. The load path already drops such rows with a notice, so this is the belt to that braces —
+// and the difference from the built-in loop, which DOES assert, is deliberate.
+TEST(WedgePresets, AnUnbuildableSavedTripleIsSkippedRatherThanOffered) {
+  gui::ResetUserWedgePresets();
+  const size_t built_in_count = gui::GetWedgePresets().size();
+
+  gui::AdoptWedgePresetOverridesInMemory({ { 1, 1, 1 }, { 0, 0, 1 } });
+  EXPECT_EQ(gui::GetWedgePresets().size(), built_in_count);
+
+  gui::ResetUserWedgePresets();
+}

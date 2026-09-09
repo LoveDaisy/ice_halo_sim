@@ -47,6 +47,10 @@ inline std::filesystem::path FreshOverlayDir(const char* tag) {
 // before it in this single-process test binary.
 inline void ResetUserDefaultsChannels() {
   gui::ResetUserAxisPresetOverrides();
+  // The second namespace-2 member's cache. It belongs HERE rather than in each case that seeds one,
+  // for the reason this header states at the top: the leak it prevents lands on the NEXT case, so
+  // the rule has to hold for cases whose author never thought about wedge presets at all.
+  gui::ResetUserWedgePresets();
   gui::TakeUserDefaultsDowngradeCount();
   gui::TakeUserDefaultsDowngradeNotices();
 }
