@@ -168,7 +168,7 @@ The central area shows the live, lens-projected halo image. While idle the area 
 Geometry of the crystal:
 
 - **Type**: `Prism` (hexagonal prism) or `Pyramid` (hexagonal pyramid with truncated upper / lower wedges).
-- **Shape parameters**: `height` for prisms; `prism_h`, `upper_h`, `lower_h`, and the wedge angles `upper_alpha` / `lower_alpha` for pyramids (the defaults map to Miller indices `{1, 0, -1, 1}`).
+- **Shape parameters**: `height` for prisms; `prism_h`, `upper_h`, `lower_h`, and the wedge angles `upper_alpha` / `lower_alpha` for pyramids (the defaults map to Miller indices `{1, 0, -1, 1}`). That four-index label `{h, k, i, l}` and the three integers a config file's `upper_indices` / `lower_indices` carry are the same face written two ways: the third of the four is derived, `i = -(h + k)`, so a JSON document holds only `(h, k, l)` and rejects a four-element array. The rules, and what the wedge angle is measured from, are in [configuration.md](configuration.md#11-reading-the-miller-index-fallback-warning).
 - **Face distance**: six values, one for each prism face, allowing irregular hexagonal cross-sections.
 
 ### Axis Tab

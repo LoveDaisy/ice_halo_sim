@@ -59,17 +59,6 @@ static std::vector<WlWeight> ParseWlWeightArray(const nlohmann::json& arr) {
   return out;
 }
 
-// Convert Miller index (i1, i4) to wedge angle in degrees. Returns default (28.0) if i1 == 0.
-static float MillerToAlpha(int i1, int i4) {
-  constexpr float kSqrt3_2 = 0.866025403784f;
-  constexpr float kIceCrystalC = 1.629f;
-  constexpr float kRadToDeg = 57.2957795131f;
-  if (i1 == 0) {
-    return 28.0f;
-  }
-  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
-}
-
 // Lens type JSON names (shared by Core config and GuiState JSON), indexed by the GUI
 // RenderConfig::lens_type value and mirroring core's own wire vocabulary verbatim (see
 // config/render_config.hpp's NLOHMANN_JSON_SERIALIZE_ENUM for LensParam::LensType) — one word means
@@ -704,6 +693,55 @@ int TakeShapeDistDowngradeCount() {
 // changing what the GUI makes of it before core does would move a value from underneath the answer
 // core is about to give. Re-evaluate whether this parameter is still needed once core states
 // whether `prism_h` is optional.
+// Why the conversion owner refused a Miller triple, in the words the person who typed it needs.
+//
+// Deliberately NOT a wrapper over core's `MillerConversionStateName`: that one produces the short
+// slug a log line wants ("invalid"), and it is not reachable from here anyway -- the GUI talks to
+// core only through the C API, which exports the verdict but no name for it. What a popup needs is
+// a sentence saying which rule the input broke.
+//
+// The reachable verdicts are exactly two. The caller takes LUMICE_MILLER_VALID and
+// LUMICE_MILLER_NO_CONE on the other side of the `if`, so this sees the complement of a four-value
+// enum. A verdict added to LUMICE_MillerConversionState later needs a sentence here too.
+//
+// `invalid_index` is what separates the three ways one slot can be wrong; the owner leaves it at -1
+// for the two failures no single slot can be blamed for -- a wrong index count, and an h:l ratio
+// that names no buildable face -- so those two share the last sentence.
+static std::string MillerRefusalReason(LUMICE_MillerConversionState state, int invalid_index, size_t provided) {
+  if (state == LUMICE_MILLER_INCOMPLETE || provided != 3) {
+    std::string reason =
+        "a wedge angle is made from exactly three indices (h, k, l), and this array holds " + std::to_string(provided);
+    if (provided > 3) {
+      // The four-index label is the crystal editor's own, so copying it into a document is the way
+      // this is most often reached, and naming it is what turns the count into an instruction.
+      reason +=
+          " -- the four-index form {h, k, i, l} the crystal editor shows is the same face written "
+          "differently, with i = -(h + k) derived rather than stored, so it is not written here";
+    }
+    return reason;
+  }
+  switch (invalid_index) {
+    case 0:
+      return "h must not be negative";
+    case 1:
+      return "k must be 0 -- a pyramidal face turned off the prism edges is not a shape this crystal model can "
+             "take, so there is no angle to convert this to";
+    case 2:
+      return "l must not be negative";
+    default:
+      return "the ratio h:l has to make an angle strictly between 0 and 90 degrees, and this one does not, so no "
+             "pyramidal face would be built from it";
+  }
+}
+
+// Two decimals, the same precision the log line beside it prints, so the popup and the log panel
+// cannot disagree about the angle that was kept.
+static std::string FormatAngleDegrees(float deg) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(deg));
+  return buf;
+}
+
 static ShapeDist ParseShapeDist(const json& j, float default_center, const std::string& crystal_label,
                                 const char* slot_key, bool enforce_type_field = true) {
   ShapeDist d;
@@ -829,8 +867,42 @@ static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::strin
         const char* indices_key = LUMICE_ShapeIndicesKeyName(upper);
         if (s.contains(angle_key) && s[angle_key].is_number()) {
           alpha = s[angle_key].get<float>();
-        } else if (s.contains(indices_key) && s[indices_key].is_array() && s[indices_key].size() == 3) {
-          alpha = MillerToAlpha(s[indices_key][0].get<int>(), s[indices_key][2].get<int>());
+        } else if (s.contains(indices_key) && s[indices_key].is_array()) {
+          // Any array enters here, not just a three-element one — the same shape as the CLI's own
+          // reader (config/crystal_config.cpp, server/c_api.cpp): a wrong length is a verdict the
+          // C API makes, not a reason to leave the branch and let the default pass for a value.
+          const auto& idx = s[indices_key];
+          int hkl[3]{ 0, 0, 0 };
+          bool all_integers = true;
+          for (size_t n = 0; n < idx.size() && n < 3; n++) {
+            if (!idx[n].is_number_integer()) {
+              all_integers = false;
+              break;
+            }
+            hkl[n] = idx[n].get<int>();
+          }
+          auto state = LUMICE_MILLER_INVALID;
+          float angle_deg = 0.0f;
+          int invalid_index = -1;
+          if (all_integers) {
+            LUMICE_ConvertMillerIndexToWedgeAngle(hkl[0], hkl[1], hkl[2], static_cast<int>(idx.size()), &state,
+                                                  &angle_deg, &invalid_index);
+          }
+          if (state == LUMICE_MILLER_VALID || state == LUMICE_MILLER_NO_CONE) {
+            alpha = angle_deg;
+          } else {
+            // Queued for the import popup as well as logged, the way every other downgrade in this
+            // function is. A refused triple leaves the angle at a default the document never stated,
+            // which is indistinguishable from a stated one in the editor -- so the log panel alone is
+            // not where this can be allowed to live.
+            const std::string reason = all_integers ? MillerRefusalReason(state, invalid_index, idx.size()) :
+                                                      std::string("every index has to be a whole number");
+            const std::string msg = crystal_label + " shape." + indices_key + " states " + idx.dump() +
+                                    ", which is not a usable wedge angle: " + reason + ". Keeping " +
+                                    FormatAngleDegrees(alpha) + " degrees.";
+            GUI_LOG_WARNING("[FileIO] ParseCrystal: {}", msg);
+            SetImportComplexFilterWarning(msg);
+          }
         }
       }
     }

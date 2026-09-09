@@ -10,7 +10,7 @@
 #include <variant>
 #include <vector>
 
-#include "core/math.hpp"
+#include "core/miller_wedge.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -329,17 +329,6 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
 }
 
 
-// Convert Miller index (i1, i4) to wedge angle in degrees. Returns 28.0 (default) if i1 == 0.
-static float MillerToAlpha(int i1, int i4) {
-  constexpr float kSqrt3_2 = 0.866025403784f;
-  constexpr float kIceCrystalC = 1.629f;
-  constexpr float kRadToDeg = 57.2957795131f;
-  if (i1 == 0) {
-    return 28.0f;
-  }
-  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
-}
-
 // ========== PyramidCrystalParam ==========
 void to_json(nlohmann::json& j, const PyramidCrystalParam& p) {
   constexpr auto kKind = CrystalKind::kPyramid;
@@ -375,9 +364,31 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     const char* indices_key = ShapeIndicesKeyName(upper);
     if (j.contains(angle_key)) {
       wedge_angle = j.at(angle_key).get<float>();
-    } else if (j.contains(indices_key) && j.at(indices_key).is_array() && j.at(indices_key).size() == 3) {
+    } else if (j.contains(indices_key) && j.at(indices_key).is_array()) {
+      // Any array enters here, not just a three-element one: a wrong length is something the
+      // conversion owner judges (and this warning reports), where it used to make the whole branch
+      // fall through in silence and leave the default 28 degrees looking like a stated value.
       const auto& idx = j.at(indices_key);
-      wedge_angle = MillerToAlpha(idx[0].get<int>(), idx[2].get<int>());
+      int hkl[3]{ 0, 0, 0 };
+      bool all_integers = true;
+      for (size_t i = 0; i < idx.size() && i < 3; i++) {
+        if (!idx[i].is_number_integer()) {
+          all_integers = false;
+          break;
+        }
+        hkl[i] = idx[i].get<int>();
+      }
+      MillerConversionResult r;
+      r.state = MillerConversionState::kInvalid;
+      if (all_integers) {
+        r = ConvertMillerIndexToWedgeAngle(hkl[0], hkl[1], hkl[2], static_cast<int>(idx.size()));
+      }
+      if (r.state == MillerConversionState::kValid || r.state == MillerConversionState::kNoCone) {
+        wedge_angle = r.wedge_angle_deg;
+      } else {
+        LOG_WARNING("Crystal shape \"{}\": {} is not a usable wedge angle ({}, offending index {}); keeping {:.2f}.",
+                    indices_key, idx.dump(), MillerConversionStateName(r.state), r.invalid_index, wedge_angle);
+      }
     }
   }
 

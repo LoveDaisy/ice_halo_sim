@@ -377,7 +377,8 @@ Crystal Crystal::CreatePrism(float h, const float* fd) {
 }
 
 Crystal Crystal::CreatePyramid(float h1, float h2, float h3) {
-  float alpha = std::atan(math::kSqrt3_2 / kIceCrystalC) * math::kRadToDegree;
+  // The no-argument pyramid is the {1,0,-1,1} face, i.e. Miller (i1, i4) = (1, 1).
+  float alpha = MillerIndexToWedgeAngleDeg(1, 1);
   return CreatePyramid(alpha, alpha, h1, h2, h3);
 }
 
@@ -414,12 +415,8 @@ Crystal Crystal::CreatePyramid(float upper_alpha, float lower_alpha, float h1, f
 Crystal Crystal::CreatePyramid(int upper_i1, int upper_i4, int lower_i1, int lower_i4,  // Miller index
                                float h1, float h2, float h3,                            // height
                                const float* dist) {                                     // face distance
-  // Guard against i1=0: although float division yields inf (not UB), we prefer an explicit guard
-  // over relying on atan(inf)=90° being filtered by the alpha range check in FillHexCrystalCoef.
-  float upper_alpha =
-      upper_i1 != 0 ? std::atan(math::kSqrt3_2 * upper_i4 / upper_i1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
-  float lower_alpha =
-      lower_i1 != 0 ? std::atan(math::kSqrt3_2 * lower_i4 / lower_i1 / kIceCrystalC) * math::kRadToDegree : 0.0f;
+  float upper_alpha = MillerIndexToWedgeAngleDeg(upper_i1, upper_i4);
+  float lower_alpha = MillerIndexToWedgeAngleDeg(lower_i1, lower_i4);
   return CreatePyramid(upper_alpha, lower_alpha, h1, h2, h3, dist);
 }
 

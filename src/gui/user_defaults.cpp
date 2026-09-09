@@ -10,6 +10,7 @@
 #include <system_error>
 #include <utility>
 
+#include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
 #include "util/path_utils.hpp"
@@ -45,6 +46,13 @@ struct AxisPresetOverrides {
   AxisPresetOverride slots[kAxisPresetSlotCount];
 };
 AxisPresetOverrides g_axis_overrides;
+
+// The user's saved wedge-angle shortcuts, in the order the file lists them. A plain vector rather
+// than the fixed slot array above because this list has no built-in rows to index into: every
+// element is one the user added. Replaced wholesale by MakeNewDocumentState(), for the same reason
+// the struct above is a value type — an unconditional assignment cannot leave a stale element the
+// way a loop behind a branch can.
+std::vector<WedgeMillerTriple> g_user_wedge_presets;
 
 // Process-wide personal-defaults source, installed once from argv by each binary's main() (see
 // SetUserConfigSourceForProcess). kAutoDetect is the unset value, so a binary that never calls
@@ -437,6 +445,75 @@ AxisPresetOverrides ParseAxisPresetOverrides(const nlohmann::json& root) {
   return result;
 }
 
+// JSON key names for one stored wedge shortcut. Spelled once so the reader, the writer and the
+// tests cannot disagree about the document shape.
+constexpr const char* kWedgePresetsKey = "wedge";
+constexpr const char* kWedgeIndexKeyH = "h";
+constexpr const char* kWedgeIndexKeyK = "k";
+constexpr const char* kWedgeIndexKeyL = "l";
+
+// One integer field of a stored triple. Returns false when the key is missing or is not an integer
+// — a float 1.0 is refused rather than truncated, because a Miller index that arrived as a
+// non-integer is a hand-edit whose intent nobody can recover, and silently rounding it would invent
+// one.
+bool ReadWedgeIndexField(const nlohmann::json& node, const char* key, int& out) {
+  const auto it = node.find(key);
+  if (it == node.end() || !it->is_number_integer()) {
+    return false;
+  }
+  out = it->get<int>();
+  return true;
+}
+
+// Does `list` already hold this triple? The three de-duplication sites in this feature (load-time
+// filter below, the merged dropdown table in edit_modals.cpp, the panel's Add button) each answer
+// this over a different list with different consequences, so they are not one authority split three
+// ways; this helper only spares THIS file from spelling the scan twice.
+bool ContainsWedgeTriple(const std::vector<WedgeMillerTriple>& list, const WedgeMillerTriple& candidate) {
+  for (const WedgeMillerTriple& existing : list) {
+    if (existing == candidate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Parse the wedge half of an override document: root["presets"]["wedge"], an array of {h,k,l}.
+// Pure with respect to the cache — it neither reads nor writes g_user_wedge_presets; the caller
+// (MakeNewDocumentState()) decides how the result replaces the global, unconditionally on every
+// call.
+//
+// This is the load path, so unlike ReadWedgePresetsFromDoc it DOES judge each triple and DOES leave
+// a trace. Two things get dropped, each with one notice: a triple the owner cannot build a cone
+// face from (k != 0 is the common hand-edit, but h == 0 and a zero l are refused for their own
+// reasons — the verdict is entirely EvaluateCustomWedgeInput's, which is entirely
+// LUMICE_ConvertMillerIndexToWedgeAngle's), and a triple that repeats one already accepted. A
+// silently shortened list would be indistinguishable from the file never having held those rows.
+//
+// The refusal wording is EvaluateCustomWedgeInput's own, not a second phrasing written here: the
+// dropdown's live feedback and this notice describe the same verdict, and two wordings of one
+// verdict drift the first time either is edited.
+std::vector<WedgeMillerTriple> ParseWedgePresetOverrides(const nlohmann::json& root) {
+  std::vector<WedgeMillerTriple> result;
+  for (const WedgeMillerTriple& candidate : ReadWedgePresetsFromDoc(root)) {
+    const CustomWedgeInputFeedback fb = EvaluateCustomWedgeInput(candidate.h, candidate.k, candidate.l);
+    if (!fb.can_apply) {
+      NoteUserDefaultsDowngrade("saved wedge preset {" + std::to_string(candidate.h) + "," +
+                                std::to_string(candidate.k) + "," + std::to_string(candidate.l) +
+                                "} was dropped: " + fb.message);
+      continue;
+    }
+    if (ContainsWedgeTriple(result, candidate)) {
+      NoteUserDefaultsDowngrade("saved wedge preset {" + std::to_string(candidate.h) + "," +
+                                std::to_string(candidate.k) + "," + std::to_string(candidate.l) +
+                                "} was listed more than once; the duplicate was dropped.");
+      continue;
+    }
+    result.push_back(candidate);
+  }
+  return result;
+}
+
 int RoundTripPrecisionForAxisPresetStd(float value) {
   char buffer[40];
   for (int precision = 6; precision < 9; ++precision) {
@@ -537,6 +614,104 @@ void WriteAxisPresetZenithStdToDoc(nlohmann::json& doc, AxisPreset preset, float
   // Surgical: ONE key is touched. The GuiState half of the document and every other preset survive
   // by construction rather than by each caller remembering to preserve them.
   doc["presets"]["axis"][entry.override_json_name]["zenith_std"] = stored_value;
+}
+
+std::vector<WedgeMillerTriple> ReadWedgePresetsFromDoc(const nlohmann::json& doc) {
+  std::vector<WedgeMillerTriple> result;
+  if (!doc.is_object()) {
+    return result;
+  }
+  // find() rather than the operator[] chain, for the same reason as ReadAxisPresetZenithStdFromDoc:
+  // the document is user-editable, and operator[] on a non-object throws a type_error that would
+  // take the caller down over a hand-edit.
+  const auto presets = doc.find("presets");
+  if (presets == doc.end() || !presets->is_object()) {
+    return result;
+  }
+  const auto wedge = presets->find(kWedgePresetsKey);
+  if (wedge == presets->end() || !wedge->is_array()) {
+    return result;
+  }
+  for (const nlohmann::json& node : *wedge) {
+    if (!node.is_object()) {
+      continue;  // shape-only rejection; see this function's declaration for why it stays silent
+    }
+    WedgeMillerTriple triple;
+    if (!ReadWedgeIndexField(node, kWedgeIndexKeyH, triple.h) ||
+        !ReadWedgeIndexField(node, kWedgeIndexKeyK, triple.k) ||
+        !ReadWedgeIndexField(node, kWedgeIndexKeyL, triple.l)) {
+      continue;
+    }
+    result.push_back(triple);
+  }
+  return result;
+}
+
+namespace {
+
+// Drop presets.wedge and prune the parent it empties. Shared by the writer's empty-list path and by
+// EraseWedgePresetsFromDoc so "cleared the list" and "erased the key" cannot leave two different
+// documents behind.
+void ErasePresetsWedgeSubtree(nlohmann::json& doc) {
+  const auto presets_it = doc.find("presets");
+  if (presets_it == doc.end() || !presets_it->is_object()) {
+    return;
+  }
+  presets_it->erase(kWedgePresetsKey);
+  if (presets_it->empty()) {
+    doc.erase("presets");
+  }
+}
+
+}  // namespace
+
+void WriteWedgePresetsToDoc(nlohmann::json& doc, const std::vector<WedgeMillerTriple>& presets) {
+  // Same normalization the axis writer owes its callers: a malformed top-level document must become
+  // a valid empty object rather than being written back to disk unchanged.
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  if (presets.empty()) {
+    // An empty list is the absence of the key, not a `[]` under it. Writing the empty array would
+    // leave a skeleton behind for anyone who opens the file by hand, and would make "the user
+    // cleared their list" and "this file predates the feature" two states the reader has to tell
+    // apart for no benefit.
+    ErasePresetsWedgeSubtree(doc);
+    return;
+  }
+  nlohmann::json array = nlohmann::json::array();
+  for (const WedgeMillerTriple& triple : presets) {
+    array.push_back(nlohmann::json{
+        { kWedgeIndexKeyH, triple.h },
+        { kWedgeIndexKeyK, triple.k },
+        { kWedgeIndexKeyL, triple.l },
+    });
+  }
+  // Surgical in the sense that matters: ONE key under `presets` is replaced. presets.axis, the app
+  // preferences and the GuiState half of the document survive by construction.
+  doc["presets"][kWedgePresetsKey] = std::move(array);
+}
+
+void EraseWedgePresetsFromDoc(nlohmann::json& doc) {
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  ErasePresetsWedgeSubtree(doc);
+}
+
+const std::vector<WedgeMillerTriple>& GetUserWedgePresets() {
+  return g_user_wedge_presets;
+}
+
+void AdoptWedgePresetOverridesInMemory(std::vector<WedgeMillerTriple> presets) {
+  // Whole-list assignment, never "clear then refill". Same discipline as
+  // AdoptAxisPresetZenithStdOverrideInMemory, which this scrum's predecessor spent three
+  // code-review rounds arriving at.
+  g_user_wedge_presets = std::move(presets);
+}
+
+void ResetUserWedgePresets() {
+  g_user_wedge_presets.clear();
 }
 
 void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset) {
@@ -774,6 +949,10 @@ GuiState MakeNewDocumentState(std::optional<std::filesystem::path> override_dir)
   // runtime) — reusing the same `if (dir)` to guard this assignment would leave a prior call's
   // overrides live on exactly that flip, the one case this function exists to degrade from.
   g_axis_overrides = dir ? ParseAxisPresetOverrides(doc) : AxisPresetOverrides{};
+  // Same rule, same reason, for the second namespace-2 member: unconditional whole-value assignment
+  // rather than a loop gated on `dir`, so a directory that becomes unavailable mid-process cannot
+  // leave a prior call's shortcuts live.
+  g_user_wedge_presets = dir ? ParseWedgePresetOverrides(doc) : std::vector<WedgeMillerTriple>{};
 
   // The override file is user-editable, so the read path — not just the write path — has to
   // enforce eligibility. Otherwise "which fields may be defaults" would be advisory metadata

@@ -1536,3 +1536,169 @@ TEST_F(UserDefaults, the_exposure_mode_is_adoptable_as_a_personal_default_withou
   EXPECT_TRUE(gui::DeserializeGuiStateJson(lmc_doc.dump(), explicit_relative));
   EXPECT_EQ(explicit_relative.renderer.ev_mode, 0);
 }
+
+// ================================================================================
+// presets.wedge — the user's saved wedge-angle shortcuts (523.5)
+// ================================================================================
+
+// AC1 + AC4 + AC8 in one round trip.
+//
+// AC4 is what the field-by-field comparison is FOR, and why it is not written as "the angle comes
+// back the same": the stored form is the identity the user picked, and a test that read it back as
+// degrees would keep passing on the day someone "simplified" the store into holding degrees, which
+// is exactly the change this feature exists to refuse.
+TEST_F(UserDefaults, wedge_presets_round_trip_as_indices_and_leave_the_schema_stamp_alone) {
+  json doc = json::object();
+  doc["bg_alpha"] = 0.42f;
+  doc[gui::kUserDefaultsOverlaySchemaVersionKey] = gui::kUserDefaultsOverlaySchemaVersion;
+  gui::WriteAxisPresetZenithStdToDoc(doc, gui::AxisPreset::kColumn, 0.3f);
+
+  const std::vector<gui::WedgeMillerTriple> saved = { { 2, 0, 1 }, { 1, 0, 3 } };
+  gui::WriteWedgePresetsToDoc(doc, saved);
+
+  const std::vector<gui::WedgeMillerTriple> read_back = gui::ReadWedgePresetsFromDoc(doc);
+  ASSERT_EQ(read_back.size(), saved.size());
+  for (size_t i = 0; i < saved.size(); ++i) {
+    SCOPED_TRACE(testing::Message() << "entry " << i);
+    EXPECT_EQ(read_back[i].h, saved[i].h);
+    EXPECT_EQ(read_back[i].k, saved[i].k);
+    EXPECT_EQ(read_back[i].l, saved[i].l);
+  }
+
+  // AC8 — a new subtree is a key-existence change, so the overlay's counter does not move. The two
+  // counters in this codebase are deliberately unaligned (see kUserDefaultsOverlaySchemaVersionKey);
+  // this asserts the one this feature touches, mechanically, rather than leaving it to review.
+  EXPECT_EQ(doc.value(gui::kUserDefaultsOverlaySchemaVersionKey, -1), gui::kUserDefaultsOverlaySchemaVersion);
+
+  // Surgical: the GuiState half and the sibling preset namespace survive the write by construction.
+  EXPECT_EQ(doc.value("bg_alpha", 0.0f), 0.42f);
+  const auto axis_survivor = ReadPresetStd(doc, "column");
+  ASSERT_TRUE(axis_survivor.has_value());
+  EXPECT_EQ(*axis_survivor, 0.3f);
+
+  // ...and so do they across the erase, which also prunes the parent it empties rather than
+  // leaving a `"presets": {"wedge": []}` skeleton.
+  gui::EraseWedgePresetsFromDoc(doc);
+  EXPECT_TRUE(gui::ReadWedgePresetsFromDoc(doc).empty());
+  EXPECT_TRUE(doc.contains("presets"));
+  EXPECT_TRUE(!doc["presets"].contains("wedge"));
+  EXPECT_EQ(doc.value("bg_alpha", 0.0f), 0.42f);
+  EXPECT_TRUE(ReadPresetStd(doc, "column").has_value());
+  EXPECT_EQ(doc.value(gui::kUserDefaultsOverlaySchemaVersionKey, -1), gui::kUserDefaultsOverlaySchemaVersion);
+}
+
+// Writing an empty list is the ABSENCE of the key, not `[]` under it — and it prunes `presets`
+// itself once nothing else lives there. Same rule the axis eraser follows, asserted separately
+// because it is the writer's own path, not the eraser's.
+TEST_F(UserDefaults, writing_an_empty_wedge_list_erases_the_key_and_prunes_the_parent) {
+  json doc = json::object();
+  gui::WriteWedgePresetsToDoc(doc, { { 2, 0, 1 } });
+  ASSERT_TRUE(doc.contains("presets"));
+  ASSERT_TRUE(doc["presets"].contains("wedge"));
+
+  gui::WriteWedgePresetsToDoc(doc, {});
+  EXPECT_TRUE(!doc.contains("presets"));
+}
+
+// The raw reader validates SHAPE and nothing else, and says so by surviving every malformed row a
+// hand-edit can produce. It must NOT judge whether a triple converts: the defaults panel calls it
+// on every frame it paints the list, so a verdict here would be recomputed sixty times a second and
+// (if it filed a notice) would bury the notice channel.
+TEST_F(UserDefaults, raw_wedge_reader_keeps_unbuildable_rows_and_drops_only_malformed_ones) {
+  const json doc = json::parse(R"({
+    "presets": {
+      "wedge": [
+        {"h": 1, "k": 1, "l": 1},
+        {"h": 2, "k": 0},
+        {"h": 1, "k": 0, "l": "3"},
+        {"h": 1.5, "k": 0, "l": 1},
+        "not an object",
+        {"h": 2, "k": 0, "l": 1}
+      ]
+    }
+  })");
+
+  const std::vector<gui::WedgeMillerTriple> rows = gui::ReadWedgePresetsFromDoc(doc);
+  // {1,1,1} survives although the owner refuses it: it IS in the file, and the panel has to be able
+  // to show the user the row it is asking them to delete.
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].h, 1);
+  EXPECT_EQ(rows[0].k, 1);
+  EXPECT_EQ(rows[0].l, 1);
+  EXPECT_EQ(rows[1].h, 2);
+  EXPECT_EQ(rows[1].l, 1);
+
+  // Nothing was reported: judging is the load path's job, and this reader has no channel of its own.
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+  EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
+}
+
+// A non-object root must be normalized rather than written back to disk unchanged, the same
+// guarantee the axis writer owes its callers.
+TEST_F(UserDefaults, wedge_writer_normalizes_a_malformed_root) {
+  json doc = json::array();
+  gui::WriteWedgePresetsToDoc(doc, { { 2, 0, 1 } });
+  ASSERT_TRUE(doc.is_object());
+  EXPECT_EQ(gui::ReadWedgePresetsFromDoc(doc).size(), 1u);
+
+  json other = json::array();
+  gui::EraseWedgePresetsFromDoc(other);
+  EXPECT_TRUE(other.is_object());
+}
+
+// The LOAD path is where judging belongs, and where a drop must leave a trace: at load time the
+// user is not looking at the panel, so a silently shortened list is indistinguishable from the file
+// never having held those rows.
+TEST_F(UserDefaults, loading_drops_unbuildable_and_duplicate_wedge_presets_and_says_so) {
+  const auto dir = FreshOverlayDir("wedge_load_filter");
+  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+  WriteRawOverlay(dir, R"({
+    "presets": {
+      "wedge": [
+        {"h": 2, "k": 0, "l": 1},
+        {"h": 1, "k": 1, "l": 1},
+        {"h": 2, "k": 0, "l": 1},
+        {"h": 0, "k": 0, "l": 1}
+      ]
+    }
+  })");
+
+  gui::MakeNewDocumentState(dir);
+
+  const std::vector<gui::WedgeMillerTriple>& live = gui::GetUserWedgePresets();
+  ASSERT_EQ(live.size(), 1u);
+  EXPECT_EQ(live[0].h, 2);
+  EXPECT_EQ(live[0].k, 0);
+  EXPECT_EQ(live[0].l, 1);
+
+  // One notice per dropped row: the k != 0 face, the repeat, and the h == 0 "no cone" row.
+  const std::vector<std::string> notices = gui::TakeUserDefaultsDowngradeNotices();
+  EXPECT_EQ(notices.size(), 3u);
+  int mentioning_wedge = 0;
+  for (const std::string& notice : notices) {
+    if (notice.find("wedge preset") != std::string::npos) {
+      ++mentioning_wedge;
+    }
+  }
+  EXPECT_EQ(mentioning_wedge, 3);
+}
+
+// D8's shape, for the second namespace-2 member: the assignment in MakeNewDocumentState() is
+// UNCONDITIONAL, so a directory that becomes unavailable mid-process cannot leave a previous call's
+// list live. Gating it behind `if (dir)` is the exact defect this scrum's predecessor fixed twice
+// on the axis half.
+TEST_F(UserDefaults, wedge_presets_do_not_leak_across_calls) {
+  const auto dir = FreshOverlayDir("wedge_no_leak");
+  WriteRawOverlay(dir, R"({"presets": {"wedge": [{"h": 2, "k": 0, "l": 1}]}})");
+
+  gui::MakeNewDocumentState(dir);
+  ASSERT_EQ(gui::GetUserWedgePresets().size(), 1u);
+
+  // The no-directory path production takes when GetUserConfigDir() reports nothing.
+  {
+    ScopedNoUserConfigDirEnv no_config_dir;
+    ScopedUserConfigSource guard(gui::UserConfigSource::kAutoDetect);
+    gui::MakeNewDocumentState(std::nullopt);
+  }
+  EXPECT_TRUE(gui::GetUserWedgePresets().empty());
+}

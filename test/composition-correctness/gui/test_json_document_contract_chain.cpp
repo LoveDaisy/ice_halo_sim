@@ -29,7 +29,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <system_error>
 
@@ -398,6 +400,84 @@ TEST(JsonImportContractChain, AJsonPrismHMissingTypeStaysSilentUnlikeOtherShapeD
 
   EXPECT_EQ(PeekImportComplexFilterWarning().find("prism_h"), std::string::npos)
       << "prism_h is held out of the rule until core settles it; got: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
+// The Miller-index fallback is the one import-time downgrade in ParseCrystal that reported only to
+// the log panel, while its twelve neighbours in the same function also queue an import notice. The
+// four inputs below are the whole set the conversion owner refuses -- a wrong index count, a
+// non-zero k, a negative index, and an h:l ratio no face can be built at -- and each of them leaves
+// the wedge angle at a default that then reads as a value the document stated. Which is exactly the
+// case a user hits by copying the GUI's own four-index label `{1, 0, -1, 1}` into the JSON.
+//
+// Table-driven with a non-fatal report per row, so one refused input failing does not hide the
+// other three: an ASSERT here would stop at the first row and report a quarter of the truth.
+TEST(JsonImportContractChain, AJsonMillerIndexRefusalReachesTheUserNotOnlyTheLog) {
+  struct Row {
+    const char* indices_json;
+    const char* why;
+  };
+  const Row rows[] = {
+    { "[1, 0, -1, 1]", "four indices: the GUI's own label notation, written straight into the JSON" },
+    { "[1, 0]", "two indices: a triple left half-written" },
+    { "[1, 1, 2]", "k != 0: a face this crystal model cannot express" },
+    { "[1, 0, -1]", "a negative index" },
+  };
+
+  for (const Row& row : rows) {
+    const std::string doc = DocWithCrystals(std::string(R"([
+    {"id": 0, "type": "pyramid",
+     "shape": {"prism_h": 1.0, "upper_h": 0.3, "lower_h": 0.3, "upper_indices": )") +
+                                            row.indices_json + R"(}}
+  ])");
+
+    ClearImportComplexFilterWarning();
+    GuiState scratch;
+    // Non-fatal + `continue` rather than ASSERT: a premise that fails on one row must not take the
+    // other three rows' verdicts with it, which is what returning out of the function would do.
+    if (!DeserializeFromJson(doc, scratch)) {
+      ADD_FAILURE() << "premise: the document parses at all -- " << row.why;
+      continue;
+    }
+    if (scratch.crystals.size() != 1u) {
+      ADD_FAILURE() << "premise: the crystal was accepted -- " << row.why;
+      continue;
+    }
+
+    EXPECT_FLOAT_EQ(scratch.crystals.at(0).upper_alpha, CrystalConfig{}.upper_alpha)
+        << "a refused triple must leave the angle where it was, not half-apply -- " << row.why;
+
+    const std::string warning = PeekImportComplexFilterWarning();
+    EXPECT_FALSE(warning.empty()) << "the log panel is not where an import problem is looked for -- " << row.why;
+    EXPECT_NE(warning.find("upper_indices"), std::string::npos)
+        << "must name the field that was refused, got: " << warning;
+    // Same two-decimal formatting the message itself uses (file_io.cpp's FormatAngleDegrees), so
+    // this stays correct if the default wedge angle ever changes rather than pinning today's "28".
+    std::ostringstream expected_angle;
+    expected_angle << std::fixed << std::setprecision(2) << CrystalConfig{}.upper_alpha;
+    EXPECT_NE(warning.find(expected_angle.str()), std::string::npos)
+        << "must say which angle was kept, or the user cannot tell a refusal from a stated value, got: " << warning;
+    ClearImportComplexFilterWarning();
+  }
+}
+
+// The contrast that keeps the rule above from over-firing: `h == 0` is a legal document saying this
+// side of the crystal has no pyramidal cap. It changes the angle to 0 and must stay silent, because
+// a notice here would train the user to dismiss the notices that matter.
+TEST(JsonImportContractChain, AJsonMillerIndexWithNoConeIsNotAnImportWarning) {
+  const std::string doc = DocWithCrystals(R"([
+    {"id": 0, "type": "pyramid",
+     "shape": {"prism_h": 1.0, "upper_h": 0.3, "lower_h": 0.3, "upper_indices": [0, 0, 1]}}
+  ])");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+  ASSERT_EQ(scratch.crystals.size(), 1u) << "premise: the crystal was accepted";
+
+  EXPECT_FLOAT_EQ(scratch.crystals.at(0).upper_alpha, 0.0f) << "h == 0 means no cone, which is an angle of 0";
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+      << "a legal document must import in silence, got: " << PeekImportComplexFilterWarning();
   ClearImportComplexFilterWarning();
 }
 

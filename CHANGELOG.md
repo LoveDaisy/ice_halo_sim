@@ -136,6 +136,70 @@ it was thinking of and false of the C struct beside it.
   header). Note the defaults run the other way from every other annotation flag: the JSON default is
   *on*, so a zero-initialized struct asks for no lines even when it carries a full angle list. Set
   the three fields, or go through JSON.
+- **`LUMICE_ConvertMillerIndexToWedgeAngle` — one place to ask what Miller indices mean.** New C API
+  function returning the wedge angle *and* a verdict on the indices themselves: valid, "no cone this
+  side", "not enough indices yet" (so a UI can call it on every keystroke without owning a rule for
+  when a row is finished), or invalid, with the offending slot named where one slot is at fault. No
+  `LUMICE_API_VERSION` change — a new function, no struct or ABI change.
+- **The wedge-angle dropdown takes custom Miller indices.** Below the four built-in presets the
+  Crystal editor's Upper A / Lower A dropdowns now carry a row of index boxes in the same
+  `{h,k,i,l}` notation the preset labels use, so a face the table does not offer — `{3,0,-3,1}`,
+  say — can be asked for by name instead of converted to degrees by hand. The angle updates as
+  you type and is only written when you press Apply, so a triple being typed through never lands
+  half-finished. `i` is shown, not typed: it is `-(h+k)` by definition, and deriving it means the
+  four numbers can never contradict each other. Indices that name no buildable face are refused
+  with the reason spelled out and Apply greyed — a non-zero `k` (a second-order pyramidal face
+  this crystal model cannot express), a negative index, an h:l ratio outside the buildable range,
+  and `h = 0`, which says "no pyramidal cap on this side" and belongs in the pyramid height rather
+  than in an angle. Nothing is stored: the dropdown writes the angle and no Miller indices enter
+  the document.
+- **The Settings panel keeps the wedge angles you use.** A new region under Settings > Presets
+  saves crystal faces by their Miller indices, and everything saved there is offered in the
+  Crystal editor's Upper A / Lower A dropdowns from then on, across restarts. The add row is the
+  same `{h,k,i,l}` control the dropdown carries, refusing the same triples for the same stated
+  reasons. Entries are stored as indices rather than as degrees, so a saved face keeps naming the
+  same face if the ice constants are ever corrected; a preset has no name of its own for the same
+  reason — the indices are the name. The four built-in presets are unaffected and cannot be
+  deleted: your list is added to them, and a triple they already cover is not saved twice. Nothing
+  is written until you press Save, and closing the panel discards the change. A file edited by
+  hand can hold a face that names no buildable cone; the panel shows that row with a warning and
+  a live delete button rather than hiding it, and loading one says which entries it dropped and
+  why.
+
+### Changed
+- **`upper_indices` / `lower_indices` are now judged rather than partly ignored.** These arrays used
+  to be read only when they held exactly three entries, and only entries 0 and 2 were looked at, so
+  three kinds of mistake passed silently: a four-index array — `[1,0,-1,1]`, the notation users
+  actually write — fell through entirely and left the default 28° looking like a stated value; a
+  non-zero second index was dropped, rendering `[1,1,2]` as `[1,0,2]`'s 46.756° instead of the
+  31.545° it names (a shape this crystal model cannot build at all); and a negative index produced a
+  negative angle whose cone then vanished from the render with nothing said. Each of these now leaves
+  the wedge angle at its default **and logs a warning naming the array and the reason**. Applies
+  equally to the CLI, the C API and the GUI's own reader, which had each kept a copy of this
+  conversion. In the GUI the report is also an import-warning popup rather than a line in the log
+  panel alone, matching every other downgrade the document reader performs: the angle a refusal
+  leaves behind is a default the document never stated, and nothing on screen distinguishes it from
+  one the document did state.
+- **`[0,0,l]` now means "no pyramidal cap on this side", not 28°.** ⚠️ Behaviour change for existing
+  configs: a crystal whose `upper_indices` or `lower_indices` starts with 0 (and states no explicit
+  `upper_wedge_angle` / `lower_wedge_angle`) previously rendered a 28° cone on that side and now
+  renders a plain prism end. 28° was never a stated value — it was the field's default showing
+  through — and every other part of the engine already read a leading 0 as "no cone". Add an explicit
+  `upper_wedge_angle: 28.0` to keep the old picture.
+
+### Fixed
+- **The wedge-angle preset dropdown named crystals it did not draw.** Its four entries carried
+  hand-transcribed angles with the Miller ratio inverted, unchanged since they were first written:
+  `{2,0,-2,1}` set 47.300° where that face is at **14.886°**, `{1,0,-1,2}` set 14.700° where it is at
+  **46.756°**, and `{1,0,-1,1}` set 28.000° for **27.996°**. Picking one built a crystal that was not
+  the one the label named. The angles are now computed from the indices, so the label and the number
+  cannot disagree again. ⚠️ Every config saved by picking one of these presets keeps its stored
+  angle — the old number is still there and still renders what it always did; re-pick the preset to
+  take the corrected value.
+- **`{1,0,-1,0}` has left the preset list; `{1,0,-1,3}` (57.912°) takes its place.** `{10-10}` is a
+  prism face and has no wedge angle at all, so its 90.000° was not a rounding error but a
+  category one. What it produced was a plain prism — reachable, then and now, by setting the pyramid
+  height to 0, which is where "no cone on this side" belongs.
 
 ## [4.5.0] - 2026-09-06
 

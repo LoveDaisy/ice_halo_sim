@@ -8,6 +8,7 @@
 
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/miller_wedge.hpp"
 #include "util/fatal.hpp"
 #include "util/logger.hpp"
 
@@ -1426,24 +1427,27 @@ ClosedFormPyramidResult ComputeClosedFormPyramid(int upper_i1, int upper_i4, int
   //   a1 = √3/4 / tan(atan(√3/2 · i4/(i1·c))) but preserves float precision
   // exactly (the production geo3d.cpp path takes a lossy trip through both
   // transcendental functions; this closed-form path does not).
-  // Legality: i1 = 0 means "no cone this side" (matches CreatePyramidMesh's
-  // guard at geo3d.cpp:555, which similarly returns alpha = 0 for i1 = 0).
+  // Legality: i1 = 0 means "no cone this side", which is what ConvertMillerIndexToWedgeAngle
+  // reports as kNoCone and what the wedge path's alpha = 0 means.
+  // WHICH index pairs make a face is asked of the conversion owner, so this path and the
+  // wedge-angle path answer that question the same way; only the NUMBER is computed here, and it
+  // is computed directly from the indices. The two are separable precisely because the verdict
+  // does not need the atan that the value would otherwise have to travel through and back.
+  //
+  // The previous gate here was `isfinite(a1) && a1 > 0`, which its own comment called the "same
+  // effective bounds as the wedge path". It was not: the wedge path drops a face outside
+  // 0.1..89.9 degrees, whose a1 equivalents are 248.1 and 7.6e-4, so this path accepted a whole
+  // band of near-degenerate faces that the very same crystal, built from its wedge angle instead,
+  // would not have had.
+  auto upper = ConvertMillerIndexToWedgeAngle(upper_i1, 0, upper_i4, 3);
+  auto lower = ConvertMillerIndexToWedgeAngle(lower_i1, 0, lower_i4, 3);
   double a1 = -1.0;
   double a2 = -1.0;
-  if (upper_i1 != 0 && h1 > math::kFloatEps) {
+  if (upper.state == MillerConversionState::kValid && h1 > math::kFloatEps) {
     a1 = static_cast<double>(upper_i1) * static_cast<double>(kIceCrystalC) / (2.0 * static_cast<double>(upper_i4));
-    // Sanity gate: reject values outside the legal wedge-angle range's
-    // equivalent a1 (a1 → 0 as alpha → 90°; a1 → ∞ as alpha → 0°). Same
-    // effective bounds as the wedge path.
-    if (!(std::isfinite(a1) && a1 > 0.0)) {
-      a1 = -1.0;
-    }
   }
-  if (lower_i1 != 0 && h3 > math::kFloatEps) {
+  if (lower.state == MillerConversionState::kValid && h3 > math::kFloatEps) {
     a2 = static_cast<double>(lower_i1) * static_cast<double>(kIceCrystalC) / (2.0 * static_cast<double>(lower_i4));
-    if (!(std::isfinite(a2) && a2 > 0.0)) {
-      a2 = -1.0;
-    }
   }
   return ComputeClosedFormPyramidInner(a1, a2, h1, h2, h3, dist);
 }

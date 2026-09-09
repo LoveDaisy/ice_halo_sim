@@ -35,6 +35,7 @@
 // sentence.
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -309,6 +310,38 @@ json ReadOverlayFile(const std::filesystem::path& dir) {
   } catch (const std::exception&) {
     return json::object();
   }
+}
+
+// The saved wedge shortcuts as they landed on disk, read straight rather than through
+// ReadWedgePresetsFromDoc: the write side is what these cases assert on, and going through the
+// production reader would let a reader bug and a writer bug cancel out into a pass.
+std::vector<std::array<int, 3>> ReadSavedWedgePresets(const std::filesystem::path& dir) {
+  std::vector<std::array<int, 3>> out;
+  const json doc = ReadOverlayFile(dir);
+  const auto presets = doc.find("presets");
+  if (presets == doc.end() || !presets->is_object()) {
+    return out;
+  }
+  const auto wedge = presets->find("wedge");
+  if (wedge == presets->end() || !wedge->is_array()) {
+    return out;
+  }
+  for (const json& node : *wedge) {
+    if (!node.is_object()) {
+      continue;
+    }
+    out.push_back({ node.value("h", -999), node.value("k", -999), node.value("l", -999) });
+  }
+  return out;
+}
+
+// Type a triple into the panel's add row. The boxes carry the shared control's ids, which is the
+// point: this drives the very widget the crystal editor's dropdown drives.
+void TypeWedgeIndices(ImGuiTestContext* ctx, int h, int k, int l) {
+  ctx->ItemInputValue("**/##custom_wedge_h", h);
+  ctx->ItemInputValue("**/##custom_wedge_k", k);
+  ctx->ItemInputValue("**/##custom_wedge_l", l);
+  ctx->Yield(2);
 }
 
 // The override file as RAW BYTES, or nullopt when it does not exist.
@@ -2837,6 +2870,172 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::DoOpen(lmc_path);
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.bg_alpha, kFileValue);
+    };
+  }
+
+  // =============================================================================================
+  // presets.wedge — the user's own wedge-angle shortcuts (523.5)
+  //
+  // What these six drive is the SAVE PATH, end to end and through the real widgets: the panel is a
+  // pure editor, so "the list changed" and "the file changed" are two different claims and only the
+  // second one is what the user gets back after a restart.
+  // =============================================================================================
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "a_saved_wedge_preset_reaches_the_file_and_the_dropdown");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "wedge_add_save");
+      panel.OpenOn(gui::DefaultsPanelSection::kPresets);
+
+      // {3,0,-3,2} is not one of the four built-ins, so nothing about this can pass by accident.
+      TypeWedgeIndices(ctx, 3, 0, 2);
+      ctx->ItemClick("**/###wedge_preset_add");
+      ctx->Yield(2);
+
+      // Not saved yet: the add went into the working copy, and the copy model's whole point is that
+      // it stops there.
+      IM_CHECK(ReadSavedWedgePresets(panel.dir()).empty());
+
+      SaveDefaultsPanel(ctx);
+      const std::vector<std::array<int, 3>> on_disk = ReadSavedWedgePresets(panel.dir());
+      IM_CHECK_EQ(on_disk.size(), (size_t)1);
+      IM_CHECK_EQ(on_disk[0][0], 3);
+      IM_CHECK_EQ(on_disk[0][1], 0);
+      IM_CHECK_EQ(on_disk[0][2], 2);
+
+      // ...and it is in the process cache the crystal editor's dropdown reads, without a reload.
+      // Disk and memory are two claims; a Save that moved only one of them is the drift this
+      // panel's "disk first, then memory" contract exists to prevent.
+      bool offered = false;
+      for (const gui::WedgePreset& row : gui::GetWedgePresets()) {
+        if (row.h == 3 && row.l == 2) {
+          offered = true;
+        }
+      }
+      IM_CHECK(offered);
+    };
+  }
+
+  {
+    // Refused BEFORE the write, not filtered out on the way back in: a file that holds a duplicate
+    // the reader hides would tell the user their list contains something it does not.
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "defaults_panel", "a_wedge_preset_that_is_already_built_in_is_not_written_at_all");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "wedge_add_duplicate");
+      panel.OpenOn(gui::DefaultsPanelSection::kPresets);
+
+      // {1,0,-1,1} is the first built-in. The dropdown already offers it.
+      IM_CHECK(gui::IsBuiltInWedgeMillerIndex(1, 0, 1));
+      TypeWedgeIndices(ctx, 1, 0, 1);
+      ctx->ItemClick("**/###wedge_preset_add");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK(ReadSavedWedgePresets(panel.dir()).empty());
+
+      // The same click on a triple that is NOT built-in does write, so the check above is about the
+      // duplicate rather than about the button being dead.
+      TypeWedgeIndices(ctx, 3, 0, 2);
+      ctx->ItemClick("**/###wedge_preset_add");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK_EQ(ReadSavedWedgePresets(panel.dir()).size(), (size_t)1);
+
+      // And adding it a second time is refused too - the same rule, against the user's own list
+      // rather than against the factory one.
+      ctx->ItemClick("**/###wedge_preset_add");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK_EQ(ReadSavedWedgePresets(panel.dir()).size(), (size_t)1);
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "deleting_a_saved_wedge_preset_leaves_the_built_ins");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "wedge_delete");
+      panel.OpenOn(gui::DefaultsPanelSection::kPresets);
+
+      TypeWedgeIndices(ctx, 3, 0, 2);
+      ctx->ItemClick("**/###wedge_preset_add");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK_EQ(ReadSavedWedgePresets(panel.dir()).size(), (size_t)1);
+      const size_t with_user_row = gui::GetWedgePresets().size();
+
+      ctx->ItemClick("**/###wedge_preset_delete_0");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK(ReadSavedWedgePresets(panel.dir()).empty());
+
+      // AC3: deletion reaches the user's row only. The four built-ins are still offered, which is
+      // what stops a user emptying the dropdown into an unusable state.
+      IM_CHECK_EQ(gui::GetWedgePresets().size(), with_user_row - 1);
+      IM_CHECK(gui::GetWedgePresets().size() > 0);
+    };
+  }
+
+  {
+    // The single-commit-point contract (gui-state-governance.md 8.5) for this region: an add that
+    // is not saved must leave the file untouched, byte for byte.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "an_unsaved_wedge_preset_never_reaches_the_file");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "wedge_close_discards");
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+      SaveDefaultsPanel(ctx);  // give the file a body, so "unchanged" is about content and not absence
+      panel.Close();
+      const auto before = ReadOverlayBytes(panel.dir());
+      IM_CHECK(before.has_value());
+
+      panel.OpenOn(gui::DefaultsPanelSection::kPresets);
+      TypeWedgeIndices(ctx, 3, 0, 2);
+      ctx->ItemClick("**/###wedge_preset_add");
+      ctx->Yield(2);
+      panel.Close();
+
+      IM_CHECK_EQ(ReadOverlayBytes(panel.dir()), before);
+      IM_CHECK(ReadSavedWedgePresets(panel.dir()).empty());
+    };
+  }
+
+  {
+    // AC6, stated as an observable: the Add button is gated by the SAME verdict the dropdown's
+    // Apply button is gated by, because it reads the same control's answer. Asserted on the
+    // disabled flag rather than on the message text - the feedback line is submitted with no id.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "the_add_button_is_dead_for_a_triple_the_owner_refuses");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "wedge_add_gate");
+      panel.OpenOn(gui::DefaultsPanelSection::kPresets);
+
+      TypeWedgeIndices(ctx, 3, 0, 2);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/###wedge_preset_add")));
+
+      // k != 0 is a second-order pyramidal face the crystal model cannot express.
+      TypeWedgeIndices(ctx, 3, 1, 2);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/###wedge_preset_add")));
+
+      // h == 0 is "no cone on this side", whose honest angle is 0 and which the wedge field cannot
+      // carry. Refused here for exactly the reason the dropdown refuses it.
+      TypeWedgeIndices(ctx, 0, 0, 2);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/###wedge_preset_add")));
+    };
+  }
+
+  {
+    // A hand-edited file can hold a triple the owner refuses. The load path drops it with a notice,
+    // but the PANEL shows the document, which keeps it verbatim - so the row has to be visible and
+    // deletable. Hiding it would leave the user a file they cannot fix from the UI that wrote it.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "a_hand_edited_wedge_preset_shows_a_warning_and_can_go");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "wedge_bad_row");
+      lumice::test_user_defaults::WriteRawOverlay(panel.dir(), R"({"presets": {"wedge": [{"h": 1, "k": 1, "l": 1}]}})");
+      panel.OpenOn(gui::DefaultsPanelSection::kPresets);
+
+      IM_CHECK(ctx->ItemExists("**/###wedge_preset_warning_0"));
+      ctx->ItemClick("**/###wedge_preset_delete_0");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK(ReadSavedWedgePresets(panel.dir()).empty());
+      IM_CHECK(!ctx->ItemExists("**/###wedge_preset_warning_0"));
     };
   }
 }

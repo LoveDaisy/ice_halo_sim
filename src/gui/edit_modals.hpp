@@ -1,6 +1,11 @@
 #ifndef LUMICE_GUI_EDIT_MODALS_HPP
 #define LUMICE_GUI_EDIT_MODALS_HPP
 
+#include <string>
+#include <vector>
+
+#include "include/lumice.h"
+
 struct GLFWwindow;
 
 namespace lumice::gui {
@@ -94,6 +99,107 @@ void RenderSpectrumModal(GuiState& state);
 // Returns false when no modal is open or the entry index is invalid.
 // Intended for GUI test assertions; production code should not call this.
 bool IsCurrentModalDApplicable();
+
+// One row of the wedge-angle preset dropdown. It declares only the Miller indices (h, l; k is
+// always 0 — that is what the {h,0,-h,l} notation means, not an omission); `label` and `value` are
+// filled in from ConvertMillerIndexToWedgeAngle's answer the first time the table is asked for.
+// Nothing here is a hand-written angle, which is the point: the four constants this replaced had
+// been transcribed with the ratio inverted and stayed wrong from the day they were written.
+//
+// Declared here rather than in the .cpp's anonymous namespace so the unit test can read the same
+// table the dropdown renders, instead of keeping a second copy of it to compare against.
+struct WedgePreset {
+  int h;
+  int l;
+  char label[32];
+  float value;
+};
+
+// The wedge-angle presets a user may pick from: the four built-ins, then whatever this session's
+// personal defaults added (GetUserWedgePresets, user_defaults.hpp), de-duplicated on Miller indices.
+// Both the render path (RenderWedgeTableRow) and the unit test call this one function — there is no
+// test-only variant, because a second entry point is a second thing that can be right while the
+// first is wrong.
+//
+// RECOMPUTED ON EVERY CALL, and BY VALUE for that reason. It used to be a function-local static
+// built once and handed out as a pointer, which was correct while its content was four compile-time
+// constants. It no longer is: a user can add or delete an entry mid-session, so a caller holding
+// the previous call's rows is holding a list that has since changed. Returning a vector makes that
+// contract something the type system enforces rather than something a comment asks the reader to
+// remember. The cost is a handful of atan() calls on the frames a dropdown is open.
+std::vector<WedgePreset> GetWedgePresets();
+
+// A Miller triple in the four-index notation this UI writes everywhere: "{h,k,i,l}", with the
+// redundant i derived as -(h+k) rather than taken from the caller, for the same reason the custom
+// input row displays it rather than accepting it.
+//
+// The single owner of that notation. It is spelled in three places — the dropdown's preset rows,
+// the Settings panel's saved rows, and the same panel's rows for a triple the owner refuses (which
+// FormatWedgePresetLabel below cannot render, since those can carry a non-zero k and have no angle
+// to print). One function so the day the notation changes is one edit.
+std::string FormatMillerIndices(int h, int k, int l);
+
+// The label a preset row shows: the notation above, then the angle in the same precision the wedge
+// slider's input box uses, so the dropdown and the box agree once a preset is picked. k is 0 by
+// construction — a preset only exists for a triple the owner accepted, and it accepts none with a
+// non-zero k.
+//
+// Public because the Settings panel's preset library renders saved entries too.
+std::string FormatWedgePresetLabel(int h, int l, float angle_deg);
+
+// Is this triple one of the four built-in presets? False for every k != 0 (no built-in has one).
+//
+// For the Settings panel, which must refuse to save a shortcut the dropdown already offers. It asks
+// here rather than re-enumerating the built-in table, which is file-local to edit_modals.cpp on
+// purpose: that table is the thing 523.2 had to correct, and a second listing is a second place to
+// correct. (GetWedgePresets() needs no such call — by the time it merges the user's rows the
+// built-ins are already in the list it de-duplicates against.)
+bool IsBuiltInWedgeMillerIndex(int h, int k, int l);
+
+
+// What the wedge dropdown's custom-input row should say about one Miller-index triple, in the form
+// the popup renders it: an angle to show, a message to show beside it, and whether Apply is live.
+//
+// It holds no rule of its own. Every field below is decided by
+// LUMICE_ConvertMillerIndexToWedgeAngle and then looked up on the (state, invalid_index) pair it
+// returns -- see the mapping table in edit_modals.cpp. Nothing here re-reads h/k/l to form a second
+// opinion about whether they are legal, which is the whole point: config, server and GUI each kept
+// a transcription of the bare formula once, and the copies then disagreed with core about what
+// h == 0 means.
+struct CustomWedgeInputFeedback {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INCOMPLETE;
+  // Meaningful for LUMICE_MILLER_VALID and LUMICE_MILLER_NO_CONE only; 0 elsewhere means "no
+  // opinion", not "zero degrees" -- the same contract the C API states for its out_angle_deg.
+  float angle_deg = 0.0f;
+  // True for LUMICE_MILLER_VALID alone. NO_CONE is excluded deliberately, not by omission: its
+  // honest answer is 0 degrees, and the wedge slider's domain starts at 0.1, so writing it would
+  // be silently clamped up into a different crystal. See edit_modals.cpp.
+  bool can_apply = false;
+  // Empty exactly when there is nothing to tell the user (LUMICE_MILLER_VALID).
+  std::string message;
+};
+
+// Declared here rather than left file-local so the unit test calls the very function the popup
+// calls. A test-only second copy of the mapping would be a second thing that can be right while
+// the one users see is wrong.
+CustomWedgeInputFeedback EvaluateCustomWedgeInput(int h, int k, int l);
+
+// The three Miller-index boxes plus their live feedback line, with no confirm button of its own.
+//
+// Split out of the dropdown's custom-input row so the Settings panel's "add a preset" row is the
+// SAME control rather than a second one that looks like it: what a triple means, which grade its
+// message carries and when it may be committed are decided here once, and the caller only decides
+// what its own button does with the verdict (write an angle into a crystal, or append a saved
+// preset).
+//
+// `storage_prefix` keys the boxes' contents in ImGui's per-window storage. Every concurrently live
+// caller must pass a distinct one — Upper A and Lower A already do, because SliderWithPresetEdit
+// runs twice per frame and a shared key would make what the user typed under one reappear under the
+// other.
+//
+// `out_h` / `out_k` / `out_l` receive what is in the boxes right now (never null); the return value
+// is that triple's verdict.
+CustomWedgeInputFeedback RenderMillerIndexInputRow(const char* storage_prefix, int* out_h, int* out_k, int* out_l);
 
 }  // namespace lumice::gui
 

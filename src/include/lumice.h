@@ -1952,6 +1952,46 @@ LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind
                                             LUMICE_RaypathValidationState* out_state, char* out_msg,
                                             size_t msg_buf_size);
 
+// =============== Miller Index Conversion ===============
+// Verdict on one Miller-index triple offered as a pyramidal wedge angle.
+typedef enum LUMICE_MillerConversionState_ {
+  LUMICE_MILLER_VALID,       // Three well-formed indices making a buildable angle
+  LUMICE_MILLER_NO_CONE,     // h == 0: this side has no pyramidal cap; angle is 0
+  LUMICE_MILLER_INCOMPLETE,  // Fewer than three indices supplied; caller still collecting
+  LUMICE_MILLER_INVALID,     // Too many indices, k != 0, a negative index, or an unbuildable angle
+} LUMICE_MillerConversionState;
+
+// Convert Miller indices to a pyramidal wedge angle, and say whether they are legal at all.
+//
+// h/k/l are the reduced three-index wire form -- the same three numbers the `upper_indices` /
+// `lower_indices` JSON arrays hold. The redundant fourth Miller-Bravais index i = -(h+k) is not
+// passed: it is derivable, so accepting it would mean accepting a value that can contradict the
+// other two.
+//
+// provided_count is how many of h/k/l the caller has actually been given. Fewer than three reads
+// as LUMICE_MILLER_INCOMPLETE (a row still being typed into, not an error to show the user); more
+// than three reads as LUMICE_MILLER_INVALID. Slots the count says were not supplied are ignored,
+// whatever was passed in them -- so a GUI can call this on every keystroke with its widgets'
+// current contents and needs no rule of its own for "has the user finished".
+//
+// out_angle_deg is meaningful only for LUMICE_MILLER_VALID and LUMICE_MILLER_NO_CONE; it is set to
+// 0 otherwise, which means "no opinion", not "zero degrees".
+//
+// out_invalid_index names the slot at fault: 0 = h, 1 = k, 2 = l, or -1 when no single slot is.
+// The -1 cases are deliberate: a wrong index count is nobody's slot, and an out-of-range angle
+// comes from the RATIO h:l, where two individually legal integers combine into a face no mesh can
+// carry -- highlighting either one would point the user at a number that is not wrong. May be NULL.
+//
+// This is core's own adjudication, not a description of it. Ask it rather than transcribing the
+// rules: every caller that transcribed the bare formula instead (config, server and GUI each kept
+// a copy) also transcribed its blind spots, and the copies then disagreed with core about what
+// h == 0 means.
+//
+// Returns LUMICE_ERR_NULL_ARG if out_state or out_angle_deg is NULL.
+LUMICE_ErrorCode LUMICE_ConvertMillerIndexToWedgeAngle(int h, int k, int l, int provided_count,
+                                                       LUMICE_MillerConversionState* out_state, float* out_angle_deg,
+                                                       int* out_invalid_index);
+
 // =============== Lens Type ===============
 // Lens projection type. Values match Core's LensParam::LensType enum (index 0-10).
 // Used by GUI to look up per-lens FOV limits without including config/render_config.hpp.
