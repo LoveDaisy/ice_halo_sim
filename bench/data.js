@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788926446249,
+  "lastUpdate": 1788926448701,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ce07b6aea91996dafbf320883cdcd408d861b672",
-          "message": "Merge pull request #230 from LoveDaisy/feat/shape-schema-key-single-source\n\nrefactor: give the crystal shape/axis JSON keys one owner in core",
-          "timestamp": "2026-07-27T17:39:30+08:00",
-          "tree_id": "e1b5c4d911db4ddbe74f30e0e534b9eed7be52b1",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ce07b6aea91996dafbf320883cdcd408d861b672"
-        },
-        "date": 1785145673815,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 80.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 94,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 90.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "19ff683644d3f8e69afc7f9c3226be0b5971d9b1",
           "message": "Merge pull request #231 from LoveDaisy/feat/user-defaults\n\nfeat(gui): user-level defaults layer — generated diff panel + editable axis preset library",
           "timestamp": "2026-07-28T09:03:52+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fe4c0778ad67356b7107c49b9f2d1758751cbab0",
+          "message": "Merge pull request #329 from LoveDaisy/fix/raypath-load-path-syntax-gate\n\nfix(gui): reject malformed raypath summand rows on the .lmc load path",
+          "timestamp": "2026-09-09T11:50:12+08:00",
+          "tree_id": "85ae4abe8324f97a506977a0b6b5e2f1ee1a6194",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fe4c0778ad67356b7107c49b9f2d1758751cbab0"
+        },
+        "date": 1788926447909,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 67.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 81.3,
             "unit": "%"
           }
         ]
