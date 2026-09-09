@@ -99,12 +99,16 @@ jobs:
           $pythonDir = Split-Path (Get-Command python).Source
           echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(Get-Command python | Select-Object -ExpandProperty Source)" >> $env:GITHUB_ENV
 
+      # Same as ci.yml: one broken third-party index fails the whole `apt-get update`, and
+      # nothing here installs a Google package. See ci.yml's build job for the incident.
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
-        run: >
-          sudo apt-get update && sudo apt-get install -y
-          libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-          libgtk-3-dev
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgtk-3-dev
 
       # CUDA toolkit for the CUDA-enabled Windows artifact (nvcc + cudart).
       # Pinned to 12.6.3 to match ci.yml's windows-cuda-compile gate; supports
