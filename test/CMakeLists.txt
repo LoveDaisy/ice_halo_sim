@@ -95,6 +95,7 @@ add_executable(unit_correctness_test
   # test_render_consumer_print_mode.cpp asserts the pixels the operator writes; this one asserts
   # the composite it declines to produce and the notices it emits for the fields it drops.
   "${PROJ_TEST_DIR}/unit-correctness/server/test_print_mode_colour_exclusions.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_contrast_headroom_warning.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_grid.cpp"

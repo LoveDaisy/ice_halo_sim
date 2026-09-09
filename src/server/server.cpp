@@ -33,6 +33,8 @@
 #include "server/scene_batch_publish.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
+#include "util/color_space.hpp"
+#include "util/contrast_headroom.hpp"
 #include "util/cpu_info.hpp"
 #include "util/env_knobs.hpp"
 #include "util/logger.hpp"
@@ -715,6 +717,52 @@ void WarnPrintModeIgnoresColourFields(Logger& logger, const std::map<IdType, Ren
   }
 }
 
+// The other half of doc/print-mode-subtractive-ink.md §8, on the side that has no panel to put a
+// notice in: a config whose zero-energy colour has run out of headroom renders a picture that is
+// not there, and `Lumice -f that.json` would otherwise write the file and exit 0 with nothing said.
+//
+// The judgement itself is NOT made here — `ContrastHeadroomIsLow` is the single predicate the GUI
+// also calls (util/contrast_headroom.hpp), so there is one threshold in the tree and not two. What
+// is local to this side is the conversion: core holds both grounds as LINEAR RGB while the predicate
+// is defined on the sRGB encoding the output actually lands in, so each component is encoded first.
+//
+// Which ground is read follows `tone_`, because only one of the two is the ground under either law:
+// under screen a pitch-black paper is irrelevant, under print a blinding sky is. Reading both would
+// warn about a field the live operator never touches.
+void WarnLowContrastHeadroom(Logger& logger, const std::map<IdType, RenderConfig>& renderers) {
+  for (const auto& [id, rc] : renderers) {
+    const bool print = rc.tone_ == RenderConfig::kPrint;
+    const float* ground_linear = print ? rc.paper_ : rc.background_;
+    float ground_srgb[3]{};
+    for (int j = 0; j < 3; j++) {
+      ground_srgb[j] = LinearToSrgb(ground_linear[j]);
+    }
+    const ToneLawLimit limit = print ? ToneLawLimit::kBlack : ToneLawLimit::kWhite;
+    if (!ContrastHeadroomIsLow(ground_srgb, limit)) {
+      continue;
+    }
+    // Two wordings rather than one parameterised line: each has to say WHY the image looks broken,
+    // and the two reasons are not the same sentence with a word swapped. Both name the fix, because
+    // the user's starting position is "I changed nothing and the halo is gone".
+    if (print) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] is tone=print and its paper is within {} 8-bit levels of "
+                "black. Ink can only ever darken the paper and never reaches black, so every feature "
+                "comes out within those few levels of the page and the image will look blank. Lighten "
+                "the paper, or switch tone back to screen.",
+                id, kContrastHeadroomWarnLevels);
+    } else {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] is tone=screen and its background is within {} 8-bit levels "
+                "of white. Light is ADDED to that background and clamps at white, so a halo has "
+                "almost nowhere left to go and will be invisible — while grid and overlay lines, "
+                "which are blended rather than added, stay perfectly visible and make it look as "
+                "though the simulation failed. Darken the background, or switch tone to print.",
+                id, kContrastHeadroomWarnLevels);
+    }
+  }
+}
+
 }  // namespace
 
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
@@ -795,6 +843,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // it never changes `new_config` and never fails the commit: none of the three is a configuration
   // ERROR, they are configurations whose colour half print has no way to show.
   WarnPrintModeIgnoresColourFields(logger_, new_config.renderers_, class_table);
+
+  // §8's predicate, applied at the same point and with the same standing: diagnostic only, never a
+  // reason to fail the commit. A ground with no headroom left is a legal configuration that renders
+  // an image nobody can read, which is precisely why it has to be said out loud rather than refused.
+  WarnLowContrastHeadroom(logger_, new_config.renderers_);
 
   // Stop → rebuild consumers → Start
   auto stop_start = std::chrono::steady_clock::now();
