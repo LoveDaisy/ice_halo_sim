@@ -153,6 +153,18 @@ it was thinking of and false of the C struct beside it.
   and `h = 0`, which says "no pyramidal cap on this side" and belongs in the pyramid height rather
   than in an angle. Nothing is stored: the dropdown writes the angle and no Miller indices enter
   the document.
+- **The Settings panel keeps the wedge angles you use.** A new region under Settings > Presets
+  saves crystal faces by their Miller indices, and everything saved there is offered in the
+  Crystal editor's Upper A / Lower A dropdowns from then on, across restarts. The add row is the
+  same `{h,k,i,l}` control the dropdown carries, refusing the same triples for the same stated
+  reasons. Entries are stored as indices rather than as degrees, so a saved face keeps naming the
+  same face if the ice constants are ever corrected; a preset has no name of its own for the same
+  reason — the indices are the name. The four built-in presets are unaffected and cannot be
+  deleted: your list is added to them, and a triple they already cover is not saved twice. Nothing
+  is written until you press Save, and closing the panel discards the change. A file edited by
+  hand can hold a face that names no buildable cone; the panel shows that row with a warning and
+  a live delete button rather than hiding it, and loading one says which entries it dropped and
+  why.
 
 ### Changed
 - **`upper_indices` / `lower_indices` are now judged rather than partly ignored.** These arrays used

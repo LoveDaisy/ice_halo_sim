@@ -116,6 +116,7 @@ GROUPS: dict[str, ReferenceGroup] = {
             "no_changes",
             "presets_expanded",
             "presets_warning",
+            "wedge_presets",
         ],
         modes=[None],
         tmp_prefix="lumice_defaults_panel_",

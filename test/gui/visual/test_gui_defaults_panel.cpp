@@ -52,6 +52,7 @@ enum class SceneKind {
   kNoChanges,        // nothing differs from factory — every row unchecked
   kPresetsExpanded,  // §1 open with one preset unfolded — the nine typed cells and their widths
   kPresetsWarning,   // the same, over an out-of-range stored value, so the warning column is filled
+  kWedgePresets,     // the wedge-shortcut region: saved rows with their delete buttons, plus the add row
 };
 
 struct DefaultsPanelScene {
@@ -76,6 +77,7 @@ const DefaultsPanelScene kScenes[] = {
   { "no_changes",       SceneKind::kNoChanges,       kDeterministicThresholdDb },
   { "presets_expanded", SceneKind::kPresetsExpanded, kDeterministicThresholdDb },
   { "presets_warning",  SceneKind::kPresetsWarning,  kDeterministicThresholdDb },
+  { "wedge_presets",    SceneKind::kWedgePresets,    kDeterministicThresholdDb },
 };
 // clang-format on
 constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -153,6 +155,20 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
         // panel and land in the capture.
         gui::TakeUserDefaultsDowngradeCount();
         gui::TakeUserDefaultsDowngradeNotices();
+      } else if (scene.kind == SceneKind::kWedgePresets) {
+        // Two saved shortcuts on disk, so the region opens showing its own shape — the derived
+        // labels, a delete button per row, and the add row underneath — rather than an empty list
+        // that only proves the heading renders. Neither is a built-in, so neither is de-duplicated
+        // away. The axis library above is left at its factory values on purpose: this scene is
+        // about the region added below it, and giving both halves something to show would make a
+        // future re-shoot ambiguous about which half moved.
+        json doc;
+        doc["presets"]["wedge"] = json::array({
+            json{ { "h", 3 }, { "k", 0 }, { "l", 2 } },
+            json{ { "h", 2 }, { "k", 0 }, { "l", 3 } },
+        });
+        IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+        gui::g_state = gui::MakeNewDocumentState();
       } else if (scene.kind == SceneKind::kPresetsExpanded) {
         json doc;
         doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;  // in range: the "(mine)" label, no warning
@@ -162,12 +178,18 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
         ApplyEdits();
       }
 
-      const bool presets_scene = scene.kind == SceneKind::kPresetsExpanded || scene.kind == SceneKind::kPresetsWarning;
+      const bool presets_scene = scene.kind == SceneKind::kPresetsExpanded ||
+                                 scene.kind == SceneKind::kPresetsWarning || scene.kind == SceneKind::kWedgePresets;
       gui::OpenDefaultsPanel(
           gui::g_state, presets_scene ? gui::DefaultsPanelSection::kPresets : gui::DefaultsPanelSection::kSettings);
       ctx->Yield(4);
 
-      if (presets_scene) {
+      if (scene.kind == SceneKind::kWedgePresets) {
+        // Nothing to unfold: the wedge region is not a TreeNode, so it is visible as soon as the
+        // Presets section is. The axis presets above it stay folded, which is also what keeps this
+        // scene's height stable against a change to their contents.
+        ctx->Yield(3);
+      } else if (presets_scene) {
         // Column unfolded: the three axis rows, the disabled type/mean cells, the live std cell and
         // the warning column beside it. One preset is enough — the other five render through the
         // same two row functions, and unfolding all six would push the table past the panel.
