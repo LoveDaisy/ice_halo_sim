@@ -441,6 +441,19 @@ TEST(MillerIndexFallback, IrreducibleIndicesConvertCorrectly) {
   EXPECT_NEAR(p.wedge_angle_l_, 28.00f, 0.01f);  // {1,0,1} → 28.00°
 }
 
+// h == 0 means "this side has no pyramidal cap", which is what every core-side Miller overload
+// already answers (geo3d.cpp / crystal.cpp return alpha = 0, and the closed-form path returns its
+// no-cone sentinel). The config layer used to answer 28.0 instead -- the SAME input decided in two
+// opposite directions by two implementations of one conversion.
+TEST(MillerIndexFallback, ZeroHMeansNoConeNotDefaultAngle) {
+  auto j = MakePyramidJson(1, { 0, 0, 1 }, { 1, 0, 1 });
+  auto c = j.get<CrystalConfig>();
+  const auto& p = std::get<PyramidCrystalParam>(c.param_);
+
+  EXPECT_NEAR(p.wedge_angle_u_, 0.0f, 1e-5f);    // {0,0,1} → no cone
+  EXPECT_NEAR(p.wedge_angle_l_, 28.00f, 0.01f);  // {1,0,1} → 28.00°
+}
+
 TEST(FaceDistanceRoundTrip, NoScalingApplied) {
   // Parse once: face_distance values should stay unchanged (no kSqrt3_4 scaling)
   auto j1 = MakePyramidJson(1, { 2, 0, 2 }, { 1, 0, 1 });
