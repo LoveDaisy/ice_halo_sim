@@ -232,22 +232,22 @@ constexpr struct {
 };
 constexpr int kWedgePresetCount = static_cast<int>(std::size(kWedgePresetIndices));
 
-// The custom Miller-index row at the bottom of the wedge-angle dropdown. Returns true on the frame
-// the user applies a converted angle to `*value`.
-//
-// `popup_id` keys the four boxes' contents. SliderWithPresetEdit runs twice per frame — once for
-// Upper A, once for Lower A — so a plain `static int` triple here would be one set of boxes shared
-// by both rows, and what the user typed under Upper would silently reappear under Lower. ImGui's
-// per-window state storage gives each popup its own copy for free, and keeps it across a
-// close/reopen without any reset bookkeeping of ours.
-bool RenderCustomWedgeInput(const char* popup_id, float* value) {
+}  // namespace
+
+// See edit_modals.hpp for the contract. The `storage_prefix` rule stated there is what makes this
+// function reusable at all: SliderWithPresetEdit runs twice per frame — once for Upper A, once for
+// Lower A — so a plain `static int` triple here would be one set of boxes shared by both rows, and
+// what the user typed under Upper would silently reappear under Lower. ImGui's per-window state
+// storage gives each caller its own copy for free, and keeps it across a close/reopen without any
+// reset bookkeeping of ours.
+CustomWedgeInputFeedback RenderMillerIndexInputRow(const char* storage_prefix, int* out_h, int* out_k, int* out_l) {
   constexpr float kIndexInputWidth = 46.0f;
   constexpr float kMessageWrapWidth = 260.0f;
 
   ImGuiStorage* storage = ImGui::GetStateStorage();
   char key_buf[96];
   auto slot_key = [&](const char* suffix) {
-    std::snprintf(key_buf, sizeof(key_buf), "%s_custom_%s", popup_id, suffix);
+    std::snprintf(key_buf, sizeof(key_buf), "%s_custom_%s", storage_prefix, suffix);
     return ImGui::GetID(key_buf);
   };
   const ImGuiID h_key = slot_key("h");
@@ -316,6 +316,23 @@ bool RenderCustomWedgeInput(const char* popup_id, float* value) {
     ImGui::PopStyleColor();
     ImGui::PopTextWrapPos();
   }
+
+  *out_h = h;
+  *out_k = k;
+  *out_l = l;
+  return fb;
+}
+
+namespace {
+
+// The custom Miller-index row at the bottom of the wedge-angle dropdown: the shared input row above,
+// plus the one thing that is specific to this caller — an Apply button that writes the converted
+// angle into `*value`. Returns true on the frame the user applies one.
+bool RenderCustomWedgeInput(const char* popup_id, float* value) {
+  int h = 0;
+  int k = 0;
+  int l = 0;
+  const CustomWedgeInputFeedback fb = RenderMillerIndexInputRow(popup_id, &h, &k, &l);
 
   bool applied = false;
   ImGui::BeginDisabled(!fb.can_apply);
@@ -422,38 +439,91 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
 }  // namespace
 
-const WedgePreset* GetWedgePresets(int* out_count) {
-  // A function-local static: initialised once, on first use, and thread-safely so since C++11 —
-  // no `built` flag to test on every call and no build step the render entry point has to remember
-  // to make. The angles cannot be constexpr because the conversion goes through atan(), which is
-  // the whole reason this table used to be transcribed by hand.
-  static const auto kPresets = [] {
-    std::array<WedgePreset, kWedgePresetCount> presets{};
-    for (int i = 0; i < kWedgePresetCount; ++i) {
-      WedgePreset& p = presets[static_cast<size_t>(i)];
-      p.h = kWedgePresetIndices[i].h;
-      p.l = kWedgePresetIndices[i].l;
-      LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
-      float angle = 0.0f;
-      const LUMICE_ErrorCode err = LUMICE_ConvertMillerIndexToWedgeAngle(p.h, 0, p.l, 3, &state, &angle, nullptr);
-      // A built-in preset naming indices the owner will not build is a typo in the table above, not
-      // a runtime condition: there is no user input on this path and nothing to degrade to. The
-      // unit test is the defence that survives NDEBUG; this assert just fails it loudly and early
-      // in a debug build. Both read the same table, so neither can be right while the other is not.
-      assert(err == LUMICE_OK && state == LUMICE_MILLER_VALID && "built-in wedge preset must be buildable");
-      (void)err;
-      (void)state;
-      p.value = angle;
-      // Precision must match the fmt SliderWithPresetEdit is called with (currently "%.3f"), so the
-      // number in the dropdown and the number in the input box agree once a preset is picked.
-      std::snprintf(p.label, sizeof(p.label), "{%d,0,%d,%d} %.3f\xc2\xb0", p.h, -p.h, p.l, static_cast<double>(angle));
-    }
-    return presets;
-  }();
-  if (out_count) {
-    *out_count = kWedgePresetCount;
+std::string FormatWedgePresetLabel(int h, int l, float angle_deg) {
+  char buf[64];
+  // Precision must match the fmt SliderWithPresetEdit is called with (currently "%.3f"), so the
+  // number in the dropdown and the number in the input box agree once a preset is picked. The
+  // degree sign is written as its UTF-8 bytes; it is inside the default font's glyph range, unlike
+  // an em dash (see EvaluateCustomWedgeInput's messages).
+  std::snprintf(buf, sizeof(buf), "{%d,0,%d,%d} %.3f\xc2\xb0", h, -h, l, static_cast<double>(angle_deg));
+  return buf;
+}
+
+bool IsBuiltInWedgeMillerIndex(int h, int k, int l) {
+  if (k != 0) {
+    return false;  // no built-in has one; {h,0,-h,l} is what the labels say
   }
-  return kPresets.data();
+  for (const auto& entry : kWedgePresetIndices) {
+    if (entry.h == h && entry.l == l) {
+      return true;
+    }
+  }
+  return false;
+}
+
+namespace {
+
+// Fill one row from its indices. The angle and the label both come from this single conversion, so
+// a row whose label disagrees with its value is not representable.
+void FillWedgePresetRow(WedgePreset& row, int h, int l, float angle_deg) {
+  row.h = h;
+  row.l = l;
+  row.value = angle_deg;
+  const std::string label = FormatWedgePresetLabel(h, l, angle_deg);
+  std::snprintf(row.label, sizeof(row.label), "%s", label.c_str());
+}
+
+}  // namespace
+
+std::vector<WedgePreset> GetWedgePresets() {
+  std::vector<WedgePreset> presets;
+  presets.reserve(static_cast<size_t>(kWedgePresetCount) + GetUserWedgePresets().size());
+
+  for (int i = 0; i < kWedgePresetCount; ++i) {
+    const int h = kWedgePresetIndices[i].h;
+    const int l = kWedgePresetIndices[i].l;
+    LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+    float angle = 0.0f;
+    const LUMICE_ErrorCode err = LUMICE_ConvertMillerIndexToWedgeAngle(h, 0, l, 3, &state, &angle, nullptr);
+    // A built-in preset naming indices the owner will not build is a typo in the table above, not
+    // a runtime condition: there is no user input on this path and nothing to degrade to. The
+    // unit test is the defence that survives NDEBUG; this assert just fails it loudly and early
+    // in a debug build. Both read the same table, so neither can be right while the other is not.
+    assert(err == LUMICE_OK && state == LUMICE_MILLER_VALID && "built-in wedge preset must be buildable");
+    (void)err;
+    (void)state;
+    presets.emplace_back();
+    FillWedgePresetRow(presets.back(), h, l, angle);
+  }
+
+  // The user's saved shortcuts, appended — never substituted for the built-ins. If a factory value
+  // is ever corrected again the user follows it, and no list can be emptied into an unusable state.
+  for (const WedgeMillerTriple& triple : GetUserWedgePresets()) {
+    LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+    float angle = 0.0f;
+    (void)LUMICE_ConvertMillerIndexToWedgeAngle(triple.h, triple.k, triple.l, 3, &state, &angle, nullptr);
+    if (state != LUMICE_MILLER_VALID) {
+      // NOT the assert the built-in loop uses, and the difference is the point: these indices came
+      // from a file a user can edit, so an unbuildable one is input rather than a typo in this
+      // source. The load path (ParseWedgePresetOverrides) already drops them with a notice, which
+      // makes this branch unreachable in practice — but "unreachable because another layer filters
+      // it" is a reason to skip the row, not a reason to abort the process if that layer changes.
+      //
+      // It is also what makes the (h, l) de-duplication below sound: VALID implies k == 0, so a row
+      // reaching it cannot be a distinct triple that merely shares h and l.
+      continue;
+    }
+    // De-duplicate against everything already listed: the built-ins first (a file repeating a
+    // factory row must not show it twice), then the surviving user rows against each other.
+    const bool already_listed = std::any_of(
+        presets.begin(), presets.end(), [&](const WedgePreset& row) { return row.h == triple.h && row.l == triple.l; });
+    if (already_listed) {
+      continue;
+    }
+    presets.emplace_back();
+    FillWedgePresetRow(presets.back(), triple.h, triple.l, angle);
+  }
+  return presets;
 }
 
 namespace {
@@ -831,9 +901,11 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   ImGui::TableNextColumn();  // Parameter
   ShapeTableParamLabel(label);
   ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
-  int preset_count = 0;
-  const WedgePreset* presets = GetWedgePresets(&preset_count);
-  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, presets, preset_count,
+  // Fetched fresh every frame this row paints: the list now carries the user's saved shortcuts, so
+  // it can change between frames (see GetWedgePresets in edit_modals.hpp).
+  const std::vector<WedgePreset> presets = GetWedgePresets();
+  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, presets.data(),
+                                      static_cast<int>(presets.size()),
                                       /*trailing_label=*/false);
   // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
   // columns as intentionally-empty cells (Sync / Rand / Spread). Driven by the shared constant

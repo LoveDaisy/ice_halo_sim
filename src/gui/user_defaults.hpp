@@ -481,6 +481,88 @@ std::string FormatAxisPresetStd(float value);
 // process: without it, one test's overrides would leak into the next.
 void ResetUserAxisPresetOverrides();
 
+// --------------------------------------------------------------------------------------------------
+// Preset library, second namespace-2 member: presets.wedge — the user's own wedge-angle shortcuts.
+//
+// Same RECIPE as presets.axis above (a set of named Read/Write/Erase*FromDoc primitives plus one
+// process-wide cache, rather than a generic per-field registry — gui-state-governance.md §8.3 puts
+// the re-evaluation of a registry at the THIRD member, and this is the second). Three structural
+// differences make it a different SHAPE, so nothing below is a copy of the axis code:
+//
+//   1. presets.axis overrides a scalar on a FIXED set of built-in rows, indexed by enum. This is a
+//      variable-length list the user adds to and deletes from, so the stored form is an ARRAY, not
+//      a keyed object, and the write primitive replaces the whole subtree instead of one leaf.
+//   2. There is no clamp. An axis std outside its domain is pulled to the nearest value that keeps
+//      the preset recognisable; a Miller triple either names a buildable cone face or it does not,
+//      and the verdict belongs to LUMICE_ConvertMillerIndexToWedgeAngle (reached through
+//      EvaluateCustomWedgeInput, edit_modals.hpp) rather than to a rule restated here.
+//   3. ⭐ NO SEMANTIC-DRIFT DISCRIMINATOR IS NEEDED HERE, and adding one later would be cargo cult.
+//      The warning on kUserDefaultsOverlaySchemaVersionKey above is about presets.axis storing a
+//      BARE VALUE whose meaning is decided elsewhere: a stored 0.7 means "Column" only because
+//      ClassifyAxisPreset's thresholds say so today, so moving those thresholds silently re-reads
+//      every stored file. These entries store the IDENTITY ITSELF. {h,k,l} is what the user picked;
+//      the angle is derived on every read. Should kIceCrystalC be corrected, a stored triple
+//      automatically means the new, correct angle — which is the point of storing indices rather
+//      than degrees, and is why no probe bit has to be planted ahead of that change.
+// --------------------------------------------------------------------------------------------------
+
+// One saved wedge-angle shortcut, as Miller indices. k is stored even though every buildable triple
+// has k == 0 (the {h,0,-h,l} notation the labels use says so) — the owner's C API takes all three
+// and refuses the ones it cannot build, and dropping k here would mean this struct could not carry
+// what a hand-edited file actually contains, i.e. the panel could not show the user the bad row it
+// is being asked to delete.
+//
+// A named struct rather than a tuple or a bare int[3] because it crosses the .hpp/.cpp boundary and
+// appears in test assertions; an anonymous shape there has already cost this scrum one round.
+struct WedgeMillerTriple {
+  int h = 0;
+  int k = 0;
+  int l = 0;
+};
+
+inline bool operator==(const WedgeMillerTriple& a, const WedgeMillerTriple& b) {
+  return a.h == b.h && a.k == b.k && a.l == b.l;
+}
+inline bool operator!=(const WedgeMillerTriple& a, const WedgeMillerTriple& b) {
+  return !(a == b);
+}
+
+// The wedge half of an override DOCUMENT, with no IO: read / write / erase presets.wedge.
+//
+// The read is RAW, in the same sense ReadAxisPresetZenithStdFromDoc is raw and for a sharper
+// reason: it validates JSON SHAPE (an array of objects with three integer fields) and nothing else.
+// It does NOT ask whether a triple converts, and it does NOT call NoteUserDefaultsDowngrade. The
+// defaults panel calls it every frame it paints the list, and a notice channel driven from a render
+// path would file the same complaint sixty times a second — one visible bug used to cover another.
+// Deciding which triples are usable is the load path's job (see MakeNewDocumentState), and showing
+// the unusable ones is the panel's.
+//
+// The write replaces the whole presets.wedge subtree in one assignment. Still surgical in the sense
+// that matters: presets.axis, the app preferences and the GuiState half of the document survive by
+// construction. An empty list ERASES the key instead of writing `[]`, so a file that has been
+// cleared does not keep a `"presets": {"wedge": []}` skeleton — the same pruning
+// EraseAxisPresetZenithStdFromDoc does for its parents.
+std::vector<WedgeMillerTriple> ReadWedgePresetsFromDoc(const nlohmann::json& doc);
+void WriteWedgePresetsToDoc(nlohmann::json& doc, const std::vector<WedgeMillerTriple>& presets);
+void EraseWedgePresetsFromDoc(nlohmann::json& doc);
+
+// The user's saved wedge shortcuts for THIS session: what the last load or the last Save put in the
+// process-wide cache. GetWedgePresets() (edit_modals.hpp) appends these to the four built-ins.
+const std::vector<WedgeMillerTriple>& GetUserWedgePresets();
+
+// Point the cache at a new list without touching any file. Whole-list replacement, never a partial
+// edit — for a caller that has ALREADY committed the document (the defaults panel writes its whole
+// working copy in one go, so by the time it calls this the list is on disk). The same "disk first,
+// then memory" contract AdoptAxisPresetZenithStdOverrideInMemory states, and for the same reason:
+// memory that leads disk is how "what this session resolves" and "what the next launch reads" drift
+// apart.
+void AdoptWedgePresetOverridesInMemory(std::vector<WedgeMillerTriple> presets);
+
+// Drop the loaded wedge shortcuts. Same role as ResetUserAxisPresetOverrides: MakeNewDocumentState()
+// replaces the list unconditionally on every call and so does not need this, but a single-process
+// test binary does — without it one case's list leaks into the next.
+void ResetUserWedgePresets();
+
 // Write `doc` to `<dir>/user_defaults.json`, creating `dir` if needed. WHAT goes in `doc` is
 // the caller's business (the defaults panel decides which keys the user adopted); this only
 // owns "given a document, put it on disk". Returns false + GUI_LOG_WARNING on failure.

@@ -2,6 +2,7 @@
 #define LUMICE_GUI_EDIT_MODALS_HPP
 
 #include <string>
+#include <vector>
 
 #include "include/lumice.h"
 
@@ -114,11 +115,37 @@ struct WedgePreset {
   float value;
 };
 
-// The wedge-angle presets, built on first call and reused after. Both the render path
-// (RenderWedgeTableRow) and the unit test call this one function — there is no test-only variant,
-// because a second entry point is a second thing that can be right while the first is wrong.
-// `out_count` may be null.
-const WedgePreset* GetWedgePresets(int* out_count);
+// The wedge-angle presets a user may pick from: the four built-ins, then whatever this session's
+// personal defaults added (GetUserWedgePresets, user_defaults.hpp), de-duplicated on Miller indices.
+// Both the render path (RenderWedgeTableRow) and the unit test call this one function — there is no
+// test-only variant, because a second entry point is a second thing that can be right while the
+// first is wrong.
+//
+// RECOMPUTED ON EVERY CALL, and BY VALUE for that reason. It used to be a function-local static
+// built once and handed out as a pointer, which was correct while its content was four compile-time
+// constants. It no longer is: a user can add or delete an entry mid-session, so a caller holding
+// the previous call's rows is holding a list that has since changed. Returning a vector makes that
+// contract something the type system enforces rather than something a comment asks the reader to
+// remember. The cost is a handful of atan() calls on the frames a dropdown is open.
+std::vector<WedgePreset> GetWedgePresets();
+
+// The label a preset row shows: "{h,0,-h,l} X.XXX°", with the angle in the same precision the wedge
+// slider's input box uses, so the dropdown and the box agree once a preset is picked.
+//
+// Public because the Settings panel's preset library renders saved entries too, and the format
+// string must have exactly one home — a second copy in defaults_panel.cpp would be a second thing
+// to remember on the day the notation changes.
+std::string FormatWedgePresetLabel(int h, int l, float angle_deg);
+
+// Is this triple one of the four built-in presets? False for every k != 0 (no built-in has one).
+//
+// For the Settings panel, which must refuse to save a shortcut the dropdown already offers. It asks
+// here rather than re-enumerating the built-in table, which is file-local to edit_modals.cpp on
+// purpose: that table is the thing 523.2 had to correct, and a second listing is a second place to
+// correct. (GetWedgePresets() needs no such call — by the time it merges the user's rows the
+// built-ins are already in the list it de-duplicates against.)
+bool IsBuiltInWedgeMillerIndex(int h, int k, int l);
+
 
 // What the wedge dropdown's custom-input row should say about one Miller-index triple, in the form
 // the popup renders it: an angle to show, a message to show beside it, and whether Apply is live.
@@ -146,6 +173,23 @@ struct CustomWedgeInputFeedback {
 // calls. A test-only second copy of the mapping would be a second thing that can be right while
 // the one users see is wrong.
 CustomWedgeInputFeedback EvaluateCustomWedgeInput(int h, int k, int l);
+
+// The three Miller-index boxes plus their live feedback line, with no confirm button of its own.
+//
+// Split out of the dropdown's custom-input row so the Settings panel's "add a preset" row is the
+// SAME control rather than a second one that looks like it: what a triple means, which grade its
+// message carries and when it may be committed are decided here once, and the caller only decides
+// what its own button does with the verdict (write an angle into a crystal, or append a saved
+// preset).
+//
+// `storage_prefix` keys the boxes' contents in ImGui's per-window storage. Every concurrently live
+// caller must pass a distinct one — Upper A and Lower A already do, because SliderWithPresetEdit
+// runs twice per frame and a shared key would make what the user typed under one reappear under the
+// other.
+//
+// `out_h` / `out_k` / `out_l` receive what is in the boxes right now (never null); the return value
+// is that triple's verdict.
+CustomWedgeInputFeedback RenderMillerIndexInputRow(const char* storage_prefix, int* out_h, int* out_k, int* out_l);
 
 }  // namespace lumice::gui
 

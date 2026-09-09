@@ -16,6 +16,7 @@
 #include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
 #include "gui/destructive_style.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/field_editor_registry.hpp"
 #include "gui/panels.hpp"
 #include "gui/theme.hpp"
@@ -356,6 +357,11 @@ bool CommitCopy(const GuiState& state) {
       AdoptAxisPresetZenithStdOverrideInMemory(entry.id, after);
     }
   }
+  // The wedge shortcuts follow the same disk-first rule, but as a whole-list adoption rather than a
+  // per-entry diff. The axis loop above pushes only what changed because re-parsing its half would
+  // re-clamp untouched values and file a duplicate downgrade notice for each; there is no such
+  // hazard here, since ReadWedgePresetsFromDoc judges nothing and records nothing.
+  AdoptWedgePresetOverridesInMemory(ReadWedgePresetsFromDoc(next));
   g_copy_doc = std::move(next);
   g_snapshot_doc = g_copy_doc;
   return true;
@@ -920,6 +926,112 @@ void RenderPresetEntry(const AxisPresetEntry& entry) {
   ImGui::TreePop();
 }
 
+// ------------------------------------------------------------------------------------------------
+// presets.wedge — the user's own wedge-angle shortcuts.
+//
+// A DIFFERENT SHAPE from the axis library above, not a second instance of it. The axis library
+// shows all six built-in presets because each has a value the user can retune; a wedge preset has
+// no adjustable field at all — the angle is derived from the indices — so there is nothing to show
+// about a built-in one, and the four of them stay where they are usable, in the crystal editor's
+// dropdown. What this region manages is therefore the list the user has ADDED, which is why it is
+// an add row plus a delete-per-row list rather than a fold-per-preset tree.
+//
+// Like every other edit in this panel it touches only g_copy_doc; Save is the one write.
+// ------------------------------------------------------------------------------------------------
+
+// The saved list as the working copy currently holds it. Read fresh each frame, never cached:
+// g_copy_doc IS the state, exactly as the checkbox-free preset edits above treat it.
+std::vector<WedgeMillerTriple> CopyWedgePresets() {
+  return ReadWedgePresetsFromDoc(g_copy_doc);
+}
+
+// One saved row. Returns true when the user asked to delete it.
+//
+// The label and the validity verdict are recomputed here from the indices rather than stored:
+// that is the whole reason this feature stores {h,k,l} and not degrees. A row whose triple the
+// owner refuses (only reachable by hand-editing the file — the load path drops such rows with a
+// notice, but this panel shows the DOCUMENT, which keeps them verbatim) is shown with a warning
+// and a live delete button, not hidden: hiding it would leave the user a file they cannot fix from
+// the UI that wrote it.
+bool RenderWedgePresetRow(size_t index, const WedgeMillerTriple& triple) {
+  const CustomWedgeInputFeedback fb = EvaluateCustomWedgeInput(triple.h, triple.k, triple.l);
+
+  const std::string delete_id = ICON_FA_TRASH "###wedge_preset_delete_" + std::to_string(index);
+  const bool deleted = ImGui::Button(delete_id.c_str());
+  ImGui::SameLine();
+
+  if (fb.can_apply) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(FormatWedgePresetLabel(triple.h, triple.l, fb.angle_deg).c_str());
+  } else {
+    // A Selectable rather than plain text, for the same reason the axis warning cell is one: the
+    // icon needs a hover explanation, and text carries no item to hover — nor an id, which is also
+    // what lets a test say "this row is showing a warning" without reading pixels.
+    const std::string warning_id = ICON_FA_TRIANGLE_EXCLAMATION "###wedge_preset_warning_" + std::to_string(index);
+    ImGui::Selectable(warning_id.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(24.0f, 0.0f));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", fb.message.c_str());
+    }
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("{%d,%d,%d,%d}", triple.h, triple.k, -(triple.h + triple.k), triple.l);
+  }
+  return deleted;
+}
+
+void RenderWedgePresetLibrary() {
+  ImGui::Separator();
+  // ASCII only, like every string in this feature: theme.cpp loads the body font without a glyph
+  // range, so it gets Basic Latin plus Latin-1. The degree sign the labels carry is inside it; an
+  // em dash is not.
+  ImGui::TextWrapped(
+      "Save the crystal faces you use often. Each is stored as its Miller indices, so it keeps "
+      "meaning the same face if the ice constants are ever corrected. The four built-in presets "
+      "are always offered and are not listed here.");
+
+  std::vector<WedgeMillerTriple> saved = CopyWedgePresets();
+  for (size_t i = 0; i < saved.size(); ++i) {
+    ImGui::PushID(static_cast<int>(i));
+    const bool deleted = RenderWedgePresetRow(i, saved[i]);
+    ImGui::PopID();
+    if (deleted) {
+      saved.erase(saved.begin() + static_cast<std::ptrdiff_t>(i));
+      WriteWedgePresetsToDoc(g_copy_doc, saved);
+      g_status_message = "Removed a saved wedge preset; press Save to keep the change.";
+      // One deletion per frame. Continuing the loop over a list an element shorter would render
+      // the rest under ids that have shifted, which is the row-index reuse ImGui warns about; the
+      // next frame re-reads the document and draws the remainder correctly.
+      break;
+    }
+  }
+
+  int h = 0;
+  int k = 0;
+  int l = 0;
+  const CustomWedgeInputFeedback fb = RenderMillerIndexInputRow("defaults_wedge_add", &h, &k, &l);
+  // Same gate as the dropdown's Apply button, by construction rather than by agreement: a triple
+  // this panel would save is exactly a triple that panel would apply.
+  ImGui::BeginDisabled(!fb.can_apply);
+  if (ImGui::Button(ICON_FA_PLUS " Add preset###wedge_preset_add")) {
+    const WedgeMillerTriple candidate{ h, k, l };
+    std::vector<WedgeMillerTriple> next = CopyWedgePresets();
+    const bool duplicate =
+        IsBuiltInWedgeMillerIndex(candidate.h, candidate.k, candidate.l) ||
+        std::any_of(next.begin(), next.end(), [&](const WedgeMillerTriple& e) { return e == candidate; });
+    if (duplicate) {
+      // Refused BEFORE the write, not filtered out on the way back in. A list that accepts a
+      // duplicate and then hides it would tell the user their file holds something it does not.
+      g_status_message = "That preset is already available, so nothing was added.";
+    } else {
+      next.push_back(candidate);
+      WriteWedgePresetsToDoc(g_copy_doc, next);
+      g_status_message =
+          "Added " + FormatWedgePresetLabel(candidate.h, candidate.l, fb.angle_deg) + "; press Save to keep it.";
+    }
+  }
+  ImGui::EndDisabled();
+}
+
 void RenderPresetLibrary() {
   ImGui::TextWrapped(
       "Retune a built-in preset so its button writes your value. The allowed range per preset is "
@@ -933,6 +1045,10 @@ void RenderPresetLibrary() {
     }
     RenderPresetEntry(entry);
   }
+  // Same child window, no second SectionHeader: both regions are the one "preset library"
+  // namespace, and sharing the scroll area is also what keeps g_presets_content_height a single
+  // measurement of everything inside it.
+  RenderWedgePresetLibrary();
 }
 
 }  // namespace

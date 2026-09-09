@@ -19,8 +19,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <vector>
 
 #include "gui/edit_modals.hpp"
+#include "gui/user_defaults.hpp"
 #include "include/lumice.h"
 
 namespace gui = lumice::gui;
@@ -28,12 +30,15 @@ namespace gui = lumice::gui;
 namespace {
 
 TEST(WedgePresets, EveryPresetAngleIsWhatItsMillerIndicesMean) {
-  int count = 0;
-  const gui::WedgePreset* presets = gui::GetWedgePresets(&count);
-  ASSERT_NE(presets, nullptr);
-  ASSERT_GT(count, 0);
+  // No user shortcuts seeded: this case is about the built-in table. The reset is not decoration —
+  // gui_unit_test runs every case in one process, so a list left behind by the cases below would
+  // otherwise be part of what this one measures.
+  gui::ResetUserWedgePresets();
 
-  for (int i = 0; i < count; ++i) {
+  const std::vector<gui::WedgePreset> presets = gui::GetWedgePresets();
+  ASSERT_FALSE(presets.empty());
+
+  for (size_t i = 0; i < presets.size(); ++i) {
     const gui::WedgePreset& p = presets[i];
     SCOPED_TRACE(testing::Message() << "preset[" << i << "] label=" << p.label << " h=" << p.h << " l=" << p.l);
 
