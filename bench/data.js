@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788986314128,
+  "lastUpdate": 1788986316132,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "95db17f1f62658518c88cdfd144891820be9a119",
-          "message": "Merge pull request #236 from LoveDaisy/feat/pytest-invocation-gate\n\nfeat(policy): gate pytest invocations that addopts would silently empty",
-          "timestamp": "2026-07-29T15:09:35+08:00",
-          "tree_id": "bec8487e460ac1e3d8b09a45c4c9728f0be2162c",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/95db17f1f62658518c88cdfd144891820be9a119"
-        },
-        "date": 1785309507253,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 87.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 92.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "86691677ff1522ce09436c46e138a863287d0e4c",
           "message": "Merge pull request #237 from LoveDaisy/feat/gui-sampling-density-stats\n\nfeat(gui): show sampling density (crystal/orientation draws) in the status bar",
           "timestamp": "2026-07-31T18:33:07+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "491b117b9a07cdf85de8099529f7811e686abf1e",
+          "message": "Merge pull request #336 from LoveDaisy/feat/miller-index-and-wedge-presets\n\nfix(gui,core): give the Miller-index wedge conversion one owner, and correct the presets it was never checked against",
+          "timestamp": "2026-09-10T04:26:14+08:00",
+          "tree_id": "4e290141061128a452482994544759c4c4475a08",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/491b117b9a07cdf85de8099529f7811e686abf1e"
+        },
+        "date": 1788986315645,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 80.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.1,
             "unit": "%"
           }
         ]
