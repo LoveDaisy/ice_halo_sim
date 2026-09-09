@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788979618262,
+  "lastUpdate": 1788979620410,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "92cc54c6635968e5797ada9b806b5f74ab0a8e93",
-          "message": "Merge pull request #235 from LoveDaisy/fix/install-hooks-worktree\n\nfix(install-hooks): resolve the hooks dir via git rev-parse --git-path",
-          "timestamp": "2026-07-29T09:53:29+08:00",
-          "tree_id": "ef5b6fe4f9f35d8c7d6032a1ad0e8c8fbc9a64df",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/92cc54c6635968e5797ada9b806b5f74ab0a8e93"
-        },
-        "date": 1785290511888,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "95db17f1f62658518c88cdfd144891820be9a119",
           "message": "Merge pull request #236 from LoveDaisy/feat/pytest-invocation-gate\n\nfeat(policy): gate pytest invocations that addopts would silently empty",
           "timestamp": "2026-07-29T15:09:35+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "712eb886076cecd28b4dedc683f8255351558cb5",
+          "message": "Merge pull request #333 from LoveDaisy/ci/cache-budget\n\nci(cache): budget the actions/cache quota — fix three prefix-shadowed keys, add ccache to the critical-path leg",
+          "timestamp": "2026-09-10T02:35:58+08:00",
+          "tree_id": "c53075d893ac829084799f406bdd8c280a195292",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/712eb886076cecd28b4dedc683f8255351558cb5"
+        },
+        "date": 1788979619952,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 74.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 92.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92,
             "unit": "%"
           }
         ]
