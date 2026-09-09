@@ -498,8 +498,12 @@ CustomWedgeInputFeedback EvaluateCustomWedgeInput(int h, int k, int l) {
       // Not an error, which is why the wording does not call it one. h = 0 is the owner's way of
       // saying "no pyramidal cap on this side", and a wedge angle is the wrong field to say it in:
       // the honest value is 0 degrees and this slider starts at 0.1.
+      //
+      // ASCII only, in this message and every one below. theme.cpp loads the body font without a
+      // glyph range, so it gets ImGui's default one: Basic Latin plus Latin-1. The degree sign in
+      // the angle line above is inside it; an em dash is not, and comes out as a "?" mid-sentence.
       fb.message =
-          "h = 0 means this side has no pyramidal cap. A wedge angle cannot express that — set the pyramid height to 0 "
+          "h = 0 means this side has no pyramidal cap. A wedge angle cannot express that; set the pyramid height to 0 "
           "instead.";
       break;
     case LUMICE_MILLER_INCOMPLETE:
