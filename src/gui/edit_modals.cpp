@@ -319,6 +319,25 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
 }  // namespace
 
+// TEMPORARY red-state probe (AC0) — reverted immediately after the red is recorded.
+// Copies kWedgePresets out verbatim and pairs each row with the Miller indices its label claims,
+// so a unit test can put the transcribed number and ConvertMillerIndexToWedgeAngle's answer side
+// by side. The h/l column is hardcoded here on purpose: it states what today's four labels say,
+// which is exactly the claim under test.
+int GetWedgePresetLegacyValuesForTest(const WedgePresetLegacyRow** out) {
+  static const WedgePresetLegacyRow kRows[] = {
+    { kWedgePresets[0].label, kWedgePresets[0].value, 1, 1 },
+    { kWedgePresets[1].label, kWedgePresets[1].value, 2, 1 },
+    { kWedgePresets[2].label, kWedgePresets[2].value, 1, 0 },
+    { kWedgePresets[3].label, kWedgePresets[3].value, 1, 2 },
+  };
+  static_assert(sizeof(kRows) / sizeof(kRows[0]) == kWedgePresetCount, "legacy probe must mirror kWedgePresets");
+  if (out) {
+    *out = kRows;
+  }
+  return kWedgePresetCount;
+}
+
 namespace {
 
 // Build a SumOfProducts from the current row buffers. Each row's text is
