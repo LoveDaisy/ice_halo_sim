@@ -307,6 +307,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_lens_border_geometry.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
+    # The GUI half of doc/print-mode-subtractive-ink.md §7's exclusion rule: which controls report
+    # themselves inapplicable under the print tone, and the import notice standing in for the one
+    # instance that has no control at all.
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_print_mode_colour_exclusions.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_identity_formatting.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_semantic_colors.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_edit_modal_delete_binding.cpp"

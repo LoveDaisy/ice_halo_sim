@@ -407,6 +407,47 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // doc/print-mode-subtractive-ink.md §7 instance 2, on the same two mirrors as the case above and
+  // for the same reason they are asserted together: the pair is wired to one predicate precisely so
+  // a user cannot meet a greyed checkbox beside a live toggle.
+  //
+  // The difference from the empty-composite case is what makes this worth its own case rather than
+  // a second `visible = false`: here the classes DO match and ARE visible, so composite_empty is
+  // false and the only thing disabling either control is the tone. A gate written as `composite_
+  // empty` alone would pass every assertion in the case above and fail every one here.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "color_window", "print_tone_disables_both_mirrors");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.raypath_color.push_back(MakeMatchAllClass(1.0f, 0.0f, 0.0f, /*z_order=*/0));
+      OpenColorsWindow(ctx);
+
+      // Screen first, so the release below is a transition this case observed rather than a state
+      // it assumed. Both must be live here: the class matches and is visible.
+      ctx->SetRef("");
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(TopBarToggleRef(/*composite_now=*/false).c_str())));
+      ctx->SetRef(kColorsWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/Enable colors")));
+
+      gui::g_state.renderer.tone = LUMICE_TONE_PRINT;
+      ctx->Yield(4);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/Enable colors")));
+      ctx->SetRef("");
+      IM_CHECK(IsDisabled(ctx->ItemInfo(TopBarToggleRef(/*composite_now=*/false).c_str())));
+
+      // And back: the classes were never discarded, so Screen restores both controls.
+      gui::g_state.renderer.tone = LUMICE_TONE_SCREEN;
+      ctx->Yield(4);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(TopBarToggleRef(/*composite_now=*/false).c_str())));
+      IM_CHECK_EQ(gui::g_state.raypath_color.size(), (size_t)1);
+      ctx->SetRef(kColorsWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/Enable colors")));
+
+      CloseColorsWindow(ctx);
+    };
+  }
+
   // Same read/write split as the top-bar mirror, asserted on the in-window control: the check mark
   // reports the ground truth, and the click writes the preference through the shared writer.
   {

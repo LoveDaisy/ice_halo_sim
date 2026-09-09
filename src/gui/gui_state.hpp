@@ -444,8 +444,9 @@ struct RenderConfig {
   //
   // Held as a plain int and registered as "renderer.tone", exactly like `ev_mode` above, and
   // excluded from RenderConfigResimFields for the same reason — see the static_assert note further
-  // down. NOTE for this version: nothing consumes it yet; the operator itself is a later step, so
-  // switching it changes no pixel today.
+  // down. Read through IsPrintTone() below rather than compared inline; the operator itself now
+  // lives in the preview shader and in the CLI's PostSnapshot, and the fields it takes the colour
+  // channel over from are listed at doc/print-mode-subtractive-ink.md §7.
   int tone = 0;
 
   bool operator==(const RenderConfig& o) const {
@@ -457,6 +458,21 @@ struct RenderConfig {
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
+
+// Is this renderer under the subtractive (print) operator?
+//
+// The ONE place the GUI spells this comparison. doc/print-mode-subtractive-ink.md §7's rule — print
+// takes over the colour channel, so every field that carries information in a hue is mutually
+// exclusive with it — has four instances and therefore at least six call sites; six hand-written
+// `tone == 1` are six chances to write `!=` and one place for a future third tone to be missed.
+//
+// It compares against LUMICE_TONE_PRINT rather than core's RenderConfig::kPrint enumerator, and
+// that is not a preference: src/gui/ reaches core only through the C API (AGENTS.md's public-API
+// boundary, enforced by scripts/check_policies.py), so the enumerator is not visible here and
+// LUMICE_TONE_PRINT is its published spelling. `tone` is held as a plain int for the same reason.
+inline bool IsPrintTone(const RenderConfig& renderer) {
+  return renderer.tone == LUMICE_TONE_PRINT;
+}
 
 // The resim-eligible projection of RenderConfig: ONLY the fields whose change genuinely requires
 // re-running / rebuilding the simulation. Everything else is client-side display state.

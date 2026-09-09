@@ -3048,7 +3048,13 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       for (int i = 0; i < 3; i++)
         r.paper[i] = jr["paper"][i].get<float>();
     }
-    if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
+    // Whether the DOCUMENT stated this field, kept because the fallback cannot be recognised from
+    // the value afterwards: GuiState::RenderConfig::ray_color defaults to {1,1,1}, not to core's
+    // {-1,-1,-1} sentinel, so "absent" and "explicitly white" leave the struct in the same state.
+    // The print notice below has to distinguish them — a document that never mentioned the field
+    // asked for nothing and must not be told anything was dropped.
+    const bool ray_color_stated = jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3;
+    if (ray_color_stated) {
       for (int i = 0; i < 3; i++)
         r.ray_color[i] = jr["ray_color"][i].get<float>();
     }
@@ -3064,6 +3070,31 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     // parser is not involved on this path at all — this function decodes the document itself, so
     // core's own warning for the same field never fires here and the GUI has to carry it.
     r.tone = ToneFromString(jr.value("tone", kToneJsonNames[RenderConfig{}.tone]));
+
+    // doc/print-mode-subtractive-ink.md §7 instance 3. This is the ONLY route by which the
+    // combination can reach the GUI at all: no editor registers renderer.ray_color, and both
+    // BuildScene arms pin it to core's {-1,-1,-1} "natural spectral colour" sentinel, so a GUI
+    // session can READ this pairing out of a hand-written core config but can never produce one.
+    // A greyed control is therefore not available as the visible half of the notice — there is no
+    // control — and the import notice takes its place.
+    //
+    // NOT routed through WarnUnsupportedByDesign, and the difference is worth one line: that
+    // function's subject is a value the GUI has NOWHERE TO PUT (its own comment says so at
+    // length), whereas ray_color has a home in GuiState and is faithfully kept here. What is
+    // missing is an effect under this tone, not a slot.
+    // The {-1,-1,-1} sentinel is core's "use the natural spectral colour", i.e. a document stating
+    // it has chosen NO tint — nothing is being dropped, so it is silent like an absent key.
+    const bool ray_color_is_a_tint =
+        ray_color_stated && (r.ray_color[0] != -1.0f || r.ray_color[1] != -1.0f || r.ray_color[2] != -1.0f);
+    if (IsPrintTone(r) && ray_color_is_a_tint) {
+      const std::string msg = "render.ray_color is set to (" + std::to_string(r.ray_color[0]) + ", " +
+                              std::to_string(r.ray_color[1]) + ", " + std::to_string(r.ray_color[2]) +
+                              "), which has no effect while render.tone is print -- print lays one neutral ink and "
+                              "does not read this field. The value was kept; it takes effect again under "
+                              "tone=screen.";
+      GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+      SetImportComplexFilterWarning(msg);
+    }
 
     state.renderer = r;
   } else {
