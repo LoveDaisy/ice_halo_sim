@@ -104,7 +104,9 @@ jobs:
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          ls -la /etc/apt/sources.list.d/ || true
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          grep -rn 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo 'google source gone'
           sudo apt-get update
           sudo apt-get install -y \
             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \

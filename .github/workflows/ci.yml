@@ -188,15 +188,28 @@ jobs:
       # has ever installed a Google package, so the only thing that source contributed was a
       # dependency on a third party's index being self-consistent.
       #
-      # Scoped to the one vendor that has actually cost us a red, not to every list in the
-      # directory. `ubuntu.sources` (the distro archive, deb822 on noble) and anything a step
-      # installs for itself — the CUDA keyring below, for instance — must survive. If a second
-      # vendor repo ever breaks a run the same way, add it here by name; do not widen this to
-      # a glob, which would take the archive with it.
+      # Selected by CONTENT, not by filename. The first attempt at this removed
+      # `google-chrome.list` by name and changed nothing — the `rm` ran, the source was still
+      # configured, and the job failed on the identical error. The image spells that source
+      # some other way (noble ships deb822 `.sources` files alongside `.list` ones), so a
+      # guessed filename is a gate that silently does nothing. Grepping for the host removes
+      # whatever file actually declares it.
+      #
+      # Scoped to the one vendor that has actually cost us a red, not to every file in the
+      # directory: `ubuntu.sources` (the distro archive itself, which lives there on noble)
+      # and anything a step installs for itself — the CUDA keyring below, for instance — must
+      # survive, and a glob would take them with it. If a second vendor repo ever breaks a run
+      # the same way, add its host to the pattern.
+      #
+      # The listing and the post-check are deliberate: this step is the only place that knows
+      # what the image actually ships, and without them a future recurrence starts again from
+      # a guess.
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          ls -la /etc/apt/sources.list.d/ || true
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          grep -rn 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo 'google source gone'
           sudo apt-get update
           sudo apt-get install -y \
             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
@@ -419,7 +432,9 @@ jobs:
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
             -O cuda-keyring.deb
           sudo dpkg -i cuda-keyring.deb
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          ls -la /etc/apt/sources.list.d/ || true
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          grep -rn 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo 'google source gone'
           sudo apt-get update -qq
           sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6
           echo "/usr/local/cuda/bin" >> $GITHUB_PATH
@@ -713,7 +728,9 @@ jobs:
       # the whole `apt-get update`.
       - name: Install Linux GUI dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          ls -la /etc/apt/sources.list.d/ || true
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          grep -rn 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo 'google source gone'
           sudo apt-get update
           sudo apt-get install -y \
             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
