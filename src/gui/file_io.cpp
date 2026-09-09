@@ -94,6 +94,11 @@ static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisib
 static const char* kEvModeJsonNames[] = { "relative", "absolute" };
 static_assert(sizeof(kEvModeJsonNames) / sizeof(kEvModeJsonNames[0]) == kEvModeCount,
               "kEvModeJsonNames must match kEvModeCount");
+// Tone JSON names, indexed by GUI RenderConfig::tone and mirroring core's own wire vocabulary
+// ("screen"/"print", see config/render_config.hpp's hand-written RenderConfig::Tone codec). Strings
+// on both paths for the same reason kEvModeJsonNames gives.
+static const char* kToneJsonNames[] = { "screen", "print" };
+static_assert(sizeof(kToneJsonNames) / sizeof(kToneJsonNames[0]) == kToneCount, "kToneJsonNames must match kToneCount");
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "2:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
@@ -1021,6 +1026,30 @@ static int EvModeFromString(const std::string& s) {
   return 0;
 }
 
+// Unknown text falls back to screen, and SAYS SO — grouped with LensTypeFromString above rather
+// than with the silent EvModeFromString / VisibleFromString beside it, and the split is the one
+// that function's own comment draws: refuse to lose a setting silently.
+//
+// Two reasons it lands on that side. Dropping `print` back to `screen` without a word leaves a
+// picture that looks fine and is not the one the document asked for, which is the failure mode a
+// silent fallback is worst at. And core's own decoder already warns on this exact field
+// (render_config.cpp's hand-written RenderConfig::Tone codec), so a silent GUI would mean the same
+// malformed document reports differently depending on which side opened it — the GUI/CLI
+// divergence this file spends most of its comments avoiding.
+//
+// Both callers warn, deliberately. The .lmc caller is this application's own output, where an
+// unrecognized value means a file from a NEWER build — worth saying precisely because the setting
+// it carries is about to be dropped on the next save.
+static int ToneFromString(const std::string& s) {
+  for (int i = 0; i < kToneCount; i++) {
+    if (s == kToneJsonNames[i])
+      return i;
+  }
+  GUI_LOG_WARNING("[FileIO] Unrecognized renderer.tone \"{}\"; loading as screen.", s);
+  SetImportComplexFilterWarning("renderer.tone states an unrecognized value \"" + s + "\"; loaded as screen.");
+  return 0;
+}
+
 static int VisibleFromString(const std::string& s) {
   for (int i = 0; i < kVisibleCount; i++) {
     if (s == kVisibleJsonNames[i])
@@ -1076,9 +1105,12 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   // in. The conversion for this side happens later and elsewhere — at the point of use, where the
   // preview shader's uniform and the .lmc bake each ask for linear (app_panels.cpp, app.cpp).
   jr["background"] = { r.background[0], r.background[1], r.background[2] };
+  // sRGB and verbatim, for exactly the reasons the paragraph above gives for "background".
+  jr["paper"] = { r.paper[0], r.paper[1], r.paper[2] };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["exposure_offset"] = r.exposure_offset;
   jr["ev_mode"] = kEvModeJsonNames[r.ev_mode];
+  jr["tone"] = kToneJsonNames[r.tone];
   return jr;
 }
 
@@ -1110,12 +1142,19 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
     for (int i = 0; i < 3; i++)
       r.background[i] = jr["background"][i].get<float>();
   }
+  // sRGB in, sRGB out, same as "background" above. A missing key keeps RenderConfig's own default
+  // (white), which is what makes a .lmc written before this key loads unchanged.
+  if (jr.contains("paper") && jr["paper"].is_array() && jr["paper"].size() == 3) {
+    for (int i = 0; i < 3; i++)
+      r.paper[i] = jr["paper"][i].get<float>();
+  }
   if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
     for (int i = 0; i < 3; i++)
       r.ray_color[i] = jr["ray_color"][i].get<float>();
   }
   r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
   r.ev_mode = EvModeFromString(jr.value("ev_mode", kEvModeJsonNames[RenderConfig{}.ev_mode]));
+  r.tone = ToneFromString(jr.value("tone", kToneJsonNames[RenderConfig{}.tone]));
   // Older .lmc payloads carry an "adaptive_brightness_mode" key; nlohmann's value(...) ignores
   // unknown keys, so no migration code is needed — the field becomes a silent no-op.
   return r;
@@ -2000,6 +2039,12 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // linear RGB, because core adds it to radiance before the transfer curve. Same conversion
       // app.cpp / app_panels.cpp apply when they push the picker colour at the preview.
       SrgbToLinearRgb(r.background, dst.background);
+      // The print mode, both halves, same conversion and same reason as `background` above: the
+      // GUI holds sRGB, LUMICE_RenderParam holds linear. Written on THIS arm only — the kSimCommit
+      // arm renders a fixed texture that is deliberately independent of GuiState, so it leaves
+      // both at the zeroed struct's values, exactly as it leaves `background`.
+      dst.tone = r.tone == 1 ? LUMICE_TONE_PRINT : LUMICE_TONE_SCREEN;
+      SrgbToLinearRgb(r.paper, dst.paper);
       // The horizon line is the one annotation core actually draws, and its GUI switch lives
       // outside RenderConfig (GuiState's overlay group). Reading it is what stops the export from
       // asserting a line the user turned off.
@@ -2996,6 +3041,13 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       for (int i = 0; i < 3; i++)
         r.background[i] = jr["background"][i].get<float>();
     }
+    // Same space and same non-conversion as "background" just above, and for the same reason: the
+    // core config's "paper" key is sRGB and so is the GUI field it lands in. A missing key keeps
+    // RenderConfig's default (white).
+    if (jr.contains("paper") && jr["paper"].is_array() && jr["paper"].size() == 3) {
+      for (int i = 0; i < 3; i++)
+        r.paper[i] = jr["paper"][i].get<float>();
+    }
     if (jr.contains("ray_color") && jr["ray_color"].is_array() && jr["ray_color"].size() == 3) {
       for (int i = 0; i < 3; i++)
         r.ray_color[i] = jr["ray_color"][i].get<float>();
@@ -3008,6 +3060,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     // for this field is kRelative, which is the same value, so the two answers coincide and there
     // is nothing to distinguish.
     r.ev_mode = EvModeFromString(jr.value("ev_mode", kEvModeJsonNames[RenderConfig{}.ev_mode]));
+    // NOT silent, unlike ev_mode above: ToneFromString warns and posts an import notice. Core's
+    // parser is not involved on this path at all — this function decodes the document itself, so
+    // core's own warning for the same field never fires here and the GUI has to carry it.
+    r.tone = ToneFromString(jr.value("tone", kToneJsonNames[RenderConfig{}.tone]));
 
     state.renderer = r;
   } else {

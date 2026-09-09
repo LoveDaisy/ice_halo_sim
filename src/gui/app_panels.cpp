@@ -1515,6 +1515,37 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         false, ImGuiSelectableFlags_Disabled);
     ImGui::PopStyleColor();
 
+    // The print mode, at the END of the display block rather than directly under the sky colour it
+    // is the counterpart of: the EV readout above belongs to the exposure trio (Mode / EV / Sky
+    // Color) and reads as a footer to it, so inserting between them would split a group. Two controls
+    // rather than one because a black ground under the subtractive operator renders an all-black
+    // page, so the tone switch alone would have no ground worth laying ink on
+    // (doc/print-mode-subtractive-ink.md decision D5).
+    //
+    // The paper swatch is NOT greyed out under Screen, and that is a decision rather than an
+    // omission: this version ships no operator that reads either field, so there is no "currently
+    // in effect" state to grey against. Whatever mutual exclusion the operator turns out to need
+    // is that step's to add.
+    ImGui::Combo("Tone##display_tone", &r.tone, kToneNames, kToneCount);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Which operator turns the simulated light into pixels.\n\n"
+          "Screen: light is ADDED to the sky colour. This is the default and what the preview "
+          "has always done. A light sky can only stay light, which is why a white sky shows no "
+          "halo.\n\n"
+          "Print: light is laid down as INK on the paper below, so the picture darkens where the "
+          "halo is — the way it would come off a printer.\n\n"
+          "NOT IMPLEMENTED YET in this version: the setting is saved and exported, but no operator "
+          "reads it, so switching changes nothing on screen.");
+    }
+    ImGui::ColorEdit3("Paper##display_paper_color", r.paper, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Colour of the paper the ink is laid on under Print tone.\n\n"
+          "Separate from Sky Color, and white rather than black by default: ink only\n"
+          "ever darkens what is beneath it, so black paper would render a black page.");
+    }
+
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
     const char* preview_label = kAspectPresetNames[preset_idx];

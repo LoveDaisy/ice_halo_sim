@@ -237,6 +237,19 @@ const std::vector<FieldProbe>& FieldProbes() {
       // is the half the round trip alone cannot see — the spelling case below covers that.
       [](GuiState& s) { s.renderer.ev_mode = 1; },
       [](const GuiState& s) { return std::to_string(s.renderer.ev_mode); } },
+    { "renderer.tone",
+      // 1 (print) for the same reason ev_mode uses 1, and with the same word-on-disk split; the
+      // spelling case further down covers that half.
+      [](GuiState& s) { s.renderer.tone = 1; }, [](const GuiState& s) { return std::to_string(s.renderer.tone); } },
+    { "renderer.paper",
+      // Off white on every channel: the default is {1,1,1}, so a serializer that dropped the key
+      // would round-trip any value that left one channel at 1.
+      [](GuiState& s) {
+        s.renderer.paper[0] = 0.95f;
+        s.renderer.paper[1] = 0.90f;
+        s.renderer.paper[2] = 0.80f;
+      },
+      [](const GuiState& s) { return JoinFloats(s.renderer.paper, 3); } },
     // The two overlay colours below are here because they had NO guard of any kind before this
     // file existed (measured while auditing the suite, not guessed). They are also the cheapest
     // possible demonstration of the key-name half of the contract: a serializer that renames its
@@ -1204,6 +1217,53 @@ TEST(DocumentRoundtripChain, EvModeIsSpelledOnDiskTheWayCoreSpellsIt) {
       continue;
     }
     EXPECT_EQ(read_back.renderer.ev_mode, 0) << "variant: " << label;
+  }
+}
+
+// The same three properties for tone, and for the same reason ev_mode needs them: the field is an
+// int in the struct and a WORD on disk, so a round trip inside one process cannot see a writer that
+// spells it differently from core, and an unreadable spelling must not take the document with it.
+TEST(DocumentRoundtripChain, ToneIsSpelledOnDiskTheWayCoreSpellsIt) {
+  struct Row {
+    int value;
+    const char* spelling;
+  };
+  for (const Row& row : { Row{ 0, "screen" }, Row{ 1, "print" } }) {
+    GuiState doc = MinimalDocument();
+    doc.renderer.tone = row.value;
+    const auto written = nlohmann::json::parse(SerializeGuiStateJson(doc));
+    EXPECT_EQ(written["renderer"]["tone"].get<std::string>(), row.spelling);
+
+    auto on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    on_disk["renderer"]["tone"] = row.spelling;
+    GuiState read_back = MinimalDocument();
+    if (!DeserializeGuiStateJson(on_disk.dump(), read_back)) {
+      // Non-fatal per row, for the reason its ev_mode twin above states.
+      ADD_FAILURE() << row.spelling << ": the reader rejected a document carrying this spelling";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.tone, row.value) << row.spelling;
+  }
+
+  // A document written before the key existed, and one written with a typo, must reach the same
+  // place: screen — and must still LOAD, which is the half worth pinning. (The typo also raises a
+  // warning; that half is ToneFromString's, asserted where the import path is exercised.)
+  for (const char* variant : { "", "pirnt" }) {
+    auto doc = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    doc["renderer"]["tone"] = "print";
+    if (variant[0] == '\0') {
+      doc["renderer"].erase("tone");
+    } else {
+      doc["renderer"]["tone"] = variant;
+    }
+    GuiState read_back = MinimalDocument();
+    read_back.renderer.tone = 1;  // seed non-default so a no-op read is visible
+    const char* label = variant[0] == '\0' ? "<absent>" : variant;
+    if (!DeserializeGuiStateJson(doc.dump(), read_back)) {
+      ADD_FAILURE() << label << ": an unrecognised tone must load, not fail the whole document";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.tone, 0) << "variant: " << label;
   }
 }
 

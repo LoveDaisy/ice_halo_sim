@@ -123,6 +123,14 @@ const Row kInertRows[] = {
   // already produced. Flipping it re-lights the picture on the next frame. A finished run that
   // went kModified over it would be offering to re-simulate its way to the same rays.
   { "renderer.ev_mode", "renderer", [](GuiState& s) { s.renderer.ev_mode = 1; }, false, false, false },
+  // The print mode's two fields, one taking each of the two dispositions already on this list.
+  // `tone` is the ev_mode case exactly: it picks WHICH operator converts an already-simulated
+  // snapshot into pixels, so a finished run that went kModified over it would be offering to
+  // re-simulate its way to the same rays. `paper` is the background case exactly: a real
+  // configuration value Revert must undo (its own ConfigSnapshot slot), which nonetheless changes
+  // only what shows behind the rays.
+  { "renderer.tone", "renderer", [](GuiState& s) { s.renderer.tone = 1; }, false, false, false },
+  { "renderer.paper", "renderer", [](GuiState& s) { s.renderer.paper[0] = 0.7f; }, false, false, false },
   // Not part of the committed snapshot at all, so it cannot participate in the diff even in
   // principle — the legacy wrapper owns it.
   { "use_gpu_backend", "use_gpu_backend", [](GuiState& s) { s.use_gpu_backend = !s.use_gpu_backend; }, false, false,

@@ -504,6 +504,10 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     // second editor — the one the defaults panel needs in order to edit a personal default without
     // a document open.
     map.emplace("renderer.background", ColorField([](GuiState& s) { return s.renderer.background; }));
+    // The print mode's ground colour, registered beside `background` because it is the same kind of
+    // field on both counts: a colour, and one whose editor the defaults panel needs in order to set
+    // a personal default with no document open.
+    map.emplace("renderer.paper", ColorField([](GuiState& s) { return s.renderer.paper; }));
     // No `renderer.ray_color` row: the GUI has no tint control anywhere (owner-decided — see
     // GuiState::RenderConfig::ray_color's own comment), so there is nothing here to register an
     // editor for.
@@ -524,6 +528,7 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.renderer.exposure_offset; }, FixedDomain(-8.0f, 16.0f), "%.1f"));
     map.emplace("renderer.ev_mode",
                 ComboField([](GuiState& s) { return &s.renderer.ev_mode; }, kEvModeNames, kEvModeCount));
+    map.emplace("renderer.tone", ComboField([](GuiState& s) { return &s.renderer.tone; }, kToneNames, kToneCount));
 
     // ---- aspect ratio ----
     map.emplace("aspect_ratio", AspectPresetField());
