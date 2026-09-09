@@ -802,6 +802,7 @@ void DoOpen(const std::filesystem::path& path) {
   // can leave a count behind that belongs to no load at all.
   TakeShapeDistDowngradeCount();
   TakeFilterNoPredicateDowngradeCount();
+  TakeInvalidSummandRowCount();
   bool tex_radiance_only = false;
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h, tex_radiance_only)) {
     // Data restore + command-semantic fields (path/dirty/run_intent stay in handler).
@@ -840,6 +841,19 @@ void DoOpen(const std::filesystem::path& path) {
           "Some filters in this file described no rule (no ray paths and no entry/exit faces). They "
           "were loaded as no filter at all, so the entries they belonged to now let every ray "
           "through. Re-add the rule in the entry's Filter tab if the file was meant to carry one.");
+    }
+
+    // Notify: a filter row in the file was not a valid filter expression — an empty step in a face
+    // path ("3--5", "-3-5", "3-5-"), a face number no crystal has, a malformed entry:/exit:/len:
+    // factor. The row was dropped. It used to be read by the tolerant parser instead, which skips
+    // what it cannot make sense of, so "3--5" loaded as the path 3-5: a path that looks entirely
+    // reasonable and is not the one the file states. Same one-time popup as the two notices above.
+    if (TakeInvalidSummandRowCount() > 0) {
+      SetImportComplexFilterWarning(
+          "Some filter rows in this file were not valid filter expressions (for example a face path "
+          "with an empty step, like \"3--5\"). Those rows were dropped rather than guessed at, so "
+          "the filters they belonged to now match less than the file described. Re-enter the "
+          "affected rows in the entry's Filter tab.");
     }
   }
 }

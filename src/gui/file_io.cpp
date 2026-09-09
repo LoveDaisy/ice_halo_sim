@@ -14,6 +14,7 @@
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1081,6 +1082,19 @@ int TakeRaypathCommaMigratedCount() {
   return n;
 }
 
+// Count of `summands` rows dropped on load because the text was not a valid filter expression (an
+// empty face-path token such as "3--5", a face number no crystal has, a malformed entry:/exit:/len:
+// factor). Same TU-local counter shape as the three above, and the same "drain once before a load
+// to discard any stale count, read again after it" discipline the Shape / FilterNoPredicate pair
+// follows in DoOpen -- this is a third member of that family, not a new concept.
+static int g_invalid_summand_row_count = 0;
+
+int TakeInvalidSummandRowCount() {
+  int n = g_invalid_summand_row_count;
+  g_invalid_summand_row_count = 0;
+  return n;
+}
+
 // The single place that decides both "how is a legacy ',' rewritten" and "does that count". Both
 // readers below need the pair, and they need the same answer; a second spelling of it is a second
 // thing to keep in sync. The two call sites keep their own downstream construction (a SummandText
@@ -1095,14 +1109,15 @@ static std::string MigrateAndCountRaypathComma(const std::string& text) {
 
 // The single disposition point for "the file's filter object states no predicate".
 //
-// Both readers below can end there — a v3 `summands` array that yields no rows, and a legacy form
-// whose `raypath_text` is absent or empty (including an unknown/removed `type` that falls through
-// to the raypath arm). Both used to answer it by writing a 1-row / 1-factor SoP holding an empty
-// RaypathParams. That shape is NOT "no filter": a row carrying a factor whose text is empty is the
-// editor's match-all and commits as core's `none`, so under filter_out the entry excluded every ray
-// and the render was black, with nothing on screen saying why. Under filter_in it admitted
-// everything, so the same shape was harmless there — the harm is asymmetric in `action`, while
-// having no filter at all is harmless under both.
+// Both readers below can end there — a v3 `summands` array that yields no rows (either because the
+// array was empty, or because every row in it was refused by the syntax gate in the reader below),
+// and a legacy form whose `raypath_text` is absent or empty (including an unknown/removed `type`
+// that falls through to the raypath arm). Both used to answer it by writing a 1-row / 1-factor SoP
+// holding an empty RaypathParams. That shape is NOT "no filter": a row carrying a factor whose text
+// is empty is the editor's match-all and commits as core's `none`, so under filter_out the entry
+// excluded every ray and the render was black, with nothing on screen saying why. Under filter_in
+// it admitted everything, so the same shape was harmless there — the harm is asymmetric in
+// `action`, while having no filter at all is harmless under both.
 //
 // Removing the predicate rather than picking a value for it is the disposition the load-degrade
 // contract settled on for a filter the GUI's own format left underspecified. Returning
@@ -1138,6 +1153,38 @@ static std::optional<FilterConfig> ParseFilterFromGuiJson(const json& jf) {
         continue;
       }
       std::string text = MigrateAndCountRaypathComma(js.get<std::string>());
+      // The load path's syntax gate, and the only one this row ever meets. ParseSummandText below
+      // is deliberately tolerant -- it skips what it cannot read so a half-typed row in the editor
+      // still shows the part that parses -- and the editor pairs that tolerance with
+      // ValidateSummandText on its OK button. This reader had the tolerance and not the pairing, so
+      // a row spelling an empty face-path token ("3--5", "-3-5", "3-5-") came back as the path 3-5:
+      // a path that looks entirely reasonable and is not the one the file states, with nothing said
+      // about it. Validating here is what pairs them, using the editor's own validator rather than
+      // a second spelling of "what is a legal row".
+      //
+      // The judgement is local (`state != LUMICE_RAYPATH_VALID`) rather than
+      // edit_modal_rules.hpp's SummandRowBlocksCommit: that function answers "may the OK button be
+      // pressed", which happens to agree here but is a different question asked in a different
+      // language. kIncomplete is refused alongside kInvalid -- in the editor it means "still
+      // typing", but a file is not still typing.
+      //
+      // kind = PYRAMID because this call site has no crystal in hand and the pyramid legal-face set
+      // is the union over every kind (see raypath_validation.cpp), i.e. the widest baseline
+      // available. PRISM would refuse face numbers that are legal on a pyramid.
+      const GuiValidationResult v = ValidateSummandText(text, LUMICE_CRYSTAL_PYRAMID);
+      if (v.state != LUMICE_RAYPATH_VALID) {
+        ++g_invalid_summand_row_count;
+        // kIncomplete carries no message: in the editor it is not an error, only a row the user has
+        // not finished, so there is nothing to say to them yet. Here it is a finished file that ends
+        // or starts on a separator, and a log line reading "(...)" would name no reason at all.
+        const std::string reason = !v.message.empty() ? v.message :
+                                                        (v.state == LUMICE_RAYPATH_INCOMPLETE ?
+                                                             std::string("the row starts or ends on a path separator") :
+                                                             std::string("invalid"));
+        GUI_LOG_WARNING("[FileIO] Filter '{}' row \"{}\" is not a valid filter expression ({}); skipping row.", f.name,
+                        text, reason);
+        continue;
+      }
       sop.push_back(SummandText{ text, ParseSummandText(text) });
     }
     // An empty summands array is not a valid state, and the disposition is the one at the bottom
