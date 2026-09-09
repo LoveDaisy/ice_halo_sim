@@ -1301,6 +1301,10 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 That leg went 650s uncached → 657s (cold, nothing to restore) → 567s → 479s → 353s across five
 consecutive runs, and its ccache hit rate over the last three was 26.34% → 41.39% → **55.96%**, still
 climbing, with the directory at 36.7% of its cap. So **353s is an upper bound on the steady state**.
+(The table's Cold column above reads 682s rather than 657s — that number is from a different, earlier
+cold event: the day the whole repository's Actions cache was accidentally emptied, before this leg
+had ccache at all. 657s is this leg's own cold start once ccache was in place but its directory was
+still empty; the two are colds of different things and neither supersedes the other.)
 The 567s step is the one to remember: the cache was present and reporting a successful restore on
 every run while sitting at **110.3% of a 200M cap** — a cap borrowed from `shared-gui-test-build`,
 whose directory settles at 37 MB — and therefore evicting the objects the next run needed.
@@ -1315,7 +1319,7 @@ of translation units and their directories land about six times apart, 37 MB aga
 The cold column is not a hypothetical. Every cache in the repository was destroyed while this table
 was being measured, so the two runs are the same commit range on the same branch, one with nothing
 to restore and one with everything. Read it as the honest price of a cold start rather than as
-run-to-run noise: the two compiler-cached legs move by 606→41 and 728→502, and nothing else moves
+run-to-run noise: the two compiler-cached legs move by 606→39 and 728→522, and nothing else moves
 by more than about 160s.
 
 **`Windows MSVC x86_64` has two durations now, and quoting one of them alone is a mistake.** Its
@@ -1458,11 +1462,13 @@ move the `E2E Slow` legs.
    "shorten CI" that does not touch those two jobs buys zero wall clock*, however much machine time
    it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a plan, a PR
    description, or a review comment — it must first answer **"does it shorten the longest job?"**.
-   This is the fourth job to hold the title, and the last three handovers all happened inside a
-   single change. `Windows MSVC x86_64` held it at 736s mean (n=14) until sccache; `shared-gui-test-build`
-   held it at 734s until ccache took it to 39s; `Ubuntu x86_64` held it for exactly as long as it
-   took to give that leg a cache too, which dropped it from 650s to 353s. Anything written against a
-   superseded ordering — "the Windows leg is the ceiling", "the shared-gui leg is the ceiling",
+   This is the fourth job to hold the title, and the last two handovers both happened inside this
+   change; the first happened earlier, in a prior change that gave the Windows leg sccache.
+   `Windows MSVC x86_64` held it at 736s mean (n=14) until that earlier change; `shared-gui-test-build`
+   held it at 734s until this change gave it ccache and took it to 39s; `Ubuntu x86_64` held it for
+   exactly as long as it
+   took this change to give that leg a cache too, which dropped it from 650s to 353s. Anything
+   written against a superseded ordering — "the Windows leg is the ceiling", "the shared-gui leg is the ceiling",
    "this is free because it lands on Ubuntu" — has to be re-derived, not carried forward.
    Note what that pattern implies: **caching moved the ceiling onto legs no compiler cache can
    touch.** The two macOS legs are 8% and 89% test execution. Further CI-time work on this workflow

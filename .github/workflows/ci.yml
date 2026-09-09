@@ -818,12 +818,14 @@ jobs:
       #
       # CCACHE_MAXSIZE is 200M, and that number is measured rather than copied. A full cold
       # compile of this configure — 291 objects, nothing restored — leaves a 37 MB directory,
-      # so the 2G the Windows leg uses (and the 2G an earlier measurement branch proposed
-      # here) is about fifty times the working set. That difference is not a Linux-vs-Windows
-      # quirk to shrug at: the sccache directory reaches its own 2 GiB ceiling on the MSVC
-      # leg, which is what makes that namespace ~1.5 GB per entry and 80% of the repository's
-      # cache quota, while this one costs a rounding error. 200M leaves room for several
-      # generations of objects to accumulate through the restore-keys fallback.
+      # so the 800M this task sized the Windows leg's SCCACHE_CACHE_SIZE to (see the Install
+      # sccache step in the build job) is about four times the working set here, and the 2G
+      # that leg used before this task is about fifty times it. That difference is not a
+      # Linux-vs-Windows quirk to shrug at: the sccache directory used to reach its own 2 GiB
+      # ceiling on the MSVC leg before this change, which made that namespace ~1.5 GB per
+      # entry and 80% of the repository's cache quota at the time, while this one costs a
+      # rounding error. 200M leaves room for several generations of objects to accumulate
+      # through the restore-keys fallback.
       #
       # If `ccache --show-stats` ever reports Cache size at Max cache size, the cap is
       # evicting live objects and has to go up. That shows up as a quietly lower hit rate and
