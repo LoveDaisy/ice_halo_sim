@@ -266,6 +266,11 @@ TEST(RenderConsumerPrintMode, PaperHueIsPreservedAtEveryExposure) {
 
 // (a) A pixel the lens does not image. 64x64 under a 180 deg equal-area fisheye leaves the four
 // corners outside the image circle.
+//
+// Note what this case does NOT cover, because the two look alike and only one of them is here: a
+// corner outside the image circle also receives no ray, so it would print as paper even if the
+// print branch ignored the visibility predicate entirely. The case below is the one that separates
+// them, and it exists because a red-state probe that deleted the predicate left this case green.
 TEST(RenderConsumerPrintMode, UnimagedPixelsPrintAsBarePaper) {
   const auto img = SnapshotOnce(MakeConfig(RenderConfig::kPrint));
   ASSERT_EQ(img.size(), static_cast<size_t>(kTotalPix) * 3);
@@ -278,6 +283,76 @@ TEST(RenderConsumerPrintMode, UnimagedPixelsPrintAsBarePaper) {
   }
   EXPECT_GT(CountPixelsEqualTo(img, paper), 4u) << "only the four probed corners came out as paper — the unimaged "
                                                    "region has shrunk to nothing and this case no longer covers it";
+}
+
+// The other half of (a), and the one with teeth: a pixel INSIDE the image circle that images sky
+// the `visible` range excludes. Rays land there and deposit energy like anywhere else — measured at
+// 89% (rectangular) to 99.8% (globe) of that region carrying energy — so withholding the ink is a
+// decision the print branch has to make, not something the scene does for it.
+//
+// The frame looks at the horizon rather than at the zenith so that half the circle is the excluded
+// lower hemisphere, and the batch fires rays into both halves.
+TEST(RenderConsumerPrintMode, PrintWithholdsInkFromTheExcludedHemisphere) {
+  const auto paper = PaperBytes();
+  const auto run = [&paper](RenderConfig::VisibleRange visible) {
+    RenderConfig cfg = MakeConfig(RenderConfig::kPrint);
+    cfg.view_.el_ = 0.0f;  // horizon-centred: the lower hemisphere is imaged, not merely absent
+    cfg.visible_ = visible;
+    RenderConsumer rc(cfg, ColorClassTable{}, MakeSun());
+    SimData data;
+    data.curr_wl_ = 550.0f;
+    // Up and down in equal measure. The downward rays are the point: under kUpper they land in the
+    // region `visible` excludes, and that region is inside the image circle.
+    const float dirs[][3]{
+      { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f, 1.0f }, { 0.3f, 0.0f, 0.954f }, { -0.3f, 0.0f, 0.954f }
+    };
+    for (const auto& d : dirs) {
+      for (int j = 0; j < 3; j++) {
+        data.outgoing_d_.push_back(d[j]);
+      }
+      data.outgoing_w_.push_back(1.0f);
+    }
+    rc.Consume(data);
+    lumice::test::TakeSnapshotAtFormerSelfAnchor(&rc);
+    auto result = rc.GetResult();
+    const auto* rr = std::get_if<RenderResult>(&result);
+    return rr == nullptr || rr->img_buffer_ == nullptr ?
+               std::vector<uint8_t>() :
+               std::vector<uint8_t>(rr->img_buffer_, rr->img_buffer_ + static_cast<size_t>(kTotalPix) * 3);
+  };
+
+  const auto clipped = run(RenderConfig::kUpper);
+  const auto unclipped = run(RenderConfig::kFull);
+  ASSERT_EQ(clipped.size(), static_cast<size_t>(kTotalPix) * 3);
+  ASSERT_EQ(unclipped.size(), static_cast<size_t>(kTotalPix) * 3);
+
+  // The control first: with the clip lifted, those pixels carry ink. If this is zero the batch has
+  // stopped putting energy in the excluded half and the assertion below would hold vacuously.
+  const size_t inked_when_unclipped = static_cast<size_t>(kTotalPix) - CountPixelsEqualTo(unclipped, paper);
+  ASSERT_GT(inked_when_unclipped, 0u) << "no pixel took ink even with visible=full — this fixture has stopped "
+                                         "depositing energy in the region the clip is about";
+
+  // And with the clip in place, every pixel that took ink under `full` must be bare paper: the
+  // excluded hemisphere is unexposed, not merely dimmer.
+  size_t inked_when_clipped = 0;
+  for (int i = 0; i < kTotalPix; ++i) {
+    if (!PixelIs(unclipped, i, paper) && !PixelIs(clipped, i, paper)) {
+      ++inked_when_clipped;
+    }
+  }
+  // Not zero: the UPPER half is imaged in both arms and legitimately keeps its ink. What has to
+  // hold is that the clip removed some of it — and that what it removed is the lower half.
+  EXPECT_LT(inked_when_clipped, inked_when_unclipped)
+      << "visible=upper removed no ink at all: the print branch is not consulting the visibility "
+         "predicate, so the hemisphere the document excludes is still being printed";
+
+  // The bottom row is squarely in the excluded hemisphere for a horizon-centred equal-area fisheye,
+  // and inside the image circle at its centre — so it is a pixel that images excluded sky rather
+  // than one the lens misses.
+  const int bottom_centre = (kH - 1) * kW + kW / 2;
+  EXPECT_TRUE(PixelIs(clipped, bottom_centre, paper))
+      << "a pixel imaging excluded sky printed ink: under kPrint an excluded pixel is unexposed, "
+         "which is the same rule the screen operator states as 'clear it to black'";
 }
 
 // (b) and (c) The two early exits that never reach the pixel loop. Before the print operator these
