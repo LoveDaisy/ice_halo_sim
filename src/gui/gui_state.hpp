@@ -199,7 +199,9 @@ struct CrystalConfig {
   ShapeDist prism_h = 1.0f;
   ShapeDist upper_h = 0.2f;
   ShapeDist lower_h = 0.2f;
-  float upper_alpha = 28.0f;  // Wedge angle (degrees). Default ≈ atan(√3/2 / 1.629) * 180/π, i.e. Miller {1,0,-1,1}
+  // Wedge angle (degrees). The default is Miller {1,0,-1,1}, i.e. what
+  // LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 1, 3) answers, rounded.
+  float upper_alpha = 28.0f;
   float lower_alpha = 28.0f;
 
   // Face distance (common to Prism and Pyramid — distance from center to each of the 6 prism faces).

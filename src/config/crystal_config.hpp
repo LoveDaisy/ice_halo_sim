@@ -71,7 +71,9 @@ struct PyramidCrystalParam {
   Distribution h_pyr_l_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Lower pyramidal relative height, from 0.0 to 1.0
   Distribution d_[6]{};                                              // Distance to center for prism faces
   int sync_group_[kShapeScalarCount]{};                              // Shape-scalar sync groups, 0 = independent
-  float wedge_angle_u_ = 28.0f;  // Upper wedge angle (degrees). Default ≈ atan(√3/2 / 1.629), i.e. Miller {1,0,-1,1}
+  // Upper wedge angle (degrees). The default is Miller {1,0,-1,1}, i.e.
+  // MillerIndexToWedgeAngleDeg(1, 1) rounded -- see core/miller_wedge.hpp for the conversion.
+  float wedge_angle_u_ = 28.0f;
   float wedge_angle_l_ = 28.0f;  // Lower wedge angle (degrees)
 };
 

@@ -136,6 +136,29 @@ it was thinking of and false of the C struct beside it.
   header). Note the defaults run the other way from every other annotation flag: the JSON default is
   *on*, so a zero-initialized struct asks for no lines even when it carries a full angle list. Set
   the three fields, or go through JSON.
+- **`LUMICE_ConvertMillerIndexToWedgeAngle` — one place to ask what Miller indices mean.** New C API
+  function returning the wedge angle *and* a verdict on the indices themselves: valid, "no cone this
+  side", "not enough indices yet" (so a UI can call it on every keystroke without owning a rule for
+  when a row is finished), or invalid, with the offending slot named where one slot is at fault. No
+  `LUMICE_API_VERSION` change — a new function, no struct or ABI change.
+
+### Changed
+- **`upper_indices` / `lower_indices` are now judged rather than partly ignored.** These arrays used
+  to be read only when they held exactly three entries, and only entries 0 and 2 were looked at, so
+  three kinds of mistake passed silently: a four-index array — `[1,0,-1,1]`, the notation users
+  actually write — fell through entirely and left the default 28° looking like a stated value; a
+  non-zero second index was dropped, rendering `[1,1,2]` as `[1,0,2]`'s 46.756° instead of the
+  31.545° it names (a shape this crystal model cannot build at all); and a negative index produced a
+  negative angle whose cone then vanished from the render with nothing said. Each of these now leaves
+  the wedge angle at its default **and logs a warning naming the array and the reason**. Applies
+  equally to the CLI, the C API and the GUI's own reader, which had each kept a copy of this
+  conversion.
+- **`[0,0,l]` now means "no pyramidal cap on this side", not 28°.** ⚠️ Behaviour change for existing
+  configs: a crystal whose `upper_indices` or `lower_indices` starts with 0 (and states no explicit
+  `upper_wedge_angle` / `lower_wedge_angle`) previously rendered a 28° cone on that side and now
+  renders a plain prism end. 28° was never a stated value — it was the field's default showing
+  through — and every other part of the engine already read a leading 0 as "no cone". Add an explicit
+  `upper_wedge_angle: 28.0` to keep the old picture.
 
 ## [4.5.0] - 2026-09-06
 
