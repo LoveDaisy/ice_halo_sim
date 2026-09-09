@@ -1642,6 +1642,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   if (g_bg_pick.active && !BgPickerAvailable(g_state)) {
     g_bg_pick.active = false;
   }
+  // The post-confirm latch ends with the press that set it, whatever happened in between.
+  if (g_bg_pick.swallow_drag_until_release && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    g_bg_pick.swallow_drag_until_release = false;
+  }
 
   float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
@@ -1961,6 +1965,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // second case a no-op instead of silently orbiting: a user pressing the modifier over a
       // hidden background has stated what they meant to move, and swallowing the modifier to move
       // something else is worse than doing nothing.
+      // "No gesture this frame": either the eyedropper owns the viewport, or it has just taken a
+      // colour and the press that took it has not been let go of yet.
+      const bool gestures_locked = g_bg_pick.active || g_bg_pick.swallow_drag_until_release;
       // Same predicate the eyedropper button is enabled by, and deliberately not a second copy of
       // the expression: "there is a photo on screen to act on" is one question, whether the act is
       // dragging it or sampling it.
@@ -1969,7 +1976,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // into a right click before this handler runs — see kBgModifierName in preview_renderer.hpp.
       const bool bg_modifier = io.KeyAlt;
 
-      if (!g_bg_pick.active && bg_active && bg_modifier && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      if (!gestures_locked && bg_active && bg_modifier && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         // Solve for "the texel under the cursor stays under the cursor". With
         // bg_uv = ndc * scale + offset, moving the cursor by dndc requires
         // offset_new = offset_old - dndc * scale; since `scale` already carries the zoom, this is
@@ -1998,7 +2005,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
                      std::min(static_cast<float>(oy_c.max_value), g_state.bg_offset_y - dndc.y * t.scale_y));
       }
 
-      if (!g_bg_pick.active && bg_active && bg_modifier && is_hovered && io.MouseWheel != 0.0f) {
+      if (!gestures_locked && bg_active && bg_modifier && is_hovered && io.MouseWheel != 0.0f) {
         // Multiplicative, so one notch is the same proportional change everywhere on the range —
         // matching the kLog slider the same field is edited by.
         const FieldEditorConstraint scale_c = ConstraintFor("bg_scale", g_state);
@@ -2007,8 +2014,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
             std::max(static_cast<float>(scale_c.min_value), std::min(static_cast<float>(scale_c.max_value), zoomed));
       }
 
-      if (!g_bg_pick.active && !bg_modifier && !full_sky && is_active &&
-          ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      if (!gestures_locked && !bg_modifier && !full_sky && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
         // Sensitivity is the lens's angular resolution at the frame center, so one pixel of
         // drag moves the content one pixel whatever the FOV and viewport are. A fixed deg/px
@@ -2040,7 +2046,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         rc.elevation = std::max(-el_lim, std::min(el_lim, rc.elevation));
       }
 
-      if (!g_bg_pick.active && !bg_modifier && !full_sky && is_hovered && io.MouseWheel != 0.0f) {
+      if (!gestures_locked && !bg_modifier && !full_sky && is_hovered && io.MouseWheel != 0.0f) {
         float fov_max = LUMICE_MaxFov(static_cast<LUMICE_LensType>(rc.lens_type));
         rc.fov -= io.MouseWheel * 5.0f;
         rc.fov = std::max(1.0f, std::min(fov_max, rc.fov));
@@ -2095,6 +2101,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
           rc.background[1] = (*sampled)[1];
           rc.background[2] = (*sampled)[2];
           g_bg_pick.active = false;
+          g_bg_pick.swallow_drag_until_release = true;
         }
         // A click on the letterbox is deliberately inert — not a cancel: the user aimed at the
         // photo and missed its edge, and dropping them out of the mode would make the miss cost a

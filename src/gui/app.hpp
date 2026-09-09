@@ -60,6 +60,11 @@ struct PreviewViewport {
 // this flag is edge-triggered by a user action and has to survive the frames in between.
 struct BgColorPickState {
   bool active = false;
+  // Set when a pick confirms, cleared when the left button comes back up. The confirm fires on the
+  // mouse-DOWN frame — that is what makes the swatch under the cursor and the colour taken the same
+  // thing — so without this latch the remainder of that same press, the few pixels of travel before
+  // the user lets go, would reach the camera-orbit branch as an ordinary drag and swing the view.
+  bool swallow_drag_until_release = false;
 };
 
 enum class PendingAction { kNone, kNew, kOpen, kQuit };

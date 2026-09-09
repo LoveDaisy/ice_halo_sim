@@ -296,9 +296,10 @@ TEST(BgColorPicker, PickBranchAssignsNothingButTheSkyColour) {
   }
 
   // `geom.*` is the local sample-geometry carrier being filled in — a stack value, not state.
-  // `rc.background` is the one document write, and `g_bg_pick.active` leaves the mode.
+  // `rc.background` is the one document write; `g_bg_pick.*` is the mode's own flag, which lives
+  // outside GuiState precisely so that setting it is not a document write.
   for (const std::string& t : targets) {
-    const bool allowed = t.rfind("geom.", 0) == 0 || t == "rc.background" || t == "g_bg_pick.active";
+    const bool allowed = t.rfind("geom.", 0) == 0 || t.rfind("g_bg_pick.", 0) == 0 || t == "rc.background";
     EXPECT_TRUE(allowed) << "the eyedropper branch assigns to `" << t
                          << "`; picking must write nothing to the document but renderer.background";
   }
