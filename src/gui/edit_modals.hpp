@@ -95,18 +95,6 @@ void RenderSpectrumModal(GuiState& state);
 // Intended for GUI test assertions; production code should not call this.
 bool IsCurrentModalDApplicable();
 
-// TEMPORARY red-state probe (AC0). Exposes today's hand-transcribed wedge-preset table together
-// with the Miller indices each row's label claims to stand for, so a unit test can compare the two
-// against ConvertMillerIndexToWedgeAngle. Reverted immediately after the red is recorded; the
-// permanent shape is a table that has no hand-written angle in it at all.
-struct WedgePresetLegacyRow {
-  const char* label;
-  float value;
-  int h;
-  int l;
-};
-int GetWedgePresetLegacyValuesForTest(const WedgePresetLegacyRow** out);
-
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_EDIT_MODALS_HPP
