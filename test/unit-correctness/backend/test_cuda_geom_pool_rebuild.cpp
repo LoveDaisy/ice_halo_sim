@@ -39,12 +39,6 @@
 #include "core/backend/trace_backend.hpp"
 #include "cuda_test_helpers.hpp"
 
-// TEMPORARY red-state probe, reverted by the very next commit. A platform-independent compile
-// error placed inside the LUMICE_CUDA_ENABLED guard: the two CUDA compile jobs must turn red on
-// it, and every other job must stay green (this TU is empty for them). Without that pair of
-// observations, "the job is green" cannot distinguish a compiled TU from an empty one.
-static_assert(false, "red-state probe: this file must actually be compiled by the CUDA jobs");
-
 namespace lumice {
 namespace {
 
