@@ -202,8 +202,8 @@ struct RenderConfig {
   EvMode ev_mode_ = kRelative;
   // Appearance field, for the same reason ev_mode_ above is: it selects WHICH operator turns the
   // accumulated radiance into pixels, never the accumulation layout, so a change needs no consumer
-  // rebuild. The operator itself is not in this repository yet — nothing reads this field today,
-  // which is the deliberate state while the field chain lands ahead of the operator.
+  // rebuild. Read by RenderConsumer::PostSnapshot (src/server/render.cpp) and, on the GUI side, by
+  // the preview fragment shader through LUMICE_RenderParam::tone.
   Tone tone_ = kScreen;
 
   std::vector<GridLineParam> angular_dist_grid_;

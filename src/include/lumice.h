@@ -233,9 +233,9 @@ extern "C" {
 // subtractive operator black paper renders an all-black page, since out = paper * 10^(-D). Set it,
 // or go through JSON. The reason `paper` is a field of its own rather than a reuse of `background`
 // is exactly this degenerate state — see doc/print-mode-subtractive-ink.md decision D5.
-// NO CONSUMER YET: this version carries the fields through every path (JSON both ways, this
-// struct, the GUI) but the subtractive operator itself is not implemented, so setting
-// LUMICE_TONE_PRINT changes no pixel today.
+// Both fields are LIVE: LUMICE_TONE_PRINT selects the subtractive operator in the renderer
+// (src/server/render.cpp's PostSnapshot, through src/util/ink_transfer.hpp) and in the GUI's preview
+// shader, and `paper` is the ground it lays ink on.
 #define LUMICE_API_VERSION 427
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
@@ -1127,8 +1127,10 @@ typedef struct LUMICE_RenderParam_ {
   // it, or go through JSON. Avoiding exactly this state one tick-box away is why `paper` is its
   // own field rather than a reuse of `background`.
   //
-  // NO CONSUMER YET (v4.27): the operator itself is not implemented, so LUMICE_TONE_PRINT changes
-  // no pixel in this version. The field chain lands first, deliberately.
+  // LIVE as of v4.27's operator: LUMICE_TONE_PRINT makes PostSnapshot take the density transfer
+  // curve of src/util/ink_transfer.hpp instead of the additive one, greyscale by construction — the
+  // gamut clip, the XYZ->RGB matrix and `ray_color` are all skipped. See
+  // doc/print-mode-subtractive-ink.md for what the mode does and does not promise.
   int tone;
   float paper[3];
 } LUMICE_RenderParam;

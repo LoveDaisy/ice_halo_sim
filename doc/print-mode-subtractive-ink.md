@@ -243,14 +243,17 @@ print 把输出的色度自由度整个消耗掉了：每个像素的颜色由 `
 
 ### 11.1 owner 已裁决（⛔ 不得自行推翻，如有异议上抛）
 
-| # | 决策 |
-|---|------|
-| D1 | print 是一个**显式开关**，不是按背景色自动切换；两条法则不可统一为一个滑杆 |
-| D2 | print 模式**只做灰度**，不做逐像素色度（CZA/CHA 这类高能量高饱和弧在减色下会难看，主动放弃该维度） |
-| D3 | `γ`（密度斜率）与 `s`（色相倾斜）**先钉默认值**，不暴露为用户旋钮 |
-| D4 | 灰度标量**先用 Y**；等权/辐射量作为已识别的推迟选项记入本文，将来可能作为 GUI 开关 |
-| D5 | `background`（天空）与 `paper`（纸）**拆成两个字段**，而非共用一个 |
-| D6 | screen 白底告警与 print 黑纸告警是**同一个思路**，应实现为同一个谓词 |
+> **as-built（2026-09-10，全部五块下游已落地）**：下表第三列是每条裁决在代码里的落点。
+> ⚠️ 行号会漂，符号名不会——找不到行就按符号名 grep。
+
+| # | 决策 | 落地位置（as-built） |
+|---|------|---------------------|
+| D1 | print 是一个**显式开关**，不是按背景色自动切换；两条法则不可统一为一个滑杆 | `src/config/render_config.hpp` 的 `enum Tone { kScreen, kPrint }`（:164，注释写明"structurally non-overlapping, not two parameter ranges"）。全树唯一会自己改写 `tone` 的代码路径是 `ApplyHeadroomFix`（`src/gui/gui_state.hpp`:516），而它挂在告警旁边那个**要用户点的按钮**上——没有任何路径读背景色就切模式 |
+| D2 | print 模式**只做灰度**，不做逐像素色度（CZA/CHA 这类高能量高饱和弧在减色下会难看，主动放弃该维度） | `src/server/render.cpp` 的 `if (print_mode)` 分支（:905–916）：跳过 gamut clip、XYZ→RGB 矩阵与 `ray_color_`，只取标量 `xyz[1]`。GUI 侧对偶为 `subtractiveInk()`（`src/gui/preview_renderer.cpp`:197 起） |
+| D3 | `γ`（密度斜率）与 `s`（色相倾斜）**先钉默认值**，不暴露为用户旋钮 | `γ` = `inline constexpr float kInkGamma = 11.0f`（`src/util/ink_transfer.hpp`:41），**不是** config 字段、不是函数参数，也没有对应 GUI 控件；`test/unit-correctness/util/test_ink_transfer.cpp` 把它钉住，所以改它只能是有意的。`s` 按本节脚注的结论在代码里不存在（被 D2 架空） |
+| D4 | 灰度标量**先用 Y**；等权/辐射量作为已识别的推迟选项记入本文，将来可能作为 GUI 开关 | `src/server/render.cpp`:912 `const float e = paint_bg ? xyz[1] : 0.0f;`（`xyz[1]` = CIE Y，已乘过 `scale`）。等权/辐射量没有实现，仍只是 §9.1 的推迟选项 |
+| D5 | `background`（天空）与 `paper`（纸）**拆成两个字段**，而非共用一个 | `src/config/render_config.hpp`:183 `float background_[3]{}`（默认黑）与 :193 `float paper_[3]{1,1,1}`（默认白）两个独立字段，默认值刻意相反 |
+| D6 | screen 白底告警与 print 黑纸告警是**同一个思路**，应实现为同一个谓词 | `src/util/contrast_headroom.hpp` 的 `ContrastHeadroomMargin` / `ContrastHeadroomIsLow`（:92/:108）是唯一谓词；CLI 侧 `src/server/server.cpp`:741、GUI 侧 `src/gui/gui_state.hpp`:491–499 的 `ContrastHeadroomMarginFor`/`ContrastHeadroomIsLowFor` 各自只是把"哪一边是零能量色"喂进去（print→`paper`，screen→`background`），判据本体一份 |
 
 > D3 的 `s`（色相倾斜）是 owner 原始裁决表的逐字措辞（本文按 §11 开篇的复用纪律原样保留），
 > 但**已被 D2 架空**：D2 裁定 print 模式只做灰度、主动放弃色相维度（`κ` 降为常量，见 §5），
@@ -263,13 +266,16 @@ print 把输出的色度自由度整个消耗掉了：每个像素的颜色由 `
 
 ### 11.2 AI 推导（⚠️ 可质疑；被实测证伪时不要迁就本文，按证据上抛并说明）
 
+> **as-built（2026-09-10）**：五条推断已逐条落地核对。被证伪的两条**保留原推断文字不动**，在"实际结论"
+> 里写明实际形态——本仓的既有做法是保留自我纠正链，而不是把猜错的那一版抹掉改写成"本来就是这样"。
+
 | # | 推断 | 若被证伪的影响面 | 验证状态 |
 |---|------|------------------|----------|
-| A1 | 传递曲线取 `D = γ·log10(1+e)`，`out_j = paper_j · 10^(-D)` | 换曲线不改本设计的结构 | ✅ 已由离线标定在 4 场景上验证并经 owner 眼判接受（`γ = 11`，§3.2） |
-| A2 | 灰度标量可直接复用 `render.cpp:843` 起 `use_real_color == false` 分支的前半段（取 `xyz[1]` → D65 灰） | 若复用不成立，算子落地的规模上升 | ⏳ 待算子实现验证 |
-| A3 | annotation 层在 print 下改走**密度乘法**，因而**不需要** per-mode 调色板；"ink 接管色彩通道"这条规则覆盖四个实例 | 若不成立，需回退到"Print 预设写入线条颜色"，那会带回覆盖用户值/影子状态问题 | ⏳ 待算子与互斥实现验证 |
-| A4 | 余量谓词可做成 `src/util/` 纯函数、GUI 与 CLI 共用 | 影响谓词的落点，不影响它的存在性 | ⏳ 待余量告警实现验证 |
-| A5 | 被 mask 区域可统一表述为"零能量"，`render.cpp:912` 的 `rgb[j] = 0.0f;` 特例随之消失 | 若不成立，print 下 mask 外的颜色需单独裁决 | ⏳ 待算子实现验证 |
+| A1 | 传递曲线取 `D = γ·log10(1+e)`，`out_j = paper_j · 10^(-D)` | 换曲线不改本设计的结构 | ✅ 已由离线标定在 4 场景上验证并经 owner 眼判接受（`γ = 11`，§3.2）。**as-built**：`src/util/ink_transfer.hpp` 的 `InkOpticalDensity` / `InkTransmittance` 是 C++ 侧单一 owner，`render.cpp`:913 调用它；GLSL 第三份实现是手抄（`preview_renderer.cpp`:197 起，注释指回权威） |
+| A2 | 灰度标量可直接复用 `render.cpp:843` 起 `use_real_color == false` 分支的前半段（取 `xyz[1]` → D65 灰） | 若复用不成立，算子落地的规模上升 | ⚠️ **部分证伪，但代价反向**：实际没有复用那个分支的任何代码——print 分支（`render.cpp`:905）自己取 `xyz[1]` 直接送进传递曲线，**跳过了 D65 白点矩阵乘法**（那个矩阵只在需要 RGB 色度时才必要，print 只需要标量）。A2 预判的"若复用不成立，规模上升"**没有发生**：实际分支比它要复用的那半段更短 |
+| A3 | annotation 层在 print 下改走**密度乘法**，因而**不需要** per-mode 调色板；"ink 接管色彩通道"这条规则覆盖四个实例 | 若不成立，需回退到"Print 预设写入线条颜色"，那会带回覆盖用户值/影子状态问题 | ✅ **成立**。`BlendAnnotation`（`render.cpp`:123–125）：`print_mode ? base*(1-alpha) : base*(1-alpha) + line_rgb*alpha`，CLI 侧 7 个调用点（grid / angular_dist / horizon / markers / `PaintLabels`）全部收敛于它；GUI 侧同形的 `blendAnnotationColor()`（`preview_renderer.cpp`:215）有 8 个调用点。全程未新增任何 print 专用调色板字段 |
+| A4 | 余量谓词可做成 `src/util/` 纯函数、GUI 与 CLI 共用 | 影响谓词的落点，不影响它的存在性 | ✅ **成立**。`src/util/contrast_headroom.hpp`，无 core/config 类型依赖，`server.cpp` 与 `gui_state.hpp` 双侧调用同一实现（落点见 §11.1 的 D6 行） |
+| A5 | 被 mask 区域可统一表述为"零能量"，`render.cpp:912` 的 `rgb[j] = 0.0f;` 特例随之消失 | 若不成立，print 下 mask 外的颜色需单独裁决 | ⚠️ **机制被证伪，效果达成**：那行 `rgb[j] = 0.0f;` **没有消失**（现 `render.cpp`:992），而是被 `if (!print_mode)`（:977）卫护起来、只在 screen 下执行；print 走的是另一条路——`paint_bg == false` 时 `e = 0.0f`（:912），经 `InkTransmittance(InkOpticalDensity(0)) == 1` 落地为**纸的原色**。所以 A5 的主张（print 下 mask 区域是零能量色 = 纸白，不是黑）成立，但实现形态是"新增一条独立分支"而不是"消除旧特例"，与 A5 字面预测的机制不同 |
 
 关于 A5 的一个已知后果，实现时须一并核对：统一为"零能量"之后，print 下被 mask 的区域
 （镜头成像圆之外、`visible` 舍弃的半天、`front` 之后）渲染为 `D = 0 ⇒ out = paper`，
@@ -277,4 +283,13 @@ print 把输出的色度自由度整个消耗掉了：每个像素的颜色由 `
 但它同时意味着成像圆边界在 print 下失去了视觉分界，除非画出镜头边框。这是 A5 的验证负担之一，
 不是可以默认成立的推论。
 
-⏳ 标记的条目在下游落地后应由验收闸那一环回写为 as-built。
+A5 那条已知后果（成像圆边界在 print 下失去视觉分界，除非画镜头边框）**仍然成立且仍未处理**——
+后续四个子任务都没有碰它，保留为已知边界，见上一段。
+
+**跨切验收闸**（只有整个模式建成之后才可能存在的那一类）落在两处：
+`test/unit-correctness/server/test_print_mode_dynamic_range_gate.cpp`——四个数量级动态范围在 8-bit
+输出里的可分辨性，print 全分开、screen 白底全塌成同一个白，即 §1 的诊断被操作化成一条可执行断言；
+以及 `test/gui/parity/test_gui_cli_export_parity.cpp` 的 `full_sky_dual_fisheye_print` 场景——GLSL 那份
+手抄实现与 C++ 权威之间的漂移，只能靠同一份文档经 CLI 与 GUI 预览两条生产路各渲一次再互比来兜住。
+⚠️ 后者所属的 `parity` tag **没有任何 CI job 在跑**（`doc/testing-architecture.md` §7.5），只在有 GL
+context 的开发机上经 `./scripts/test.sh {quick,full,pr}` 求值——不要因为流水线绿就以为它跑过。
