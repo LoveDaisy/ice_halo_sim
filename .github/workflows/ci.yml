@@ -166,6 +166,27 @@ jobs:
           echo "SCCACHE_DIR=$env:GITHUB_WORKSPACE\sccache_cache" >> $env:GITHUB_ENV
           echo "SCCACHE_CACHE_SIZE=2G" >> $env:GITHUB_ENV
 
+      # [MEASUREMENT BRANCH — DO NOT MERGE] ccache on the Ubuntu x86_64 leg. Mirrors the sccache leg
+      # above rather than inventing a second shape: same launcher-via-env-var injection
+      # (so the shared Configure step below needs no branch), same "one cache entry per
+      # commit + restore-keys fallback" key shape. Throwaway measurement branch — not to merge.
+      - name: Install ccache (Ubuntu x86_64)
+        if: matrix.cache_key == 'ubuntu-x64'
+        run: |
+          sudo apt-get update && sudo apt-get install -y ccache
+          ccache --version
+          echo "LUMICE_SCCACHE_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+
+      - name: Cache ccache directory (Ubuntu x86_64)
+        if: matrix.cache_key == 'ubuntu-x64'
+        uses: actions/cache@v6
+        with:
+          path: ccache_cache
+          key: ccache-ubuntu-x64-${{ github.sha }}
+          restore-keys: ccache-ubuntu-x64-
+
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       - name: Install GLAD2 Python dependencies (MSVC)
         if: matrix.msvc && matrix.build_gui == 'ON'
@@ -229,6 +250,13 @@ jobs:
       # slow Build was a cold cache or a real regression. Stopping the server afterwards
       # flushes its state to disk before actions/cache's post-step packs the directory; no
       # compilation happens after this point in the job.
+      # [MEASUREMENT BRANCH — DO NOT MERGE] Hit rate is the second, independent evidence chain: wall
+      # clock alone cannot separate "cache worked" from "faster runner" (measured ~1.5x spread
+      # on identical work, 331 ninja steps either way). Never a gate — hence `|| true`.
+      - name: ccache statistics (Ubuntu x86_64)
+        if: always() && matrix.cache_key == 'ubuntu-x64'
+        run: ccache --show-stats --verbose || true
+
       - name: sccache statistics (Windows MSVC)
         if: always() && matrix.msvc
         shell: bash
@@ -707,6 +735,24 @@ jobs:
           key: cpm-ubuntu-x64-shared-gui-test-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-ubuntu-x64-shared-gui-test-
 
+      # [MEASUREMENT BRANCH — DO NOT MERGE] ccache on the critical-path leg. This job is 93% compile
+      # (659/708 s measured), and no compiler cache reaches it today: ci.yml's sccache comment
+      # says it is installed "on the one leg where compilation is most of the job", which was
+      # true when written and is not any more. Throwaway measurement branch — not to merge.
+      - name: Install ccache
+        run: |
+          sudo apt-get install -y ccache
+          ccache --version
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+
+      - name: Cache ccache directory
+        uses: actions/cache@v6
+        with:
+          path: ccache_cache
+          key: ccache-ubuntu-x64-shared-gui-test-${{ github.sha }}
+          restore-keys: ccache-ubuntu-x64-shared-gui-test-
+
       - name: Configure (shared + test + GUI)
         run: >
           cmake -S . -B build -G Ninja
@@ -715,9 +761,16 @@ jobs:
           -DBUILD_GUI=ON
           -DBUILD_SHARED_LIBS=ON
           -DLUMICE_NATIVE_ARCH=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build (compile + link only, no run)
         run: cmake --build build --parallel
+
+      # [MEASUREMENT BRANCH — DO NOT MERGE] see the ccache statistics step in the build job.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats --verbose || true
 
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
