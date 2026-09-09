@@ -514,6 +514,22 @@ struct RenderConfigResimFields {
   friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
 };
 
+// The field-set guards for the two structs above. Deliberately OUTSIDE the platform gate that
+// follows: a member COUNT is the same on every target, so gating it would buy nothing and would
+// leave Linux/Windows without the half of the check that works there. The sizeof pins below stay
+// gated because a byte size is not portable.
+//
+// WHEN ONE FIRES the compiler says "decomposes into N elements, but M names were provided". A
+// field was added to or removed from that struct, and the dispositions spelled out under the
+// platform gate below are what has to be decided.
+inline void RenderConfigFieldSetGuard(const RenderConfig& c) {
+  [[maybe_unused]] const auto& [lens_type, fov, elevation, azimuth, roll, sim_resolution_index, visible, front,
+                                background, ray_color, exposure_offset, ev_mode] = c;
+}
+inline void RenderConfigResimFieldsGuard(const RenderConfigResimFields& r) {
+  [[maybe_unused]] const auto& [sim_resolution_index] = r;
+}
+
 // Apple Silicon + libc++ only. Layout pins, mirroring the EntryCard pattern (see below).
 // Linux/Windows CI still compiles both structs; this only pins the Apple main-dev platform.
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -536,13 +552,25 @@ struct RenderConfigResimFields {
 // its anchor from config_.ev_mode_ at CommitConfig time), and there it deliberately takes effect
 // on the next Run rather than the next frame — see the note at component_compositor.cpp's
 // CompositeAnchorScale. That is a slower path to the same value, not a resim dependency.
-static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimFields for new fields");
+static_assert(sizeof(RenderConfig) == 64, "RenderConfig layout changed — see RenderConfigFieldSetGuard above");
 // RenderConfigResimFields: naming the field list once does NOT by itself keep the three
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
-// the old subset. Pinning the size is what turns that omission into a compile error.
+// the old subset.
+//
+// Pinning the SIZE does not turn that omission into a compile error either, which is what this
+// comment used to claim. sizeof is blind to a field that lands in an alignment hole — measured
+// on the two structs above, and this one is one member away from having such a hole itself (add
+// an int and a bool and the next bool is free). RenderConfigResimFieldsGuard above is what makes
+// "a field was added or removed" a compile error, because it counts member declarations.
+//
+// What NOTHING here guarantees is the three-way part: once the guard has told you a field
+// appeared, keeping From / ApplyTo / operator== consistent about it is a code-review duty, not a
+// compile-time one. A stronger mechanism (a user-declared constructor to force From to name every
+// field) is deliberately not built: this struct holds one field and no drift has ever escaped
+// here, so the cost is not carried by any observed harm.
 static_assert(sizeof(RenderConfigResimFields) == 4,
-              "RenderConfigResimFields size changed — update From/ApplyTo/operator== together");
+              "RenderConfigResimFields layout changed — re-check From/ApplyTo/operator== together");
 #endif
 
 // Resettable subset of RenderConfig (the View `Reset` button targets these

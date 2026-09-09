@@ -271,6 +271,36 @@ struct RenderConfig {
   float markers_radius_px_ = 8.0f;
 };
 
+// The field-set guard for RenderConfig, kept beside the struct so the list of names has one owner
+// rather than one copy per consumer.
+//
+// WHAT IT MEASURES: the number of non-static data members. A structured binding is checked against
+// the member DECLARATIONS, so a field that costs no bytes still changes the count.
+//
+// WHY IT IS NOT THE sizeof PIN: the two `static_assert(sizeof(RenderConfig) == 224)` in
+// NeedsRebuild (render_config.cpp) and operator== (config_compare.hpp) measure the byte size, and
+// a field that lands in an alignment hole does not change it. That is measured, not theorised:
+// adding a bool to the run below `horizon_` leaves sizeof at 224 and every sizeof pin silent, and
+// removing `opacity_` (a float) once left it at 136 for the same reason. A binding list has no
+// padding for a field to hide in.
+//
+// WHEN IT FIRES the compiler says "decomposes into N elements, but M names were provided" on the
+// binding below. A field was added or removed, and three duties follow:
+//   - classify it as layout or appearance in NeedsRebuild (render_config.cpp);
+//   - decide whether operator== must compare it (config_compare.hpp);
+//   - add or drop its name here.
+//
+// WHAT IT DOES NOT COVER, and why the sizeof pins stay: a change WITHIN a field — a nested struct
+// gaining a member, a type widening — keeps the count unchanged and is invisible here. The sizeof
+// pins do see that class, so the two are complements and neither replaces the other.
+inline void RenderConfigFieldSetGuard(const RenderConfig& c) {
+  [[maybe_unused]] const auto& [id, lens, lens_shift, resolution, view, visible, front, background, ray_color,
+                                intensity_factor, overlap, ev_mode, angular_dist_grid, elevation_grid, longitude_grid,
+                                horizon, elevation_grid_line, longitude_grid_line, angular_dist_grid_line,
+                                horizon_label, grid_label, angular_dist_label, zenith_nadir, markers, markers_opacity,
+                                markers_radius_px] = c;
+}
+
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
     RenderConfig::VisibleRange,  // type
     {
