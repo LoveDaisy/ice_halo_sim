@@ -481,6 +481,7 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/geo3d_closedform.cpp"
   "${PROJ_SRC_DIR}/core/lat_lut.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
+  "${PROJ_SRC_DIR}/core/miller_wedge.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp"
   "${PROJ_SRC_DIR}/core/parallel_rows.cpp"
   "${PROJ_SRC_DIR}/core/projection.cpp"

@@ -91,6 +91,20 @@ constexpr int kHexPyramidTriCnt = 44;
 constexpr float kIceCrystalC = 1.629f;
 constexpr int kMaxHexCrystalPlanes = 20;  // 2 basal + 6 prism + 6 upper pyr + 6 lower pyr
 
+// ====== Miller index -> wedge angle ======
+// The pyramidal wedge angle, in degrees, of the face whose reduced Miller-Bravais indices are
+// (i1, 0, i4): atan(sqrt(3)/2 * i4 / i1 / c). i1 == 0 means "this side has no pyramidal cap" and
+// yields 0 (the guard is explicit rather than leaning on atan(inf) = 90 degrees).
+//
+// NO VALIDATION SEMANTICS. This is the bare formula: it does not know how many indices the caller
+// was given, does not look at the second index, and does not judge whether the angle it returns is
+// a geometrically buildable one. It is meant for callers that already hold a settled (i1, i4) pair
+// -- the three Miller mesh overloads below. A new caller that is anywhere near user input (JSON
+// fields, GUI keystrokes) wants ConvertMillerIndexToWedgeAngle in core/miller_wedge.hpp instead,
+// which returns those judgements; reaching for this one there is how the four silently-accepted
+// inputs this owner was created to settle would grow back.
+float MillerIndexToWedgeAngleDeg(int i1, int i4);
+
 // ====== Unified hex crystal plane equations ======
 // Generates plane equations for hexagonal crystal (convex: prism and/or pyramid).
 // Prism = h1≈0, h3≈0 degenerate case (8 planes). Full pyramid = up to 20 planes.
