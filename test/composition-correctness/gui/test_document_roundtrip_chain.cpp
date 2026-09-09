@@ -23,6 +23,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
+#include "support/scene_json_helpers.hpp"
 
 namespace lumice::gui {
 namespace {
@@ -934,6 +935,33 @@ TEST(DocumentRoundtripChain, SchemaVersionIsFour) {
   ASSERT_TRUE(root.contains("schema_version"));
   EXPECT_EQ(root["schema_version"].get<int>(), 4);
 }
+
+// ===== TEMPORARY AC0 PROBE — removed/rewritten before this task lands =====
+TEST(DocumentRoundtripChain, AC0ProbeEmptyTokenLoadPath) {
+  const char* kInputs[] = { "3--5", "-3-5", "3-5-", "3---5", "99" };
+  for (const char* in : kInputs) {
+    GuiState s;
+    TakeFilterNoPredicateDowngradeCount();
+    TakeRaypathCommaMigratedCount();
+    ClearImportComplexFilterWarning();
+    const bool ok = DeserializeGuiStateJson(V3DocWithSummand(in), s);
+    std::string text = "<none>";
+    size_t nrows = 0;
+    if (ok && !s.filters.empty()) {
+      nrows = s.filters.at(0).param.size();
+      if (nrows > 0) {
+        text = s.filters.at(0).param[0].text;
+      }
+    }
+    nlohmann::json committed = ok ? lumice::test::CommitSceneJson(s) : nlohmann::json{};
+    std::string filt = committed.is_null() || !committed.contains("filter") ? "<null>" : committed["filter"].dump();
+    fprintf(stderr, "AC0PROBE input=%-8s deser=%d rows=%zu text=%-10s nopred=%d warn=[%s] filter=%s\n", in,
+            static_cast<int>(ok), nrows, text.c_str(), TakeFilterNoPredicateDowngradeCount(),
+            std::string(PeekImportComplexFilterWarning()).c_str(), filt.c_str());
+    ClearImportComplexFilterWarning();
+  }
+}
+// ===== END TEMPORARY AC0 PROBE =====
 
 }  // namespace
 
