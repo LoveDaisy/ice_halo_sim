@@ -1296,6 +1296,12 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 | format-check | 8 | 10 | no — second-scale gate |
 | | **4644s** | 5642s | warm head = 3591s (77%) |
 
+⚠️ **Both columns predate the ccache step on `Ubuntu x86_64`.** They were read from the two runs
+that landed the shared-gui leg's cache, and the ubuntu leg got its own one commit later, so that
+row's 650s is what the job costs *without* a compiler cache. Its first cached run was cold (657s,
+nothing to restore) and no warm figure exists yet. Do not quote 650s as this workflow's ceiling
+without checking whether a warm run has happened since.
+
 The cold column is not a hypothetical. Every cache in the repository was destroyed while this table
 was being measured, so the two runs are the same commit range on the same branch, one with nothing
 to restore and one with everything. Read it as the honest price of a cold start rather than as
