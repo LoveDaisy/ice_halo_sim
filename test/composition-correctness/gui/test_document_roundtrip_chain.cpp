@@ -936,32 +936,127 @@ TEST(DocumentRoundtripChain, SchemaVersionIsFour) {
   EXPECT_EQ(root["schema_version"].get<int>(), 4);
 }
 
-// ===== TEMPORARY AC0 PROBE — removed/rewritten before this task lands =====
-TEST(DocumentRoundtripChain, AC0ProbeEmptyTokenLoadPath) {
-  const char* kInputs[] = { "3--5", "-3-5", "3-5-", "3---5", "99" };
-  for (const char* in : kInputs) {
-    GuiState s;
-    TakeFilterNoPredicateDowngradeCount();
-    TakeRaypathCommaMigratedCount();
-    ClearImportComplexFilterWarning();
-    const bool ok = DeserializeGuiStateJson(V3DocWithSummand(in), s);
-    std::string text = "<none>";
-    size_t nrows = 0;
-    if (ok && !s.filters.empty()) {
-      nrows = s.filters.at(0).param.size();
-      if (nrows > 0) {
-        text = s.filters.at(0).param[0].text;
-      }
+// The .lmc reader's syntax gate.
+//
+// The GUI-native load path used to hand every `summands` row straight to ParseSummandText, which is
+// deliberately tolerant — it skips what it cannot read so a half-typed row in the editor still shows
+// the part that parses. The editor pairs that tolerance with ValidateSummandText on its OK button.
+// This reader had the tolerance and not the pairing, and an empty step in a face path is exactly the
+// shape that slips through it: the parser's flush() returns early on an empty token without marking
+// the row bad, so "3--5" parsed as {3, 5} and committed as the path 3-5. Not a crash, not a blank
+// picture — a path that looks entirely reasonable and is not the one the file states, with nothing
+// on screen saying so.
+//
+// Asserted through the committed scene rather than through the loaded rows, because the row is where
+// the defect is invisible: `param[0].text` came back as "3--5" verbatim in the broken build too. What
+// changed shape was the document handed to the simulator.
+//
+// The one-line fix this looks like it wants — mark the empty token invalid in ParseRaypathSegment —
+// is worse, and the reason is pinned in that function's comment: it makes the row lower to core's
+// match-all, i.e. from filtering one path the user did not write to filtering nothing at all, just as
+// silently. The gate belongs on this caller, which is the one that never had one.
+TEST(DocumentRoundtripChain, AMalformedSummandRowIsRejectedRatherThanReinterpreted) {
+  struct Case {
+    const char* name;
+    const char* summand;
+  };
+  const Case kCases[] = {
+    // The whole empty-token class, not just the middle one: the parser's flush() treats a leading,
+    // a trailing and an interior empty token identically, so all four spellings used to collapse
+    // onto the same wrong answer, {3, 5}.
+    { "an interior empty step", "3--5" },
+    { "a leading empty step", "-3-5" },
+    { "a trailing empty step", "3-5-" },
+    // Two empty steps in a row: the judgement is "any empty token", not "exactly one".
+    { "several empty steps", "3---5" },
+    // Not an AC of its own — reusing the editor's whole validator rather than writing a fresh
+    // empty-token predicate means face-number legality comes along with it. Pinned so that a later
+    // narrowing of the gate to "empty tokens only" is a visible choice rather than a silent loss.
+    { "a face number no crystal has", "99" },
+    { "a malformed entry: factor", "entry:abc & 3-5" },
+  };
+
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    TakeInvalidSummandRowCount();  // discard anything a previous case in this binary left
+    GuiState loaded;
+    if (!DeserializeGuiStateJson(V3DocWithSummand(c.summand), loaded)) {
+      ADD_FAILURE() << c.name << ": the document failed to deserialize";
+      continue;  // no load to check; the rest of the cases still get their turn
     }
-    nlohmann::json committed = ok ? lumice::test::CommitSceneJson(s) : nlohmann::json{};
-    std::string filt = committed.is_null() || !committed.contains("filter") ? "<null>" : committed["filter"].dump();
-    fprintf(stderr, "AC0PROBE input=%-8s deser=%d rows=%zu text=%-10s nopred=%d warn=[%s] filter=%s\n", in,
-            static_cast<int>(ok), nrows, text.c_str(), TakeFilterNoPredicateDowngradeCount(),
-            std::string(PeekImportComplexFilterWarning()).c_str(), filt.c_str());
-    ClearImportComplexFilterWarning();
+
+    // The row is gone, not kept with an empty parse: a row whose text survives is a row the editor
+    // would show back to the user as if the file had said something valid.
+    EXPECT_TRUE(loaded.filters.empty() || loaded.filters.at(0).param.empty())
+        << c.name << ": the malformed row survived the load";
+
+    // What the simulator is handed. The empty-token cases used to arrive here as
+    // {"type": "raypath", "raypath": [3, 5]}; a fail-closed parser change would make them arrive as
+    // {"type": "none"}, which is core's match-all. Neither is the file's meaning, and asserting the
+    // absence of both is what separates this fix from that one.
+    const nlohmann::json committed = lumice::test::CommitSceneJson(loaded);
+    if (committed.is_null()) {
+      ADD_FAILURE() << c.name << ": the document did not commit at all";
+      continue;
+    }
+    const std::string emitted = committed.value("filter", nlohmann::json::array()).dump();
+    EXPECT_EQ(emitted.find("\"raypath\""), std::string::npos)
+        << c.name << ": a face path the file never stated reached the simulator: " << emitted;
+    EXPECT_EQ(emitted.find("\"none\""), std::string::npos)
+        << c.name << ": the row lowered to core's match-all, which filters nothing: " << emitted;
+
+    // Counted, and counted once — DoOpen reads this to decide whether to raise the import notice,
+    // so a row dropped without being counted is a row dropped in silence, which is the state this
+    // whole case exists to leave behind.
+    EXPECT_EQ(TakeInvalidSummandRowCount(), 1) << c.name << ": the dropped row was not counted";
+    EXPECT_EQ(TakeInvalidSummandRowCount(), 0)
+        << c.name << ": the counter did not clear on read, so the notice would never go away";
   }
 }
-// ===== END TEMPORARY AC0 PROBE =====
+
+// The other half: the gate must not refuse anything the editor can write.
+//
+// Every .lmc this GUI saves has already been through ValidateSummandText on the way in, so a false
+// positive here would reject a file the program itself produced. Kept separate from the cases above
+// on purpose — those say "the bad input is caught", this says "the good input still loads", and a
+// gate can pass the first while failing the second.
+TEST(DocumentRoundtripChain, ValidSummandRowsStillLoadAndAreNotCounted) {
+  struct Case {
+    const char* name;
+    const char* summand;
+    const char* expected_text;
+  };
+  const Case kCases[] = {
+    { "a plain face path", "3-5", "3-5" },
+    { "several ORed segments", "3-5;1-3", "3-5;1-3" },
+    { "an entry facelist ANDed with a path", "entry:1,2 & 3-5", "entry:1,2 & 3-5" },
+    // Migration runs before the gate, so what is validated is the rewritten row. A gate placed
+    // before the rewrite would refuse every pre-retirement document.
+    { "a row the ',' migration rewrote", "3-5,1-2", "3-5-1-2" },
+    // The widest face number that is legal on some crystal. The gate validates against the pyramid
+    // set (the union over every kind) precisely so a pyramid-only face is not refused by a reader
+    // that has no crystal in hand.
+    { "a face legal only on a pyramid", "28", "28" },
+    { "a length factor", "len:<=4 & 3-5", "len:<=4 & 3-5" },
+  };
+
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    TakeInvalidSummandRowCount();
+    GuiState loaded;
+    if (!DeserializeGuiStateJson(V3DocWithSummand(c.summand), loaded)) {
+      ADD_FAILURE() << c.name << ": the document failed to deserialize";
+      continue;
+    }
+    if (loaded.filters.size() != 1u || loaded.filters.at(0).param.size() != 1u) {
+      ADD_FAILURE() << c.name << ": the row did not survive the load";
+      continue;  // the text read below would be out of bounds
+    }
+    EXPECT_EQ(loaded.filters.at(0).param[0].text, std::string(c.expected_text))
+        << c.name << ": the row came back saying something else";
+    EXPECT_EQ(TakeInvalidSummandRowCount(), 0) << c.name << ": a valid row was refused by the gate";
+  }
+}
 
 }  // namespace
 
