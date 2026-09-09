@@ -2066,7 +2066,20 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     }
   }
 
-  // Scene: light source. sun_azimuth is always 0 (the GUI exposes no azimuth control).
+  // Scene: light source. The azimuth handed to core is the literal 0 below, on both arms, always.
+  //
+  // Read that as a property of the GUI's world rather than as a control nobody has added yet: the
+  // sun sits due north here and the camera turns instead, which is the same picture with one fewer
+  // degree of freedom for the user to hold. The CLI keeps the freedom because a config written by
+  // hand has no camera to turn — it is the same reasoning that lets the GUI ask core for one fixed
+  // dual-equal-area projection and re-project it in the front end, while the CLI can name any
+  // projection it likes. The two are not expected to match field for field.
+  //
+  // So this line is not waiting on a control. If a document states a non-zero azimuth,
+  // DeserializeFromJson says so out loud (WarnUnsupportedByDesign) rather than turning the sky
+  // silently, and that notice — not a future widget — is the whole of the answer.
+  // doc/gui-state-governance.md 9.3 carries the same statement where a reader looking for the
+  // design decision rather than for this call would find it.
   const char* spectrum_name = "D65";
   const bool use_custom_spectrum =
       state.sun.spectrum_index == kCustomSpectrumIndex && !state.sun.custom_spectrum.empty();
@@ -2360,6 +2373,32 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
   return true;
 }
 
+// Report a core field the GUI deliberately does not have, and never will.
+//
+// This is a DIFFERENT statement from the "states no X; loaded as Y" notices elsewhere in this
+// function, even though it travels the same channel. Those describe a value the GUI can hold that
+// the document declined to state, so the editor picked one and now says so. This one describes a
+// value the GUI has nowhere to put: `SunConfig` has no azimuth, `GuiState::RenderConfig` has no
+// lens shift, `SimConfig` has no geometry clock. The asymmetry with the CLI is intentional and
+// stays — the owner ruling is that the GUI and the CLI need not match feature for feature, and the
+// sun sitting at azimuth 0 is a fixed property of the GUI's world, not a control someone forgot to
+// add. See doc/gui-state-governance.md 9.3.
+//
+// What the notice buys is therefore not a chance to recover the value — nothing downstream can —
+// but the difference between a picture that is quietly not the one the document asked for, and a
+// picture the user knows is not the one the document asked for. The wording says all three parts:
+// what the file asked for, what the GUI does instead, and that the gap is by design rather than a
+// failure to read the file.
+static void WarnUnsupportedByDesign(const std::string& field, const std::string& doc_value,
+                                    const std::string& gui_behavior) {
+  const std::string msg = field + " is set to " + doc_value + ", which this editor has no control for and does not " +
+                          "carry: " + gui_behavior + ". That is deliberate — the command-line renderer keeps the " +
+                          "freedom this editor does not, so the two are not expected to match field for field. The " +
+                          "value was dropped; the source file is untouched.";
+  GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+  SetImportComplexFilterWarning(msg);
+}
+
 bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   json root;
   try {
@@ -2487,6 +2526,17 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       auto& jl = js["light_source"];
       state.sun.altitude = jl.value("altitude", SunConfig{}.altitude);
       state.sun.diameter = jl.value("diameter", SunConfig{}.diameter);
+      // Exact comparison, no epsilon: an absent key and a written `0` both parse to exactly 0.0f,
+      // and any other literal the user typed is a value they meant. There is no rounding here to
+      // absorb — the number is not computed, it is read.
+      const float sun_azimuth = jl.value("azimuth", 0.0f);
+      if (sun_azimuth != 0.0f) {
+        // The document's own literal rather than a re-rendered float: std::to_string would print a
+        // written `30` back as "30.000000", which reads as a precision the file never claimed.
+        WarnUnsupportedByDesign("scene.light_source.azimuth", jl["azimuth"].dump() + " degrees",
+                                "the sun is always due north (azimuth 0) here, so the whole sky is turned back by "
+                                "that angle relative to the document");
+      }
       if (jl.contains("spectrum")) {
         const auto& sp = jl["spectrum"];
         if (sp.is_string()) {
@@ -2520,6 +2570,15 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       }
     }
     state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
+
+    // 0 is core's own "pool disabled", which is what BuildScene commits unconditionally, so only a
+    // request for a pool is worth a word.
+    const int geom_clock = js.value("geom_clock", 0);
+    if (geom_clock != 0) {
+      WarnUnsupportedByDesign("scene.geom_clock", std::to_string(geom_clock),
+                              "the shape pool stays disabled, so every ray is traced against a freshly sampled "
+                              "crystal rather than one of a fixed pool");
+    }
 
     // Convert ID-referenced scattering to copy-model layers.
     if (js.contains("scattering") && js["scattering"].is_array()) {
@@ -2775,6 +2834,18 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           r.sim_resolution_index = i;
           break;
         }
+      }
+    }
+
+    // Core's lens_shift is int[2] pixels, defaulting to {0, 0}; either component alone is a shift.
+    // A malformed value is left to the unknown-key silence the rest of this decoder gives — the
+    // proposition here is about a shift that was asked for, not about the shape of the request.
+    if (jr.contains("lens_shift") && jr["lens_shift"].is_array() && jr["lens_shift"].size() == 2) {
+      const int dx = jr["lens_shift"][0].get<int>();
+      const int dy = jr["lens_shift"][1].get<int>();
+      if (dx != 0 || dy != 0) {
+        WarnUnsupportedByDesign("render[0].lens_shift", "(" + std::to_string(dx) + ", " + std::to_string(dy) + ") px",
+                                "the optical axis stays at the centre of the image");
       }
     }
 

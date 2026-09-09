@@ -515,6 +515,155 @@ TEST(JsonImportContractChain, AJsonColorClassMissingColorIsDroppedNotDefaultColo
 }
 
 // ---------------------------------------------------------------------------------------------
+// The deliberate-capability-boundary half: fields core reads, the GUI has no place to put, and
+// the GUI is not going to grow one.
+//
+// These are NOT the same proposition as D-4/D-6/D-7 above. Those are about a value the GUI CAN
+// hold, arrived at by a guess the document never authorised — the fix there is to stop guessing in
+// silence. Here the GUI has no field at all: `SunConfig` has no azimuth, `GuiState::RenderConfig`
+// has no lens shift, `SimConfig` has no geometry clock. The owner ruling is that this asymmetry is
+// intentional and stays (the sun is fixed at azimuth 0 in the GUI; the CLI keeps the freedom to
+// write another value), so what is under test is not the value — the value is unreachable by
+// construction — but whether the boundary says anything when a document crosses it.
+//
+// That distinction is why "does the loaded state differ" is the wrong oracle for these three and
+// is deliberately not asserted: it cannot differ, in any build, ever. The only observable is the
+// notice, and the only defect these cases can catch is its absence — which is exactly the state
+// they were written against.
+//
+// The sibling half of the same boundary is the export arm, pinned in test_scene_commit_chain.cpp:
+// what the GUI commits to core carries azimuth 0 and geom_clock 0 no matter what was imported.
+
+// A complete document apart from an extra key inside `scene`, which is where geom_clock lives.
+// DocWithParts' third parameter appends at ROOT level, one level too high for this.
+namespace {
+std::string DocWithSceneExtra(const char* scene_extra_json) {
+  return std::string(R"({
+    "crystal": [{"id": 0, "type": "prism", "shape": {"height": 2.0, "face_distance": [1, 1, 1, 1, 1, 1]}}],
+    "filter": [],
+    "scene": {"light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
+              "ray_num": 1000, "max_hits": 8)") +
+         scene_extra_json + R"(,
+              "scattering": [{"prob": 1.0, "entries": [{"crystal": 0, "proportion": 1.0}]}]},
+    "render": [{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64]}]
+  })";
+}
+}  // namespace
+
+// B-1: a non-zero `scene.light_source.azimuth` rotates the whole sky in core, and the GUI drops it
+// on the floor. Nothing downstream can recover it — the sun's azimuth is not a GuiState field —
+// so the image the user is shown is the document's, turned by however many degrees they wrote.
+TEST(JsonImportContractChain, AJsonSunAzimuthIsRefusedOutLoudNotDroppedInSilence) {
+  const std::string doc =
+      DocWithParts(R"({"type": "sun", "altitude": 20, "azimuth": 30, "spectrum": "D65"})", kWellFormedRender, "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_FLOAT_EQ(scratch.sun.altitude, 20.0f) << "premise: the light_source object was read at all";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the sky was rotated back to azimuth 0 and the user was told nothing";
+  EXPECT_NE(warning.find("azimuth"), std::string::npos) << "must name the field, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// The other side of B-1, and the reason the warning is conditional rather than unconditional: a
+// document that states azimuth 0, or states none at all, has asked for exactly what the GUI does.
+// Warning there would train the user to dismiss the notice without reading it, which is the failure
+// mode that makes every OTHER case in this file worthless.
+TEST(JsonImportContractChain, AJsonSunAzimuthOfZeroIsNotWorthMentioning) {
+  const char* const kRows[] = {
+    R"({"type": "sun", "altitude": 20, "azimuth": 0, "spectrum": "D65"})",
+    R"({"type": "sun", "altitude": 20, "spectrum": "D65"})",
+  };
+  for (const char* light_source : kRows) {
+    const std::string doc = DocWithParts(light_source, kWellFormedRender, "");
+
+    ClearImportComplexFilterWarning();
+    GuiState scratch;
+    if (!DeserializeFromJson(doc, scratch)) {
+      // Non-fatal: a fatal assert here would hide the second row entirely.
+      ADD_FAILURE() << "the import rejected the document outright: " << light_source;
+      continue;
+    }
+    EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+        << "nothing was lost, so there is nothing to report: " << light_source << " -> "
+        << PeekImportComplexFilterWarning();
+    ClearImportComplexFilterWarning();
+  }
+  ClearImportComplexFilterWarning();
+}
+
+// B-2: `render[].lens_shift` moves the optical axis off the image centre. The export arm has
+// carried a comment since it was written saying it stays zero because no GUI control exists; the
+// import arm said nothing at all, which is the same statement made where the user could not read
+// it.
+TEST(JsonImportContractChain, AJsonLensShiftIsRefusedOutLoudNotDroppedInSilence) {
+  const std::string doc = DocWithParts(
+      kWellFormedLightSource,
+      R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "lens_shift": [8, -12], "resolution": [64, 64]}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_FLOAT_EQ(scratch.renderer.fov, 60.0f) << "premise: the render object was read at all";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the optical axis was recentred and the user was told nothing";
+  EXPECT_NE(warning.find("lens_shift"), std::string::npos) << "must name the field, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// A zero shift is what the GUI does anyway, on both components. Same reason as the azimuth twin.
+TEST(JsonImportContractChain, AJsonLensShiftOfZeroIsNotWorthMentioning) {
+  const std::string doc = DocWithParts(
+      kWellFormedLightSource,
+      R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "lens_shift": [0, 0], "resolution": [64, 64]}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+      << "nothing was lost, so there is nothing to report: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
+// B-3: `scene.geom_clock` selects core's GPU K-shape pool size. The GUI commits 0 (the pool
+// disabled) unconditionally, so a document asking for a pool gets a different simulation than it
+// wrote — and, until now, no indication of it.
+TEST(JsonImportContractChain, AJsonGeomClockIsRefusedOutLoudNotDroppedInSilence) {
+  const std::string doc = DocWithSceneExtra(R"(, "geom_clock": 64)");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_EQ(scratch.sim.max_hits, 8) << "premise: the scene object was read at all";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the shape pool was disabled and the user was told nothing";
+  EXPECT_NE(warning.find("geom_clock"), std::string::npos) << "must name the field, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// geom_clock 0 IS "pool disabled", which is what the GUI commits. Same reason as the two twins.
+TEST(JsonImportContractChain, AJsonGeomClockOfZeroIsNotWorthMentioning) {
+  const std::string doc = DocWithSceneExtra(R"(, "geom_clock": 0)");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+      << "nothing was lost, so there is nothing to report: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
+// ---------------------------------------------------------------------------------------------
 // The export half of the same contract: what the GUI is allowed to write over.
 //
 // Import degrades in memory; export is where that degraded copy can reach the disk. The four cases
