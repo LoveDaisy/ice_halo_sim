@@ -143,15 +143,21 @@
   ⚠️ 长时间构建**别用 `Start-Process` 分离**（实测会静默失败、日志为空）；
   要么同步跑（我方 bash 用后台任务拿 notification），要么用 `schtasks` 建一次性计划任务。
 
-- **⚠️ 这条路径至今没有任何 CI job 走过，所以它的红只会在这台机器上出现。**
-  Windows 上「带 CUDA 编译测试」这个配置的覆盖缺口**仍然存在**，而原因不是漏了 Windows：
-  主矩阵的 Windows job 开了 `BUILD_TEST` 但没开 CUDA、CUDA 编译 job 开了 CUDA 但没开
-  `BUILD_TEST`——**两半都在，交集为空**。这个缺口一次攒下三处 MSVC 不兼容
+- **⚠️ 这条路径的「编译」那一半现在 CI 也走了，「运行」那一半仍然只在这台机器上。**
+  历史状态（2026-09-09 之前）：主矩阵的四个 build job 开了 `BUILD_TEST` 但没开 CUDA、两个 CUDA
+  编译 job 开了 CUDA 但没开 `BUILD_TEST`——**两半都在，交集为空**，而且这个空交集是**全平台**的，
+  不是 Windows 特有（Windows 只是代价最先显形的那一侧）。这个缺口一次攒下三处 MSVC 不兼容
   （两个 `test_cuda_*` 用 POSIX `setenv`/`unsetenv`、一个 bench 文件用 `M_PI`），
   三周无信号，直到这台机器第一次以 `BUILD_TEST=ON` + CUDA 构建才炸出来；它们已经修掉
-  （`test/support/env_var.hpp` 是全树唯一持有该 `#ifdef` 的地方），但**攒下它们的缺口没有**。
-  ⇒ 在缺口补上之前，动 `test/` 或 `bench/` 后请在这台机器上真跑一次本节的构建，
-  别把「mac/Linux 绿」当成 Windows 也绿。
+  （`test/support/env_var.hpp` 是全树唯一持有该 `#ifdef` 的地方）。
+  现在 `cuda-compile` 与 `windows-cuda-compile` 两个 job 都以 `BUILD_TEST=ON` + `BUILD_GUI=OFF`
+  配置，`test/{unit-correctness,parity-cross-backend}/backend/test_cuda_*.cpp` 那 5 个 TU 真的会被
+  编译，同类语法 / 可移植性缺陷在 PR 上当场报错。
+  ⛔ **但这只买到编译覆盖。** CI runner 没有 GPU，那些 case 一律走 `ShouldSkipCudaTests()` /
+  `CudaDeviceAvailable()` 报 SKIPPED；`LUMICE_HAS_CUDA` 也没有任何 CI job 设过。
+  ⇒ 动 `test/` 或 `bench/` 后可以先看 CI 的这两个 job 判断「编不编得过」，
+  但凡涉及 CUDA 运行时行为（parity、数值、吞吐），仍然必须在这台机器上真跑本节的协议，
+  别把 CI 的绿当成运行时也验过了。
 
 - **parity**：
   ```bat
