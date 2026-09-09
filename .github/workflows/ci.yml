@@ -174,10 +174,13 @@ jobs:
       # the same "one entry per commit with a prefix fallback" key. Only the ubuntu-x64
       # matrix entry, because it is the only Linux entry in this job that is compile-bound.
       #
-      # CCACHE_MAXSIZE is 200M on measured grounds — see the sibling step in
-      # shared-gui-test-build, whose configure leaves a 37 MB directory after a full cold
-      # build. A cap is not a footprint, and copying the Windows leg's number here would
-      # reserve fifty times the working set.
+      # CCACHE_MAXSIZE is 800M, and it is 800M because this leg was measured rather than
+      # assumed to resemble its neighbour. It first shipped at the 200M that fits
+      # shared-gui-test-build, whose directory settles at 37 MB; on this leg 200M was
+      # immediately over-full — `ccache --show-stats` reported 110.3% of the cap and a
+      # 26.34% hit rate, i.e. the cap was evicting objects the next run needed. The two
+      # configures compile a similar number of units and land roughly six times apart in
+      # bytes, so neither leg's number transfers to the other. Measure per leg.
       - name: Install ccache (Ubuntu x86_64)
         if: matrix.cache_key == 'ubuntu-x64'
         run: |
@@ -185,7 +188,7 @@ jobs:
           ccache --version
           echo "LUMICE_COMPILER_LAUNCHER_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=200M" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
       # Discriminator first, as everywhere else in this file: `ccache-ubuntu-x64-` would be
       # a prefix of the shared-gui leg's namespace, which is the exact defect the cpm keys
