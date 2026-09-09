@@ -163,7 +163,7 @@ Render Preview 上的辅助线，以一张表格呈现——每条辅助线回�
 晶体几何参数：
 
 - **Type**：`Prism`（六棱柱）或 `Pyramid`（带上下截顶楔形的六棱锥）。
-- **形状参数**：Prism 用 `height`；Pyramid 用 `prism_h`、`upper_h`、`lower_h` 以及楔角 `upper_alpha` / `lower_alpha`（默认值对应 Miller 指数 `{1, 0, -1, 1}`）。
+- **形状参数**：Prism 用 `height`；Pyramid 用 `prism_h`、`upper_h`、`lower_h` 以及楔角 `upper_alpha` / `lower_alpha`（默认值对应 Miller 指数 `{1, 0, -1, 1}`）。这里显示的四指数标号 `{h, k, i, l}` 与配置文件里 `upper_indices` / `lower_indices` 的三个整数，是同一个面的两种写法：四个数里的第三个是推导出来的，`i = -(h + k)`，所以 JSON 文档只写 `(h, k, l)`，写成四个元素会被拒绝。完整规则以及楔角是从哪儿量起的，见 [configuration_zh.md](configuration_zh.md#12-读懂-miller-指数回退警告)。
 - **Face distance**：六个值，分别对应六个棱面，用于支持非规则六棱截面。
 
 ### Axis Tab

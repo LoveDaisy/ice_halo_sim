@@ -130,8 +130,8 @@ dropped and contributes zero energy) rather than silently accepted.
   "prism_h": <value or distribution>,
   "upper_h": <value or distribution>,
   "lower_h": <value or distribution>,
-  "upper_indices": [<3 integers>],
-  "lower_indices": [<3 integers>],
+  "upper_indices": [<h>, <k>, <l>],
+  "lower_indices": [<h>, <k>, <l>],
   "face_distance": [<6 values or distributions>],
   "sync_group": {
     "prism_h": <int>, "upper_h": <int>, "lower_h": <int>, "face_distance": [<6 ints>]
@@ -146,8 +146,8 @@ dropped and contributes zero energy) rather than silently accepted.
 | `prism_h` | value/distribution | yes | - | Prism segment height ratio |
 | `upper_h` | value/distribution | no | 0.0 | Upper pyramid segment relative height — see [Pyramid Shape Legality](#pyramid-shape-legality) below |
 | `lower_h` | value/distribution | no | 0.0 | Lower pyramid segment relative height — see [Pyramid Shape Legality](#pyramid-shape-legality) below |
-| `upper_indices` | integer array | no | [1,0,1] | Miller indices for the upper pyramid segment |
-| `lower_indices` | integer array | no | [1,0,1] | Miller indices for the lower pyramid segment |
+| `upper_indices` | integer array | no | [1,0,1] | Miller indices `(h, k, l)` of the upper pyramid face — exactly three, `k` must be `0` — see [Reading the Miller-Index Fallback Warning](#11-reading-the-miller-index-fallback-warning) below |
+| `lower_indices` | integer array | no | [1,0,1] | Miller indices `(h, k, l)` of the lower pyramid face — same rules |
 | `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces |
 | `sync_group` | object | no | all independent | Shape-scalar sync groups — see [Shape-Scalar Sync Groups](#shape-scalar-sync-groups) below |
 
@@ -840,8 +840,11 @@ what is on screen. Widen the field of view, or turn the grid off, and export aga
 
 - `scene.light_source.spectrum` must be either a string (standard illuminant name) or an object array (each object containing `wavelength` and `weight`)
 - `crystal[].shape.face_distance` array length must be 6 (if specified)
-- `crystal[].shape.upper_indices` array length must be 3 (if specified)
-- `crystal[].shape.lower_indices` array length must be 3 (if specified)
+- `crystal[].shape.upper_indices` / `crystal[].shape.lower_indices` must hold exactly 3 integers
+  (if specified). An array of any other length is reported and the wedge angle keeps whatever value
+  it already had — it is not skipped in silence. See [Reading the Miller-Index Fallback
+  Warning](#11-reading-the-miller-index-fallback-warning) for the full set of rules and what each
+  refusal looks like
 - `crystal[].shape.sync_group.face_distance` array length must be 6 (if specified); a shorter or
   longer array is truncated/zero-padded rather than rejected — see [Shape-Scalar Sync
   Groups](#shape-scalar-sync-groups)
@@ -885,6 +888,19 @@ what is on screen. Widen the field of view, or turn the grid off, and export aga
   treated as absent, the same as `upper_h`/`lower_h` folding to `0.0` — silently, with
   no warning of its own (the shape still builds fine as long as the rest of the
   crystal — the other side's cone, or the prism band — still gives it enough faces).
+  Only the direct `upper_alpha`/`lower_alpha` route is silent this way: an out-of-range
+  angle arrived at from Miller indices is refused before it ever becomes an angle, and
+  reported — see [Reading the Miller-Index Fallback
+  Warning](#11-reading-the-miller-index-fallback-warning).
+
+  **What the angle is measured from.** The wedge angle is the angle between the pyramidal
+  face and the **c axis** — equivalently, between the pyramidal face and the prism (side)
+  face it rises from. It is *not* the angle to the basal (top/bottom) face, and the two are
+  easy to mistake for each other because crystallographic tables usually quote the basal one.
+  The classic ice pyramidal face `{1, 0, -1, 1}` is listed in the literature at 62.0° to the
+  basal plane; the same face is `upper_alpha = 28.0°` here, since 90° − 62.0° = 28.0°. A value
+  copied straight out of a table without that subtraction builds a visibly different crystal
+  rather than failing, which is why it is worth stating.
 - **`prism_h == 0.0` (no straight prism band)** is legal in every combination of
   cones:
   - *one side has a cone, the other does not*: legal. The cone-less side's basal cap
@@ -1246,6 +1262,60 @@ number for a fixed angle (e.g. "zenith": 20) or as an object naming the distribu
   "axis": { "zenith": 30, "azimuth": 0 }  // Correct
 }
 ```
+
+### 11. Reading the Miller-Index Fallback Warning
+
+**Description**: `upper_indices` / `lower_indices` name the pyramidal face whose wedge angle
+the crystal is built at, and they are refused rather than partly used when they cannot name one.
+
+The three integers are `(h, k, l)` — the reduced three-index form. They are **not** a
+four-index Miller-Bravais label with one number dropped. The crystal editor in the GUI
+displays the four-index form `{h, k, i, l}` (the ice default reads `{1, 0, -1, 1}`), where the
+third number is derived rather than stored: `i = -(h + k)`. Writing four numbers here is
+therefore not a longer spelling of the same thing — it is one number too many, and it is
+refused. Because the default has `k = 0`, `i` is just `-h`, and the two notations happen to
+carry the same digits in a different order, which is what makes the mistake easy to make and
+hard to notice.
+
+A triple is refused when:
+
+- it does not hold exactly three integers — including the four-index label copied out of the
+  GUI, and a triple left half-written;
+- `k != 0` — a pyramidal face turned off the prism edges is not a shape this crystal model can
+  express, so there is no angle to convert it to;
+- `h` or `l` is negative;
+- any element is not a whole number;
+- `h` and `l` are individually well-formed but their ratio makes an angle outside `[0.1°, 89.9°]`,
+  which builds no face — see [Pyramid Shape Legality](#pyramid-shape-legality) above.
+
+`h == 0` is **not** a refusal. It states that this side of the crystal has no pyramidal cap, and
+sets that side's wedge angle to 0. It is a legal document and passes without a word.
+
+**What it looks like** (all three entry points — the command-line config reader, the C API, and
+the GUI's document import — refuse the same inputs and report them; the GUI additionally raises
+an import-warning popup rather than only writing to its log panel):
+```text
+Crystal shape "upper_indices": [1,0,-1,1] is not a usable wedge angle (invalid, offending
+index -1); keeping 28.00.
+```
+`offending index` names which of the three slots is to blame — `0` = h, `1` = k, `2` = l — and is
+`-1` when no single slot is: a wrong count is not any one slot's doing, and an unbuildable angle
+comes from the ratio, in which two individually valid integers combine badly.
+
+**How to respond**: the wedge angle keeps the value it already had — the field default of 28.0°,
+or whatever `upper_alpha`/`lower_alpha` had been set to. It is not zeroed and not made negative,
+so a refused document still renders; it renders a crystal you did not ask for. Write three
+non-negative integers with `k = 0`:
+
+```json
+{
+  "upper_indices": [1, 0, 1],   // correct: (h, k, l), k = 0 -> upper_alpha = 28.0 degrees
+  "lower_indices": [1, 0, -1, 1] // wrong: the GUI's four-index label; drop the derived i = -(h+k)
+}
+```
+
+Setting `upper_alpha` / `lower_alpha` directly is always an alternative — when both are present the
+explicit angle wins and the indices are not read at all.
 
 ## Configuration Best Practices
 

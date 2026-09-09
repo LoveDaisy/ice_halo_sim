@@ -164,7 +164,10 @@ it was thinking of and false of the C struct beside it.
   negative angle whose cone then vanished from the render with nothing said. Each of these now leaves
   the wedge angle at its default **and logs a warning naming the array and the reason**. Applies
   equally to the CLI, the C API and the GUI's own reader, which had each kept a copy of this
-  conversion.
+  conversion. In the GUI the report is also an import-warning popup rather than a line in the log
+  panel alone, matching every other downgrade the document reader performs: the angle a refusal
+  leaves behind is a default the document never stated, and nothing on screen distinguishes it from
+  one the document did state.
 - **`[0,0,l]` now means "no pyramidal cap on this side", not 28°.** ⚠️ Behaviour change for existing
   configs: a crystal whose `upper_indices` or `lower_indices` starts with 0 (and states no explicit
   `upper_wedge_angle` / `lower_wedge_angle`) previously rendered a 28° cone on that side and now
