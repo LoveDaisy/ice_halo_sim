@@ -163,6 +163,16 @@ class RenderConsumer : public IConsume {
   // its output without reaching into the private config.
   int ImageWidth() const { return config_.resolution_[0]; }
   int ImageHeight() const { return config_.resolution_[1]; }
+  // Which tone-reproduction operator this consumer was built for. Read by DoSnapshot to decide
+  // whether the raypath-colour composite is produced at all (print is greyscale ink by
+  // construction, so a composite whose whole payload is hue would be a picture of nothing).
+  //
+  // It hangs off the CONSUMER rather than being re-read from ServerImpl's RenderConfig list
+  // because DoSnapshot's composite loop iterates over the snapshotted consumers, not over the
+  // config: pairing a consumer with its own renderer entry there would mean re-deriving the
+  // correspondence (by index, or by the renderer id recovered from GetResult()) that the consumer
+  // already holds. Same reason ImageWidth/ImageHeight above are here.
+  RenderConfig::Tone Tone() const { return config_.tone_; }
 
   // task-336.3: the SINGLE mono-image exposure scale, the sole source of truth
   // for both PostSnapshot() and the component compositor (plan §1.1). Reads the

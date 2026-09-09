@@ -91,6 +91,10 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_print_mode.cpp"
+  # The other half of the print operator: the fields it takes over the colour channel FROM.
+  # test_render_consumer_print_mode.cpp asserts the pixels the operator writes; this one asserts
+  # the composite it declines to produce and the notices it emits for the fields it drops.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_print_mode_colour_exclusions.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_grid.cpp"

@@ -620,6 +620,103 @@ ServerImpl::~ServerImpl() {
 
 // Lifecycle reset sequence: see doc/capi-lifecycle-architecture.md §7.
 // NOLINTNEXTLINE(readability-function-size)
+namespace {
+
+// ------------------------------------------------------------------------------------------------
+// "print takes over the colour channel" — the one rule of doc/print-mode-subtractive-ink.md §7,
+// stated once, on the CLI/server side.
+//
+// The print operator deposits a single neutral ink whose only degree of freedom is DENSITY, so
+// every field whose job is to carry information in a HUE stops being readable the moment the tone
+// is print. Three such fields exist in a RenderConfig today, and the point of putting all three in
+// one function is that they are three instances of ONE rule rather than three special cases: a
+// reader who has to decide what a fourth field should do reads this block, not four scattered ifs.
+//
+// NEW INSTANCES GO HERE, in the same shape — one `if` naming the field and one ILOG_WARN saying
+// (a) what the config asked for, (b) what print does instead, (c) that the value is kept. Do NOT
+// open a parallel judgement point elsewhere in the commit path; a second owner is how the CLI and
+// the GUI came to disagree about other fields before.
+//
+// One warning per instance rather than one merged line, because the three have different reach:
+// the composite is scene-level (one class table shared by every renderer), while ray_color and the
+// annotation colours are each read off the renderer's own entry. A merged line would make the
+// instances that did NOT fire read as if they had.
+// ------------------------------------------------------------------------------------------------
+
+// True when `c` differs from `ref` in any component. Colour comparison here is an EXACT float
+// compare on purpose: the question is "did anybody write a value into this field", not "is this
+// visually distinguishable from the default", and a tolerance would answer the second.
+bool ColorDiffers(const float (&c)[3], const float (&ref)[3]) {
+  return c[0] != ref[0] || c[1] != ref[1] || c[2] != ref[2];
+}
+
+// Whether any annotation in this renderer carries a non-default colour.
+//
+// The judgement is deliberately "is the colour non-default", NOT "would this annotation actually
+// be drawn". Folding in opacity_ and the three per-family line switches would narrow the warning
+// to configs that really do lose something visible, but it costs a cross-read of three independent
+// flags to buy a lower false-positive rate on a NON-BLOCKING notice. One extra log line for a
+// fully transparent line is a better failure than a missing line for a config the user is staring
+// at and cannot explain.
+bool HasNonDefaultAnnotationColour(const RenderConfig& rc) {
+  const GridLineParam kGridDefault{};
+  for (const auto* family : { &rc.angular_dist_grid_, &rc.elevation_grid_, &rc.longitude_grid_ }) {
+    for (const auto& line : *family) {
+      if (ColorDiffers(line.color_, kGridDefault.color_)) {
+        return true;
+      }
+    }
+  }
+  const ZenithNadirParam kZenithNadirDefault{};
+  if (rc.zenith_nadir_.enabled_ && ColorDiffers(rc.zenith_nadir_.color_, kZenithNadirDefault.color_)) {
+    return true;
+  }
+  const MarkerStyleParam kMarkerDefault{};
+  for (const auto& m : rc.markers_) {
+    if (m.enabled_ && ColorDiffers(m.color_, kMarkerDefault.color_)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// `class_table` is the SCENE's table, the same object every RenderConsumer is constructed with and
+// the same one RenderConsumer::ColoredMask() reads back — so `referenced_mask_ != 0` here and
+// `rc->ColoredMask() != 0` in DoSnapshot's composite loop are two readings of one field, not two
+// computations that have to be kept in step. That is what makes "warned" and "actually excluded"
+// the same set rather than two sets that happen to agree today.
+void WarnPrintModeIgnoresColourFields(Logger& logger, const std::map<IdType, RenderConfig>& renderers,
+                                      const ColorClassTable& class_table) {
+  const RenderConfig kDefaults{};
+  for (const auto& [id, rc] : renderers) {
+    if (rc.tone_ != RenderConfig::kPrint) {
+      continue;
+    }
+    if (class_table.referenced_mask_ != 0) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] is tone=print, so the raypath-colour composite is not "
+                "produced — print lays one neutral ink and carries no hue to tell the classes apart. "
+                "The colour classes are kept and take effect again under tone=screen.",
+                id);
+    }
+    if (ColorDiffers(rc.ray_color_, kDefaults.ray_color_)) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] sets ray_color, which tone=print does not read — the ink is "
+                "neutral by construction. The value is kept and takes effect again under tone=screen.",
+                id);
+    }
+    if (HasNonDefaultAnnotationColour(rc)) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] sets an annotation colour, which tone=print does not read — "
+                "overlay lines are drawn by density on paper, not by hue. The values are kept and take "
+                "effect again under tone=screen.",
+                id);
+    }
+  }
+}
+
+}  // namespace
+
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
@@ -691,6 +788,13 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     }
     return Error::InvalidConfig("Unknown configuration error");
   }
+
+  // The one rule of doc/print-mode-subtractive-ink.md §7, applied to the config that is about to
+  // become live. Placed after the parse (so class_table exists) and before Stop() (so the notice
+  // reaches the log alongside the commit that caused it, not one restart later). Diagnostic only —
+  // it never changes `new_config` and never fails the commit: none of the three is a configuration
+  // ERROR, they are configurations whose colour half print has no way to show.
+  WarnPrintModeIgnoresColourFields(logger_, new_config.renderers_, class_table);
 
   // Stop → rebuild consumers → Start
   auto stop_start = std::chrono::steady_clock::now();
@@ -956,9 +1060,20 @@ bool ServerImpl::DoSnapshot() {
     // task-336.3: only colored consumers (ColoredMask()!=0) produce a composite.
     // Zero-config consumers (mask 0) are skipped → no composite, mono path
     // untouched (plan §0 / risk-5 rollback).
+    //
+    // The print operator is the second skip reason, and it is a DIFFERENT statement from the
+    // first: mask 0 means "nothing was configured", print means "it was configured and cannot be
+    // shown". Raypath colour puts the whole payload in the HUE — which path a ray took is read off
+    // the colour and nothing else — while print deposits one neutral ink whose only degree of
+    // freedom is density (doc/print-mode-subtractive-ink.md §7). Compositing under print would
+    // collapse every class onto the same grey, i.e. produce a picture that answers no question.
+    // The CONFIG is left completely alone (raypath_color_ and the class table are untouched, and
+    // the consumers still accumulate their per-class lanes), so switching tone back to screen
+    // restores the composite on the very next snapshot — that is the mechanism behind "the
+    // configuration is not lost", not a promise.
     for (const auto& c : snapshot_consumers) {
       auto* rc = dynamic_cast<RenderConsumer*>(c.get());
-      if (rc == nullptr || rc->ColoredMask() == 0) {
+      if (rc == nullptr || rc->ColoredMask() == 0 || rc->Tone() == RenderConfig::kPrint) {
         continue;
       }
       // task-345.3: display-time EV multiplier + participating-P99 anchor
