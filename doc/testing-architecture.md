@@ -1269,30 +1269,38 @@ in parallel as a matrix, so the run's wall clock is its **longest job**, not the
 the fast e2e leg runs `pytest` serially and the slow e2e legs run `-n 3` (with the throughput gates
 re-run serially afterwards, so they do not measure under load).
 
-The figures are one pull-request run (`9656077f`, 2026-09-08), read off the GitHub Actions job and
-step timestamps. One run rather than the union of two, which earlier editions of this table needed:
+The figures are one pull-request run (`6474620c`, run 34369655618, 2026-09-09), read off the GitHub
+Actions job and step timestamps. It is a *warm* run — the run before it on the same branch filled
+every cache from empty, and the two are reported separately below because the difference is large
+enough to change which job is the longest. One run rather than the union of two, which earlier editions of this table needed:
 every job in the workflow now runs on a `pull_request` event, so a single run yields every row and
 the rows can be added up. `benchmark-summary` is the exception and is absent below — it is guarded
 to `push` on `main` because it writes the gh-pages benchmark history.
 
-| CI job | Seconds | In §7.0's covered head? |
-|---|---|---|
-| shared-gui-test-build | **734** | yes — longest job, sets the run's wall clock |
-| E2E Slow (macOS ARM64 parity) | 556 | yes |
-| Ubuntu x86_64 | 530 | yes |
-| Windows MSVC x86_64 | 528 | yes — sccache warm; see the two cache states below |
-| macOS ARM64 | 507 | yes |
-| e2e-test | 473 | yes |
-| E2E Slow (Ubuntu x86_64) | 462 | yes |
-| E2E Slow (macOS ARM64 rest) | 456 | yes |
-| windows-cuda-compile | 221 | no — compile-only |
-| Ubuntu ARM64 | 187 | no |
-| cuda-compile | 164 | no — compile-only |
-| bench-compile | 85 | no — compile-only |
-| policy | 27 | no — second-scale gate |
-| format-check | 13 | no — second-scale gate |
-| new-refs | 7 | no — second-scale gate |
-| | **4950s total machine time** | head = 4246s (86%) |
+| CI job | Warm | Cold | In §7.0's covered head? |
+|---|---|---|---|
+| Ubuntu x86_64 | **650** | 682 | yes — longest job, sets the run's wall clock |
+| E2E Slow (macOS ARM64 parity) | 599 | 586 | yes |
+| E2E Slow (macOS ARM64 rest) | 511 | 485 | yes |
+| Windows MSVC x86_64 | 502 | 728 | yes — sccache; see the cache states below |
+| windows-cuda-compile | 444 | 467 | no — compile-only |
+| macOS ARM64 | 437 | 598 | yes |
+| E2E Slow (Ubuntu x86_64) | 428 | 452 | yes |
+| e2e-test | 423 | 424 | yes |
+| cuda-compile | 293 | 286 | no — compile-only |
+| Ubuntu ARM64 | 182 | 196 | no |
+| bench-compile | 88 | 85 | no — compile-only |
+| shared-gui-test-build | **41** | 606 | yes — ccache; 93% of it is the cache |
+| policy | 27 | 29 | no — second-scale gate |
+| new-refs | 11 | 9 | no — second-scale gate |
+| format-check | 8 | 10 | no — second-scale gate |
+| | **4644s** | 5642s | warm head = 3591s (77%) |
+
+The cold column is not a hypothetical. Every cache in the repository was destroyed while this table
+was being measured, so the two runs are the same commit range on the same branch, one with nothing
+to restore and one with everything. Read it as the honest price of a cold start rather than as
+run-to-run noise: the two compiler-cached legs move by 606→41 and 728→502, and nothing else moves
+by more than about 160s.
 
 **`Windows MSVC x86_64` has two durations now, and quoting one of them alone is a mistake.** Its
 compiler cache is keyed per commit with a prefix fallback, so the exact key essentially never hits
@@ -1320,7 +1328,8 @@ Four things that table is for, none of which a single headline percentage says o
   that missed exactly one unit measured 317s and 276s, which is the honest width of that floor: it
   is linking, cache lookups and writing 292 object files, and none of it is cacheable. **So the most
   sccache can ever take off this step is about 216s**, and a proposal that assumes it scales past
-  that is wrong.
+  that is wrong. A later controlled measurement (below) puts the slope at 1.10 s rather than 0.743 s
+  and the floor higher; prefer those figures, and read the paragraph on why they differ.
 - **The win depends on the change, and the range is wide.** Against the 736s pre-sccache mean, the
   job totals above run −7% (cold), −18%, −28% and −43% (nothing to recompile). Quote the one that
   matches the change being discussed; −43% is a doc-only commit and is not what a code PR gets.
@@ -1329,35 +1338,122 @@ Four things that table is for, none of which a single headline percentage says o
 - **Transfer is not the bottleneck anyone expected it to be.** Restoring the directory took 4–9s
   (150 MB/s at 385 MiB) and saving it 3–27s. It reached 793 MiB over five runs, because a cache
   restored through the prefix keeps the old objects alongside the new ones; `SCCACHE_CACHE_SIZE` is
-  set to 2G. That growth is worth watching against the repository's 10 GB `actions/cache` quota,
-  where it competes with the `cpm-*` entries (~175 MB each, restored in 4–6s in these same runs).
+  set to 2G.
 
-Where a job's time goes differs by job, and the split cannot be assumed. From the same run as the
-table: `Windows MSVC x86_64` is 71% compile (374s of 528s) — down from 78% before sccache, which is
-what a cache that only touches compilation does to a ratio. Step-level timestamps from an earlier
-run for the rest: `shared-gui-test-build`, which runs nothing, 92% compile (589s of 641s);
+The growth that last point ends on has since run to completion, and the quota it was to be watched
+against turns out to have a shape worth stating rather than watching. Both were measured directly.
+
+**The directory now sits at its ceiling.** `sccache --show-stats` reports 2 GiB of a 2 GiB maximum,
+so entries have stopped growing; the observed progression of one entry's compressed size was 846 →
+1292 → 1331 → 1547 MB as it approached that cap. What that costs is best read against the other
+namespaces: the seven `cpm-*` entries together are about 2.1 GB, of which four are 171–175 MB and
+three are single-digit MB, so `sccache-windows-msvc-x64-` alone is around 80% of everything the
+repository caches.
+
+**The pool is a strict LRU keyed on `last_accessed_at`, and it is zero-sum.** Admitting one 1292.8 MB
+entry was observed to evict 2690.2 MB, and the three entries evicted were exactly the three
+least-recently-accessed of the thirty then present — ranks 1, 2 and 3 with no gaps, which chance
+alone gives odds of 1 in 4060. One of them was on `refs/heads/main`, and entries belonging to four
+merged-and-deleted PR branches survived, which is what rules out branch-scope cleanup as the
+mechanism. So a megabyte held in one namespace is a megabyte taken from another, and "seconds per MB"
+is an exchange rate rather than a figure of speech.
+
+**Within a namespace, only the newest entry per ref is ever restored.** `restore-keys` returns one
+entry, the most recently created match in scope, so every earlier entry becomes dead weight the
+moment a newer one appears. Four of the nine sccache entries in that snapshot had `last_accessed_at`
+equal to `created_at` — written and never read once, 4.03 GB of them, all belonging to PRs that had
+already merged. This is not currently a problem to fix: dead entries are by construction the least
+recently accessed, so the LRU reaches them first, and every live `cpm-*` entry survived the eviction
+above. It becomes one if the dead pool ever stops being large enough to absorb new demand, and that
+is the thing to watch — not the growth, which has stopped.
+
+**A cache cap is not a footprint.** The two numbers differ by fifty times across these two legs, so
+one cannot be read off the other. `SCCACHE_CACHE_SIZE=2G` really does describe a ~1.5 GB entry,
+because that directory fills its cap; `CCACHE_MAXSIZE` on `shared-gui-test-build` is 200M and the
+directory after a full cold compile of 291 objects is **37 MB**. Quote the measured directory size,
+never the configured ceiling.
+
+**What sccache is worth, measured against a red arm rather than against history.** The table above
+compares runs that differ in cache state *and* in what they compiled *and* in which runner drew
+them. A later experiment removed the last two: three tiers of change, each built twice from the same
+tree — once with sccache enabled and once with both of its steps skipped entirely, so the red arm is
+"never installed" rather than "installed and missing". Six real runs on a throwaway branch whose PR
+base was a frozen branch, so `refs/pull/N/merge` could not drift as `main` moved under it.
+
+| Tier | Change | Hit rate | Misses | `Build` hot | `Build` red |
+|---|---|---|---|---|---|
+| 1 | nothing a compiler reads | 99.66% | 1 | 327s | 496s |
+| 2 | two C++ files — the median commit touches two | 92.18% | 23 | 345s | 371s |
+| 3 | `src/include/lumice.h` | 59.52% | 119 | 445s | 508s |
+
+**Read no wall clock off that table without the next paragraph.** Tier 2's red arm is *faster* than
+tier 1's — 371s against 496s for very nearly the same full compile — because it drew a faster runner.
+The separator is the link phase, which no compiler cache touches: summed over the ninja actions
+inside the `Build` step it was 257, 258, 252, **196**, 251 and 253 seconds across the six arms, so
+the one anomalous `Build` sits under the one anomalous link. Scaling each arm's compile portion
+(`Build` minus link) by its link ratio collapses a 37% spread across the three red arms to 6%
+(240s, 232s, 262s; mean 245s). **Provider-level runner spread on this leg is therefore around 1.3×
+on identical work, and any single-arm figure in seconds is uncomparable without a control of this
+kind.**
+
+Normalised that way, the compile portion fits `70s + 1.10s × misses` — predicting 71s, 95s and 201s
+against 71s, 96s and 201s measured. The slope is half again the 0.743 s the five-run fit above gave,
+and the reason is that the older fit had run-to-run machine spread inside its residuals, which flattens
+a slope. Net of the cache's own 19–23s of restore and save, the three tiers are worth **+154s**,
+**+129s** and **+24s**.
+
+**sccache makes a miss more expensive than a plain compile, so it has a break-even.** The red arms
+compile 294 units in 245s — 0.83 s each — against 1.10 s for a miss under sccache, the difference
+being preprocessor hashing and writing the object back. Setting `245 = 70 + 1.10m` puts break-even at
+about 159 misses, i.e. **a hit rate near 54%**: below that, the leg is slower with sccache than
+without. Tier 3 measured 59.52%. A public-header commit therefore barely pays for itself while still
+writing a ~1.5 GB cache entry, which is the shape to keep in mind before extending this pattern to
+another leg or another header-heavy configure.
+
+**Weighted by what actually gets committed, sccache is worth about 130 s/run.** Thirty days of
+history, 486 non-merge commits, classified by what each touches: 30.0% tier 1, 64.2% tier 2, 5.8%
+tier 3. Weighting instead by the 73 merges to `main` (21.9% / 64.4% / 13.7%) gives 120 s/run, so the
+figure does not hinge on which granularity is chosen.
+
+Where a job's time goes differs by job, and the split cannot be assumed. `Windows MSVC x86_64` was
+71% compile (374s of 528s) before this table's revision, down from 78% before sccache, which is what
+a cache that only touches compilation does to a ratio — and the ratio keeps falling as the cache
+gets better, which is the point. Step-level timestamps from an earlier run for the rest:
+`shared-gui-test-build`, which runs nothing, was 92% compile (589s of 641s) before it got a cache;
 `E2E Slow (macOS rest)` 8% compile and **89% test execution** (612s of 686s); `e2e-test` 84% test
-execution (377s of 450s). Those three come from a different run than the totals above and are
-shape, not precision.
+execution (377s of 450s). Those come from different runs than the totals above and are shape, not
+precision.
+
+The two compile-bound legs are the reason the ratios matter: a leg that is 92% compile is one a
+compiler cache can take almost all of, and one that is 89% test execution is one it cannot touch at
+all. That is the whole of why `shared-gui-test-build` fell to 41s and why no amount of caching will
+move the `E2E Slow` legs.
 
 **Two facts about this table that any CI-time proposal has to answer to.**
 
-1. **The critical path is `shared-gui-test-build` (734s) and, behind it, `E2E Slow (macOS ARM64
-   parity)` (556s).** A run's wall clock is its longest job and nothing else. Therefore: *any
-   proposal to "shorten CI" that does not touch those two jobs buys zero wall clock*, however much
-   machine time it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a
-   plan, a PR description, or a review comment — it must first answer **"does it shorten the longest
-   job?"**.
-   This is the second job to hold that title, and the handover is the argument for re-reading the
-   table rather than remembering it. `Windows MSVC x86_64` used to be the ceiling at 736s mean
-   (n=14) against `shared-gui-test-build`'s 674s mean (n=14, sd 38); sccache moved it to 528–605s
-   across two runs with real change sets, which puts it fifth. Anything written against the old
-   ordering — "the Windows leg is the ceiling", "this is free because it lands on Ubuntu" — has to
-   be re-derived, not carried forward.
+1. **The critical path is `Ubuntu x86_64` (650s) and, behind it, `E2E Slow (macOS ARM64 parity)`
+   (599s).** A run's wall clock is its longest job and nothing else. Therefore: *any proposal to
+   "shorten CI" that does not touch those two jobs buys zero wall clock*, however much machine time
+   it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a plan, a PR
+   description, or a review comment — it must first answer **"does it shorten the longest job?"**.
+   This is the third job to hold the title in as many revisions of this table, and that churn is the
+   argument for re-deriving the ordering rather than remembering it. `Windows MSVC x86_64` held it
+   at 736s mean (n=14) until sccache; `shared-gui-test-build` held it at 734s until ccache took it
+   to 41s. Anything written against a superseded ordering — "the Windows leg is the ceiling", "the
+   shared-gui leg is the ceiling", "this is free because it lands on Ubuntu" — has to be re-derived,
+   not carried forward.
+   **That instruction has already been disregarded once, by a change to this very file.** The commit
+   that first put ccache on `shared-gui-test-build` argued for *not* caching `Ubuntu x86_64` on the
+   grounds that its 530s sat under the next-longest job — a figure quoted from the previous revision
+   of the table above rather than re-measured. It was 650s. The stale number did not look stale, and
+   it produced a decision that was exactly backwards; re-measuring took one API call. Prefer that to
+   trusting this paragraph, including the version of it you are reading.
    The corollary that keeps catching people: rebalancing two shards against each other is worth CI
-   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs sit 178s and
-   278s under the ceiling, so packing them closer is currently worth nothing (`ci.yml`'s `e2e-slow`
-   matrix comment carries the same statement next to the code it constrains).
+   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs sit 51s and
+   139s under the ceiling, so packing them closer is currently worth nothing (`ci.yml`'s `e2e-slow`
+   matrix comment carries the same statement next to the code it constrains). Note how much smaller
+   those margins are than the 178s and 278s of the previous revision: as the compile-bound legs get
+   cheaper, the test-bound ones stop being comfortably clear of the ceiling.
 2. **A floor sits under the `E2E Slow (macOS ARM64 parity)` leg that no repacking removes.**
    `test_capi_sentinel_overflow` is **one indivisible pytest case** (3 configs × 12 rounds inside a
    single function) that pins one xdist worker for the leg's whole duration — ~204s in the grouping
