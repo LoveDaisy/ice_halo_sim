@@ -2060,11 +2060,16 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         geom.zoom = g_state.bg_scale;
         geom.img_w = g_state.bg_pixel_w;
         geom.img_h = g_state.bg_pixel_h;
-        // Relative to the interaction rect's top-left, which is the viewport's: the InvisibleButton
-        // above fills the content region the preview is drawn into.
-        const ImVec2 rect_min = ImGui::GetItemRectMin();
+        // Relative to the WINDOW's top-left, not the InvisibleButton's. The GL viewport published
+        // above is the panel rectangle itself (vp_x/vp_w/vp_h come from panel_x/panel_width/
+        // panel_height, not from the content region), and the window's content origin sits one
+        // WindowPadding inside that — 8 x 6 points under the current style. Measuring from the
+        // button would shift every sample by that much: small enough to read as the photo being
+        // slightly off rather than as a bug. It is also the origin the overlay label anchors are
+        // built against, for the same reason.
+        const ImVec2 vp_origin = ImGui::GetWindowPos();
         const std::optional<std::array<float, 3>> sampled =
-            SampleBgColorAtScreenPos(io.MousePos.x - rect_min.x, io.MousePos.y - rect_min.y, geom, g_state.bg_pixels);
+            SampleBgColorAtScreenPos(io.MousePos.x - vp_origin.x, io.MousePos.y - vp_origin.y, geom, g_state.bg_pixels);
 
         if (sampled) {
           // Swatch of the value that WOULD be taken, not of the screen under the cursor: the
