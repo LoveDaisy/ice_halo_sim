@@ -90,6 +90,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_print_mode.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_grid.cpp"
@@ -113,6 +114,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_illuminant.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_label_viewport_clamp.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_ink_transfer.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"

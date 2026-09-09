@@ -24,6 +24,7 @@
 #include "core/shared/projection_shared.h"
 #include "util/color_data.hpp"
 #include "util/color_space.hpp"
+#include "util/ink_transfer.hpp"
 #include "util/label_viewport_clamp.hpp"
 
 
@@ -98,6 +99,55 @@ void AppendLabels(const std::vector<annotation::Label>& in, int line_index, std:
 // two things free to drift apart.
 constexpr float kOutlineAlpha = 0.6f;
 constexpr float kOutlineSrgb[3]{ 0.8f, 0.2f, 0.2f };
+
+// One annotation layer composited over what is already there, in LINEAR RGB. Both renderer-side
+// callers of this rule live in this file (PostSnapshot's four layer blends and PaintLabels' text),
+// which is why it is here rather than in util/.
+//
+// screen is the additive path's usual `mix`, unchanged. print does NOT read line_rgb at all: under
+// kPrint the annotation is ink like everything else, and ink has only one degree of freedom —
+// how much of it there is (doc/print-mode-subtractive-ink.md §5, "one rule, four instances"). This
+// is what makes the print annotations visible on white paper BY CONSTRUCTION rather than by
+// choosing a colour that happens to contrast: multiplying by (1 - alpha) can only darken.
+//
+// Why (1 - alpha) and not a second density constant of its own: the density law
+// out = out * 10^(-D_line * alpha) is satisfied exactly by taking D_line * alpha := -log10(1 -
+// alpha), which collapses to this multiply. So the existing alpha — already the user's "how opaque
+// is this line" knob — IS the ink coverage, and print needs no per-mode palette and no new
+// calibrated constant beside the kInkGamma of the main image.
+//
+// Its GLSL counterpart is blendAnnotationColor() in src/gui/preview_renderer.cpp. The two are
+// structurally the same (one tone branch, same algebra) but NOT signature-compatible: the shader
+// keeps its own two independent multipliers (edge falloff `t` times layer alpha) where this side
+// has a single alpha already folded by the caller.
+inline float BlendAnnotation(float base, float alpha, float line_rgb, bool print_mode) {
+  return print_mode ? base * (1.0f - alpha) : base * (1.0f - alpha) + line_rgb * alpha;
+}
+
+// The "no energy at all" image, for the two early exits below that never reach the pixel loop.
+//
+// screen's zero-energy colour is black, which is what the std::memset these replaced meant
+// literally. print's is the paper: an unexposed sheet. Writing it as one function with the tone as
+// an argument keeps AC5 ("a masked or unexposed region is that mode's zero-energy colour") as a
+// single rule instead of a special case bolted onto one mode.
+//
+// Neither early exit runs the annotation layers — PostSnapshot returns before PaintLabels() in both
+// — which is pre-existing behaviour this change does not touch.
+void FillZeroEnergyImage(uint8_t* buf, size_t total_pix, bool print_mode, const float paper[3]) {
+  if (!print_mode) {
+    std::memset(buf, 0, total_pix * 3u);
+    return;
+  }
+  uint8_t paper_srgb[3];
+  for (int j = 0; j < 3; j++) {
+    paper_srgb[j] = static_cast<uint8_t>(LinearToSrgb(std::clamp(paper[j], 0.0f, 1.0f)) * 255);
+  }
+  for (size_t i = 0; i < total_pix; i++) {
+    for (int j = 0; j < 3; j++) {
+      buf[i * 3 + j] = paper_srgb[j];
+    }
+  }
+}
 
 }  // namespace
 
@@ -661,12 +711,17 @@ void RenderConsumer::CountEffectivePixels() {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void RenderConsumer::PostSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  // Resolved here, at the top, because BOTH early exits below need it as well as the pixel loop:
+  // the zero-energy colour is the paper under kPrint, so "the simulation has produced nothing yet"
+  // must not fall through to a black frame (AC5).
+  const bool print_mode = config_.tone_ == RenderConfig::kPrint;
   // Fresh borrow for the same reason PrepareSnapshot takes one (the previous mono
   // image belongs to the previously published frame). Taken before the early-out below
   // so BOTH exits hand the frame a buffer this snapshot owns.
   snapshot_image_buffer_ = image_pool_->Acquire(static_cast<size_t>(std::max(total_pix, 0)) * 3u);
   if (total_pix <= 0 || snapshot_intensity_ <= 0) {
-    std::memset(snapshot_image_buffer_.get(), 0, total_pix * 3);
+    FillZeroEnergyImage(snapshot_image_buffer_.get(), static_cast<size_t>(std::max(total_pix, 0)), print_mode,
+                        config_.paper_);
     return;
   }
 
@@ -679,7 +734,7 @@ void RenderConsumer::PostSnapshot() {
   // free to drift apart.
   float scale = ExposureScale();
   if (scale <= 0.0f) {
-    std::memset(snapshot_image_buffer_.get(), 0, static_cast<size_t>(total_pix) * 3u);
+    FillZeroEnergyImage(snapshot_image_buffer_.get(), static_cast<size_t>(total_pix), print_mode, config_.paper_);
     return;
   }
 
@@ -839,8 +894,27 @@ void RenderConsumer::PostSnapshot() {
       xyz[j] = snapshot_xyz_[i * 3 + j] * scale;
     }
 
+    // Hoisted above the colour branch because print needs it there: under kPrint a masked-out pixel
+    // is not "coloured, then cleared" but simply unexposed, so the same predicate that decides
+    // whether the sky is painted decides how much ink lands. screen still consumes it below, at the
+    // point in the chain it always did — the value is computed once per pixel either way, so no
+    // arithmetic moved, only the declaration.
+    const bool paint_bg = masked_bg ? visible_mask_[i] != 0 : true;
+
     float rgb[3];
-    if (use_real_color) {
+    if (print_mode) {
+      // Print is greyscale by construction (doc/print-mode-subtractive-ink.md §5): the gamut clip,
+      // the XYZ->RGB matrix and the ray_color tint are all skipped, not because they are expensive
+      // but because "which arc is this" cannot be carried by hue on paper at all — an ink whose
+      // absorption is the complement of the light would make a neutral feature (a sun pillar, a
+      // parhelic circle) vanish on a white sheet. What is taken is the same scalar the other two
+      // branches would have started from: xyz[1], which is CIE Y already multiplied by scale.
+      const float e = paint_bg ? xyz[1] : 0.0f;
+      const float transmittance = InkTransmittance(InkOpticalDensity(e));
+      for (int j = 0; j < 3; j++) {
+        rgb[j] = config_.paper_[j] * transmittance;
+      }
+    } else if (use_real_color) {
       // Gamut clip → matrix multiply
       float clipped[3];
       GamutClipXyz(xyz, clipped);
@@ -877,7 +951,6 @@ void RenderConsumer::PostSnapshot() {
     // can land, but inside it the excluded hemisphere is imaged normally and its rays deposit
     // energy like any other — measured at 89% (rectangular) to 99.8% (globe) of that region
     // carrying energy. Left alone they show up as lit pixels scattered through a black field.
-    const bool paint_bg = masked_bg ? visible_mask_[i] != 0 : true;
     const bool paint_outline = paint_outline_layer && horizon_mask_[i] != 0;
     // Resolved once per pixel rather than per channel: the ring test does not depend on j. The
     // pixel's coordinates are recovered inside the guard so the default (markers off) path pays
@@ -895,21 +968,29 @@ void RenderConsumer::PostSnapshot() {
       }
     }
     for (int j = 0; j < 3; j++) {
-      if (paint_bg) {
-        rgb[j] += config_.background_[j];
-      } else if (masked_bg) {
-        // SYNC:visible-mask-zero — the display clip. component_compositor.cpp's
-        // ApplyCompositeBackground carries the twin of this line for the raypath-colour path;
-        // both read the SAME visible_mask_ buffer, so the predicate is single-sourced and only
-        // the two applications of it need to stay in step. Guarded by masked_bg so a mask that
-        // disagrees with the pixel count still falls back to "paint everything", which is the
-        // fallback paint_bg above already takes.
-        //
-        // Placed before the annotation layers on purpose: a grid line or the horizon is drawn ON
-        // the clipped region, over black, exactly as it is drawn over the background elsewhere.
-        // The annotations run their own hemisphere policy (annotation_overlay.cpp's
-        // VisibleForLabel), so what reaches here has already been admitted.
-        rgb[j] = 0.0f;
+      // This whole block is the ADDITIVE operator's way of saying "what colour is this pixel's
+      // ground", and kPrint answered that question already, up in the colour branch: paper times
+      // transmittance, with a zero exposure wherever paint_bg is false. So print skipping it is not
+      // an omission. There is no sky term to add either — background is the SKY and paper is the
+      // SHEET, two fields on purpose, so that "print onto the default black background" is not a
+      // reachable state at all.
+      if (!print_mode) {
+        if (paint_bg) {
+          rgb[j] += config_.background_[j];
+        } else if (masked_bg) {
+          // SYNC:visible-mask-zero — the display clip. component_compositor.cpp's
+          // ApplyCompositeBackground carries the twin of this line for the raypath-colour path;
+          // both read the SAME visible_mask_ buffer, so the predicate is single-sourced and only
+          // the two applications of it need to stay in step. Guarded by masked_bg so a mask that
+          // disagrees with the pixel count still falls back to "paint everything", which is the
+          // fallback paint_bg above already takes.
+          //
+          // Placed before the annotation layers on purpose: a grid line or the horizon is drawn ON
+          // the clipped region, over black, exactly as it is drawn over the background elsewhere.
+          // The annotations run their own hemisphere policy (annotation_overlay.cpp's
+          // VisibleForLabel), so what reaches here has already been admitted.
+          rgb[j] = 0.0f;
+        }
       }
       // After the background (the line is drawn ON the sky, not under it), before the clamp, and
       // in linear — the same three constraints the background term above satisfies.
@@ -919,16 +1000,16 @@ void RenderConsumer::PostSnapshot() {
       // which line wins where they cross.
       for (const auto& layer : grid_layers) {
         if (layer.mask[i] != 0) {
-          rgb[j] = rgb[j] * (1.0f - layer.alpha) + layer.rgb[j] * layer.alpha;
+          rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
         }
       }
       for (const auto& layer : angular_dist_layers) {
         if (layer.mask[i] != 0) {
-          rgb[j] = rgb[j] * (1.0f - layer.alpha) + layer.rgb[j] * layer.alpha;
+          rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
         }
       }
       if (paint_outline) {
-        rgb[j] = rgb[j] * (1.0f - kOutlineAlpha) + outline_rgb[j] * kOutlineAlpha;
+        rgb[j] = BlendAnnotation(rgb[j], kOutlineAlpha, outline_rgb[j], print_mode);
       }
       // One independent blend per layer rather than one on the union, matching the shader: where
       // two rings overlap it composites both, and so does this. In list order, which for the
@@ -936,7 +1017,7 @@ void RenderConsumer::PostSnapshot() {
       if (paint_marker) {
         for (size_t m = 0; m < marker_layers.size(); ++m) {
           if (on_marker_ring[m] != 0) {
-            rgb[j] = rgb[j] * (1.0f - marker_alpha) + marker_layers[m].rgb[j] * marker_alpha;
+            rgb[j] = BlendAnnotation(rgb[j], marker_alpha, marker_layers[m].rgb[j], print_mode);
           }
         }
       }
@@ -957,6 +1038,10 @@ void RenderConsumer::PostSnapshot() {
 void RenderConsumer::PaintLabels() {
   const int width_px = config_.resolution_[0];
   const int height_px = config_.resolution_[1];
+  // Text is an annotation layer like the grid or the horizon, and takes the same tone branch: under
+  // kPrint the glyphs are ink, so they darken the paper by their coverage and their own colour is
+  // not read. This is why print needs no second palette for labels — see BlendAnnotation().
+  const bool print_mode = config_.tone_ == RenderConfig::kPrint;
   if (width_px <= 0 || height_px <= 0 || snapshot_image_buffer_ == nullptr) {
     return;
   }
@@ -1060,7 +1145,7 @@ void RenderConsumer::PaintLabels() {
           // background — the same reason every other annotation layer blends before the transfer
           // curve rather than after it.
           const float dst = SrgbToLinear(static_cast<float>(snapshot_image_buffer_[base + j]) * (1.0f / 255.0f));
-          const float mixed = std::clamp(dst * (1.0f - a) + draw.rgb[j] * a, 0.0f, 1.0f);
+          const float mixed = std::clamp(BlendAnnotation(dst, a, draw.rgb[j], print_mode), 0.0f, 1.0f);
           snapshot_image_buffer_[base + j] = static_cast<uint8_t>(LinearToSrgb(mixed) * 255);
         }
       }
