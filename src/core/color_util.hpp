@@ -78,6 +78,9 @@ inline void SpectrumToXyzPerRay(const float* wl_per_ray, const float* v, const i
   }
 }
 
+// Throwaway probe symbol: changes this header's preprocessor output.
+constexpr int kProbeTier2ColorUtil = 20260909;
+
 }  // namespace lumice
 
 #endif  // CORE_COLOR_UTIL_H_

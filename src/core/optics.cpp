@@ -197,4 +197,7 @@ double IceRefractiveIndex::Get(double wave_length) {
   return std::sqrt(n);
 }
 
+// Throwaway probe symbol: changes this TU's preprocessor output.
+constexpr int kProbeTier2Optics = 20260909;
+
 }  // namespace lumice
