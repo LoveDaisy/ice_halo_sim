@@ -29,7 +29,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <system_error>
 
@@ -449,7 +451,11 @@ TEST(JsonImportContractChain, AJsonMillerIndexRefusalReachesTheUserNotOnlyTheLog
     EXPECT_FALSE(warning.empty()) << "the log panel is not where an import problem is looked for -- " << row.why;
     EXPECT_NE(warning.find("upper_indices"), std::string::npos)
         << "must name the field that was refused, got: " << warning;
-    EXPECT_NE(warning.find("28"), std::string::npos)
+    // Same two-decimal formatting the message itself uses (file_io.cpp's FormatAngleDegrees), so
+    // this stays correct if the default wedge angle ever changes rather than pinning today's "28".
+    std::ostringstream expected_angle;
+    expected_angle << std::fixed << std::setprecision(2) << CrystalConfig{}.upper_alpha;
+    EXPECT_NE(warning.find(expected_angle.str()), std::string::npos)
         << "must say which angle was kept, or the user cannot tell a refusal from a stated value, got: " << warning;
     ClearImportComplexFilterWarning();
   }

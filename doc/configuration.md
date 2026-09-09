@@ -1291,9 +1291,14 @@ A triple is refused when:
 `h == 0` is **not** a refusal. It states that this side of the crystal has no pyramidal cap, and
 sets that side's wedge angle to 0. It is a legal document and passes without a word.
 
-**What it looks like** (all three entry points — the command-line config reader, the C API, and
-the GUI's document import — refuse the same inputs and report them; the GUI additionally raises
-an import-warning popup rather than only writing to its log panel):
+**What it looks like**: all three entry points refuse the same inputs, but they do not word the
+report identically. The command-line config reader and the C API share one short, uniform line;
+the GUI's document import writes a fuller sentence instead, and additionally raises an
+import-warning popup rather than only writing to its log panel. Both name the same three things —
+which field, why it was refused, and what angle was kept — they just say it differently.
+
+The command-line config reader and the C API (`src/config/crystal_config.cpp`,
+`src/server/c_api.cpp`):
 ```text
 Crystal shape "upper_indices": [1,0,-1,1] is not a usable wedge angle (invalid, offending
 index -1); keeping 28.00.
@@ -1301,6 +1306,13 @@ index -1); keeping 28.00.
 `offending index` names which of the three slots is to blame — `0` = h, `1` = k, `2` = l — and is
 `-1` when no single slot is: a wrong count is not any one slot's doing, and an unbuildable angle
 comes from the ratio, in which two individually valid integers combine badly.
+
+The GUI's document import (`src/gui/file_io.cpp`) reports the same verdict as a sentence instead
+of a slug, so a reader does not need the `offending index` table above to know which field failed:
+```text
+crystal id=0 shape.upper_indices states [1,0,-1,1], which is not a usable wedge angle: l must
+not be negative. Keeping 28.00 degrees.
+```
 
 **How to respond**: the wedge angle keeps the value it already had — the field default of 28.0°,
 or whatever `upper_alpha`/`lower_alpha` had been set to. It is not zeroed and not made negative,

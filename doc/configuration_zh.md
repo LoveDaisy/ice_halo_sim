@@ -1238,8 +1238,12 @@ number for a fixed angle (e.g. "zenith": 20) or as an object naming the distribu
 
 `h == 0` **不属于**拒绝。它表示这一侧没有锥，该侧 wedge 角取 0。这是合法文档，不会有任何提示。
 
-**报错原文**（三个入口——命令行配置解析、C API、GUI 文档导入——拒绝的输入集合与报出的内容一致；
-GUI 额外会弹出一个导入警告弹窗，而不只是写进日志面板）：
+**报错原文**：三个入口拒绝的输入集合一致，但报出的文字不逐字相同。命令行配置解析与 C API
+共用同一条简短、统一的日志；GUI 文档导入写的是一整句更详细的话，并且额外会弹出一个导入警告
+弹窗，而不只是写进日志面板。两边说的是同一件事——哪个字段、为什么被拒绝、保留了多少度——
+只是措辞不同。
+
+命令行配置解析与 C API（`src/config/crystal_config.cpp`、`src/server/c_api.cpp`）：
 ```text
 Crystal shape "upper_indices": [1,0,-1,1] is not a usable wedge angle (invalid, offending
 index -1); keeping 28.00.
@@ -1247,6 +1251,13 @@ index -1); keeping 28.00.
 `offending index` 指出是三个槽位中的哪一个的问题——`0` = h，`1` = k，`2` = l；当没有任何单个槽位
 该负责时为 `-1`：数组个数不对不能怪到某一个槽位头上，而角度不可构建来自 h:l 这个**比值**，是两个
 各自合法的整数组合出来的结果。
+
+GUI 文档导入（`src/gui/file_io.cpp`）把同样的判定写成一整句话而不是短代号，读者不需要对照上面
+`offending index` 的编号表就能知道是哪个字段出了问题：
+```text
+crystal id=0 shape.upper_indices states [1,0,-1,1], which is not a usable wedge angle: l must
+not be negative. Keeping 28.00 degrees.
+```
 
 **如何处理**：wedge 角会保留它原有的取值——字段默认的 28.0°，或者此前 `upper_alpha`/`lower_alpha`
 已经设定的值。它不会被清零、也不会变成负数，所以被拒绝的文档照样能渲染出图；只是渲染出来的不是你
