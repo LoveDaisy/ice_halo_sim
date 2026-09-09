@@ -549,11 +549,15 @@ namespace {
 // that the guard does not, is a change WITHIN a field — a nested struct gaining a member, a type
 // widening — which moves the byte size without moving the member count.
 //
-// Once either one fires, a field was added/removed — the author must decide between three
+// WHICH ONE fired says what is being decided, and the two are not the same question. The GUARD
+// firing means a field was added or removed, and that field has to be placed in one of three
 // dispositions: it belongs in RenderConfigResimFields above (participates in resim eligibility);
 // it is excluded outright, captured by nothing (like exposure_offset and the T-view fields); or it
 // is excluded from resim eligibility but still Revert-tracked through its own ConfigSnapshot slot
-// (like background — see ConfigSnapshot::renderer_background).
+// (like background — see ConfigSnapshot::renderer_background). This SIZE assert firing ALONE
+// means no field was added or removed — some existing field grew — so there is no new name to
+// place; what has to be re-checked is whether the grown field's new content changes the
+// disposition already recorded for it.
 //
 // ev_mode (v4.16) is EXCLUDED, and it now HAS a control (the Display group's Mode combo, plus the
 // defaults panel's registered editor) — so the exclusion is a decision, not the absence of one.

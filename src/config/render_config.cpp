@@ -297,7 +297,11 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // What this one is blind to, measured rather than theorised: a field that lands in an alignment
   // hole. Adding a bool to the run below horizon_ leaves sizeof at 224 and this assert silent;
   // removing opacity_ (a float) once left it at 136 the same way.
-  // Either way the duty is the same: classify the new field as layout or appearance.
+  // Which one fired says what has to be classified, and the two are not the same question. The
+  // guard firing means a field was added or removed: classify that field, layout or appearance.
+  // This assert firing ALONE means no field was added or removed — some existing field grew — so
+  // there is no new field to classify; the question is whether the grown field's new content
+  // changes what the accumulator buffer must be. Do not go looking for a new name in that case.
   // Still 192 after the three text-label switches were added: they landed in the tail padding
   // `horizon_` already carried ahead of ZenithNadirParam's 4-byte alignment. The number is a
   // tripwire for "a field was added", not a size budget, so an unchanged one is only safe to leave

@@ -378,9 +378,15 @@ kept it at 136. What the tripwire *does* catch is a change **within** a field �
 nested struct gaining a member, a type widening — which moves the byte size without
 moving the field count, and which the guard is in turn blind to. Hence both.
 
-Either one firing carries the same duty: classify the field as layout-affecting (add
-it to the `NeedsRebuild` comparisons) or appearance-only (no change needed), so that
-a new layout field cannot silently drift past `NeedsRebuild`.
+Which one fired says what has to be classified, and the two are not the same
+question. The **guard** firing means a field was added or removed: classify that
+field as layout-affecting (add it to the `NeedsRebuild` comparisons) or
+appearance-only (no change needed). The **tripwire** firing alone means no field was
+added or removed — some existing field grew — so there is no new name to classify;
+the question is instead whether the grown field's new content changes what the
+accumulator buffer must be. Either way the pinned number is only safe again once
+that question has been answered, so that a layout change cannot silently drift past
+`NeedsRebuild`.
 
 ### §5.3 ResetWith Path
 
