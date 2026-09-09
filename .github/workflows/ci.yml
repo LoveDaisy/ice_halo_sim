@@ -776,17 +776,25 @@ jobs:
       # job says it was put "on the one leg where compilation is most of the job" — that was
       # true when written, and this leg is what it means today.
       #
-      # CCACHE_MAXSIZE is 800M rather than the 2G the Windows leg uses, because the quota is
-      # the binding constraint: the sccache namespace alone holds ~1.5 GB per entry and one
-      # entry per active ref. If `ccache --show-stats` ever reports Cache size == Max cache
-      # size, this cap is evicting live objects and has to go up — the hit rate drops
-      # silently when that happens, so read the number rather than the wall clock.
+      # CCACHE_MAXSIZE is 200M, and that number is measured rather than copied. A full cold
+      # compile of this configure — 291 objects, nothing restored — leaves a 37 MB directory,
+      # so the 2G the Windows leg uses (and the 2G an earlier measurement branch proposed
+      # here) is about fifty times the working set. That difference is not a Linux-vs-Windows
+      # quirk to shrug at: the sccache directory reaches its own 2 GiB ceiling on the MSVC
+      # leg, which is what makes that namespace ~1.5 GB per entry and 80% of the repository's
+      # cache quota, while this one costs a rounding error. 200M leaves room for several
+      # generations of objects to accumulate through the restore-keys fallback.
+      #
+      # If `ccache --show-stats` ever reports Cache size at Max cache size, the cap is
+      # evicting live objects and has to go up. That shows up as a quietly lower hit rate and
+      # an unchanged-looking build, never as a red, so read the number rather than the wall
+      # clock.
       - name: Install ccache
         run: |
           sudo apt-get install -y ccache
           ccache --version
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=200M" >> $GITHUB_ENV
 
       # Same key shape as the sccache entry: one per commit, with a prefix fallback to the
       # newest earlier one. The discriminator leads the platform for the reason spelled out
