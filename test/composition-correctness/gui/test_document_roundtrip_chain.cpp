@@ -15,13 +15,17 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
+#include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
 #include "support/scene_json_helpers.hpp"
 
@@ -1012,6 +1016,95 @@ TEST(DocumentRoundtripChain, AMalformedSummandRowIsRejectedRatherThanReinterpret
     EXPECT_EQ(TakeInvalidSummandRowCount(), 0)
         << c.name << ": the counter did not clear on read, so the notice would never go away";
   }
+}
+
+// The last link in the chain, and the one nothing above it covers: the count reaching the user.
+//
+// Every case above stops at the counter, which is the same place the two counters this one was
+// modelled on stop. That leaves the wiring in DoOpen — the drain before the load and the notice
+// after it — with no cover at all: drop the notice block, or drop the pre-load drain, and every
+// assertion above stays green while the user is told nothing, or told about someone else's load.
+// The whole point of the change is that the drop is not silent, so the silence is what has to be
+// asserted against.
+//
+// Driven through a real .lmc rather than DeserializeGuiStateJson, because DoOpen is the only caller
+// that reads the counter and it only reads it on that path. The malformed row is planted by writing
+// the row text directly: that is what a file written by a pre-gate build of this GUI holds, and the
+// editor will not produce one.
+struct RoundtripTempFile {
+  std::filesystem::path path;
+
+  explicit RoundtripTempFile(std::filesystem::path p) : path(std::move(p)) {}
+  RoundtripTempFile(const RoundtripTempFile&) = delete;
+  RoundtripTempFile& operator=(const RoundtripTempFile&) = delete;
+  ~RoundtripTempFile() {
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+  }
+};
+
+// A document whose one filter carries `rows`, written to disk as a .lmc. Rows go in verbatim
+// (SerializeFilterForGui writes SummandText::text as-is), so a row the gate will refuse can be
+// planted without going through the editor that would have refused it first.
+//
+// Callers plant a SECOND, valid row beside the bad one deliberately. A filter left with no rows at
+// all trips the no-predicate notice next door, which announces a different thing through the same
+// popup — and an earlier draft of these cases passed with the notice under test deleted, because it
+// was reading that neighbour's sentence. Keeping one row alive is what makes the popup attributable.
+void SaveDocumentWithSummandRows(const std::filesystem::path& path, const std::vector<std::string>& rows) {
+  DoNew();
+  g_state.filters.assign(1, FilterConfig{});
+  g_state.filters[0].param.clear();
+  for (const std::string& text : rows) {
+    g_state.filters[0].param.push_back(SummandText{ text, ParseSummandText(text) });
+  }
+  // The writer emits filters inline per entry, so an unreferenced one never reaches the file.
+  ASSERT_FALSE(g_state.layers.empty());
+  ASSERT_FALSE(g_state.layers[0].entries.empty());
+  g_state.layers[0].entries[0].filter_id = 0;
+  ASSERT_TRUE(SaveLmcFile(path, g_state, g_preview, /*save_texture=*/false));
+}
+
+TEST(DocumentRoundtripChain, ADroppedSummandRowIsAnnouncedWhenTheDocumentIsOpened) {
+  const RoundtripTempFile bad{ std::filesystem::temp_directory_path() / "lumice_roundtrip_bad_summand.lmc" };
+  ASSERT_NO_FATAL_FAILURE(SaveDocumentWithSummandRows(bad.path, { "3--5", "1-3" }));
+
+  ClearImportComplexFilterWarning();
+  DoOpen(bad.path);
+
+  ASSERT_EQ(g_state.filters.size(), 1u);
+  ASSERT_EQ(g_state.filters.at(0).param.size(), 1u)
+      << "premise: the bad row was dropped and the good one kept, so the filter still states a rule "
+         "and the no-predicate notice next door stays quiet";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the row was dropped and the user was told nothing about it";
+  EXPECT_NE(warning.find("not valid filter expressions"), std::string::npos)
+      << "the popup did not carry THIS notice's sentence, so something else raised it: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// ...and only about its own load. The counter is process-wide and take-on-read, so a count left by
+// an earlier read — MakeNewDocumentState running the user's personal defaults through the same
+// deserializer is the real instance — would be handed to the next document opened. This is the case
+// that fails for a fix that adds the notice without the drain before the load.
+TEST(DocumentRoundtripChain, ACleanDocumentDoesNotInheritAnEarlierReadsDroppedRow) {
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3--5"), scratch)) << "premise: the seeding read succeeds";
+  ASSERT_TRUE(scratch.filters.empty() || scratch.filters.at(0).param.empty())
+      << "premise: the seeding read dropped a row, i.e. left a count behind";
+
+  const RoundtripTempFile good{ std::filesystem::temp_directory_path() / "lumice_roundtrip_good_summand.lmc" };
+  ASSERT_NO_FATAL_FAILURE(SaveDocumentWithSummandRows(good.path, { "3-5" }));
+
+  ClearImportComplexFilterWarning();
+  DoOpen(good.path);
+
+  ASSERT_EQ(g_state.filters.size(), 1u);
+  EXPECT_EQ(g_state.filters.at(0).param.size(), 1u) << "premise: this document's row is valid and loaded";
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+      << "a clean load announced an earlier read's dropped row: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
 }
 
 // The other half: the gate must not refuse anything the editor can write.
