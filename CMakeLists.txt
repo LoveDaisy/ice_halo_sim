@@ -260,10 +260,23 @@ endif()
 
 # ==================================================================================================
 # CPM.cmake — lightweight dependency manager (wrapper around FetchContent)
-# Cache CPM downloads outside cmake_build so clean builds (-k) don't re-download
+# Cache CPM downloads outside cmake_build so clean builds (-k) don't re-download, and — since the
+# default below is a machine-level directory rather than a per-source-tree one — so that a fresh
+# clone or a new `git worktree` reuses whatever this machine already downloaded instead of
+# re-fetching every dependency source. Three-tier fallback; the last tier is the old repo-local
+# behaviour, so configure can never fail just because no home directory is discoverable.
 if(NOT DEFINED CPM_SOURCE_CACHE AND NOT DEFINED ENV{CPM_SOURCE_CACHE})
-  set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/build/cpm_cache"
-      CACHE PATH "Directory to cache CPM dependency sources")
+  if(DEFINED ENV{HOME})
+    set(_lumice_cpm_cache_default "$ENV{HOME}/.cache/lumice-cpm")
+  elseif(DEFINED ENV{USERPROFILE})  # Windows shells that do not set HOME
+    set(_lumice_cpm_cache_default "$ENV{USERPROFILE}/.cache/lumice-cpm")
+  else()
+    set(_lumice_cpm_cache_default "${CMAKE_SOURCE_DIR}/build/cpm_cache")
+  endif()
+  set(CPM_SOURCE_CACHE "${_lumice_cpm_cache_default}"
+      CACHE PATH "Directory to cache CPM dependency sources (machine-level and shared across \
+worktrees/clones by default; override with the CPM_SOURCE_CACHE env var, as CI does)")
+  unset(_lumice_cpm_cache_default)
 endif()
 include(cmake/CPM.cmake)
 

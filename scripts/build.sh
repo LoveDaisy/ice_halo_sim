@@ -110,7 +110,12 @@ help() {
   echo "               build/<BUILD_TYPE>/<flavor>/. A liblumice there survives -k, and"
   echo "               it is the first thing the e2e C API loader looks for — so after"
   echo "               -k it can still load a pre-clean library. Use -x to wipe build/."
-  echo "  -x:          Clean everything including dependency cache (both flavors)."
+  echo "  -x:          Wipe build/ entirely — both flavors, plus the compiler output"
+  echo "               tree that -k leaves behind. It does NOT clear the CPM"
+  echo "               dependency-source cache, which defaults to a machine-level"
+  echo "               directory outside build/ (\$HOME/.cache/lumice-cpm) shared with"
+  echo "               every other clone and worktree; delete that directory by hand if"
+  echo "               you really want the sources re-downloaded."
   echo "  -s:          Build shared library (default: static)."
   echo "  -h:          Show this message."
 }
@@ -137,8 +142,12 @@ clean_all() {
   rm -rf "${BUILD_DIR}" "${INSTALL_DIR}"
 }
 
+# Wipes this tree's build/ only. The CPM dependency-source cache defaults to a machine-level
+# directory outside build/, and is deliberately left alone: it is shared with every other clone
+# and worktree on this machine, so deleting it from one of them would cost all the others a full
+# re-download. Delete it by hand if that is really what you want.
 clean_everything() {
-  echo "Cleaning all build files and dependency cache..."
+  echo "Cleaning all build files (dependency source cache is shared machine-wide, left intact)..."
   rm -rf "${ROOT_DIR}/build"
 }
 

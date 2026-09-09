@@ -52,7 +52,10 @@ The project uses CMake for building and provides a `scripts/build.sh` script to 
 - `-b`: Build benchmarks (Google Benchmark)
 - `-j`: Parallel compilation
 - `-k`: Clean build artifacts (keep dependency cache)
-- `-x`: Clean everything including dependency cache
+- `-x`: Wipe `build/` entirely (both flavors). It does **not** clear the CPM
+  dependency-source cache — that defaults to a machine-level directory outside
+  `build/` (`$HOME/.cache/lumice-cpm`) shared with every other clone and worktree.
+  Delete that directory by hand to force a re-download.
 - `-s`: Build shared libraries (static libraries by default)
 - `-h`: Show help information
 
