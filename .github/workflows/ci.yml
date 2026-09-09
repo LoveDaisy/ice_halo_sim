@@ -768,6 +768,40 @@ jobs:
           key: cpm-sharedgui-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-sharedgui-ubuntu-x64-
 
+      # ccache on this leg and no other, which is a budget decision before it is a
+      # performance one. A run's wall clock is its longest job, and this is that job; the
+      # plain `Ubuntu x86_64` leg already finishes under the next-longest one, so a compiler
+      # cache there would buy machine time and zero wall clock while claiming its share of a
+      # 10 GB repository-wide quota that is already full. The sccache comment in the build
+      # job says it was put "on the one leg where compilation is most of the job" — that was
+      # true when written, and this leg is what it means today.
+      #
+      # CCACHE_MAXSIZE is 800M rather than the 2G the Windows leg uses, because the quota is
+      # the binding constraint: the sccache namespace alone holds ~1.5 GB per entry and one
+      # entry per active ref. If `ccache --show-stats` ever reports Cache size == Max cache
+      # size, this cap is evicting live objects and has to go up — the hit rate drops
+      # silently when that happens, so read the number rather than the wall clock.
+      - name: Install ccache
+        run: |
+          sudo apt-get install -y ccache
+          ccache --version
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
+
+      # Same key shape as the sccache entry: one per commit, with a prefix fallback to the
+      # newest earlier one. The discriminator leads the platform for the reason spelled out
+      # on the cpm keys — `ccache-ubuntu-x64-...` would become a prefix-subset the moment the
+      # plain ubuntu-x64 leg ever gets a cache of its own.
+      - name: Cache ccache directory
+        uses: actions/cache@v6
+        with:
+          path: ccache_cache
+          key: ccache-sharedgui-ubuntu-x64-${{ github.sha }}
+          restore-keys: ccache-sharedgui-ubuntu-x64-
+
+      # The launcher flags are written out here rather than injected through an environment
+      # variable: this job has exactly one Configure step, so the indirection the build job
+      # needs (one step serving four matrix entries) would buy nothing here.
       - name: Configure (shared + test + GUI)
         run: >
           cmake -S . -B build -G Ninja
@@ -776,9 +810,19 @@ jobs:
           -DBUILD_GUI=ON
           -DBUILD_SHARED_LIBS=ON
           -DLUMICE_NATIVE_ARCH=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build (compile + link only, no run)
         run: cmake --build build --parallel
+
+      # Diagnostics, never a gate. The hit rate is what separates "the cache worked" from
+      # "this runner was faster", which wall clock alone cannot do: identical work on this
+      # provider was measured spanning 1.28x across runners while its link phase held to
+      # within 6%.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats --verbose || true
 
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
