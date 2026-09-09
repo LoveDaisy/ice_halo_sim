@@ -136,6 +136,10 @@ add_executable(unit_correctness_test
   # preview shader's relative-illumination factor, and the oracle it is held to is a numerical
   # Jacobian rather than the GLSL twin, so the case needs no GL context of any kind.
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_preview_jacobian.cpp"
+  # Contrast-headroom warning, GUI half: gui_state.hpp's wrappers over util/contrast_headroom.hpp
+  # plus the one-click fix. All three are header-only inline functions over a plain struct, so this
+  # is the target that does not link lumice_gui_obj — the same reason as the three lines above.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_contrast_headroom_warning.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the

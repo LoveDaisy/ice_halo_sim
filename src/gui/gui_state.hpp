@@ -14,6 +14,7 @@
 
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"  // LUMICE_RayCount (64-bit ray-count type)
+#include "util/contrast_headroom.hpp"
 
 namespace lumice::gui {
 
@@ -472,6 +473,55 @@ struct RenderConfig {
 // LUMICE_TONE_PRINT is its published spelling. `tone` is held as a plain int for the same reason.
 inline bool IsPrintTone(const RenderConfig& renderer) {
   return renderer.tone == LUMICE_TONE_PRINT;
+}
+
+// Has this renderer's ground run out of room for the picture to show against?
+//
+// doc/print-mode-subtractive-ink.md §8 (owner decision D6): the two tone operators have one
+// degenerate direction each — a white sky under screen, a black paper under print — and they are ONE
+// idea, so they are ONE predicate. That predicate is util/contrast_headroom.hpp's, which the CLI
+// calls too (src/server/server.cpp's WarnLowContrastHeadroom); these two functions exist only to
+// hand it the right field and the right direction.
+//
+// They forward and do nothing else — no extra condition, no GUI-only exception, no second
+// comparison against the threshold. That restriction is the point of having them: a branch added
+// here would make the GUI a second authority on when the warning fires, and then "the threshold is
+// defined in one place" would be true of the constant while being false of the judgement.
+//
+// No conversion, unlike the CLI's caller: RenderConfig::background / ::paper here are sRGB already
+// (see their declarations above), which is the domain the predicate is defined on.
+inline float ContrastHeadroomMarginFor(const RenderConfig& renderer) {
+  const bool print = IsPrintTone(renderer);
+  return ContrastHeadroomMargin(print ? renderer.paper : renderer.background,
+                                print ? ToneLawLimit::kBlack : ToneLawLimit::kWhite);
+}
+
+inline bool ContrastHeadroomIsLowFor(const RenderConfig& renderer) {
+  const bool print = IsPrintTone(renderer);
+  return ContrastHeadroomIsLow(print ? renderer.paper : renderer.background,
+                               print ? ToneLawLimit::kBlack : ToneLawLimit::kWhite);
+}
+
+// The one-click fix offered beside that warning, as a function rather than as a lambda inside the
+// button: what it changes is the part worth asserting, and asserting it through a real click would
+// need a window and an ImGuiTestContext for a two-line mutation.
+//
+// The two arms are deliberately NOT symmetric, and each one is the smallest move that restores a
+// visible picture:
+//   screen, near-white sky  -> switch to print. The sky the user picked is kept, because a pale sky
+//                              is a perfectly good PAPER; it is the additive law that cannot use it.
+//   print, near-black paper -> reset the paper to its default white, and STAY in print. The user is
+//                              fixing print's ground, not asking to leave print, and switching tone
+//                              back would undo the choice they just made.
+// The default is read off a default-constructed RenderConfig rather than written as {1,1,1}, the same
+// way server.cpp's notices read theirs, so a change to the field's default needs no edit here.
+inline void ApplyHeadroomFix(RenderConfig& renderer) {
+  if (IsPrintTone(renderer)) {
+    const RenderConfig kDefaults{};
+    std::copy(kDefaults.paper, kDefaults.paper + 3, renderer.paper);
+  } else {
+    renderer.tone = LUMICE_TONE_PRINT;
+  }
 }
 
 // The resim-eligible projection of RenderConfig: ONLY the fields whose change genuinely requires
