@@ -145,7 +145,7 @@ jobs:
       # written on this leg, and every other matrix entry evaluates the unset variable to an
       # empty string, so the shared Configure step needs no branch of its own.
       - name: Install sccache (Windows MSVC)
-        if: matrix.msvc
+        if: matrix.msvc && true
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -204,7 +204,7 @@ jobs:
       # restore-keys then supplies the previous commit's directory, where the objects for
       # every file this commit did not touch still hit.
       - name: Cache sccache directory (Windows MSVC)
-        if: matrix.msvc
+        if: matrix.msvc && true
         uses: actions/cache@v6
         with:
           path: sccache_cache
