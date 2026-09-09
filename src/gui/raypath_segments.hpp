@@ -251,11 +251,13 @@ inline GuiValidationResult ValidateRaypathTextMultiSegment(const std::string& te
 // predicate" and "the text would not parse", and no fail-closed change here can be right until
 // those are two different things.
 //
-// So the gate is not here. It is on the one caller that used to have no gate: the .lmc reader
-// (ParseFilterFromGuiJson) validates each summands row with ValidateSummandText and drops the row
-// loudly, which is what the editor has always done on its own input. Both of this function's
-// callers now sit behind a validator, and its tolerance goes on serving what it was written for —
-// showing the part of a half-typed row that does parse.
+// So the gate is not here. This function is reached from exactly one place — through
+// ParseRaypathTextMultiSegment, from FactorAlternatives in file_io.cpp — and the text that arrives
+// there is a SummandText::text that entered the state through one of two doors: the editor, which
+// has always run ValidateSummandText before writing one, and the .lmc reader
+// (ParseFilterFromGuiJson), which did not and now does. Closing the second door is what makes the
+// tolerance here safe to keep, and it goes on serving what it was written for: showing the part of
+// a half-typed row that does parse, while the row is still being typed.
 inline std::vector<int> ParseRaypathSegment(const std::string& seg) {
   std::vector<int> ints;
   std::string tok;
