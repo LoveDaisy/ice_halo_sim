@@ -1,9 +1,11 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
 
 #include "IconsFontAwesome6.h"
@@ -22,7 +24,7 @@
 #include "gui/mono_exposure_scale.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
-#include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / kBgModifierName
+#include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / kBgModifierName / SampleBgColorAtScreenPos
 #include "gui/semantic_colors.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
@@ -635,6 +637,11 @@ void RenderTopBar(float window_width) {
 
 namespace {
 constexpr float kCollapseBtnSize = 20.0f;
+
+// The eyedropper's live swatch, in ImGui points. Offset down-right of the hotspot so the cursor
+// glyph does not sit on top of the colour it is reporting.
+constexpr float kBgPickSwatchOffsetPt = 16.0f;
+constexpr float kBgPickSwatchSizePt = 24.0f;
 
 // Draw a collapse/expand button as a foreground overlay using ImGui theme colors.
 // Returns true if clicked. Coordinates are viewport-local; under multi-viewport
@@ -1464,6 +1471,34 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           "outside the visible hemisphere, stays black.");
     }
 
+    // Eyedropper: take the sky colour off the imported photograph instead of dialling it. The
+    // point is not convenience alone — the shader composites the photo as
+    // `photo*(1-alpha) + render*alpha`, so where `background` already equals the photo's own sky
+    // that lerp is the identity and the halo arrives as a pure addition rather than washing the
+    // photo out. Which is why the tooltip says to sample SKY: a pixel off the treeline sets the
+    // whole empty sky to dark green.
+    ImGui::SameLine();
+    const bool bg_pick_ok = BgPhotoOnScreen(g_state);
+    ImGui::BeginDisabled(!bg_pick_ok);
+    if (ImGui::Button(ICON_FA_EYE_DROPPER "##display_sky_pick")) {
+      g_bg_pick.active = !g_bg_pick.active;
+    }
+    ImGui::EndDisabled();
+    // AllowWhenDisabled: the disabled case is the one that most needs to say why.
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (!g_preview.HasBackground()) {
+        ImGui::SetTooltip("No background photo loaded — use Load Bg under Background first.");
+      } else if (!g_state.bg_show) {
+        ImGui::SetTooltip("The background photo is hidden. Tick Show under Background to sample it.");
+      } else {
+        ImGui::SetTooltip(
+            "Pick the sky colour off the background photo.\n"
+            "The preview shows the photo alone while picking; click a patch of\n"
+            "SKY (the halo is composited over the sky, not the ground), or press\n"
+            "Esc to cancel.");
+      }
+    }
+
     // Permanent readout, not a tooltip: exposure_offset is saved per document, so in absolute
     // mode two open files can sit at different heights on one shared scale. A single-document GUI
     // cannot compare them for the user, but it can refuse to leave the current height implicit.
@@ -1595,6 +1630,23 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
+  // Eyedropper mode: two ways out that must be taken before anything else this frame reads the
+  // flag. Esc is read ahead of ImGui::Begin for the same reason the entry-link picker in the left
+  // panel reads it there — an inner widget would otherwise consume the key first. The second is
+  // not a user action at all: the photo can go away mid-pick (Show unticked, Clear pressed, a
+  // document opened from another panel), and leaving the mode armed over a preview that no longer
+  // shows a photo would swallow the next click for nothing.
+  if (g_bg_pick.active && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    g_bg_pick.active = false;
+  }
+  if (g_bg_pick.active && !BgPhotoOnScreen(g_state)) {
+    g_bg_pick.active = false;
+  }
+  // The post-confirm latch ends with the press that set it, whatever happened in between.
+  if (g_bg_pick.swallow_drag_until_release && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    g_bg_pick.swallow_drag_until_release = false;
+  }
+
   float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
   float panel_x = left_w;
@@ -1865,6 +1917,30 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
     }
 
+    // Eyedropper mode: what the user is about to sample is what they must be looking at, so this
+    // frame shows the photograph and nothing else. Every line below overwrites a value that was
+    // just derived from GuiState a few dozen lines up; GuiState itself is untouched, so leaving
+    // the mode needs no restore step — the next frame derives the same fields again from the
+    // unchanged document and the picture comes back whole.
+    //
+    // alpha = 0 is exact rather than approximate: the shader's background stage is
+    // `photo*(1-alpha) + render*alpha`, so zero leaves the photo bit for bit.
+    //
+    // The overlay switches are a POSITIVE list, not a master off switch — there is no such switch
+    // in OverlayDecoration. A seventh overlay class added later will keep drawing over the photo
+    // until it is named here too.
+    if (g_bg_pick.active) {
+      pp.bg.alpha = 0.0f;
+      pp.overlay.show_horizon = false;
+      pp.overlay.show_grid = false;
+      pp.overlay.show_sun_circles = false;
+      pp.overlay.show_lens_border = false;
+      pp.overlay.marker_screen_pos = MakeAllSentinelMarkerPositions();
+      // Not part of `pp`: the curve labels are rasterized by the deferred pass from this vector,
+      // so hiding their lines above does not hide their text.
+      g_preview_vp.curve_labels.clear();
+    }
+
     // Mouse interaction: orbit with drag, FOV with scroll — or, with the pan/zoom modifier held,
     // the background image instead of the camera.
     //
@@ -1889,12 +1965,21 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // second case a no-op instead of silently orbiting: a user pressing the modifier over a
       // hidden background has stated what they meant to move, and swallowing the modifier to move
       // something else is worse than doing nothing.
-      const bool bg_active = g_preview.HasBackground() && g_state.bg_show;
+      // "No gesture this frame": either the eyedropper owns the viewport, or it has just taken a
+      // colour and the press that took it has not been let go of yet. The latch covers the wheel
+      // branches too, which is wider than the defect requires — a wheel notch carries no leftover
+      // motion from the press that took the colour. Conservative on purpose; not a condition the
+      // bug imposes, so it can be narrowed without reopening that defect.
+      const bool gestures_locked = g_bg_pick.active || g_bg_pick.swallow_drag_until_release;
+      // Same predicate the eyedropper button is enabled by, and deliberately not a second copy of
+      // the expression: "there is a photo on screen to act on" is one question, whether the act is
+      // dragging it or sampling it.
+      const bool bg_active = BgPhotoOnScreen(g_state);
       // Alt/Option on every platform. Cmd on macOS is not an option: ImGui aliases Super+Left
       // into a right click before this handler runs — see kBgModifierName in preview_renderer.hpp.
       const bool bg_modifier = io.KeyAlt;
 
-      if (bg_active && bg_modifier && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      if (!gestures_locked && bg_active && bg_modifier && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         // Solve for "the texel under the cursor stays under the cursor". With
         // bg_uv = ndc * scale + offset, moving the cursor by dndc requires
         // offset_new = offset_old - dndc * scale; since `scale` already carries the zoom, this is
@@ -1904,10 +1989,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // io.MouseDelta is in ImGui points while vp_w/vp_h are framebuffer pixels; dpi_scale_x/
         // dpi_scale_y (the DPI factors captured above, NOT t.scale_x/t.scale_y) reconcile the two,
         // which is what keeps the image glued to the cursor on a HiDPI display rather than moving
-        // at half speed.
-        const float dndc_x = io.MouseDelta.x * dpi_scale_x * 2.0f / static_cast<float>(g_preview_vp.vp_w);
-        // Screen Y grows downward, NDC Y upward.
-        const float dndc_y = -io.MouseDelta.y * dpi_scale_y * 2.0f / static_cast<float>(g_preview_vp.vp_h);
+        // at half speed. The relation itself (including the Y sign flip) lives in
+        // ScreenDeltaToNdcDelta so that the eyedropper below measures screen against NDC the same
+        // way this drag does, rather than growing a second copy of it.
+        const NdcPoint dndc = ScreenDeltaToNdcDelta(io.MouseDelta.x, io.MouseDelta.y, dpi_scale_x, dpi_scale_y,
+                                                    g_preview_vp.vp_w, g_preview_vp.vp_h);
 
         // Clamp on this path too, not only in the sliders: a slider clamps what IT produces, it
         // does not retroactively pull an out-of-range value back, so an unclamped drag could park
@@ -1916,13 +2002,13 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         const FieldEditorConstraint oy_c = ConstraintFor("bg_offset_y", g_state);
         g_state.bg_offset_x =
             std::max(static_cast<float>(ox_c.min_value),
-                     std::min(static_cast<float>(ox_c.max_value), g_state.bg_offset_x - dndc_x * t.scale_x));
+                     std::min(static_cast<float>(ox_c.max_value), g_state.bg_offset_x - dndc.x * t.scale_x));
         g_state.bg_offset_y =
             std::max(static_cast<float>(oy_c.min_value),
-                     std::min(static_cast<float>(oy_c.max_value), g_state.bg_offset_y - dndc_y * t.scale_y));
+                     std::min(static_cast<float>(oy_c.max_value), g_state.bg_offset_y - dndc.y * t.scale_y));
       }
 
-      if (bg_active && bg_modifier && is_hovered && io.MouseWheel != 0.0f) {
+      if (!gestures_locked && bg_active && bg_modifier && is_hovered && io.MouseWheel != 0.0f) {
         // Multiplicative, so one notch is the same proportional change everywhere on the range —
         // matching the kLog slider the same field is edited by.
         const FieldEditorConstraint scale_c = ConstraintFor("bg_scale", g_state);
@@ -1931,7 +2017,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
             std::max(static_cast<float>(scale_c.min_value), std::min(static_cast<float>(scale_c.max_value), zoomed));
       }
 
-      if (!bg_modifier && !full_sky && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+      if (!gestures_locked && !bg_modifier && !full_sky && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
         // Sensitivity is the lens's angular resolution at the frame center, so one pixel of
         // drag moves the content one pixel whatever the FOV and viewport are. A fixed deg/px
@@ -1963,10 +2049,66 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         rc.elevation = std::max(-el_lim, std::min(el_lim, rc.elevation));
       }
 
-      if (!bg_modifier && !full_sky && is_hovered && io.MouseWheel != 0.0f) {
+      if (!gestures_locked && !bg_modifier && !full_sky && is_hovered && io.MouseWheel != 0.0f) {
         float fov_max = LUMICE_MaxFov(static_cast<LUMICE_LensType>(rc.lens_type));
         rc.fov -= io.MouseWheel * 5.0f;
         rc.fov = std::max(1.0f, std::min(fov_max, rc.fov));
+      }
+
+      // The eyedropper's own branch, gated on the flag the four above are gated on the negation of:
+      // exactly one of the five can run in a frame, and while picking, the click that would have
+      // orbited the camera samples a colour instead.
+      if (g_bg_pick.active && is_hovered) {
+        BgSampleGeometry geom;
+        geom.dpi_scale_x = dpi_scale_x;
+        geom.dpi_scale_y = dpi_scale_y;
+        geom.vp_w = g_preview_vp.vp_w;
+        geom.vp_h = g_preview_vp.vp_h;
+        geom.bg_aspect = g_preview.GetBgAspect();
+        geom.pan_x = g_state.bg_offset_x;
+        geom.pan_y = g_state.bg_offset_y;
+        geom.zoom = g_state.bg_scale;
+        geom.img_w = g_state.bg_pixel_w;
+        geom.img_h = g_state.bg_pixel_h;
+        // Relative to the WINDOW's top-left, not the InvisibleButton's. The GL viewport published
+        // above is the panel rectangle itself (vp_x/vp_w/vp_h come from panel_x/panel_width/
+        // panel_height, not from the content region), and the window's content origin sits one
+        // WindowPadding inside that — 8 x 6 points under the current style. Measuring from the
+        // button would shift every sample by that much: small enough to read as the photo being
+        // slightly off rather than as a bug. It is also the origin the overlay label anchors are
+        // built against, for the same reason.
+        const ImVec2 vp_origin = ImGui::GetWindowPos();
+        const std::optional<std::array<float, 3>> sampled =
+            SampleBgColorAtScreenPos(io.MousePos.x - vp_origin.x, io.MousePos.y - vp_origin.y, geom, g_state.bg_pixels);
+
+        if (sampled) {
+          // Swatch of the value that WOULD be taken, not of the screen under the cursor: the
+          // texture is minified through a mipmap chain, so the pixel on screen is a blend of
+          // several source texels while the sample is one exact texel. Showing the sample is what
+          // makes the preview honest about the click's outcome.
+          ImDrawList* fg = ImGui::GetForegroundDrawList();
+          const ImU32 swatch =
+              ImGui::ColorConvertFloat4ToU32(ImVec4((*sampled)[0], (*sampled)[1], (*sampled)[2], 1.0f));
+          const ImVec2 tl(io.MousePos.x + kBgPickSwatchOffsetPt, io.MousePos.y + kBgPickSwatchOffsetPt);
+          const ImVec2 br(tl.x + kBgPickSwatchSizePt, tl.y + kBgPickSwatchSizePt);
+          fg->AddRectFilled(tl, br, swatch);
+          fg->AddRect(tl, br, IM_COL32(255, 255, 255, 220));
+        }
+
+        if (sampled && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+          // The one and only write this mode makes to the document, and it goes through the same
+          // field the Sky Color swatch beside the eyedropper writes. No colour conversion: the
+          // photo was composited after the gamma curve, so its bytes and `background` are both
+          // sRGB (see SampleBgColorAtScreenPos).
+          rc.background[0] = (*sampled)[0];
+          rc.background[1] = (*sampled)[1];
+          rc.background[2] = (*sampled)[2];
+          g_bg_pick.active = false;
+          g_bg_pick.swallow_drag_until_release = true;
+        }
+        // A click on the letterbox is deliberately inert — not a cancel: the user aimed at the
+        // photo and missed its edge, and dropping them out of the mode would make the miss cost a
+        // second trip to the button.
       }
     }
   } else {

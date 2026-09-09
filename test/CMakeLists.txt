@@ -292,6 +292,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_bg_color_picker.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_sampling_density_stats.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_server_poller.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
@@ -320,6 +321,10 @@ if(BUILD_GUI)
   # what makes the fixture unconditionally reachable here.
   target_compile_definitions(gui_unit_test PRIVATE
     LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
+    # Second source-scan anchor, same shape as the one above: the eyedropper's "writes nothing to
+    # the document but the sky colour" claim is about a branch that lives inside an ImGui frame and
+    # cannot be called from a unit test, so what the test holds is the branch's text.
+    LUMICE_GUI_APP_PANELS_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app_panels.cpp"
     LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs"
     LUMICE_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/test/fixtures")
   # `lumice_obj` (objects), not `lumice` — a NAMED exemption, not an unexamined default.

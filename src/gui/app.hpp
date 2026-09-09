@@ -49,6 +49,24 @@ struct PreviewViewport {
   std::vector<CurveLabelSet> curve_labels;
 };
 
+// Sky-Color eyedropper mode: while active, the preview shows the background photo alone and a
+// click on it samples that photo's pixel into renderer.background.
+//
+// Deliberately NOT a GuiState field: the mode is display-time only, and the document must come
+// out of it byte-identical to how it went in (the one write is the sampled colour, on confirm,
+// through the same field the Sky Color swatch writes). Deliberately not a PreviewViewport field
+// either, though that is the closest existing carrier: every member of that struct is republished
+// unconditionally by RenderPreviewPanel each frame (level-triggered, see its comment), whereas
+// this flag is edge-triggered by a user action and has to survive the frames in between.
+struct BgColorPickState {
+  bool active = false;
+  // Set when a pick confirms, cleared when the left button comes back up. The confirm fires on the
+  // mouse-DOWN frame — that is what makes the swatch under the cursor and the colour taken the same
+  // thing — so without this latch the remainder of that same press, the few pixels of travel before
+  // the user lets go, would reach the camera-orbit branch as an ordinary drag and swing the view.
+  bool swallow_drag_until_release = false;
+};
+
 enum class PendingAction { kNone, kNew, kOpen, kQuit };
 
 // task-cleanup-hardening AC4 (Save-偏离-E owner ruling = 提示需 Run):
@@ -70,6 +88,25 @@ extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
 extern PreviewViewport g_preview_vp;
+extern BgColorPickState g_bg_pick;
+
+// "There is a background photo on screen to act on" — a photo is loaded AND it is being shown.
+// The single owner of that judgement, asked by two different features: the eyedropper (button
+// disabled state, the preview panel's pick branch, the mid-mode bail-out) and the photo's own
+// drag/wheel gestures. Sharing is deliberate — both ask the same question — but note what that
+// makes this function: NOT "the eyedropper is available", which is why it is not named that.
+//
+// ⚠️ The distinction is load-bearing for the next condition anyone adds here. A subtractive/print
+// rendering mode, in which the halo is laid on paper rather than composited over a photograph,
+// would make the background overlay mutually exclusive with the eyedropper. It is tempting to put
+// that condition in this predicate — do not do it without deciding, explicitly, whether it should
+// also stop the user dragging and scaling the photo, because writing it here decides both at once
+// and silently. If it gates only the eyedropper, it belongs at the eyedropper's own call sites.
+// One thing is settled either way: the paper colour is emphatically NOT a second thing this picker
+// may sample, because the whole reason sampling works is that `background` and the photo meet in
+// the same lerp. No condition is written today because the mode does not exist in this tree yet,
+// and a gate on a field nobody has defined is a gate that will be wrong by the time it matters.
+bool BgPhotoOnScreen(const GuiState& state);
 // The construction-time properties the live g_server was actually built with (see app.cpp):
 // whether it is a GPU backend (Metal/CUDA) vs CPU, and how many CPU workers it holds. Together
 // they are what MaybeReconstructServerForConstructionProperties compares against to decide whether

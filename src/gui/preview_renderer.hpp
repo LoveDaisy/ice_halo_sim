@@ -2,6 +2,7 @@
 #define LUMICE_GUI_PREVIEW_RENDERER_HPP
 
 #include <array>
+#include <optional>
 #include <vector>
 
 #include "gui/gui_constants.hpp"
@@ -340,6 +341,65 @@ struct BgUvTransform {
   float offset_y;
 };
 BgUvTransform ComputeBgUvTransform(int vp_w, int vp_h, float bg_aspect, float pan_x, float pan_y, float zoom);
+
+// --- Background eyedropper: screen point -> photo pixel -> colour ---------------------------
+// Declared here, beside ComputeBgUvTransform and for the same reason: these are the CPU half of
+// the same mapping, and a unit test must be able to hold them without a GL context.
+
+struct NdcPoint {
+  float x;
+  float y;
+};
+
+// A screen-space displacement in ImGui LOGICAL POINTS, expressed in NDC units. dpi_scale_* is what
+// reconciles the two (vp_w/vp_h are framebuffer pixels), and the Y sign flip is here because screen
+// Y grows downward while NDC Y grows upward. Returns {0,0} on a degenerate viewport.
+NdcPoint ScreenDeltaToNdcDelta(float dx_pt, float dy_pt, float dpi_scale_x, float dpi_scale_y, int vp_w, int vp_h);
+
+// A screen point given RELATIVE TO THE VIEWPORT'S TOP-LEFT corner, in logical points, as NDC.
+// Same relation as above with the corner's own NDC (-1, +1) added: one owner, two call shapes.
+NdcPoint ScreenPosToNdc(float x_pt, float y_pt, float dpi_scale_x, float dpi_scale_y, int vp_w, int vp_h);
+
+// Column/row into the background image's CPU copy — row 0 is the TOP row, matching stbi's native
+// order and therefore the order the bytes were uploaded in.
+struct BgPixelIndex {
+  int col;
+  int row;
+};
+
+// uv in [0,1]^2 -> {col, row}; anything outside that square is the letterbox and yields nullopt.
+// No Y flip of its own: ComputeBgUvTransform's negative scale_y is the single owner of the flip,
+// and a second one here would silently mirror the sample against what the user sees.
+std::optional<BgPixelIndex> BgUvToPixelIndex(float u, float v, int img_w, int img_h);
+
+// Everything the mapping needs about the current frame, in one named carrier rather than ten
+// positional scalars — the same set the shader's background stage is fed from.
+struct BgSampleGeometry {
+  float dpi_scale_x = 1.0f;
+  float dpi_scale_y = 1.0f;
+  int vp_w = 0;
+  int vp_h = 0;
+  float bg_aspect = 1.0f;
+  float pan_x = 0.0f;
+  float pan_y = 0.0f;
+  float zoom = 1.0f;
+  int img_w = 0;
+  int img_h = 0;
+};
+
+// The eyedropper sample, end to end: a cursor position over the preview -> the sRGB triple of the
+// photo pixel under it, in the [0,1] convention RenderConfig::background stores. nullopt when the
+// point falls on the letterbox, or when there is no CPU copy to read.
+//
+// No colour-space conversion happens or should happen here: the shader composites the photo AFTER
+// clampAndGamma, i.e. in the same sRGB encoding these bytes carry, and `background` is stored in
+// that encoding too (app_panels.cpp converts to linear only when filling PreviewParams). Byte/255
+// is therefore the exact answer, not an approximation of one.
+//
+// `pixels` is the RGB, row-major, top-down buffer GuiState::bg_pixels holds; img_w/img_h in `geom`
+// must be the size it was filled at.
+std::optional<std::array<float, 3>> SampleBgColorAtScreenPos(float x_pt, float y_pt, const BgSampleGeometry& geom,
+                                                             const std::vector<unsigned char>& pixels);
 
 // How the on-screen hint spells the key that arms the background pan/zoom gestures. The key
 // itself is io.KeyAlt on every platform; only its printed name differs, because that is what is

@@ -1553,6 +1553,62 @@ BgUvTransform ComputeBgUvTransform(int vp_w, int vp_h, float bg_aspect, float pa
   return t;
 }
 
+NdcPoint ScreenDeltaToNdcDelta(float dx_pt, float dy_pt, float dpi_scale_x, float dpi_scale_y, int vp_w, int vp_h) {
+  if (vp_w <= 0 || vp_h <= 0) {
+    return NdcPoint{ 0.0f, 0.0f };
+  }
+  return NdcPoint{ dx_pt * dpi_scale_x * 2.0f / static_cast<float>(vp_w),
+                   -dy_pt * dpi_scale_y * 2.0f / static_cast<float>(vp_h) };
+}
+
+NdcPoint ScreenPosToNdc(float x_pt, float y_pt, float dpi_scale_x, float dpi_scale_y, int vp_w, int vp_h) {
+  const NdcPoint d = ScreenDeltaToNdcDelta(x_pt, y_pt, dpi_scale_x, dpi_scale_y, vp_w, vp_h);
+  // The viewport's top-left corner is NDC (-1, +1); the displacement above is measured from it.
+  return NdcPoint{ -1.0f + d.x, 1.0f + d.y };
+}
+
+std::optional<BgPixelIndex> BgUvToPixelIndex(float u, float v, int img_w, int img_h) {
+  if (img_w <= 0 || img_h <= 0) {
+    return std::nullopt;
+  }
+  // Same square the shader tests before it samples u_bg_texture (preview_renderer's fragment
+  // source, background overlay stage) — outside it the shader paints the black letterbox, so
+  // there is no photo pixel to report.
+  if (!(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f)) {
+    return std::nullopt;
+  }
+  // floor, then clamp: u == 1.0f is inside the square by the test above but floors to img_w,
+  // one past the last column.
+  int col = static_cast<int>(std::floor(u * static_cast<float>(img_w)));
+  int row = static_cast<int>(std::floor(v * static_cast<float>(img_h)));
+  col = std::max(0, std::min(img_w - 1, col));
+  row = std::max(0, std::min(img_h - 1, row));
+  return BgPixelIndex{ col, row };
+}
+
+std::optional<std::array<float, 3>> SampleBgColorAtScreenPos(float x_pt, float y_pt, const BgSampleGeometry& geom,
+                                                             const std::vector<unsigned char>& pixels) {
+  const NdcPoint ndc = ScreenPosToNdc(x_pt, y_pt, geom.dpi_scale_x, geom.dpi_scale_y, geom.vp_w, geom.vp_h);
+  const BgUvTransform t = ComputeBgUvTransform(geom.vp_w, geom.vp_h, geom.bg_aspect, geom.pan_x, geom.pan_y, geom.zoom);
+  // The shader's own line, on the CPU: bg_uv = v_ndc * u_bg_uv_scale + u_bg_uv_offset.
+  const float u = ndc.x * t.scale_x + t.offset_x;
+  const float v = ndc.y * t.scale_y + t.offset_y;
+  const std::optional<BgPixelIndex> idx = BgUvToPixelIndex(u, v, geom.img_w, geom.img_h);
+  if (!idx) {
+    return std::nullopt;
+  }
+  const size_t offset =
+      (static_cast<size_t>(idx->row) * static_cast<size_t>(geom.img_w) + static_cast<size_t>(idx->col)) * 3u;
+  if (offset + 2u >= pixels.size()) {
+    // geom's dimensions and the buffer disagree — no copy loaded, or a stale one. Report "nothing
+    // here" rather than reading past the end.
+    return std::nullopt;
+  }
+  return std::array<float, 3>{ static_cast<float>(pixels[offset]) / 255.0f,
+                               static_cast<float>(pixels[offset + 1]) / 255.0f,
+                               static_cast<float>(pixels[offset + 2]) / 255.0f };
+}
+
 float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_h) {
   constexpr float kPi = 3.14159265358979323846f;
   // Pre-fov-aware sensitivity. Only reachable via the default branch below, which

@@ -18,6 +18,7 @@ add_executable(gui_test
     functional/test_status_bar.cpp
     functional/test_defaults_panel.cpp
     functional/test_background_overlay.cpp
+    functional/test_bg_color_picker_mode.cpp
     functional/test_entry_management.cpp
     functional/test_scene_controls.cpp
     functional/test_shell_chrome.cpp
