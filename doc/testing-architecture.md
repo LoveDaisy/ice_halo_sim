@@ -1296,11 +1296,20 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 | format-check | 8 | 10 | no — second-scale gate |
 | | **4644s** | 5642s | warm head = 3591s (77%) |
 
-⚠️ **Both columns predate the ccache step on `Ubuntu x86_64`.** They were read from the two runs
-that landed the shared-gui leg's cache, and the ubuntu leg got its own one commit later, so that
-row's 650s is what the job costs *without* a compiler cache. Its first cached run was cold (657s,
-nothing to restore) and no warm figure exists yet. Do not quote 650s as this workflow's ceiling
-without checking whether a warm run has happened since.
+⚠️ **The `Ubuntu x86_64` row is the one number here still in motion.** Both columns were read from
+the two runs that landed the shared-gui leg's cache; that leg got its own ccache a commit later, so
+650s is what the job costs *uncached*. What happened after is worth keeping, because it is the
+shape a compiler cache fails in. Successive runs measured 657s (cold, nothing to restore), 567s
+(cache present but capped at 200M — `ccache --show-stats` reported **110.3% of the cap and a 26.34%
+hit rate**, i.e. the cap was evicting objects the next run needed) and 479s once the cap was raised
+to 800M and the directory came back under it at 36.7%. The hit rate was still climbing at that
+point, so **479s is an upper bound on the steady state, not the steady state**.
+
+Two things to carry from that. The failure mode is a cache that works, reports a restore, and is
+quietly throwing away half of what it stores — no red, no warning, just a slower job; the only
+number that shows it is `Cache size` against `Max cache size`. And a cap measured on one leg does
+not transfer to another: these two configures compile a similar number of translation units and
+their directories land about six times apart, 37 MB against more than 220 MB.
 
 The cold column is not a hypothetical. Every cache in the repository was destroyed while this table
 was being measured, so the two runs are the same commit range on the same branch, one with nothing
