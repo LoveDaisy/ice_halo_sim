@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788931516423,
+  "lastUpdate": 1788974901522,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "c8492857cbb930e8415baf8267aaadf2082f7b6e",
-          "message": "Merge pull request #233 from LoveDaisy/feat/local-test-scope-and-docs\n\nbuild: per-flavor build/install trees + gate bare pytest to the fast subset",
-          "timestamp": "2026-07-29T09:07:07+08:00",
-          "tree_id": "7796a30d82f61ff9812359a3848ac7bbeb8ccc0a",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c8492857cbb930e8415baf8267aaadf2082f7b6e"
-        },
-        "date": 1785287713696,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 417045.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 580098.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 397310.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 317822.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4752,6 +4704,54 @@ window.BENCHMARK_DATA = {
             "value": 377284,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "96d644a21248a0968f4866679a3de372c1610833",
+          "message": "Merge pull request #334 from LoveDaisy/feat/bg-image-color-picker\n\nfeat(gui): sample Sky Color off the background photo with an eyedropper",
+          "timestamp": "2026-09-10T01:16:27+08:00",
+          "tree_id": "dacea434bc3720c060ce99ea1e1f7083321478c0",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/96d644a21248a0968f4866679a3de372c1610833"
+        },
+        "date": 1788974899057,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 409623.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 610248.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 428039.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 439436.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
