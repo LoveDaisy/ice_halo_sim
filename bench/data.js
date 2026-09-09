@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788925162366,
+  "lastUpdate": 1788925164619,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "1104a952b08241bd61e45bcf7380439a761cbbf7",
-          "message": "Merge pull request #229 from LoveDaisy/feat/crystal-sample-count-semantics\n\nfix(stats): make crystals=N a scene property instead of a schedule artifact",
-          "timestamp": "2026-07-27T15:17:09+08:00",
-          "tree_id": "330fc333a3c88c2f6fcf80ba8e69d53bbf64b031",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1104a952b08241bd61e45bcf7380439a761cbbf7"
-        },
-        "date": 1785137107464,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 79.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.8,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "ce07b6aea91996dafbf320883cdcd408d861b672",
           "message": "Merge pull request #230 from LoveDaisy/feat/shape-schema-key-single-source\n\nrefactor: give the crystal shape/axis JSON keys one owner in core",
           "timestamp": "2026-07-27T17:39:30+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d04ed2b510cf8da1331d69d8a0ec9d064e8688a",
+          "message": "Merge pull request #328 from LoveDaisy/feat/gui-import-capability-boundary\n\nfeat(gui): warn on intentionally unsupported capabilities when importing core/CLI configs",
+          "timestamp": "2026-09-09T11:28:47+08:00",
+          "tree_id": "5fb7bd048fbeeb0720b37f54dc406c24b4f696f7",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5d04ed2b510cf8da1331d69d8a0ec9d064e8688a"
+        },
+        "date": 1788925163996,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92,
             "unit": "%"
           }
         ]
