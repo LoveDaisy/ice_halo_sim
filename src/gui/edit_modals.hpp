@@ -95,6 +95,27 @@ void RenderSpectrumModal(GuiState& state);
 // Intended for GUI test assertions; production code should not call this.
 bool IsCurrentModalDApplicable();
 
+// One row of the wedge-angle preset dropdown. It declares only the Miller indices (h, l; k is
+// always 0 — that is what the {h,0,-h,l} notation means, not an omission); `label` and `value` are
+// filled in from ConvertMillerIndexToWedgeAngle's answer the first time the table is asked for.
+// Nothing here is a hand-written angle, which is the point: the four constants this replaced had
+// been transcribed with the ratio inverted and stayed wrong from the day they were written.
+//
+// Declared here rather than in the .cpp's anonymous namespace so the unit test can read the same
+// table the dropdown renders, instead of keeping a second copy of it to compare against.
+struct WedgePreset {
+  int h;
+  int l;
+  char label[32];
+  float value;
+};
+
+// The wedge-angle presets, built on first call and reused after. Both the render path
+// (RenderWedgeTableRow) and the unit test call this one function — there is no test-only variant,
+// because a second entry point is a second thing that can be right while the first is wrong.
+// `out_count` may be null.
+const WedgePreset* GetWedgePresets(int* out_count);
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_EDIT_MODALS_HPP

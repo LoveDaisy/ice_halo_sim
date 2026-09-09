@@ -1,6 +1,7 @@
 #include "gui/edit_modals.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cfloat>
 #include <cmath>
@@ -29,6 +30,7 @@
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
+#include "include/lumice.h"
 
 namespace lumice::gui {
 
@@ -215,19 +217,20 @@ static bool g_pending_mode_switch = false;
 
 namespace {
 
-struct ValuePreset {
-  const char* label;
-  float value;
+// The presets, as Miller indices only. {1,0,-1,0} is deliberately absent: it is a PRISM face, not a
+// pyramidal one, so the owner rules it unbuildable as a wedge angle — and "this side has no cone"
+// is already said by setting the pyramid height to 0, which is what the old 90.000 row actually
+// produced. {1,0,-1,3} takes its slot: a real cone face, and one the table did not otherwise reach.
+constexpr struct {
+  int h;
+  int l;
+} kWedgePresetIndices[] = {
+  { 1, 1 },
+  { 2, 1 },
+  { 1, 3 },
+  { 1, 2 },
 };
-
-// Label precision must match the fmt passed to SliderWithPresetEdit (currently "%.3f").
-constexpr ValuePreset kWedgePresets[] = {
-  { "{1,0,-1,1} 28.000\xc2\xb0", 28.0f },
-  { "{2,0,-2,1} 47.300\xc2\xb0", 47.3f },
-  { "{1,0,-1,0} 90.000\xc2\xb0", 90.0f },
-  { "{1,0,-1,2} 14.700\xc2\xb0", 14.7f },
-};
-constexpr int kWedgePresetCount = 4;
+constexpr int kWedgePresetCount = static_cast<int>(std::size(kWedgePresetIndices));
 
 // Render a slider + input + preset dropdown for wedge angle.
 // Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
@@ -235,7 +238,7 @@ constexpr int kWedgePresetCount = 4;
 // trailing text label and drop kLabelColWidth from the width so the [slider][input][▼] group
 // fills the whole table cell (the field name lives in the Parameter column instead).
 bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
-                          SliderScale scale, const ValuePreset* presets, int preset_count, bool trailing_label = true) {
+                          SliderScale scale, const WedgePreset* presets, int preset_count, bool trailing_label = true) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
@@ -318,6 +321,40 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 }
 
 }  // namespace
+
+const WedgePreset* GetWedgePresets(int* out_count) {
+  // A function-local static: initialised once, on first use, and thread-safely so since C++11 —
+  // no `built` flag to test on every call and no build step the render entry point has to remember
+  // to make. The angles cannot be constexpr because the conversion goes through atan(), which is
+  // the whole reason this table used to be transcribed by hand.
+  static const auto kPresets = [] {
+    std::array<WedgePreset, kWedgePresetCount> presets{};
+    for (int i = 0; i < kWedgePresetCount; ++i) {
+      WedgePreset& p = presets[static_cast<size_t>(i)];
+      p.h = kWedgePresetIndices[i].h;
+      p.l = kWedgePresetIndices[i].l;
+      LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+      float angle = 0.0f;
+      const LUMICE_ErrorCode err = LUMICE_ConvertMillerIndexToWedgeAngle(p.h, 0, p.l, 3, &state, &angle, nullptr);
+      // A built-in preset naming indices the owner will not build is a typo in the table above, not
+      // a runtime condition: there is no user input on this path and nothing to degrade to. The
+      // unit test is the defence that survives NDEBUG; this assert just fails it loudly and early
+      // in a debug build. Both read the same table, so neither can be right while the other is not.
+      assert(err == LUMICE_OK && state == LUMICE_MILLER_VALID && "built-in wedge preset must be buildable");
+      (void)err;
+      (void)state;
+      p.value = angle;
+      // Precision must match the fmt SliderWithPresetEdit is called with (currently "%.3f"), so the
+      // number in the dropdown and the number in the input box agree once a preset is picked.
+      std::snprintf(p.label, sizeof(p.label), "{%d,0,%d,%d} %.3f\xc2\xb0", p.h, -p.h, p.l, static_cast<double>(angle));
+    }
+    return presets;
+  }();
+  if (out_count) {
+    *out_count = kWedgePresetCount;
+  }
+  return kPresets.data();
+}
 
 namespace {
 
@@ -613,8 +650,10 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   ImGui::TableNextColumn();  // Parameter
   ShapeTableParamLabel(label);
   ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
-  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                                      kWedgePresetCount, /*trailing_label=*/false);
+  int preset_count = 0;
+  const WedgePreset* presets = GetWedgePresets(&preset_count);
+  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, presets, preset_count,
+                                      /*trailing_label=*/false);
   // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
   // columns as intentionally-empty cells (Sync / Rand / Spread). Driven by the shared constant
   // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
