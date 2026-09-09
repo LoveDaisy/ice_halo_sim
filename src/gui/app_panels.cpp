@@ -640,8 +640,8 @@ constexpr float kCollapseBtnSize = 20.0f;
 
 // The eyedropper's live swatch, in ImGui points. Offset down-right of the hotspot so the cursor
 // glyph does not sit on top of the colour it is reporting.
-constexpr float kBgPickSwatchOffsetPx = 16.0f;
-constexpr float kBgPickSwatchSizePx = 24.0f;
+constexpr float kBgPickSwatchOffsetPt = 16.0f;
+constexpr float kBgPickSwatchSizePt = 24.0f;
 
 // Draw a collapse/expand button as a foreground overlay using ImGui theme colors.
 // Returns true if clicked. Coordinates are viewport-local; under multi-viewport
@@ -1478,7 +1478,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     // photo out. Which is why the tooltip says to sample SKY: a pixel off the treeline sets the
     // whole empty sky to dark green.
     ImGui::SameLine();
-    const bool bg_pick_ok = BgPickerAvailable(g_state);
+    const bool bg_pick_ok = BgPhotoOnScreen(g_state);
     ImGui::BeginDisabled(!bg_pick_ok);
     if (ImGui::Button(ICON_FA_EYE_DROPPER "##display_sky_pick")) {
       g_bg_pick.active = !g_bg_pick.active;
@@ -1639,7 +1639,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   if (g_bg_pick.active && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
     g_bg_pick.active = false;
   }
-  if (g_bg_pick.active && !BgPickerAvailable(g_state)) {
+  if (g_bg_pick.active && !BgPhotoOnScreen(g_state)) {
     g_bg_pick.active = false;
   }
   // The post-confirm latch ends with the press that set it, whatever happened in between.
@@ -1966,12 +1966,15 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // hidden background has stated what they meant to move, and swallowing the modifier to move
       // something else is worse than doing nothing.
       // "No gesture this frame": either the eyedropper owns the viewport, or it has just taken a
-      // colour and the press that took it has not been let go of yet.
+      // colour and the press that took it has not been let go of yet. The latch covers the wheel
+      // branches too, which is wider than the defect requires — a wheel notch carries no leftover
+      // motion from the press that took the colour. Conservative on purpose; not a condition the
+      // bug imposes, so it can be narrowed without reopening that defect.
       const bool gestures_locked = g_bg_pick.active || g_bg_pick.swallow_drag_until_release;
       // Same predicate the eyedropper button is enabled by, and deliberately not a second copy of
       // the expression: "there is a photo on screen to act on" is one question, whether the act is
       // dragging it or sampling it.
-      const bool bg_active = BgPickerAvailable(g_state);
+      const bool bg_active = BgPhotoOnScreen(g_state);
       // Alt/Option on every platform. Cmd on macOS is not an option: ImGui aliases Super+Left
       // into a right click before this handler runs — see kBgModifierName in preview_renderer.hpp.
       const bool bg_modifier = io.KeyAlt;
@@ -2086,8 +2089,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
           ImDrawList* fg = ImGui::GetForegroundDrawList();
           const ImU32 swatch =
               ImGui::ColorConvertFloat4ToU32(ImVec4((*sampled)[0], (*sampled)[1], (*sampled)[2], 1.0f));
-          const ImVec2 tl(io.MousePos.x + kBgPickSwatchOffsetPx, io.MousePos.y + kBgPickSwatchOffsetPx);
-          const ImVec2 br(tl.x + kBgPickSwatchSizePx, tl.y + kBgPickSwatchSizePx);
+          const ImVec2 tl(io.MousePos.x + kBgPickSwatchOffsetPt, io.MousePos.y + kBgPickSwatchOffsetPt);
+          const ImVec2 br(tl.x + kBgPickSwatchSizePt, tl.y + kBgPickSwatchSizePt);
           fg->AddRectFilled(tl, br, swatch);
           fg->AddRect(tl, br, IM_COL32(255, 255, 255, 220));
         }

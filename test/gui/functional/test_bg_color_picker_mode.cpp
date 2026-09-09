@@ -129,10 +129,10 @@ void RegisterBgColorPickerModeTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists(kPickButton));
-      IM_CHECK_EQ(gui::BgPickerAvailable(gui::g_state), false);  // no photo yet
+      IM_CHECK_EQ(gui::BgPhotoOnScreen(gui::g_state), false);  // no photo yet
 
       InstallProbeBackground(ctx);
-      IM_CHECK_EQ(gui::BgPickerAvailable(gui::g_state), true);
+      IM_CHECK_EQ(gui::BgPhotoOnScreen(gui::g_state), true);
 
       IM_CHECK_EQ(gui::g_bg_pick.active, false);
       ctx->ItemClick(kPickButton);
@@ -148,7 +148,7 @@ void RegisterBgColorPickerModeTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_bg_pick.active, true);
       gui::g_state.bg_show = false;
       ctx->Yield(2);
-      IM_CHECK_EQ(gui::BgPickerAvailable(gui::g_state), false);
+      IM_CHECK_EQ(gui::BgPhotoOnScreen(gui::g_state), false);
       IM_CHECK_EQ(gui::g_bg_pick.active, false);
     };
   }

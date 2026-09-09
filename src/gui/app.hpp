@@ -90,19 +90,23 @@ extern ServerPoller g_server_poller;
 extern PreviewViewport g_preview_vp;
 extern BgColorPickState g_bg_pick;
 
-// "There is a background photo the eyedropper could sample right now." The single owner of that
-// judgement: the button's disabled state, the preview panel's pick branch and the mid-mode bail-out
-// all ask this one function, so a further condition is one edit rather than three that must be
-// remembered together.
+// "There is a background photo on screen to act on" — a photo is loaded AND it is being shown.
+// The single owner of that judgement, asked by two different features: the eyedropper (button
+// disabled state, the preview panel's pick branch, the mid-mode bail-out) and the photo's own
+// drag/wheel gestures. Sharing is deliberate — both ask the same question — but note what that
+// makes this function: NOT "the eyedropper is available", which is why it is not named that.
 //
-// One such condition is already foreseen. A subtractive/print rendering mode, in which the halo is
-// laid on paper rather than composited over a photograph, would make the background overlay
-// mutually exclusive with it — and the eyedropper along with it. That condition belongs HERE when
-// the mode arrives; the paper colour is emphatically NOT a second thing this picker may sample,
-// because the whole reason sampling works is that `background` and the photo meet in the same lerp.
-// No condition is written today because the mode does not exist in this tree yet, and a gate on a
-// field nobody has defined is a gate that will be wrong by the time it matters.
-bool BgPickerAvailable(const GuiState& state);
+// ⚠️ The distinction is load-bearing for the next condition anyone adds here. A subtractive/print
+// rendering mode, in which the halo is laid on paper rather than composited over a photograph,
+// would make the background overlay mutually exclusive with the eyedropper. It is tempting to put
+// that condition in this predicate — do not do it without deciding, explicitly, whether it should
+// also stop the user dragging and scaling the photo, because writing it here decides both at once
+// and silently. If it gates only the eyedropper, it belongs at the eyedropper's own call sites.
+// One thing is settled either way: the paper colour is emphatically NOT a second thing this picker
+// may sample, because the whole reason sampling works is that `background` and the photo meet in
+// the same lerp. No condition is written today because the mode does not exist in this tree yet,
+// and a gate on a field nobody has defined is a gate that will be wrong by the time it matters.
+bool BgPhotoOnScreen(const GuiState& state);
 // The construction-time properties the live g_server was actually built with (see app.cpp):
 // whether it is a GPU backend (Metal/CUDA) vs CPU, and how many CPU workers it holds. Together
 // they are what MaybeReconstructServerForConstructionProperties compares against to decide whether

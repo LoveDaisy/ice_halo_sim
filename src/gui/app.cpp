@@ -603,7 +603,7 @@ void CancelPendingConfigJsonExport() {
   g_pending_export_json_content.clear();
 }
 
-bool BgPickerAvailable(const GuiState& state) {
+bool BgPhotoOnScreen(const GuiState& state) {
   return g_preview.HasBackground() && state.bg_show;
 }
 
@@ -614,7 +614,10 @@ bool BgPickerAvailable(const GuiState& state) {
 static void ClearBackgroundImage(GuiState& state) {
   g_preview.ClearBackground();
   state.bg_pixels.clear();
-  state.bg_pixels.shrink_to_fit();  // Up to ~50 MB; a cleared-but-reserved vector still holds it.
+  // Up to ~50 MB; a cleared-but-reserved vector still holds it. shrink_to_fit is a non-binding
+  // request — the standard permits an implementation to ignore it — so this is a best effort at
+  // handing the memory back, not a guarantee to cite as the feature's hard ceiling.
+  state.bg_pixels.shrink_to_fit();
   state.bg_pixel_w = 0;
   state.bg_pixel_h = 0;
 }
