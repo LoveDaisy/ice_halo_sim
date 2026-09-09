@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788928788590,
+  "lastUpdate": 1788928790914,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "19ff683644d3f8e69afc7f9c3226be0b5971d9b1",
-          "message": "Merge pull request #231 from LoveDaisy/feat/user-defaults\n\nfeat(gui): user-level defaults layer — generated diff panel + editable axis preset library",
-          "timestamp": "2026-07-28T09:03:52+08:00",
-          "tree_id": "705f62fb463dfc4fa6d35c7c57aa2735e68ff882",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/19ff683644d3f8e69afc7f9c3226be0b5971d9b1"
-        },
-        "date": 1785201086043,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 83.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 97.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "a9d95c29cf1c41e15ecd018702019bef1d7f8f5d",
           "message": "Merge pull request #232 from LoveDaisy/feat/orientation-sample-count-stat\n\nfeat(stats): report orientation sample count as an independent statistic",
           "timestamp": "2026-07-28T13:40:08+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 81.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61199dc71bb8afa824f182ecb361c1765212e2ba",
+          "message": "Merge pull request #330 from LoveDaisy/build/cpm-cache-shared-default\n\nbuild(cpm): default the dependency-source cache to a machine-level directory",
+          "timestamp": "2026-09-09T12:28:59+08:00",
+          "tree_id": "401ce6afc69f30c5242ddcb0e9b1c84c265275ad",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/61199dc71bb8afa824f182ecb361c1765212e2ba"
+        },
+        "date": 1788928790150,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 75.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.7,
             "unit": "%"
           }
         ]
