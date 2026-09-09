@@ -9,6 +9,7 @@
 #include "config/config_compare.hpp"
 #include "core/math.hpp"
 #include "util/color_space.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -244,6 +245,33 @@ float MaxFov(LensParam::LensType type) {
 }
 
 
+// ========== RenderConfig::Tone ==========
+void to_json(nlohmann::json& j, const RenderConfig::Tone& t) {
+  j = (t == RenderConfig::kPrint) ? "print" : "screen";
+}
+
+// Warn-and-fall-back, which is neither of the two shapes this file already uses and is deliberate
+// on both counts. Not NLOHMANN_JSON_SERIALIZE_ENUM's silent map-to-first (VisibleRange, EvMode
+// above), because the two tones are two different operators and a typo that lands on `screen`
+// silently returns the very picture the author was trying to leave. Not MarkerStyleParam's throw
+// either, because that field names WHICH marker to draw — defaulting it would draw a ring nobody
+// asked for — whereas a tone that falls back to `screen` reproduces exactly the pre-field
+// behaviour, so refusing the whole config would cost more than it protects.
+// The warning fires on every parse, with no once-per-process latch: a config is parsed once per
+// load, not per frame, so there is no repetition to suppress.
+void from_json(const nlohmann::json& j, RenderConfig::Tone& t) {
+  const auto s = j.get<std::string>();
+  if (s == "print") {
+    t = RenderConfig::kPrint;
+    return;
+  }
+  if (s != "screen") {
+    LOG_WARNING("render.tone: unknown value \"{}\" is ignored; falling back to \"screen\"", s);
+  }
+  t = RenderConfig::kScreen;
+}
+
+
 // ========== RenderConfig ==========
 void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["id"] = r.id_;
@@ -256,10 +284,14 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   // background_ is linear; the JSON key is sRGB. Twin of the decode-side conversion in
   // config_manager.cpp::ParseRenderConfig.
   j["background"] = { LinearToSrgb(r.background_[0]), LinearToSrgb(r.background_[1]), LinearToSrgb(r.background_[2]) };
+  // paper_ is linear and the JSON key is sRGB, exactly as "background" above — same conversion,
+  // same twin on the decode side in config_manager.cpp::ParseRenderConfig.
+  j["paper"] = { LinearToSrgb(r.paper_[0]), LinearToSrgb(r.paper_[1]), LinearToSrgb(r.paper_[2]) };
   j["ray_color"] = r.ray_color_;
   j["intensity_factor"] = r.intensity_factor_;
   j["overlap"] = r.overlap_;
   j["ev_mode"] = r.ev_mode_;
+  j["tone"] = r.tone_;
 
   j["grid"].emplace("angular_dist", r.angular_dist_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
@@ -325,7 +357,13 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // APPEARANCE, for the same reason the label switches are: they decide whether a line is
   // composited onto the finished image, never the buffer it accumulates into, so a config that
   // flips one reaches an existing consumer through ResetWith() with no rebuild.
-  static_assert(sizeof(RenderConfig) == 224,
+  // 224 -> 240 for the two print-mode fields: paper_ (three floats, 12) landing beside
+  // background_ with no new padding, and tone_ (4) beside ev_mode_ in the same way. Both are
+  // APPEARANCE, and for the same reason background_ and ev_mode_ beside them are: paper_ is the
+  // ground the finished image is composited onto and tone_ selects WHICH operator does that
+  // compositing, so neither touches the buffer being accumulated into. A config that edits either
+  // reaches an existing consumer through ResetWith() with no rebuild.
+  static_assert(sizeof(RenderConfig) == 240,
                 "RenderConfig layout changed — re-check the classification in NeedsRebuild");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.

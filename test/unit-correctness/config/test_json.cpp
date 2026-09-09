@@ -20,6 +20,7 @@
 #include "config/render_config.hpp"
 #include "core/def.hpp"
 #include "core/math.hpp"
+#include "util/color_space.hpp"
 #include "util/illuminant.hpp"
 #include "util/logger.hpp"
 
@@ -57,6 +58,28 @@ class V3TestJson : public ::testing::Test {
   }
 
   nlohmann::json config_json_;
+};
+
+// Captures everything the global logger emits for the lifetime of the object; RAII because
+// GetSharedSink() is a process-wide singleton and an early return must not leave a dangling sink
+// attached for the rest of the binary. Same shape as the copies in test_render_config.cpp and
+// test_crystal_sync_group.cpp.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) {
+    lumice::GetSharedSink()->add_sink(sink_);
+  }
+
+  ~LogCapture() { lumice::GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
 };
 
 // =============== LightSource ===============
@@ -1128,6 +1151,82 @@ TEST_F(V3TestJson, RenderGrid_MissingLongitudeKeyLeavesTheListEmpty) {
   auto manager = config_json_.get<ConfigManager>();
   for (const auto& [id, r] : manager.renderers_) {
     EXPECT_TRUE(r.longitude_grid_.empty()) << "renderer " << id;
+  }
+}
+
+// ===== render.tone / render.paper through the WHOLE parse path =====
+//
+// test_render_config.cpp already pins RenderConfig::Tone's own codec in isolation. What these add
+// is the other end of the same behaviour: that ParseRenderConfig actually reaches that codec, and
+// that `paper` gets the sRGB->linear conversion at the parser boundary rather than being stored as
+// written. The fixture predates both keys, which is what makes it the right vehicle for the
+// "missing key" cases — it is a real file written before the fields existed.
+
+TEST_F(V3TestJson, RenderTone_MissingKeyIsScreen) {
+  auto manager = config_json_.get<ConfigManager>();
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_EQ(r.tone_, RenderConfig::kScreen) << "renderer " << id;
+  }
+}
+
+TEST_F(V3TestJson, RenderTone_PrintParses) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    jr["tone"] = "print";
+  }
+
+  auto manager = j.get<ConfigManager>();
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_EQ(r.tone_, RenderConfig::kPrint) << "renderer " << id;
+  }
+}
+
+// The AC2 nail on the full core path: an unknown tone warns AND loads as `screen`. Loading is the
+// half worth stating — a malformed appearance value must not make the whole document unloadable,
+// which is why this is warn-and-fall-back here and a hard reject in c_api.cpp's independent
+// decoder (that one serves LUMICE_SceneFromJson and follows its own file's convention).
+TEST_F(V3TestJson, RenderTone_UnknownValueWarnsAndFallsBackToScreen) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    jr["tone"] = "glossy";
+  }
+
+  std::string logged;
+  ConfigManager manager;
+  {
+    LogCapture capture;
+    manager = j.get<ConfigManager>();
+    logged = capture.Text();
+  }
+
+  EXPECT_NE(logged.find("glossy"), std::string::npos) << logged;
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_EQ(r.tone_, RenderConfig::kScreen) << "renderer " << id;
+  }
+}
+
+TEST_F(V3TestJson, RenderPaper_MissingKeyIsWhite) {
+  auto manager = config_json_.get<ConfigManager>();
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_FLOAT_EQ(r.paper_[0], 1.0f) << "renderer " << id;
+    EXPECT_FLOAT_EQ(r.paper_[1], 1.0f) << "renderer " << id;
+    EXPECT_FLOAT_EQ(r.paper_[2], 1.0f) << "renderer " << id;
+  }
+}
+
+// The document value is sRGB and the member is linear, the same split `background` has. A decoder
+// that stored the triple as written would pass a round-trip test and fail this one.
+TEST_F(V3TestJson, RenderPaper_IsConvertedFromSrgbToLinear) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    jr["paper"] = nlohmann::json::array({ 0.25f, 0.5f, 0.75f });
+  }
+
+  auto manager = j.get<ConfigManager>();
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_NEAR(r.paper_[0], SrgbToLinear(0.25f), 1e-6f) << "renderer " << id;
+    EXPECT_NEAR(r.paper_[1], SrgbToLinear(0.5f), 1e-6f) << "renderer " << id;
+    EXPECT_NEAR(r.paper_[2], SrgbToLinear(0.75f), 1e-6f) << "renderer " << id;
   }
 }
 
