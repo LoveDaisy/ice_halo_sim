@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788926448701,
+  "lastUpdate": 1788928784802,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "19ff683644d3f8e69afc7f9c3226be0b5971d9b1",
-          "message": "Merge pull request #231 from LoveDaisy/feat/user-defaults\n\nfeat(gui): user-level defaults layer — generated diff panel + editable axis preset library",
-          "timestamp": "2026-07-28T09:03:52+08:00",
-          "tree_id": "705f62fb463dfc4fa6d35c7c57aa2735e68ff882",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/19ff683644d3f8e69afc7f9c3226be0b5971d9b1"
-        },
-        "date": 1785201078944,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 328296.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 586369.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 381055.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 575737.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V45 96-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4752,6 +4704,54 @@ window.BENCHMARK_DATA = {
             "value": 430115.9,
             "unit": "rays/sec",
             "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61199dc71bb8afa824f182ecb361c1765212e2ba",
+          "message": "Merge pull request #330 from LoveDaisy/build/cpm-cache-shared-default\n\nbuild(cpm): default the dependency-source cache to a machine-level directory",
+          "timestamp": "2026-09-09T12:28:59+08:00",
+          "tree_id": "401ce6afc69f30c5242ddcb0e9b1c84c265275ad",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/61199dc71bb8afa824f182ecb361c1765212e2ba"
+        },
+        "date": 1788928782668,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 372360.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 611889.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 437338.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 434947.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
