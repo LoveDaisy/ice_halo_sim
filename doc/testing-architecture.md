@@ -1295,7 +1295,7 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 | policy | 33 | 29 | no — second-scale gate |
 | format-check | 16 | 10 | no — second-scale gate |
 | new-refs | 11 | 11 | no — second-scale gate |
-| | **4401s** | 5642s | warm head = 3325s (76%) |
+| | **4401s** | 5642s | warm head = 3365s (76%) |
 
 ⚠️ **The `Ubuntu x86_64` row is still settling, and its history is worth more than its number.**
 That leg went 650s uncached → 657s (cold, nothing to restore) → 567s → 479s → 353s across five
@@ -1353,8 +1353,8 @@ Four things that table is for, none of which a single headline percentage says o
   so a first run on a branch with no cache to restore is not a regression — it just does not win.
 - **Transfer is not the bottleneck anyone expected it to be.** Restoring the directory took 4–9s
   (150 MB/s at 385 MiB) and saving it 3–27s. It reached 793 MiB over five runs, because a cache
-  restored through the prefix keeps the old objects alongside the new ones; `SCCACHE_CACHE_SIZE` is
-  set to 2G.
+  restored through the prefix keeps the old objects alongside the new ones; `SCCACHE_CACHE_SIZE` was
+  set to 2G at the time of this five-run measurement (it has since been reduced to 800M — see below).
 
 The growth that last point ends on has since run to completion, and the quota it was to be watched
 against turns out to have a shape worth stating rather than watching. Both were measured directly.
@@ -1383,11 +1383,13 @@ recently accessed, so the LRU reaches them first, and every live `cpm-*` entry s
 above. It becomes one if the dead pool ever stops being large enough to absorb new demand, and that
 is the thing to watch — not the growth, which has stopped.
 
-**A cache cap is not a footprint.** The two numbers differ by fifty times across these two legs, so
-one cannot be read off the other. `SCCACHE_CACHE_SIZE=2G` really does describe a ~1.5 GB entry,
-because that directory fills its cap; `CCACHE_MAXSIZE` on `shared-gui-test-build` is 200M and the
-directory after a full cold compile of 291 objects is **37 MB**. Quote the measured directory size,
-never the configured ceiling.
+**A cache cap is not a footprint.** The two numbers differ by many times across these legs, so
+one cannot be read off the other. At the time of the ceiling measurement above, `SCCACHE_CACHE_SIZE=2G`
+really did describe a ~1.5 GB entry, because that directory filled its cap. This task has since
+tightened that cap to `SCCACHE_CACHE_SIZE=800M` in `ci.yml`, so a fresh entry today caps out well
+under 1.5 GB instead of growing to fill 2 GiB. `CCACHE_MAXSIZE` on `shared-gui-test-build` is 200M
+and the directory after a full cold compile of 291 objects is **37 MB**. Quote the measured directory
+size, never the configured ceiling.
 
 **What sccache is worth, measured against a red arm rather than against history.** The table above
 compares runs that differ in cache state *and* in what they compiled *and* in which runner drew
@@ -1421,10 +1423,11 @@ a slope. Net of the cache's own 19–23s of restore and save, the three tiers ar
 **sccache makes a miss more expensive than a plain compile, so it has a break-even.** The red arms
 compile 294 units in 245s — 0.83 s each — against 1.10 s for a miss under sccache, the difference
 being preprocessor hashing and writing the object back. Setting `245 = 70 + 1.10m` puts break-even at
-about 159 misses, i.e. **a hit rate near 54%**: below that, the leg is slower with sccache than
-without. Tier 3 measured 59.52%. A public-header commit therefore barely pays for itself while still
-writing a ~1.5 GB cache entry, which is the shape to keep in mind before extending this pattern to
-another leg or another header-heavy configure.
+about 159 misses out of 294, i.e. a miss rate near 54%, which is **a hit rate near 46%**: below that
+hit rate, the leg is slower with sccache than without. Tier 3 measured a 59.52% hit rate, about 13.6
+percentage points above the 46% break-even line, so it clears the bar with a comfortable margin rather
+than barely paying for itself. That margin, not "barely", is the shape to keep in mind before
+extending this pattern to another leg or another header-heavy configure.
 
 **Weighted by what actually gets committed, sccache is worth about 130 s/run.** Thirty days of
 history, 486 non-merge commits, classified by what each touches: 30.0% tier 1, 64.2% tier 2, 5.8%

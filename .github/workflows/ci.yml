@@ -193,7 +193,9 @@ jobs:
       # Discriminator first, as everywhere else in this file: `ccache-ubuntu-x64-` would be
       # a prefix of the shared-gui leg's namespace, which is the exact defect the cpm keys
       # were renamed to fix and which cost a measured 99.66% -> 2.35% hit rate the first time
-      # a branch tried it.
+      # a branch tried it. "static" is this leg's discriminator word, chosen to contrast with
+      # `shared-gui-test-build`'s `BUILD_SHARED_LIBS=ON` configure — this leg builds the
+      # static flavor, same sense as `-sj` meaning "shared flavor" in the build script docs.
       - name: Cache ccache directory (Ubuntu x86_64)
         if: matrix.cache_key == 'ubuntu-x64'
         uses: actions/cache@v6
@@ -808,16 +810,11 @@ jobs:
           key: cpm-sharedgui-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-sharedgui-ubuntu-x64-
 
-      # ccache on this leg and no other. A run's wall clock is its longest job, and this is
-      # that job — the sccache comment in the build job says it was put "on the one leg where
-      # compilation is most of the job", which was true when written and means this leg today.
-      # The plain `Ubuntu x86_64` leg deliberately does not get one: it already finishes under
-      # the next-longest job, whose own floor is an indivisible test case no compiler cache
-      # touches, so caching it would buy machine time and zero wall clock. That is the whole
-      # of the reason, and it is worth being precise about what is NOT part of it: quota is
-      # not the constraint here. A cold build of this configure leaves a 37 MB directory, so
-      # a second Linux leg would cost a rounding error against a 10 GB pool. Revisit this if
-      # the job ordering changes, not if the quota does.
+      # ccache on this leg, and on the plain `Ubuntu x86_64` leg in the build job below —
+      # both are compile-bound Linux legs, so both get one, each with its own independently
+      # measured CCACHE_MAXSIZE (see the comment on that leg's Install ccache step for why
+      # its number is 800M rather than this leg's 200M: the two configures land roughly six
+      # times apart in working-set bytes, so neither leg's number transfers to the other).
       #
       # CCACHE_MAXSIZE is 200M, and that number is measured rather than copied. A full cold
       # compile of this configure — 291 objects, nothing restored — leaves a 37 MB directory,
