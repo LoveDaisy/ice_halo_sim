@@ -505,6 +505,8 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 #define LUMICE_MAX_CONFIG_RENDERERS 4
 #define LUMICE_MAX_CONFIG_SCATTER_LAYERS 8
 #define LUMICE_MAX_CONFIG_SCATTER_ENTRIES 256
+/* Throwaway probe macro: changes this public header's preprocessor output. */
+#define LUMICE_PROBE_TIER3 20260909
 #define LUMICE_MAX_CONFIG_RAYPATH_LEN 32
 // Discrete-spectrum entry cap. Mirrors core wl_pool.hpp::kWlPoolSizeMax (255).
 #define LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES 255
