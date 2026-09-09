@@ -1269,47 +1269,48 @@ in parallel as a matrix, so the run's wall clock is its **longest job**, not the
 the fast e2e leg runs `pytest` serially and the slow e2e legs run `-n 3` (with the throughput gates
 re-run serially afterwards, so they do not measure under load).
 
-The figures are one pull-request run (`6474620c`, run 34369655618, 2026-09-09), read off the GitHub
-Actions job and step timestamps. It is a *warm* run — the run before it on the same branch filled
-every cache from empty, and the two are reported separately below because the difference is large
-enough to change which job is the longest. One run rather than the union of two, which earlier editions of this table needed:
+The figures are one pull-request run (`039653eb`, run 34375283294, 2026-09-09), read off the GitHub
+Actions job and step timestamps, with both compiler caches warm. The cold column is a different run
+of the same branch — every cache in the repository was destroyed midway through this measurement,
+which turned "what a cold start costs" from a hypothetical into an observation. The two are reported
+separately because the difference is large enough to change which job is the longest. One run rather than the union of two, which earlier editions of this table needed:
 every job in the workflow now runs on a `pull_request` event, so a single run yields every row and
 the rows can be added up. `benchmark-summary` is the exception and is absent below — it is guarded
 to `push` on `main` because it writes the gh-pages benchmark history.
 
 | CI job | Warm | Cold | In §7.0's covered head? |
 |---|---|---|---|
-| Ubuntu x86_64 | **650** | 682 | yes — longest job, sets the run's wall clock |
-| E2E Slow (macOS ARM64 parity) | 599 | 586 | yes |
-| E2E Slow (macOS ARM64 rest) | 511 | 485 | yes |
-| Windows MSVC x86_64 | 502 | 728 | yes — sccache; see the cache states below |
-| windows-cuda-compile | 444 | 467 | no — compile-only |
-| macOS ARM64 | 437 | 598 | yes |
-| E2E Slow (Ubuntu x86_64) | 428 | 452 | yes |
-| e2e-test | 423 | 424 | yes |
-| cuda-compile | 293 | 286 | no — compile-only |
-| Ubuntu ARM64 | 182 | 196 | no |
-| bench-compile | 88 | 85 | no — compile-only |
-| shared-gui-test-build | **41** | 606 | yes — ccache; 93% of it is the cache |
-| policy | 27 | 29 | no — second-scale gate |
-| new-refs | 11 | 9 | no — second-scale gate |
-| format-check | 8 | 10 | no — second-scale gate |
-| | **4644s** | 5642s | warm head = 3591s (77%) |
+| macOS ARM64 | **631** | 598 | yes — longest job, but see the spread below |
+| E2E Slow (macOS ARM64 parity) | 552 | 586 | yes |
+| Windows MSVC x86_64 | 522 | 728 | yes — sccache; see the cache states below |
+| E2E Slow (Ubuntu x86_64) | 432 | 452 | yes |
+| e2e-test | 425 | 424 | yes |
+| windows-cuda-compile | 412 | 467 | no — compile-only |
+| E2E Slow (macOS ARM64 rest) | 411 | 485 | yes |
+| Ubuntu x86_64 | **353** | 682 | yes — ccache |
+| cuda-compile | 299 | 286 | no — compile-only |
+| Ubuntu ARM64 | 171 | 196 | no |
+| bench-compile | 94 | 85 | no — compile-only |
+| shared-gui-test-build | **39** | 606 | yes — ccache; 93% of it was compile |
+| policy | 33 | 29 | no — second-scale gate |
+| format-check | 16 | 10 | no — second-scale gate |
+| new-refs | 11 | 11 | no — second-scale gate |
+| | **4401s** | 5642s | warm head = 3325s (76%) |
 
-⚠️ **The `Ubuntu x86_64` row is the one number here still in motion.** Both columns were read from
-the two runs that landed the shared-gui leg's cache; that leg got its own ccache a commit later, so
-650s is what the job costs *uncached*. What happened after is worth keeping, because it is the
-shape a compiler cache fails in. Successive runs measured 657s (cold, nothing to restore), 567s
-(cache present but capped at 200M — `ccache --show-stats` reported **110.3% of the cap and a 26.34%
-hit rate**, i.e. the cap was evicting objects the next run needed) and 479s once the cap was raised
-to 800M and the directory came back under it at 36.7%. The hit rate was still climbing at that
-point, so **479s is an upper bound on the steady state, not the steady state**.
+⚠️ **The `Ubuntu x86_64` row is still settling, and its history is worth more than its number.**
+That leg went 650s uncached → 657s (cold, nothing to restore) → 567s → 479s → 353s across five
+consecutive runs, and its ccache hit rate over the last three was 26.34% → 41.39% → **55.96%**, still
+climbing, with the directory at 36.7% of its cap. So **353s is an upper bound on the steady state**.
+The 567s step is the one to remember: the cache was present and reporting a successful restore on
+every run while sitting at **110.3% of a 200M cap** — a cap borrowed from `shared-gui-test-build`,
+whose directory settles at 37 MB — and therefore evicting the objects the next run needed.
 
 Two things to carry from that. The failure mode is a cache that works, reports a restore, and is
-quietly throwing away half of what it stores — no red, no warning, just a slower job; the only
-number that shows it is `Cache size` against `Max cache size`. And a cap measured on one leg does
-not transfer to another: these two configures compile a similar number of translation units and
-their directories land about six times apart, 37 MB against more than 220 MB.
+quietly throwing away much of what it stores: no red, no warning, and indistinguishable from a slow
+runner by wall clock. The only number that shows it is `Cache size` against `Max cache size`. And a
+cap measured on one leg does not transfer to another — these two configures compile a similar number
+of translation units and their directories land about six times apart, 37 MB against more than
+220 MB, which nothing about "both Linux, both GUI, both tests" predicts.
 
 The cold column is not a hypothetical. Every cache in the repository was destroyed while this table
 was being measured, so the two runs are the same commit range on the same branch, one with nothing
@@ -1446,17 +1447,24 @@ move the `E2E Slow` legs.
 
 **Two facts about this table that any CI-time proposal has to answer to.**
 
-1. **The critical path is `Ubuntu x86_64` (650s) and, behind it, `E2E Slow (macOS ARM64 parity)`
-   (599s).** A run's wall clock is its longest job and nothing else. Therefore: *any proposal to
+1. **The critical path is `macOS ARM64` (631s) and, behind it, `E2E Slow (macOS ARM64 parity)`
+   (552s) — with a caveat this table has not needed before.** `macOS ARM64` measured 437, 522, 598,
+   600 and 631s across five runs of this branch while the macOS `E2E Slow` legs held 552–599s, so the
+   gap between the top two is inside the noise of the first. Treat "the ceiling is one of the two
+   macOS legs, around 550–630s" as the finding, and re-measure before optimising either.** A run's wall clock is its longest job and nothing else. Therefore: *any proposal to
    "shorten CI" that does not touch those two jobs buys zero wall clock*, however much machine time
    it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a plan, a PR
    description, or a review comment — it must first answer **"does it shorten the longest job?"**.
-   This is the third job to hold the title in as many revisions of this table, and that churn is the
-   argument for re-deriving the ordering rather than remembering it. `Windows MSVC x86_64` held it
-   at 736s mean (n=14) until sccache; `shared-gui-test-build` held it at 734s until ccache took it
-   to 41s. Anything written against a superseded ordering — "the Windows leg is the ceiling", "the
-   shared-gui leg is the ceiling", "this is free because it lands on Ubuntu" — has to be re-derived,
-   not carried forward.
+   This is the fourth job to hold the title, and the last three handovers all happened inside a
+   single change. `Windows MSVC x86_64` held it at 736s mean (n=14) until sccache; `shared-gui-test-build`
+   held it at 734s until ccache took it to 39s; `Ubuntu x86_64` held it for exactly as long as it
+   took to give that leg a cache too, which dropped it from 650s to 353s. Anything written against a
+   superseded ordering — "the Windows leg is the ceiling", "the shared-gui leg is the ceiling",
+   "this is free because it lands on Ubuntu" — has to be re-derived, not carried forward.
+   Note what that pattern implies: **caching moved the ceiling onto legs no compiler cache can
+   touch.** The two macOS legs are 8% and 89% test execution. Further CI-time work on this workflow
+   has to be about test execution or about macOS, and a sixth compiler-cache proposal now buys
+   nothing at all.
    **That instruction has already been disregarded once, by a change to this very file.** The commit
    that first put ccache on `shared-gui-test-build` argued for *not* caching `Ubuntu x86_64` on the
    grounds that its 530s sat under the next-longest job — a figure quoted from the previous revision
@@ -1464,11 +1472,12 @@ move the `E2E Slow` legs.
    it produced a decision that was exactly backwards; re-measuring took one API call. Prefer that to
    trusting this paragraph, including the version of it you are reading.
    The corollary that keeps catching people: rebalancing two shards against each other is worth CI
-   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs sit 51s and
-   139s under the ceiling, so packing them closer is currently worth nothing (`ci.yml`'s `e2e-slow`
-   matrix comment carries the same statement next to the code it constrains). Note how much smaller
-   those margins are than the 178s and 278s of the previous revision: as the compile-bound legs get
-   cheaper, the test-bound ones stop being comfortably clear of the ceiling.
+   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs now sit 79s and
+   220s under the ceiling (`ci.yml`'s `e2e-slow` matrix comment carries the same statement next to
+   the code it constrains) — but the parity leg's 79s margin is inside the ceiling's own run-to-run
+   spread, so unlike in previous revisions of this table that gap can no longer be treated as
+   comfortable. As the compile-bound legs got cheaper, the test-bound ones stopped being clear of
+   the ceiling.
 2. **A floor sits under the `E2E Slow (macOS ARM64 parity)` leg that no repacking removes.**
    `test_capi_sentinel_overflow` is **one indivisible pytest case** (3 configs × 12 rounds inside a
    single function) that pins one xdist worker for the leg's whole duration — ~204s in the grouping
