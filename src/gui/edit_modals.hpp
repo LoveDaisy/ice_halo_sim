@@ -1,6 +1,10 @@
 #ifndef LUMICE_GUI_EDIT_MODALS_HPP
 #define LUMICE_GUI_EDIT_MODALS_HPP
 
+#include <string>
+
+#include "include/lumice.h"
+
 struct GLFWwindow;
 
 namespace lumice::gui {
@@ -115,6 +119,33 @@ struct WedgePreset {
 // because a second entry point is a second thing that can be right while the first is wrong.
 // `out_count` may be null.
 const WedgePreset* GetWedgePresets(int* out_count);
+
+// What the wedge dropdown's custom-input row should say about one Miller-index triple, in the form
+// the popup renders it: an angle to show, a message to show beside it, and whether Apply is live.
+//
+// It holds no rule of its own. Every field below is decided by
+// LUMICE_ConvertMillerIndexToWedgeAngle and then looked up on the (state, invalid_index) pair it
+// returns -- see the mapping table in edit_modals.cpp. Nothing here re-reads h/k/l to form a second
+// opinion about whether they are legal, which is the whole point: config, server and GUI each kept
+// a transcription of the bare formula once, and the copies then disagreed with core about what
+// h == 0 means.
+struct CustomWedgeInputFeedback {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INCOMPLETE;
+  // Meaningful for LUMICE_MILLER_VALID and LUMICE_MILLER_NO_CONE only; 0 elsewhere means "no
+  // opinion", not "zero degrees" -- the same contract the C API states for its out_angle_deg.
+  float angle_deg = 0.0f;
+  // True for LUMICE_MILLER_VALID alone. NO_CONE is excluded deliberately, not by omission: its
+  // honest answer is 0 degrees, and the wedge slider's domain starts at 0.1, so writing it would
+  // be silently clamped up into a different crystal. See edit_modals.cpp.
+  bool can_apply = false;
+  // Empty exactly when there is nothing to tell the user (LUMICE_MILLER_VALID).
+  std::string message;
+};
+
+// Declared here rather than left file-local so the unit test calls the very function the popup
+// calls. A test-only second copy of the mapping would be a second thing that can be right while
+// the one users see is wrong.
+CustomWedgeInputFeedback EvaluateCustomWedgeInput(int h, int k, int l);
 
 }  // namespace lumice::gui
 

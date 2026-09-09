@@ -232,6 +232,104 @@ constexpr struct {
 };
 constexpr int kWedgePresetCount = static_cast<int>(std::size(kWedgePresetIndices));
 
+// The custom Miller-index row at the bottom of the wedge-angle dropdown. Returns true on the frame
+// the user applies a converted angle to `*value`.
+//
+// `popup_id` keys the four boxes' contents. SliderWithPresetEdit runs twice per frame — once for
+// Upper A, once for Lower A — so a plain `static int` triple here would be one set of boxes shared
+// by both rows, and what the user typed under Upper would silently reappear under Lower. ImGui's
+// per-window state storage gives each popup its own copy for free, and keeps it across a
+// close/reopen without any reset bookkeeping of ours.
+bool RenderCustomWedgeInput(const char* popup_id, float* value) {
+  constexpr float kIndexInputWidth = 46.0f;
+  constexpr float kMessageWrapWidth = 260.0f;
+
+  ImGuiStorage* storage = ImGui::GetStateStorage();
+  char key_buf[96];
+  auto slot_key = [&](const char* suffix) {
+    std::snprintf(key_buf, sizeof(key_buf), "%s_custom_%s", popup_id, suffix);
+    return ImGui::GetID(key_buf);
+  };
+  const ImGuiID h_key = slot_key("h");
+  const ImGuiID k_key = slot_key("k");
+  const ImGuiID l_key = slot_key("l");
+
+  // {1,0,-1,1} is the first built-in preset, so the row opens on a triple that already converts —
+  // the angle line below is never blank on the first frame, and the user edits from a worked
+  // example rather than from zeros that read as an error.
+  int h = storage->GetInt(h_key, 1);
+  int k = storage->GetInt(k_key, 0);
+  int l = storage->GetInt(l_key, 1);
+
+  ImGui::TextUnformatted("Custom {h,k,i,l}");
+
+  bool edited = false;
+  // step = 0 suppresses InputInt's -/+ buttons: four of those would be wider than the popup and
+  // the boxes are typed into, not stepped through.
+  ImGui::SetNextItemWidth(kIndexInputWidth);
+  edited |= ImGui::InputInt("##custom_wedge_h", &h, 0, 0);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(kIndexInputWidth);
+  edited |= ImGui::InputInt("##custom_wedge_k", &k, 0, 0);
+  ImGui::SameLine();
+  // i is shown, never typed. It is the redundant Miller-Bravais index, defined as -(h+k) — the C
+  // API says so and refuses to accept it for exactly that reason, since a passed i can contradict
+  // the other two. Displaying the derived value keeps the four-index notation the preset labels
+  // use while leaving no state in which i disagrees with h and k.
+  int i_derived = -(h + k);
+  ImGui::BeginDisabled();
+  ImGui::SetNextItemWidth(kIndexInputWidth);
+  ImGui::InputInt("##custom_wedge_i", &i_derived, 0, 0);
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(kIndexInputWidth);
+  edited |= ImGui::InputInt("##custom_wedge_l", &l, 0, 0);
+
+  if (edited) {
+    storage->SetInt(h_key, h);
+    storage->SetInt(k_key, k);
+    storage->SetInt(l_key, l);
+  }
+
+  const CustomWedgeInputFeedback fb = EvaluateCustomWedgeInput(h, k, l);
+
+  // Grade the whole block by what the verdict is, per gui/semantic_colors.hpp's three grades:
+  // VALID is the good answer, INVALID is an error, and NO_CONE / INCOMPLETE are neither — they are
+  // well-formed input this particular field cannot carry, which is what the warning grade is for.
+  const ImVec4 grade = (fb.state == LUMICE_MILLER_VALID)   ? GoodTextColor() :
+                       (fb.state == LUMICE_MILLER_INVALID) ? DestructiveTextColor() :
+                                                             WarningTextColor();
+
+  // Live preview: recomputed every frame from whatever is in the boxes right now, and deliberately
+  // NOT written to *value — seeing an angle and choosing it are two separate acts, so a triple
+  // being typed through cannot leave a half-finished number in the crystal.
+  if (fb.state == LUMICE_MILLER_VALID || fb.state == LUMICE_MILLER_NO_CONE) {
+    ImGui::TextColored(grade, "= %.3f\xc2\xb0", static_cast<double>(fb.angle_deg));
+  } else {
+    ImGui::TextColored(grade, "= --");
+  }
+
+  if (!fb.message.empty()) {
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kMessageWrapWidth);
+    ImGui::PushStyleColor(ImGuiCol_Text, grade);
+    ImGui::TextUnformatted(fb.message.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+  }
+
+  bool applied = false;
+  ImGui::BeginDisabled(!fb.can_apply);
+  if (ImGui::Button("Apply##custom_wedge")) {
+    *value = fb.angle_deg;
+    applied = true;
+    // A Selectable inside a popup closes it by itself; a Button does not. Without this the angle
+    // lands but the popup stays put, which reads as nothing having happened.
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndDisabled();
+  return applied;
+}
+
 // Render a slider + input + preset dropdown for wedge angle.
 // Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
 // `trailing_label = false` (table-cell mode): mirrors SliderWithInput's switch — omit the
@@ -306,6 +404,8 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
         changed = true;
       }
     }
+    ImGui::Separator();
+    changed |= RenderCustomWedgeInput(popup_id, value);
     ImGui::EndPopup();
   }
 
@@ -354,6 +454,83 @@ const WedgePreset* GetWedgePresets(int* out_count) {
     *out_count = kWedgePresetCount;
   }
   return kPresets.data();
+}
+
+namespace {
+
+// The slots LUMICE_ConvertMillerIndexToWedgeAngle's out_invalid_index names, spelled out.
+//
+// The C API documents them as bare integers (0 = h, 1 = k, 2 = l, -1 = no single slot), so a
+// mapping written against the literals would be three magic numbers whose meaning lives in another
+// file's comment. Should the owner ever reorder them, a literal 1 here would keep compiling and
+// start pointing the user at the wrong box; a name at least makes the coupling visible at the one
+// place that depends on it.
+constexpr int kMillerSlotH = 0;
+constexpr int kMillerSlotK = 1;
+constexpr int kMillerSlotL = 2;
+constexpr int kMillerSlotNone = -1;
+
+// The custom-input row always hands the owner all three indices: the boxes are integers, so there
+// is no "half typed" state for it to report as LUMICE_MILLER_INCOMPLETE.
+constexpr int kCustomWedgeProvidedCount = 3;
+
+}  // namespace
+
+CustomWedgeInputFeedback EvaluateCustomWedgeInput(int h, int k, int l) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+  float angle = 0.0f;
+  int invalid_index = kMillerSlotNone;
+  // The one documented failure of this call is a NULL out-pointer, and both are addresses of
+  // locals here, so there is no error path to translate. The locals are initialised above anyway,
+  // which is what makes ignoring the code safe rather than merely convenient.
+  (void)LUMICE_ConvertMillerIndexToWedgeAngle(h, k, l, kCustomWedgeProvidedCount, &state, &angle, &invalid_index);
+
+  CustomWedgeInputFeedback fb;
+  fb.state = state;
+  fb.angle_deg = angle;
+  fb.can_apply = (state == LUMICE_MILLER_VALID);
+
+  // Everything below is a lookup on (state, invalid_index). No branch reads h, k or l.
+  switch (state) {
+    case LUMICE_MILLER_VALID:
+      break;  // Nothing to say: the angle beside the boxes is the whole answer.
+    case LUMICE_MILLER_NO_CONE:
+      // Not an error, which is why the wording does not call it one. h = 0 is the owner's way of
+      // saying "no pyramidal cap on this side", and a wedge angle is the wrong field to say it in:
+      // the honest value is 0 degrees and this slider starts at 0.1.
+      fb.message =
+          "h = 0 means this side has no pyramidal cap. A wedge angle cannot express that — set the pyramid height to 0 "
+          "instead.";
+      break;
+    case LUMICE_MILLER_INCOMPLETE:
+      // Unreachable from three integer boxes; kept so the mapping covers the enum rather than the
+      // subset today's caller happens to produce.
+      fb.message = "Enter all three of h, k and l.";
+      break;
+    case LUMICE_MILLER_INVALID:
+      switch (invalid_index) {
+        case kMillerSlotH:
+          fb.message = "h must not be negative.";
+          break;
+        case kMillerSlotK:
+          fb.message =
+              "k must be 0. A second-order pyramidal face is rotated off the prism edges, which is not a shape this "
+              "crystal model can express.";
+          break;
+        case kMillerSlotL:
+          fb.message = "l must not be negative.";
+          break;
+        default:
+          // kMillerSlotNone. Deliberately names no box: both integers are well formed on their own
+          // and it is their RATIO that lands outside the buildable range, so highlighting either
+          // would point at a number that is not wrong.
+          fb.message =
+              "The h:l ratio makes a face outside the buildable range, so no wedge angle can be built from it.";
+          break;
+      }
+      break;
+  }
+  return fb;
 }
 
 namespace {
