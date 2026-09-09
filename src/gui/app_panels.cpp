@@ -1812,6 +1812,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // before the transfer curve. This one assignment also feeds all three PNG export entry
     // points: BuildExportParams copies this struct and overrides only the exposure fields.
     lumice::SrgbToLinearRgb(rc.background, pp.background_color_linear);
+    // The paper and the operator that reads it, converted and carried the same way and for the
+    // same reason: the shader multiplies the paper by a transmittance in linear, before the
+    // transfer curve.
+    lumice::SrgbToLinearRgb(rc.paper, pp.paper_color_linear);
+    pp.tone = rc.tone;
 
     pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
     pp.bg.alpha = g_state.bg_alpha;

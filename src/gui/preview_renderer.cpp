@@ -38,6 +38,8 @@ uniform int u_front;         // 1=discard back hemisphere
 uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
 uniform int u_tex_mode;           // kTexModeSrgbComposited / kTexModeXyz / kTexModeSrgbRadiance
 uniform vec3 u_background;        // sky colour, LINEAR RGB (see PreviewParams::background_color_linear)
+uniform vec3 u_paper;             // paper colour, LINEAR RGB (see PreviewParams::paper_color_linear)
+uniform int u_tone;               // 0 = screen (additive), 1 = print (subtractive) — config::RenderConfig::Tone
 uniform sampler2D u_bg_texture;
 uniform float u_max_abs_dz;      // overlap zone |sky.z| threshold (0 = no blend)
 uniform float u_r_scale;         // projection r_scale for overlap normalization
@@ -177,6 +179,41 @@ vec3 srgbToLinear(vec3 srgb) {
 vec3 clampAndGamma(vec3 rgb) {
     rgb = clamp(rgb, 0.0, 1.0);
     return mix(rgb * 12.92, 1.055 * pow(rgb, vec3(1.0/2.4)) - 0.055, step(0.0031308, rgb));
+}
+
+// The subtractive (u_tone == 1) operator: ink on paper, replacing the additive `radiance + sky`
+// wherever it applies.
+//
+// HAND-TRANSCRIBED from src/util/ink_transfer.hpp (kInkGamma / InkOpticalDensity /
+// InkTransmittance), which is the authority. GLSL cannot #include a C++ header, so this is a copy
+// and not a shared implementation — the same arrangement, and for the same reason, as the relIllum*
+// block's relationship to src/gui/preview_jacobian.hpp. kInkGamma below MUST equal
+// lumice::kInkGamma; nothing in the build enforces that, and what does instead is
+// test/gui/functional/test_preview_print_mode.cpp, which renders through this shader and compares
+// against values the C++ function produced.
+//
+// `e` is the exposed scalar — CIE Y after u_intensity_scale and the lens's relative illumination —
+// which is the same quantity the CLI calls xyz[1] in RenderConsumer::PostSnapshot.
+const float kInkGamma = 11.0;
+vec3 subtractiveInk(float e, vec3 paper) {
+    // GLSL has no log10 builtin; log(x)/log(10) is the whole of the difference from the C++ line.
+    float density = kInkGamma * log(1.0 + max(e, 0.0)) / log(10.0);
+    return paper * pow(10.0, -density);
+}
+
+// One annotation layer composited over what is already there.
+//
+// Structurally the same as BlendAnnotation() in src/server/render.cpp — one tone branch, the same
+// algebra, and print reading no colour at all — but NOT signature-compatible, and deliberately so:
+// this side keeps its own two independent multipliers (the edge falloff `t` and the layer's alpha)
+// where the CPU caller has already folded them into one. Aligning the signatures would mean
+// changing one side's arithmetic to match the other's spelling.
+//
+// print multiplies by (1 - t*alpha), i.e. the existing opacity IS the ink coverage. That is what
+// makes an annotation visible on white paper by construction rather than by picking a colour that
+// contrasts, and why print needs no per-mode palette.
+vec3 blendAnnotationColor(vec3 base, vec3 lineColor, float t, float alpha, int tone) {
+    return (tone == 1) ? base * (1.0 - t * alpha) : mix(base, lineColor, t * alpha);
 }
 
 // Pure math: equal-area fisheye projection (matches C++ FisheyeEqualAreaForward).
@@ -472,7 +509,7 @@ vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
   if (u_show_grid != 0 && u_has_grid_mask != 0) {
     vec2 grid_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
     float t = texture(u_grid_mask, grid_uv).r > 0.0 ? 1.0 : 0.0;
-    color = mix(color, u_grid_color, t * u_grid_alpha);
+    color = blendAnnotationColor(color, u_grid_color, t, u_grid_alpha, u_tone);
   }
 
   // Sun angular distance circles. Geometry from core's mask; colour and alpha still this
@@ -490,7 +527,7 @@ vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
     // scaling it — any nonzero texel is on. (Sampled NEAREST, so there are no intermediate values
     // to lose by thresholding.)
     float t = texture(u_angular_dist_mask, mask_uv).r > 0.0 ? 1.0 : 0.0;
-    color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
+    color = blendAnnotationColor(color, u_sun_circles_color, t, u_sun_circles_alpha, u_tone);
   }
 
   // Horizon line (altitude = 0) — geometry from core's mask, drawn last so it's most visible.
@@ -498,7 +535,7 @@ vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
   if (u_show_horizon != 0 && u_has_horizon_mask != 0) {
     vec2 horizon_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
     float t = texture(u_horizon_mask, horizon_uv).r > 0.0 ? 1.0 : 0.0;
-    color = mix(color, u_horizon_color, t * u_horizon_alpha);
+    color = blendAnnotationColor(color, u_horizon_color, t, u_horizon_alpha, u_tone);
   }
 
   // Sky reference-point ring markers — drawn last so they sit on top of all
@@ -516,7 +553,7 @@ vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
     for (int i = 0; i < 6; ++i) {
       float d = length(pos_pix - u_marker_screen_pos[i]);
       float t = 1.0 - smoothstep(0.0, kRingHalfWidthPx, abs(d - u_markers_radius_px));
-      color = mix(color, u_marker_color[i], t * u_markers_alpha);
+      color = blendAnnotationColor(color, u_marker_color[i], t, u_markers_alpha, u_tone);
     }
   }
 
@@ -547,10 +584,10 @@ vec3 overlayLensBorder(vec3 color, vec2 pos, float half_fov) {
     float circle_radius = short_res * 0.5;
     float dl = abs(length(pos - vec2(-circle_radius, 0.0)) - circle_radius);
     float tl = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, dl);
-    color = mix(color, u_lens_border_color, tl * u_lens_border_alpha);
+    color = blendAnnotationColor(color, u_lens_border_color, tl, u_lens_border_alpha, u_tone);
     float dr = abs(length(pos - vec2(circle_radius, 0.0)) - circle_radius);
     float tr = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, dr);
-    color = mix(color, u_lens_border_color, tr * u_lens_border_alpha);
+    color = blendAnnotationColor(color, u_lens_border_color, tr, u_lens_border_alpha, u_tone);
     return color;
   }
 
@@ -579,7 +616,7 @@ vec3 overlayLensBorder(vec3 color, vec2 pos, float half_fov) {
   float radius_px = img_radius * r_boundary;
   float d = abs(length(pos) - radius_px);
   float t = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, d);
-  return mix(color, u_lens_border_color, t * u_lens_border_alpha);
+  return blendAnnotationColor(color, u_lens_border_color, t, u_lens_border_alpha, u_tone);
 }
 )glsl"
 R"glsl(
@@ -631,7 +668,14 @@ void main() {
   // pins kLensTypeCount so any out-of-range value is a compile-time catchable mismatch.
 
   // Eliminated early returns so bg mixing can always execute at the end.
-  vec3 final_color = vec3(0.0);
+  //
+  // The starting value is this mode's ZERO-ENERGY colour, and it stands for every pixel the branch
+  // below leaves alone: outside the lens's image circle, in the half-sky `visible` discards, behind
+  // the camera under `front`. Under print that is bare paper — which is what subtractiveInk(0.0,
+  // u_paper) returns, written here in its already-simplified form since 10^0 is 1. The CLI states
+  // the same rule at its own two spellings (the masked-pixel branch and FillZeroEnergyImage in
+  // src/server/render.cpp).
+  vec3 final_color = (u_tone == 1) ? clampAndGamma(u_paper) : vec3(0.0);
   vec3 world_dir = vec3(0.0);
   bool pixel_visible = false;
 
@@ -706,7 +750,26 @@ void main() {
         // before the format carried radiance-only textures — whose pixels were baked with whatever
         // background was in effect when they were saved. Adding here too would apply it twice, and
         // subtracting the old one back out is not invertible where the bake clipped.
-        tex_color = clampAndGamma(radiance_linear + u_background);
+        if (u_tone == 1 && u_tex_mode == kTexModeXyz) {
+          // print: ink on paper replaces the whole additive statement above. The gamut clip and the
+          // matrix are skipped along with the sky — print is greyscale by construction, so what is
+          // taken is the exposed scalar alone. tex_color.y is CIE Y and the two multipliers are the
+          // ones xyzToLinearRgb would have applied to it, in the same order, so this is the same
+          // number the CLI calls xyz[1] (src/server/render.cpp).
+          float e = tex_color.y * rel_illum * u_intensity_scale;
+          tex_color = clampAndGamma(subtractiveInk(e, u_paper));
+        } else if (u_tone == 1) {
+          // kTexModeSrgbRadiance under print: a KNOWN GAP, held here on purpose rather than left to
+          // look supported. These texels are a reopened .lmc whose exposure was already baked in, so
+          // the exposed scalar `e` the operator needs is not directly available — recovering it
+          // would mean inverting the bake through the standard luminance coefficients, which is a
+          // relationship nothing in this repo has verified. Until it is, such a document keeps the
+          // screen result until the next simulation run replaces the texture with a live XYZ one.
+          // See doc/print-mode-subtractive-ink.md.
+          tex_color = clampAndGamma(radiance_linear + u_background);
+        } else {
+          tex_color = clampAndGamma(radiance_linear + u_background);
+        }
       }
       final_color = tex_color;
     }
@@ -1716,6 +1779,9 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_tex_mode"), static_cast<int>(tex_mode_));
   glUniform3f(glGetUniformLocation(shader_program_, "u_background"), params.background_color_linear[0],
               params.background_color_linear[1], params.background_color_linear[2]);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_paper"), params.paper_color_linear[0],
+              params.paper_color_linear[1], params.paper_color_linear[2]);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_tone"), params.tone);
   glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.exposure.intensity_scale);
   glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.source.max_abs_dz);
   glUniform1f(glGetUniformLocation(shader_program_, "u_r_scale"), params.source.r_scale);

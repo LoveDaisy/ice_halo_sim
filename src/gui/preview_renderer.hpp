@@ -167,6 +167,26 @@ struct PreviewParams {
   // the addition has to happen before the sRGB transfer curve; the default of all zeroes makes the
   // addition a no-op, so a caller that never touches this field renders exactly as before.
   float background_color_linear[3] = { 0.0f, 0.0f, 0.0f };
+
+  // The PAPER colour under `tone == 1`, and a third distinct thing from the two above: `bg` is a
+  // photo behind the halo, `background_color_linear` is the SKY the halo's light is added to, and
+  // this is the SHEET the ink is laid on. They are separate fields so that "print onto the default
+  // black background" is not a state the document can reach at all — see
+  // doc/print-mode-subtractive-ink.md §6.
+  //
+  // LINEAR RGB, on the same terms as background_color_linear: converted from
+  // GuiState::RenderConfig::paper (sRGB, what the picker shows) by whoever fills this struct, and
+  // inherited unchanged by the export entry points through BuildExportParams.
+  float paper_color_linear[3] = { 1.0f, 1.0f, 1.0f };
+
+  // Which operator turns radiance into pixels: 0 = screen (additive, the historical one), 1 =
+  // print (subtractive ink on paper). Same int spelling as config::RenderConfig::Tone and
+  // GuiState::RenderConfig::tone, so the value travels the whole chain without a mapping table
+  // that could invert.
+  //
+  // The default of 0 is what makes every caller that never touches this field render exactly as
+  // before, the same guarantee background_color_linear's all-zero default gives.
+  int tone = 0;
 };
 
 class PreviewRenderer {
