@@ -1578,6 +1578,51 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           "ever darkens what is beneath it, so black paper would render a black page.");
     }
 
+    // doc/print-mode-subtractive-ink.md §8 (owner decision D6), GUI half. Each operator has one
+    // degenerate ground — a near-white sky under Screen, a near-black paper under Print — and the
+    // shared predicate (gui_state.hpp's ContrastHeadroomIsLowFor over util/contrast_headroom.hpp,
+    // the same one src/server/server.cpp's CommitConfig notice calls) decides which, if either, the
+    // live tone is in.
+    //
+    // Non-blocking, like panels.cpp's LayerProducesNoRays notice and for the same reason: this is a
+    // legitimate state to pass through while picking a colour, and nothing downstream is endangered
+    // by it. It opens no popup and disables nothing; when the predicate is quiet it renders nothing
+    // at all, so the block costs no layout in the common case (unlike the top bar's Revert row,
+    // which holds its space because it sits mid-row in a horizontal toolbar).
+    //
+    // The text says WHY the picture is gone, not just that a colour is extreme. The screen half is
+    // the state the user feedback behind this work came from, and its signature is specific: the
+    // overlay lines stay perfectly crisp while the halo alone disappears, because lines are blended
+    // and light is added. Told only "background too bright", a user looking at visible grid lines has
+    // no reason to believe that is the explanation.
+    if (ContrastHeadroomIsLowFor(r)) {
+      const bool print_tone = IsPrintTone(r);
+      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION "%s",
+                         print_tone ? " Paper is nearly black — ink has nowhere to darken" :
+                                      " Sky is nearly white — the halo has nowhere to brighten");
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", print_tone ?
+                                    "Ink only ever darkens the paper, and never reaches black. With the paper "
+                                    "this dark\nevery feature lands within a few 8-bit levels of the page, so "
+                                    "the image reads as blank.\n\nLighten the paper, or switch Tone back to "
+                                    "Screen." :
+                                    "Light is ADDED to the sky colour and clamps at white, so with the sky this "
+                                    "bright a halo\nhas almost nowhere left to go. Grid and overlay lines are "
+                                    "blended rather than added, so\nthey stay perfectly visible — which is why "
+                                    "this looks like a failed simulation rather than\na colour choice.\n\nDarken "
+                                    "the sky, or switch Tone to Print, which lays ink ON a pale ground instead.");
+      }
+      ImGui::SameLine();
+      // The repair itself lives in gui_state.hpp (ApplyHeadroomFix) rather than here, so that what
+      // it changes is asserted without a window — see its unit tests. The two labels name the field
+      // each arm moves, because "Fix" alone would not say which of the two controls above is about
+      // to change under the user's hand.
+      if (ImGui::SmallButton(print_tone ? "Reset paper to white##display_headroom_fix" :
+                                          "Switch to Print##display_headroom_fix")) {
+        ApplyHeadroomFix(r);
+      }
+    }
+
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
     const char* preview_label = kAspectPresetNames[preset_idx];

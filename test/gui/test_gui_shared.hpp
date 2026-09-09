@@ -602,6 +602,7 @@ void RegisterPreviewPixelTests(ImGuiTestEngine* engine);
 void RegisterPreviewTextureTests(ImGuiTestEngine* engine);
 void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine);
 void RegisterPreviewPrintModeTests(ImGuiTestEngine* engine);
+void RegisterContrastHeadroomNoticeTests(ImGuiTestEngine* engine);
 void RegisterPreviewDualFisheyeGatherTests(ImGuiTestEngine* engine);
 void RegisterBackgroundMainUiControlTests(ImGuiTestEngine* engine);
 void RegisterEntryManagementTests(ImGuiTestEngine* engine);
