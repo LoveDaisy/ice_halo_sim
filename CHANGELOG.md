@@ -160,6 +160,20 @@ it was thinking of and false of the C struct beside it.
   through — and every other part of the engine already read a leading 0 as "no cone". Add an explicit
   `upper_wedge_angle: 28.0` to keep the old picture.
 
+### Fixed
+- **The wedge-angle preset dropdown named crystals it did not draw.** Its four entries carried
+  hand-transcribed angles with the Miller ratio inverted, unchanged since they were first written:
+  `{2,0,-2,1}` set 47.300° where that face is at **14.886°**, `{1,0,-1,2}` set 14.700° where it is at
+  **46.756°**, and `{1,0,-1,1}` set 28.000° for **27.996°**. Picking one built a crystal that was not
+  the one the label named. The angles are now computed from the indices, so the label and the number
+  cannot disagree again. ⚠️ Every config saved by picking one of these presets keeps its stored
+  angle — the old number is still there and still renders what it always did; re-pick the preset to
+  take the corrected value.
+- **`{1,0,-1,0}` has left the preset list; `{1,0,-1,3}` (57.912°) takes its place.** `{10-10}` is a
+  prism face and has no wedge angle at all, so its 90.000° was not a rounding error but a
+  category one. What it produced was a plain prism — reachable, then and now, by setting the pyramid
+  height to 0, which is where "no cone on this side" belongs.
+
 ## [4.5.0] - 2026-09-06
 
 ### Added
