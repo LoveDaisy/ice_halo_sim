@@ -219,7 +219,24 @@ extern "C" {
 // DEFAULT TRUE on the JSON side, unlike every other annotation flag in this struct — see the
 // WARNING at the fields themselves. Nothing is removed and nothing changes meaning: a config that
 // carries none of the three keys renders the pixels it always did.
-#define LUMICE_API_VERSION 426
+//
+// BREAKING (v4.27): LUMICE_RenderParam gains a trailing pair — `tone` (LUMICE_TONE_*, which
+// operator turns accumulated radiance into pixels) and `paper` (the ground colour that operator
+// lays ink on). They are APPENDED after `angular_dist_line`, so every existing field keeps its
+// offset while sizeof() grows; a caller that was NOT recompiled hands the API a shorter struct and
+// the new fields are read past the end of it. Recompile against this header. The JSON keys are
+// "render.tone" and "render.paper".
+// Nothing is removed and nothing changes meaning: LUMICE_TONE_SCREEN == 0 is the operator this API
+// has always used, so a zero-initialized `tone` asks for the existing behaviour.
+// `paper` does NOT follow that pattern and is the second trap of the `zenith_nadir` kind in this
+// struct: its JSON default is WHITE, so a zero-initialized struct names BLACK paper. Under the
+// subtractive operator black paper renders an all-black page, since out = paper * 10^(-D). Set it,
+// or go through JSON. The reason `paper` is a field of its own rather than a reuse of `background`
+// is exactly this degenerate state — see doc/print-mode-subtractive-ink.md decision D5.
+// NO CONSUMER YET: this version carries the fields through every path (JSON both ways, this
+// struct, the GUI) but the subtractive operator itself is not implemented, so setting
+// LUMICE_TONE_PRINT changes no pixel today.
+#define LUMICE_API_VERSION 427
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -889,6 +906,16 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_EV_MODE_RELATIVE 0
 #define LUMICE_EV_MODE_ABSOLUTE 1
 
+// Which operator turns accumulated radiance into pixels (mirrors core RenderConfig::Tone).
+//   SCREEN — the additive operator: out = clamp(L * c + background). Monotonically non-decreasing
+//            in radiance, so a light background can only stay light.
+//   PRINT  — the subtractive (density) operator of doc/print-mode-subtractive-ink.md: ink is laid
+//            ON the paper, out = paper * 10^(-D), so a white paper CAN go dark.
+// SCREEN == 0 is the default: a zero-initialized LUMICE_RenderParam asks for the operator this API
+// has always used, which is also what a config with no "tone" key means.
+#define LUMICE_TONE_SCREEN 0
+#define LUMICE_TONE_PRINT 1
+
 // Which half of the celestial sphere the renderer draws (mirrors core RenderConfig::VisibleRange).
 #define LUMICE_VISIBLE_UPPER 0
 #define LUMICE_VISIBLE_LOWER 1
@@ -1090,6 +1117,20 @@ typedef struct LUMICE_RenderParam_ {
   int elevation_line;
   int longitude_line;
   int angular_dist_line;
+  // ADDED (v4.27). The print display mode: which tone-reproduction operator runs, and the ground
+  // it composites onto. LUMICE_TONE_* for `tone`; `paper` is a LINEAR RGB triple, like `background`
+  // above and unlike the JSON key of the same name, which is sRGB.
+  //
+  // WARNING, the same shape as `zenith_nadir`'s: `paper` has a NON-ZERO default on the JSON side
+  // (white). A zero-initialized struct therefore names BLACK paper, and under the subtractive
+  // operator that renders an all-black page — out = paper * 10^(-D) is zero for every pixel. Set
+  // it, or go through JSON. Avoiding exactly this state one tick-box away is why `paper` is its
+  // own field rather than a reuse of `background`.
+  //
+  // NO CONSUMER YET (v4.27): the operator itself is not implemented, so LUMICE_TONE_PRINT changes
+  // no pixel in this version. The field chain lands first, deliberately.
+  int tone;
+  float paper[3];
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============

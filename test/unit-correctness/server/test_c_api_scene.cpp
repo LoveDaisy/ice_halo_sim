@@ -8,6 +8,7 @@
 
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"  // ConfigScratch(+Guard) + ConfigToJson + SceneRoot (internal)
+#include "util/color_space.hpp"       // LinearToSrgb (the struct-is-linear / key-is-sRGB split)
 
 // White-box tests for the LUMICE_Scene opaque handle (type + lifecycle + Add*/Set* build API).
 //
@@ -602,6 +603,13 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   bad_ev_mode.ev_mode = 42;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_ev_mode, &id), LUMICE_ERR_INVALID_CONFIG);
 
+  // v4.27: tone is the fourth. Out of range on the ENCODE side is a caller passing an int that
+  // names no operator — a programming error with nothing sensible to substitute — so it is
+  // rejected rather than mapped, exactly as the three above are.
+  LUMICE_RenderParam bad_tone = base;
+  bad_tone.tone = 42;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_tone, &id), LUMICE_ERR_INVALID_CONFIG);
+
   EXPECT_TRUE(SceneRoot(g.get()).at("render").empty())
       << "a rejected renderer must not leave a partially-built entry behind";
 
@@ -1106,6 +1114,149 @@ LUMICE_Scene* Sentinel() {
   return reinterpret_cast<LUMICE_Scene*>(0xDEADBEEF);
 }
 }  // namespace
+
+// =============== render.tone / render.paper: the print display mode (v4.27) ===============
+//
+// Both directions of the C API seam, because this struct has two independent codecs and a field
+// wired into only one of them is exactly the defect shape this file exists to catch: the ENCODE
+// side (LUMICE_RenderParam -> JSON, RendererToJson) and the DECODE side (JSON ->
+// LUMICE_RenderParam, JsonToRenderers, reached through LUMICE_SceneFromJson).
+
+namespace {
+// A scene whose single renderer is built through the struct path, then serialized and handed to
+// `edit` as the renderer OBJECT — the sibling of SceneJsonWithMarkerBlock above, which hands over
+// the "grid" sub-object instead.
+std::string SceneJsonWithRendererEdit(const std::function<void(nlohmann::json&)>& edit) {
+  SceneGuard g;
+  int id = -1;
+  EXPECT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000, 8, 0), LUMICE_OK);
+  EXPECT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  const LUMICE_CrystalParam c = MakePrismParam(1.5f);
+  EXPECT_EQ(LUMICE_SceneAddCrystal(g.get(), &c, &id), LUMICE_OK);
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.0f;
+  layer.entry_count = 1;
+  layer.entries[0] = LUMICE_ScatterEntry{ id, 1.0f, -1 };
+  EXPECT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+  r.paper[0] = r.paper[1] = r.paper[2] = 1.0f;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  nlohmann::json doc = nlohmann::json::parse(SceneToJsonString(g.get()));
+  edit(doc.at("render").at(0));
+  return doc.dump();
+}
+
+const nlohmann::json& RendererOf(const LUMICE_Scene* scene) {
+  return SceneRoot(scene).at("render").at(0);
+}
+}  // namespace
+
+TEST(SceneRenderTone, EncodeWritesTheSpellingCoreReads) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.lens_fov = 90.0f;
+  r.tone = LUMICE_TONE_PRINT;
+  // 0.5 in all three channels, LINEAR — the key must come back as its sRGB image, not as 0.5.
+  r.paper[0] = r.paper[1] = r.paper[2] = 0.5f;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  const auto& jr = RendererOf(g.get());
+  EXPECT_EQ(jr.at("tone").get<std::string>(), "print");
+  ASSERT_EQ(jr.at("paper").size(), 3u);
+  EXPECT_NEAR(jr.at("paper")[0].get<float>(), lumice::LinearToSrgb(0.5f), 1e-5f);
+  EXPECT_GT(jr.at("paper")[0].get<float>(), 0.5f) << "the key must be sRGB, not the raw linear value";
+}
+
+TEST(SceneRenderTone, ScreenIsTheZeroInitializedDefault) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.lens_fov = 90.0f;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  EXPECT_EQ(RendererOf(g.get()).at("tone").get<std::string>(), "screen");
+}
+
+TEST(SceneRenderTone, DecodeRoundTripsBothValues) {
+  for (const char* name : { "screen", "print" }) {
+    const std::string doc = SceneJsonWithRendererEdit([name](nlohmann::json& jr) { jr["tone"] = name; });
+    LUMICE_Scene* scene = nullptr;
+    // Non-fatal, so the second spelling is still evaluated when the first one fails: a fatal
+    // assert here would report one row and silently skip the other.
+    if (LUMICE_SceneFromJson(doc.c_str(), &scene) != LUMICE_OK || scene == nullptr) {
+      ADD_FAILURE() << name << ": SceneFromJson did not produce a scene";
+      continue;
+    }
+    EXPECT_EQ(RendererOf(scene).at("tone").get<std::string>(), name);
+    LUMICE_SceneDestroy(scene);
+  }
+}
+
+// The decode-side half of the divergence argued at IsKnownToneString (c_api.cpp): THIS decoder
+// rejects an unknown tone, while core's ParseRenderConfig warns and falls back to "screen"
+// (pinned in test_json.cpp). Each follows its own file's convention — every other enum-valued
+// renderer field here (lens type, visible, ev_mode) rejects too, and a C API returning OK while
+// quietly substituting a value would leave its caller no way to learn anything happened.
+TEST(SceneRenderTone, DecodeRejectsAnUnknownValue) {
+  const std::string doc = SceneJsonWithRendererEdit([](nlohmann::json& jr) { jr["tone"] = "glossy"; });
+  LUMICE_Scene* scene = Sentinel();
+  EXPECT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(scene, nullptr);
+}
+
+// A non-string tone is the other malformed shape, and it must not reach get<std::string>().
+TEST(SceneRenderTone, DecodeRejectsANonStringValue) {
+  const std::string doc = SceneJsonWithRendererEdit([](nlohmann::json& jr) { jr["tone"] = 1; });
+  LUMICE_Scene* scene = Sentinel();
+  EXPECT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(scene, nullptr);
+}
+
+// The counterpart of SceneRenderZenithNadir.MissingKeyDecodesToCoreDefaultsNotZeros, and the more
+// dangerous of the two: `paper`'s core default is WHITE, so a decoder that left the zeroed struct
+// alone would hand back BLACK paper for every document written before v4.27 — and under the
+// subtractive operator black paper is an all-black page.
+TEST(SceneRenderTone, MissingPaperKeyDecodesToWhiteNotZeros) {
+  const std::string doc = SceneJsonWithRendererEdit([](nlohmann::json& jr) { jr.erase("paper"); });
+  ASSERT_EQ(doc.find("paper"), std::string::npos) << "the fixture must actually omit the key";
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+  const auto& paper = RendererOf(scene).at("paper");
+  ASSERT_EQ(paper.size(), 3u);
+  for (int i = 0; i < 3; i++) {
+    EXPECT_NEAR(paper[i].get<float>(), 1.0f, 1e-5f) << "channel " << i;
+  }
+  LUMICE_SceneDestroy(scene);
+}
+
+// sRGB in, sRGB out, with a linear struct in between: the two conversions must be inverses, and a
+// decoder that skipped its half would show up here as a value that drifted.
+TEST(SceneRenderTone, PaperSurvivesTheDecodeEncodeRoundTrip) {
+  const std::string doc =
+      SceneJsonWithRendererEdit([](nlohmann::json& jr) { jr["paper"] = nlohmann::json::array({ 0.9f, 0.85f, 0.8f }); });
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+  const auto& paper = RendererOf(scene).at("paper");
+  EXPECT_NEAR(paper[0].get<float>(), 0.9f, 1e-5f);
+  EXPECT_NEAR(paper[1].get<float>(), 0.85f, 1e-5f);
+  EXPECT_NEAR(paper[2].get<float>(), 0.8f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
+}
+
 
 TEST(SceneSerializeNegative, ToJsonNullScene) {
   size_t len = 12345;
