@@ -87,8 +87,16 @@ extern BgColorPickState g_bg_pick;
 
 // "There is a background photo the eyedropper could sample right now." The single owner of that
 // judgement: the button's disabled state, the preview panel's pick branch and the mid-mode bail-out
-// all ask this one function, so a future third condition (a print mode that has no photo overlay,
-// say) is one edit rather than three that must be remembered together.
+// all ask this one function, so a further condition is one edit rather than three that must be
+// remembered together.
+//
+// One such condition is already foreseen. A subtractive/print rendering mode, in which the halo is
+// laid on paper rather than composited over a photograph, would make the background overlay
+// mutually exclusive with it — and the eyedropper along with it. That condition belongs HERE when
+// the mode arrives; the paper colour is emphatically NOT a second thing this picker may sample,
+// because the whole reason sampling works is that `background` and the photo meet in the same lerp.
+// No condition is written today because the mode does not exist in this tree yet, and a gate on a
+// field nobody has defined is a gate that will be wrong by the time it matters.
 bool BgPickerAvailable(const GuiState& state);
 // The construction-time properties the live g_server was actually built with (see app.cpp):
 // whether it is a GPU backend (Metal/CUDA) vs CPU, and how many CPU workers it holds. Together

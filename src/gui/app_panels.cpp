@@ -1961,6 +1961,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // second case a no-op instead of silently orbiting: a user pressing the modifier over a
       // hidden background has stated what they meant to move, and swallowing the modifier to move
       // something else is worse than doing nothing.
+      // Same predicate the eyedropper button is enabled by, and deliberately not a second copy of
+      // the expression: "there is a photo on screen to act on" is one question, whether the act is
+      // dragging it or sampling it.
       const bool bg_active = BgPickerAvailable(g_state);
       // Alt/Option on every platform. Cmd on macOS is not an option: ImGui aliases Super+Left
       // into a right click before this handler runs — see kBgModifierName in preview_renderer.hpp.
@@ -1981,8 +1984,6 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // way this drag does, rather than growing a second copy of it.
         const NdcPoint dndc = ScreenDeltaToNdcDelta(io.MouseDelta.x, io.MouseDelta.y, dpi_scale_x, dpi_scale_y,
                                                     g_preview_vp.vp_w, g_preview_vp.vp_h);
-        const float dndc_x = dndc.x;
-        const float dndc_y = dndc.y;
 
         // Clamp on this path too, not only in the sliders: a slider clamps what IT produces, it
         // does not retroactively pull an out-of-range value back, so an unclamped drag could park
@@ -1991,10 +1992,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         const FieldEditorConstraint oy_c = ConstraintFor("bg_offset_y", g_state);
         g_state.bg_offset_x =
             std::max(static_cast<float>(ox_c.min_value),
-                     std::min(static_cast<float>(ox_c.max_value), g_state.bg_offset_x - dndc_x * t.scale_x));
+                     std::min(static_cast<float>(ox_c.max_value), g_state.bg_offset_x - dndc.x * t.scale_x));
         g_state.bg_offset_y =
             std::max(static_cast<float>(oy_c.min_value),
-                     std::min(static_cast<float>(oy_c.max_value), g_state.bg_offset_y - dndc_y * t.scale_y));
+                     std::min(static_cast<float>(oy_c.max_value), g_state.bg_offset_y - dndc.y * t.scale_y));
       }
 
       if (!g_bg_pick.active && bg_active && bg_modifier && is_hovered && io.MouseWheel != 0.0f) {
