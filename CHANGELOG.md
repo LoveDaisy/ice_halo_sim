@@ -141,6 +141,18 @@ it was thinking of and false of the C struct beside it.
   side", "not enough indices yet" (so a UI can call it on every keystroke without owning a rule for
   when a row is finished), or invalid, with the offending slot named where one slot is at fault. No
   `LUMICE_API_VERSION` change — a new function, no struct or ABI change.
+- **The wedge-angle dropdown takes custom Miller indices.** Below the four built-in presets the
+  Crystal editor's Upper A / Lower A dropdowns now carry a row of index boxes in the same
+  `{h,k,i,l}` notation the preset labels use, so a face the table does not offer — `{3,0,-3,1}`,
+  say — can be asked for by name instead of converted to degrees by hand. The angle updates as
+  you type and is only written when you press Apply, so a triple being typed through never lands
+  half-finished. `i` is shown, not typed: it is `-(h+k)` by definition, and deriving it means the
+  four numbers can never contradict each other. Indices that name no buildable face are refused
+  with the reason spelled out and Apply greyed — a non-zero `k` (a second-order pyramidal face
+  this crystal model cannot express), a negative index, an h:l ratio outside the buildable range,
+  and `h = 0`, which says "no pyramidal cap on this side" and belongs in the pyramid height rather
+  than in an angle. Nothing is stored: the dropdown writes the angle and no Miller indices enter
+  the document.
 
 ### Changed
 - **`upper_indices` / `lower_indices` are now judged rather than partly ignored.** These arrays used

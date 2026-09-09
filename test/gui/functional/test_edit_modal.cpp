@@ -2523,8 +2523,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   // function, so neither can be right while the other is wrong.
   //
   // The expected angles below are read from EvaluateCustomWedgeInput rather than written as
-  // literals: a hand-copied 28.4 here would be a fourth transcription of the very formula this
-  // scrum removed three copies of.
+  // literals: a hand-copied number here would be one more transcription of the formula that
+  // core/miller_wedge.cpp is now the single owner of, and hand transcription is what had three of
+  // the four built-in presets wrong.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "wedge_custom_input_applies_only_a_buildable_triple");
     t->TestFunc = [](ImGuiTestContext* ctx) {

@@ -47,11 +47,11 @@ struct Case {
   int expect_slot;
 };
 
-// h = 1, l = 0 is the {1,0,-1,0} row 523.2 removed from the presets: a PRISM face, whose ratio
-// converts to 0 degrees and so falls below the buildable floor. h = 1, l = 2000 is the same
-// rejection from the other end. Both are ratio verdicts, hence kSlotNone — neither integer is
-// wrong on its own. The expectations here are asserted against the API's live answer below, not
-// merely trusted; a row whose premise stops holding fails rather than silently testing nothing.
+// h = 1, l = 0 is the {1,0,-1,0} row that kWedgePresetIndices (edit_modals.cpp) deliberately does
+// not carry: a PRISM face, whose ratio converts to 0 degrees and so falls below the buildable floor. h = 1, l = 2000 is
+// the same rejection from the other end. Both are ratio verdicts, hence kSlotNone — neither integer is wrong on its
+// own. The expectations here are asserted against the API's live answer below, not merely trusted; a row whose premise
+// stops holding fails rather than silently testing nothing.
 constexpr Case kCases[] = {
   { "a buildable face the built-in presets do not offer ({3,0,-3,1})", 3, 0, 1, LUMICE_MILLER_VALID, kSlotNone },
   { "the shallowest built-in face ({1,0,-1,1})", 1, 0, 1, LUMICE_MILLER_VALID, kSlotNone },
