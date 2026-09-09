@@ -167,6 +167,13 @@ jobs:
           echo "SCCACHE_CACHE_SIZE=2G" >> $env:GITHUB_ENV
 
       # [MEASUREMENT BRANCH — DO NOT MERGE] ccache on the Ubuntu x86_64 leg. Mirrors the sccache leg
+      # NOTE on the key namespace: it is `ccache-static-ubuntu-x64-`, not `ccache-ubuntu-x64-`,
+      # because `restore-keys` matches by PREFIX. A `ccache-ubuntu-x64-` fallback also matches
+      # `ccache-ubuntu-x64-shared-gui-test-<sha>`, so this leg silently restored the shared
+      # flavour's cache and hit 2.35% instead of 99.66% -- measured, first time round. The same
+      # prefix relation exists between the `cpm-ubuntu-x64-` restore key and both
+      # `cpm-ubuntu-x64-bench-` and `cpm-ubuntu-x64-shared-gui-test-`, which is a live issue in
+      # this file independent of this branch.
       # above rather than inventing a second shape: same launcher-via-env-var injection
       # (so the shared Configure step below needs no branch), same "one cache entry per
       # commit + restore-keys fallback" key shape. Throwaway measurement branch — not to merge.
@@ -184,8 +191,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ccache_cache
-          key: ccache-ubuntu-x64-${{ github.sha }}
-          restore-keys: ccache-ubuntu-x64-
+          key: ccache-static-ubuntu-x64-${{ github.sha }}
+          restore-keys: ccache-static-ubuntu-x64-
 
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       - name: Install GLAD2 Python dependencies (MSVC)
