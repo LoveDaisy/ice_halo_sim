@@ -1555,9 +1555,10 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     // (doc/print-mode-subtractive-ink.md decision D5).
     //
     // The paper swatch is NOT greyed out under Screen, and that is a decision rather than an
-    // omission: this version ships no operator that reads either field, so there is no "currently
-    // in effect" state to grey against. Whatever mutual exclusion the operator turns out to need
-    // is that step's to add.
+    // omission: both fields are authored state that survives a tone switch, so greying the one the
+    // live operator is not reading would hide a value the user is about to need. The mutual
+    // exclusions the operator does impose are the colour-carrying fields of
+    // doc/print-mode-subtractive-ink.md §7, which are greyed where they live.
     ImGui::Combo("Tone##display_tone", &r.tone, kToneNames, kToneCount);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
@@ -1566,9 +1567,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           "has always done. A light sky can only stay light, which is why a white sky shows no "
           "halo.\n\n"
           "Print: light is laid down as INK on the paper below, so the picture darkens where the "
-          "halo is — the way it would come off a printer.\n\n"
-          "NOT IMPLEMENTED YET in this version: the setting is saved and exported, but no operator "
-          "reads it, so switching changes nothing on screen.");
+          "halo is — the way it would come off a printer.");
     }
     ImGui::ColorEdit3("Paper##display_paper_color", r.paper, ImGuiColorEditFlags_NoInputs);
     if (ImGui::IsItemHovered()) {
