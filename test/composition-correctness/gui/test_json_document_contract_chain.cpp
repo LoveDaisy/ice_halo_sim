@@ -603,7 +603,7 @@ TEST(JsonImportContractChain, AJsonSunAzimuthOfZeroIsNotWorthMentioning) {
 TEST(JsonImportContractChain, AJsonLensShiftIsRefusedOutLoudNotDroppedInSilence) {
   const std::string doc = DocWithParts(
       kWellFormedLightSource,
-      R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "lens_shift": [0.1, -0.2], "resolution": [64, 64]}])", "");
+      R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "lens_shift": [8, -12], "resolution": [64, 64]}])", "");
 
   ClearImportComplexFilterWarning();
   GuiState scratch;
