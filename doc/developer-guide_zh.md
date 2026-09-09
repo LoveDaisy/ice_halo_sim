@@ -52,7 +52,9 @@ sudo apt-get install cmake ninja-build
 - `-b`: 构建基准测试（Google Benchmark）
 - `-j`: 并行编译
 - `-k`: 清理构建产物（保留依赖缓存）
-- `-x`: 清理全部（含依赖缓存）
+- `-x`: 清空整个 `build/`（两种 flavor 都清）。它**不会**清 CPM 依赖源码缓存——
+  该缓存默认落在 `build/` 之外的机器级目录（`$HOME/.cache/lumice-cpm`），
+  与本机其他 clone / worktree 共享。确需强制重下时手动删除该目录。
 - `-s`: 构建共享库（默认为静态库）
 - `-h`: 显示帮助信息
 

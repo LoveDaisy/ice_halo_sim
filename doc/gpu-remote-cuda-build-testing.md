@@ -54,7 +54,9 @@
   rsync -az --exclude '__pycache__' src/ $HOSTALIAS:$REPO/src/   # test/ 同理
   ```
   ⚠️ 首次同步整棵树时**别在机器上从 GitHub 拉**——见 `machines.md` 的网络实测，
-  从开发机 rsync 过去快得多，`build/cpm_cache` 尤其（省掉全部依赖下载）。
+  从开发机 rsync 过去快得多，CPM 依赖源码缓存尤其（省掉全部依赖下载）。它默认落在
+  机器级的 `~/.cache/lumice-cpm`（**不在** `build/` 下），两端同路径，
+  一份服务该机器上的所有 clone 与 worktree——命令见 `machines.md` 的网络那一条。
 
 - **build**（shared flavor，parity 需要 `.so`）：
   ```bash

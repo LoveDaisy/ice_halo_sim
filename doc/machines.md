@@ -94,8 +94,15 @@
 3. **网络：GitHub 慢，Docker Hub 不通。** 实测 GitHub 直下约 69 KB/s、
    Docker Hub 连不上；而 apt（阿里云镜像）、pypi、NVIDIA 的
    `developer.download.nvidia.cn`（26–30 MB/s）都很快。
-   ⇒ CPM 依赖不要在这两台机器上下载，从开发机经局域网 rsync `build/cpm_cache`
-   （约 282 MB）过去。⚠️ Mac 上的缓存里**没有 `glad`**（它是 `WIN32` 才用的依赖，
+   ⇒ CPM 依赖不要在这两台机器上下载，从开发机经局域网 rsync 依赖源码缓存
+   （约 282 MB）过去。**两端的路径都是 `~/.cache/lumice-cpm`**——那是
+   `CMakeLists.txt` 给 `CPM_SOURCE_CACHE` 的机器级默认值（`$HOME` 取不到时退
+   `$USERPROFILE`，都取不到才退回旧的 repo-local `build/cpm_cache`），所以它一份
+   服务该机器上的所有 clone 与 worktree，不必按仓库路径各推一份：
+   ```bash
+   rsync -az ~/.cache/lumice-cpm/ $HOSTALIAS:~/.cache/lumice-cpm/
+   ```
+   ⚠️ Mac 上的缓存里**没有 `glad`**（它是 `WIN32` 才用的依赖，
    Mac 从不构建它），Windows 首次构建会自行拉取。
 
 ## 相关文档

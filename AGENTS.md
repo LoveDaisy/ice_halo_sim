@@ -54,6 +54,23 @@ produce a shared library. Release artifacts are installed to `build/cmake_instal
 CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
 `build/<BUILD_TYPE>/<flavor>/{bin,lib}/`.
 
+Dependency **sources**, by contrast, are cached per-*machine*, not per-source-tree: CPM downloads
+land in `$HOME/.cache/lumice-cpm` by default (`$USERPROFILE/.cache/lumice-cpm` on a Windows shell
+that sets no `HOME`; and if neither variable exists, the old repo-local `build/cpm_cache`, so a
+configure can never fail for want of a home directory). That is what makes a fresh clone or a new
+`git worktree` cheap — it reuses whatever this machine has already downloaded instead of re-fetching
+~300MB of the same 13 packages, which is the cost that was actually being paid: four trees on one
+machine each held their own ~300MB copy. `CPM_SOURCE_CACHE` still overrides it unconditionally —
+the default is only computed when neither the CMake variable nor the environment variable is set —
+which is how CI keeps its own per-workspace cache (`.github/workflows/{ci,release}.yml`) unaffected.
+Two consequences worth knowing. `rm -rf build/`, and `./scripts/build.sh -x` with it, no longer
+clears the dependency sources, because they are no longer under `build/`; delete the cache directory
+by hand when you genuinely want them re-downloaded, and note that doing so bills every other
+worktree on the machine for the re-download, not just yours. And the compiler-output and build trees
+above stay deliberately per-tree — only the immutable, content-addressed dependency sources are
+shared, which is why concurrent configures are safe (CPM takes a `file(LOCK)` per package directory
+before downloading into it).
+
 ## Code Structure
 
 - `src/config/`: configuration parsing and simulation config data
