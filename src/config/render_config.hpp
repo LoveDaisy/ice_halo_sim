@@ -243,6 +243,7 @@ struct RenderConfig {
   // The parallels and the meridians share one switch, as they share one appearance in the GUI.
   bool grid_label_ = false;
   bool angular_dist_label_ = false;
+  bool probe_pad_field_ = false;  // TEMPORARY red-state probe
   // The zenith / nadir ring markers. Opt-in for the same reason horizon_ is: an annotation nobody
   // asked for must not appear in a config that predates the field.
   //

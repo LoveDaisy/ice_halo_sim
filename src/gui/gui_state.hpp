@@ -405,6 +405,7 @@ struct RenderConfig {
   int sim_resolution_index = 1;  // Index into kSimResolutions (default 1024)
   int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
   bool front = false;            // Independent front-hemisphere clip flag (AND with base)
+  bool probe_pad_field = false;  // TEMPORARY red-state probe
   float background[3] = { 0.0f, 0.0f, 0.0f };
   // Serialized only (file_io.cpp) — no editor registers it (field_editor_registry.cpp), so
   // nothing in the running GUI can change it. See the RenderConfigResimFields comment below.
