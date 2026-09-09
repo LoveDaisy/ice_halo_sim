@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -28,6 +30,7 @@
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"  // ConfigScratch(+Guard) + ParseConfigString + ConfigToJson (internal)
 #include "support/env_var.hpp"
+#include "util/logger.hpp"
 
 // Regression guard (task-fix-stats-ray-count-u32-overflow): ray-count fields must be
 // 64-bit so totals > 2^32 never truncate on Windows, where `unsigned long` is 32-bit
@@ -614,6 +617,29 @@ static std::string MakeMinimalConfigJson() {
 }
 
 // Helper: build a full config JSON with pyramid, filters, scattering.
+// Captures everything the core logger emits for the lifetime of the object.
+// RAII rather than a manual remove_sink at the end of each test, because
+// GetSharedSink() is a process-wide singleton: an ASSERT_* returning early with
+// the sink still attached would leave later tests in this binary writing into a
+// destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) {
+    lumice::GetSharedSink()->add_sink(sink_);
+  }
+
+  ~LogCapture() { lumice::GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
+
 static std::string MakeFullConfigJson() {
   nlohmann::json root;
 
@@ -2106,6 +2132,70 @@ TEST(ConvertMillerIndexToWedgeAngleApi, KeystrokeSequenceNeedsNoCallerSideRule) 
     EXPECT_EQ(state, st.state) << "step h=" << st.h << " k=" << st.k << " l=" << st.l << " count=" << st.count;
     EXPECT_EQ(bad, st.bad) << "step h=" << st.h << " k=" << st.k << " l=" << st.l << " count=" << st.count;
   }
+}
+
+// The API-level cases above pin what the conversion owner decides. This one pins what the JSON
+// reader in front of it does with a refusal: keep the wedge angle where it was AND say so. The
+// value half alone is not enough -- the angle a refusal leaves behind is a default the document
+// never stated, and nothing downstream can tell it from a stated one.
+//
+// The log is captured rather than trusted, because a warning line is exactly what a later tidy-up
+// drops or downgrades with no test noticing. Same proposition as the config reader's twin in
+// test/unit-correctness/config/test_json.cpp; both readers are asserted because they are two
+// implementations of one behaviour and a shared owner underneath does not make them the same code.
+TEST(ParseConfigApi, RefusedMillerIndicesAreReported) {
+  struct Row {
+    nlohmann::json indices;
+    const char* why;
+  };
+  const Row kRows[] = {
+    { nlohmann::json::array({ 1, 0, -1, 1 }), "four indices: the editor's own label written into the document" },
+    { nlohmann::json::array({ 1, 0 }), "two indices: a triple left half-written" },
+    { nlohmann::json::array({ 1, 1, 2 }), "k != 0: a face this crystal model cannot express" },
+    { nlohmann::json::array({ 1, 0, -1 }), "a negative index" },
+  };
+
+  for (const Row& row : kRows) {
+    auto json = nlohmann::json::parse(MakeFullConfigJson());
+    json["crystal"][1]["shape"]["upper_indices"] = row.indices;
+
+    ConfigScratch config{};
+    ConfigScratchGuard config_guard(config);
+    std::string text;
+    {
+      LogCapture capture;
+      EXPECT_EQ(ParseConfigString(json.dump().c_str(), &config), LUMICE_OK)
+          << "premise: a refused triple is a warning, not a rejected document -- " << row.why;
+      text = capture.Text();
+    }
+
+    EXPECT_FLOAT_EQ(config.crystals[1].upper_wedge_angle, 28.0f)
+        << "a refused triple must leave the angle at the default, not half-apply -- " << row.why;
+    EXPECT_NE(text.find("is not a usable wedge angle"), std::string::npos)
+        << "a refused triple must not fall back in silence -- " << row.why << "; captured: " << text;
+    EXPECT_NE(text.find("upper_indices"), std::string::npos)
+        << "must name the field that was refused -- " << row.why << "; captured: " << text;
+  }
+}
+
+// The contrast that keeps the rule above from over-firing: h == 0 is a legal document saying this
+// side has no pyramidal cap, so it must change the angle and stay quiet.
+TEST(ParseConfigApi, MillerIndicesWithNoConeAreNotReported) {
+  auto json = nlohmann::json::parse(MakeFullConfigJson());
+  json["crystal"][1]["shape"]["upper_indices"] = nlohmann::json::array({ 0, 0, 1 });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  std::string text;
+  {
+    LogCapture capture;
+    EXPECT_EQ(ParseConfigString(json.dump().c_str(), &config), LUMICE_OK);
+    text = capture.Text();
+  }
+
+  EXPECT_FLOAT_EQ(config.crystals[1].upper_wedge_angle, 0.0f) << "premise: the no-cone verdict was the one taken";
+  EXPECT_EQ(text.find("is not a usable wedge angle"), std::string::npos)
+      << "a legal document must parse in silence; captured: " << text;
 }
 
 // ============================================================

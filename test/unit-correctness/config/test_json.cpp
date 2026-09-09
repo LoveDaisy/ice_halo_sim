@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <cstddef>
 #include <fstream>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -18,11 +21,33 @@
 #include "core/def.hpp"
 #include "core/math.hpp"
 #include "util/illuminant.hpp"
+#include "util/logger.hpp"
 
 extern std::string config_file_name;
 using namespace lumice;
 
 namespace {
+
+// Captures everything the global logger emits for the lifetime of the object.
+// RAII rather than a manual remove_sink at the end of each test, because
+// GetSharedSink() is a process-wide singleton: an ASSERT_* returning early with
+// the sink still attached would leave later tests in this binary writing into a
+// destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) { GetSharedSink()->add_sink(sink_); }
+
+  ~LogCapture() { GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
 
 class V3TestJson : public ::testing::Test {
  protected:
@@ -487,6 +512,62 @@ TEST(MillerIndexFallback, RefusedIndicesKeepTheDefaultAngle) {
   auto textual = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
   textual["shape"]["upper_indices"] = nlohmann::json::array({ "1", 0, 1 });
   EXPECT_NEAR(std::get<PyramidCrystalParam>(textual.get<CrystalConfig>().param_).wedge_angle_u_, kDefault, 1e-5f);
+}
+
+// Keeping the default is only half of what a refusal owes the user. The other half is saying so:
+// the angle a refused triple leaves behind is a default the document never stated, and a reader of
+// the render has no way to tell it from a stated one. The case above pins the value; this one pins
+// that the value change was announced.
+//
+// Captures the log rather than trusting it, because a warning is exactly the kind of line a later
+// tidy-up drops or downgrades to debug with no test noticing.
+TEST(MillerIndexFallback, RefusedIndicesAreReported) {
+  struct Row {
+    nlohmann::json indices;
+    const char* why;
+  };
+  const Row kRows[] = {
+    { nlohmann::json::array({ 1, 0, -1, 1 }), "four indices: the editor's own label written into the document" },
+    { nlohmann::json::array({ 1, 0 }), "two indices: a triple left half-written" },
+    { nlohmann::json::array({ 1, 1, 2 }), "k != 0: a face this crystal model cannot express" },
+    { nlohmann::json::array({ 1, 0, -1 }), "a negative index" },
+  };
+
+  for (const Row& row : kRows) {
+    auto j = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
+    j["shape"]["upper_indices"] = row.indices;
+
+    std::string text;
+    {
+      LogCapture capture;
+      (void)j.get<CrystalConfig>();
+      text = capture.Text();
+    }
+
+    EXPECT_NE(text.find("is not a usable wedge angle"), std::string::npos)
+        << "a refused triple must not fall back in silence -- " << row.why << "; captured: " << text;
+    EXPECT_NE(text.find("upper_indices"), std::string::npos)
+        << "must name the field that was refused -- " << row.why << "; captured: " << text;
+  }
+}
+
+// The contrast that keeps the rule above from over-firing: h == 0 is a legal document saying this
+// side has no pyramidal cap. It changes the angle and must stay silent, or the warning becomes
+// noise a user learns to read past.
+TEST(MillerIndexFallback, NoConeIsNotReportedAsARefusal) {
+  auto j = MakePyramidJson(1, { 0, 0, 1 }, { 1, 0, 1 });
+
+  std::string text;
+  {
+    LogCapture capture;
+    const auto c = j.get<CrystalConfig>();
+    EXPECT_NEAR(std::get<PyramidCrystalParam>(c.param_).wedge_angle_u_, 0.0f, 1e-5f)
+        << "premise: the no-cone verdict was the one taken";
+    text = capture.Text();
+  }
+
+  EXPECT_EQ(text.find("is not a usable wedge angle"), std::string::npos)
+      << "a legal document must parse in silence; captured: " << text;
 }
 
 TEST(FaceDistanceRoundTrip, NoScalingApplied) {
