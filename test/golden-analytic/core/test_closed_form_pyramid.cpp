@@ -426,6 +426,33 @@ TEST(ClosedFormPyramid, TopologyMatchesGoldenConstants) {
 // boundary, so platform rounding can never flip a decision).
 // ============================================================================
 
+// The Miller overload computes a1 straight from the indices rather than through atan/tan, so its
+// legality gate is written in a1 space and has to be kept honest against the wedge overload's own
+// 0.1..89.9 degree window. It once was not: `isfinite(a1) && a1 > 0` accepted an entire band of
+// near-degenerate faces that the same crystal, described by its wedge angle instead, would drop.
+// Both directions are checked, because a gate that simply refused everything would also pass a
+// one-sided version of this.
+TEST(ClosedFormPyramid, MillerAndWedgePathsDropTheSameFaces) {
+  const float dist[6]{ 1, 1, 1, 1, 1, 1 };
+  struct Case {
+    int i1, i4;
+    const char* what;
+  };
+  const Case kCases[] = {
+    { 1, 1, "28.0 deg, ordinary" },
+    { 3, 1, "10.1 deg, shallow but legal" },
+    { 1, 3, "57.9 deg, steep but legal" },
+    { 1, 100000, "89.999 deg, past the upper bound" },
+    { 100000, 1, "0.0003 deg, past the lower bound" },
+  };
+  for (const auto& c : kCases) {
+    const float alpha = lumice::MillerIndexToWedgeAngleDeg(c.i1, c.i4);
+    auto by_index = ComputeClosedFormPyramid(c.i1, c.i4, c.i1, c.i4, 0.4f, 1.0f, 0.4f, dist);
+    auto by_angle = ComputeClosedFormPyramid(alpha, alpha, 0.4f, 1.0f, 0.4f, dist);
+    EXPECT_EQ(PackFacePresent(by_index), PackFacePresent(by_angle)) << c.what << " (alpha=" << alpha << ")";
+  }
+}
+
 TEST(ClosedFormPyramid, VertexPlaneSelfConsistency) {
   // Loose physical tolerance: 1e-4 of the characteristic length is
   // geometrically meaningless (well above float round-off of an O(1)-coordinate

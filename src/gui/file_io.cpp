@@ -59,17 +59,6 @@ static std::vector<WlWeight> ParseWlWeightArray(const nlohmann::json& arr) {
   return out;
 }
 
-// Convert Miller index (i1, i4) to wedge angle in degrees. Returns default (28.0) if i1 == 0.
-static float MillerToAlpha(int i1, int i4) {
-  constexpr float kSqrt3_2 = 0.866025403784f;
-  constexpr float kIceCrystalC = 1.629f;
-  constexpr float kRadToDeg = 57.2957795131f;
-  if (i1 == 0) {
-    return 28.0f;
-  }
-  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
-}
-
 // Lens type JSON names (shared by Core config and GuiState JSON), indexed by the GUI
 // RenderConfig::lens_type value and mirroring core's own wire vocabulary verbatim (see
 // config/render_config.hpp's NLOHMANN_JSON_SERIALIZE_ENUM for LensParam::LensType) — one word means
@@ -829,8 +818,35 @@ static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::strin
         const char* indices_key = LUMICE_ShapeIndicesKeyName(upper);
         if (s.contains(angle_key) && s[angle_key].is_number()) {
           alpha = s[angle_key].get<float>();
-        } else if (s.contains(indices_key) && s[indices_key].is_array() && s[indices_key].size() == 3) {
-          alpha = MillerToAlpha(s[indices_key][0].get<int>(), s[indices_key][2].get<int>());
+        } else if (s.contains(indices_key) && s[indices_key].is_array()) {
+          // Any array enters here, not just a three-element one — the same shape as the CLI's own
+          // reader (config/crystal_config.cpp, server/c_api.cpp): a wrong length is a verdict the
+          // C API makes, not a reason to leave the branch and let the default pass for a value.
+          const auto& idx = s[indices_key];
+          int hkl[3]{ 0, 0, 0 };
+          bool all_integers = true;
+          for (size_t n = 0; n < idx.size() && n < 3; n++) {
+            if (!idx[n].is_number_integer()) {
+              all_integers = false;
+              break;
+            }
+            hkl[n] = idx[n].get<int>();
+          }
+          auto state = LUMICE_MILLER_INVALID;
+          float angle_deg = 0.0f;
+          int invalid_index = -1;
+          if (all_integers) {
+            LUMICE_ConvertMillerIndexToWedgeAngle(hkl[0], hkl[1], hkl[2], static_cast<int>(idx.size()), &state,
+                                                  &angle_deg, &invalid_index);
+          }
+          if (state == LUMICE_MILLER_VALID || state == LUMICE_MILLER_NO_CONE) {
+            alpha = angle_deg;
+          } else {
+            GUI_LOG_WARNING(
+                "[FileIO] ParseCrystal: {} shape \"{}\": {} is not a usable wedge angle "
+                "(state={}, offending index {}); keeping {:.2f}.",
+                crystal_label, indices_key, idx.dump(), static_cast<int>(state), invalid_index, alpha);
+          }
         }
       }
     }

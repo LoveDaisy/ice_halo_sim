@@ -60,4 +60,18 @@ MillerConversionResult ConvertMillerIndexToWedgeAngle(int h, int k, int l, int p
   return r;
 }
 
+const char* MillerConversionStateName(MillerConversionState state) {
+  switch (state) {
+    case MillerConversionState::kValid:
+      return "valid";
+    case MillerConversionState::kNoCone:
+      return "no_cone";
+    case MillerConversionState::kIncomplete:
+      return "incomplete";
+    case MillerConversionState::kInvalid:
+      return "invalid";
+  }
+  return "invalid";
+}
+
 }  // namespace lumice

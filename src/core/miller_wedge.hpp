@@ -58,6 +58,10 @@ struct MillerConversionResult {
 ///   8. otherwise                       -> kValid (-1), angle in degrees
 MillerConversionResult ConvertMillerIndexToWedgeAngle(int h, int k, int l, int provided_count);
 
+/// Short lower-case name of a state, for diagnostics ("valid", "no_cone", "incomplete", "invalid").
+/// Static storage; never null. Lives here so a log line and a verdict cannot drift apart.
+const char* MillerConversionStateName(MillerConversionState state);
+
 }  // namespace lumice
 
 #endif  // SRC_CORE_MILLER_WEDGE_HPP_

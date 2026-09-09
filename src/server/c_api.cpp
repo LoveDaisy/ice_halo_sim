@@ -20,6 +20,7 @@
 #include "core/crystal.hpp"
 #include "core/ev_anchor.hpp"
 #include "core/geo3d.hpp"
+#include "core/miller_wedge.hpp"
 #include "core/trace_ops.hpp"  // ns::MakeCrystal (core single-source crystal sampler)
 #if defined(__APPLE__)
 #include "core/backend/metal_trace_backend.hpp"
@@ -36,16 +37,6 @@
 #include "util/path_utils.hpp"
 
 namespace ns = lumice;
-
-// Convert Miller index (i1, i4) to wedge angle in degrees. Returns 28.0 (default) if i1 == 0.
-static float MillerToAlpha(int i1, int i4) {
-  constexpr float kSqrt3_2 = 0.866025403784f;
-  constexpr float kIceCrystalC = 1.629f;
-  constexpr float kRadToDeg = 57.2957795131f;
-  if (i1 == 0)
-    return 28.0f;
-  return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
-}
 
 // =============== Internal Helpers ===============
 struct LUMICE_Server_ {
@@ -1720,8 +1711,31 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
       const char* indices_key = ns::ShapeIndicesKeyName(upper);
       if (shape.contains(angle_key) && shape.at(angle_key).is_number()) {
         wedge_angle = shape.at(angle_key).get<float>();
-      } else if (shape.contains(indices_key) && shape.at(indices_key).is_array() && shape.at(indices_key).size() == 3) {
-        wedge_angle = MillerToAlpha(shape.at(indices_key)[0].get<int>(), shape.at(indices_key)[2].get<int>());
+      } else if (shape.contains(indices_key) && shape.at(indices_key).is_array()) {
+        // Any array enters here, not just a three-element one — see the twin in
+        // config/crystal_config.cpp's from_json(PyramidCrystalParam): a wrong length is a verdict
+        // the owner makes, not a reason to leave the branch and let the default pass for a value.
+        const auto& idx = shape.at(indices_key);
+        int hkl[3]{ 0, 0, 0 };
+        bool all_integers = true;
+        for (size_t i = 0; i < idx.size() && i < 3; i++) {
+          if (!idx[i].is_number_integer()) {
+            all_integers = false;
+            break;
+          }
+          hkl[i] = idx[i].get<int>();
+        }
+        ns::MillerConversionResult r;
+        r.state = ns::MillerConversionState::kInvalid;
+        if (all_integers) {
+          r = ns::ConvertMillerIndexToWedgeAngle(hkl[0], hkl[1], hkl[2], static_cast<int>(idx.size()));
+        }
+        if (r.state == ns::MillerConversionState::kValid || r.state == ns::MillerConversionState::kNoCone) {
+          wedge_angle = r.wedge_angle_deg;
+        } else {
+          LOG_WARNING("Crystal shape \"{}\": {} is not a usable wedge angle ({}, offending index {}); keeping {:.2f}.",
+                      indices_key, idx.dump(), ns::MillerConversionStateName(r.state), r.invalid_index, wedge_angle);
+        }
       }
     }
   } else {
@@ -3877,6 +3891,38 @@ LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind
   }
   if (msg_buf_size > 0) {
     std::snprintf(out_msg, msg_buf_size, "%s", r.message.c_str());
+  }
+  return LUMICE_OK;
+}
+
+LUMICE_ErrorCode LUMICE_ConvertMillerIndexToWedgeAngle(int h, int k, int l, int provided_count,
+                                                       LUMICE_MillerConversionState* out_state, float* out_angle_deg,
+                                                       int* out_invalid_index) {
+  if (!out_state || !out_angle_deg) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto r = ns::ConvertMillerIndexToWedgeAngle(h, k, l, provided_count);
+  switch (r.state) {
+    case ns::MillerConversionState::kValid:
+      *out_state = LUMICE_MILLER_VALID;
+      break;
+    case ns::MillerConversionState::kNoCone:
+      *out_state = LUMICE_MILLER_NO_CONE;
+      break;
+    case ns::MillerConversionState::kIncomplete:
+      *out_state = LUMICE_MILLER_INCOMPLETE;
+      break;
+    case ns::MillerConversionState::kInvalid:
+      *out_state = LUMICE_MILLER_INVALID;
+      break;
+    default:
+      assert(false);
+      *out_state = LUMICE_MILLER_INVALID;
+      return LUMICE_ERR_UNKNOWN;
+  }
+  *out_angle_deg = r.wedge_angle_deg;
+  if (out_invalid_index) {
+    *out_invalid_index = r.invalid_index;
   }
   return LUMICE_OK;
 }

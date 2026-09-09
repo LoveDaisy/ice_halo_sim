@@ -454,6 +454,41 @@ TEST(MillerIndexFallback, ZeroHMeansNoConeNotDefaultAngle) {
   EXPECT_NEAR(p.wedge_angle_l_, 28.00f, 0.01f);  // {1,0,1} → 28.00°
 }
 
+// Indices the conversion owner refuses leave the wedge angle at whatever it was before the
+// fallback ran -- PyramidCrystalParam's own 28.0 default here. The point of each case is that the
+// document said something unusable and the parser noticed, where it used to either ignore the
+// offending part (k) or skip the whole branch without a word (a wrong length).
+TEST(MillerIndexFallback, RefusedIndicesKeepTheDefaultAngle) {
+  const float kDefault = PyramidCrystalParam{}.wedge_angle_u_;
+
+  // k != 0: a second-order pyramidal face this crystal model cannot express. The old reader read
+  // slots 0 and 2 and never looked at k, so this rendered as {1,0,2}'s 46.756 degrees.
+  auto k_nonzero = MakePyramidJson(1, { 1, 1, 2 }, { 1, 0, 1 }).get<CrystalConfig>();
+  EXPECT_NEAR(std::get<PyramidCrystalParam>(k_nonzero.param_).wedge_angle_u_, kDefault, 1e-5f);
+
+  // Negative index: the old reader produced a negative angle, which FillHexCrystalCoef then
+  // dropped, so the cone silently vanished from the render with nothing said anywhere.
+  auto negative = MakePyramidJson(1, { 1, 0, -1 }, { 1, 0, 1 }).get<CrystalConfig>();
+  EXPECT_NEAR(std::get<PyramidCrystalParam>(negative.param_).wedge_angle_u_, kDefault, 1e-5f);
+
+  // Wrong length, both directions. The old reader required size() == 3 to enter the branch at all,
+  // so a four-index array -- the notation users actually write, {1,0,-1,1} -- fell through to the
+  // default and looked like a stated 28 degrees.
+  auto four = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
+  four["shape"]["upper_indices"] = nlohmann::json::array({ 1, 0, -1, 1 });
+  EXPECT_NEAR(std::get<PyramidCrystalParam>(four.get<CrystalConfig>().param_).wedge_angle_u_, kDefault, 1e-5f);
+
+  auto two = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
+  two["shape"]["upper_indices"] = nlohmann::json::array({ 1, 0 });
+  EXPECT_NEAR(std::get<PyramidCrystalParam>(two.get<CrystalConfig>().param_).wedge_angle_u_, kDefault, 1e-5f);
+
+  // A non-integer element is a parsing failure, not a conversion one, and used to throw out of
+  // from_json for a three-element array while a wrong-length one was skipped in silence.
+  auto textual = MakePyramidJson(1, { 1, 0, 1 }, { 1, 0, 1 });
+  textual["shape"]["upper_indices"] = nlohmann::json::array({ "1", 0, 1 });
+  EXPECT_NEAR(std::get<PyramidCrystalParam>(textual.get<CrystalConfig>().param_).wedge_angle_u_, kDefault, 1e-5f);
+}
+
 TEST(FaceDistanceRoundTrip, NoScalingApplied) {
   // Parse once: face_distance values should stay unchanged (no kSqrt3_4 scaling)
   auto j1 = MakePyramidJson(1, { 2, 0, 2 }, { 1, 0, 1 });

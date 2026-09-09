@@ -1986,6 +1986,129 @@ TEST(ValidateRaypathTextApi, MsgBufTruncation) {
 }
 
 // ============================================================
+// LUMICE_ConvertMillerIndexToWedgeAngle
+// ============================================================
+
+TEST(ConvertMillerIndexToWedgeAngleApi, NullArgs) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+  float angle = -1.0f;
+  int bad = 99;
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 1, 3, nullptr, &angle, &bad), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 1, 3, &state, nullptr, &bad), LUMICE_ERR_NULL_ARG);
+  // out_invalid_index is the one optional out-param: a caller that only needs the angle may skip it.
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 1, 3, &state, &angle, nullptr), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_VALID);
+  EXPECT_NEAR(angle, 28.00f, 0.01f);
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, Valid) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+  float angle = -1.0f;
+  int bad = 99;
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(2, 0, 3, 3, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_VALID);
+  EXPECT_NEAR(angle, 38.57f, 0.01f);
+  EXPECT_EQ(bad, -1);
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, NoCone) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_INVALID;
+  float angle = -1.0f;
+  int bad = 99;
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(0, 0, 1, 3, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_NO_CONE);
+  EXPECT_FLOAT_EQ(angle, 0.0f);
+  EXPECT_EQ(bad, -1);
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, IncompleteWhileTyping) {
+  // The whole reason provided_count exists: a row typed left to right must read as "not finished"
+  // rather than as an error, on every keystroke, without the caller owning that rule.
+  for (int count = 0; count < 3; count++) {
+    LUMICE_MillerConversionState state = LUMICE_MILLER_VALID;
+    float angle = -1.0f;
+    int bad = 99;
+    EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 1, count, &state, &angle, &bad), LUMICE_OK)
+        << "provided_count=" << count;
+    EXPECT_EQ(state, LUMICE_MILLER_INCOMPLETE) << "provided_count=" << count;
+    EXPECT_FLOAT_EQ(angle, 0.0f) << "provided_count=" << count;
+    EXPECT_EQ(bad, -1) << "provided_count=" << count;
+  }
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, InvalidTooMany) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_VALID;
+  float angle = -1.0f;
+  int bad = 99;
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 1, 4, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_INVALID);
+  EXPECT_EQ(bad, -1);
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, InvalidKNonZero) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_VALID;
+  float angle = -1.0f;
+  int bad = 99;
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 1, 2, 3, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_INVALID);
+  EXPECT_EQ(bad, 1);  // k is nameable, and the GUI can point at that box
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, InvalidNegativeIndex) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_VALID;
+  float angle = -1.0f;
+  int bad = 99;
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, -1, 3, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_INVALID);
+  EXPECT_EQ(bad, 2);
+
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(-1, 0, 1, 3, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_INVALID);
+  EXPECT_EQ(bad, 0);
+}
+
+TEST(ConvertMillerIndexToWedgeAngleApi, InvalidUnbuildableRatioBlamesNoSlot) {
+  LUMICE_MillerConversionState state = LUMICE_MILLER_VALID;
+  float angle = -1.0f;
+  int bad = 99;
+  // {1,0,0} is the prism face m: a vertical plane, not a wedge. Both integers are legal on their
+  // own, so no single box is the one to highlight.
+  EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(1, 0, 0, 3, &state, &angle, &bad), LUMICE_OK);
+  EXPECT_EQ(state, LUMICE_MILLER_INVALID);
+  EXPECT_EQ(bad, -1);
+}
+
+// The reason this API returns a struct rather than a float: walk the calling shape a Miller input
+// row actually has — four displayed indices where the user types h, then k, then l and i = -(h+k)
+// is shown rather than entered — and confirm every frame's label comes back from this one call,
+// with no rule kept on the GUI side. A GUI that has to decide for itself when a row is "finished",
+// or which box to highlight, is a GUI holding a second copy of rules that live here.
+TEST(ConvertMillerIndexToWedgeAngleApi, KeystrokeSequenceNeedsNoCallerSideRule) {
+  struct Step {
+    int h, k, l, count;
+    LUMICE_MillerConversionState state;
+    int bad;
+  };
+  // Typing "1", "0", "2" into three boxes, then correcting the middle one to "1".
+  const Step kSteps[] = {
+    { 0, 0, 0, 0, LUMICE_MILLER_INCOMPLETE, -1 },  // nothing typed yet
+    { 1, 0, 0, 1, LUMICE_MILLER_INCOMPLETE, -1 },  // "1"
+    { 1, 0, 0, 2, LUMICE_MILLER_INCOMPLETE, -1 },  // "1", "0"
+    { 1, 0, 2, 3, LUMICE_MILLER_VALID, -1 },       // "1", "0", "2"  -> a real angle to show
+    { 1, 1, 2, 3, LUMICE_MILLER_INVALID, 1 },      // k edited to 1  -> highlight the k box
+  };
+  for (const auto& st : kSteps) {
+    LUMICE_MillerConversionState state = LUMICE_MILLER_VALID;
+    float angle = -1.0f;
+    int bad = 99;
+    EXPECT_EQ(LUMICE_ConvertMillerIndexToWedgeAngle(st.h, st.k, st.l, st.count, &state, &angle, &bad), LUMICE_OK)
+        << "step h=" << st.h << " k=" << st.k << " l=" << st.l << " count=" << st.count;
+    EXPECT_EQ(state, st.state) << "step h=" << st.h << " k=" << st.k << " l=" << st.l << " count=" << st.count;
+    EXPECT_EQ(bad, st.bad) << "step h=" << st.h << " k=" << st.k << " l=" << st.l << " count=" << st.count;
+  }
+}
+
+// ============================================================
 // GuiValidateFaceNumberText (via raypath_segments.hpp)
 // — validates the substring "not legal on this crystal type"
 //   that ParseFaceNumberOrZero relies on for kind-specific detection.
