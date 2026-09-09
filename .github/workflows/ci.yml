@@ -141,9 +141,11 @@ jobs:
       # else. The version is not a free parameter to bump: 0.17.0 is the version this repo's
       # MSVC + Ninja + CPM combination was measured against, and moving it means re-measuring.
       #
-      # LUMICE_SCCACHE_ARGS follows the LUMICE_PYTHON_ARGS pattern below: it is only ever
-      # written on this leg, and every other matrix entry evaluates the unset variable to an
-      # empty string, so the shared Configure step needs no branch of its own.
+      # LUMICE_COMPILER_LAUNCHER_ARGS follows the LUMICE_PYTHON_ARGS pattern below: matrix
+      # entries that write it get a launcher, every other entry evaluates the unset variable
+      # to an empty string, and the shared Configure step needs no branch of its own. The
+      # name is deliberately not tool-specific — the ubuntu-x64 entry writes the same
+      # variable with ccache, and two spellings for one thing is how they drift apart.
       - name: Install sccache (Windows MSVC)
         if: matrix.msvc
         shell: pwsh
@@ -162,9 +164,52 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP $asset
           & (Join-Path $dir 'sccache.exe') --version
           echo $dir >> $env:GITHUB_PATH
-          echo "LUMICE_SCCACHE_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $env:GITHUB_ENV
+          echo "LUMICE_COMPILER_LAUNCHER_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $env:GITHUB_ENV
           echo "SCCACHE_DIR=$env:GITHUB_WORKSPACE\sccache_cache" >> $env:GITHUB_ENV
-          echo "SCCACHE_CACHE_SIZE=2G" >> $env:GITHUB_ENV
+          echo "SCCACHE_CACHE_SIZE=800M" >> $env:GITHUB_ENV
+
+      # The same treatment for ubuntu-x64, which is this workflow's longest job once the
+      # shared-gui leg has a cache of its own. Deliberately the same shape as the sccache
+      # step above rather than a second invention: same launcher-via-env-var injection, and
+      # the same "one entry per commit with a prefix fallback" key. Only the ubuntu-x64
+      # matrix entry, because it is the only Linux entry in this job that is compile-bound.
+      #
+      # CCACHE_MAXSIZE is 800M, and it is 800M because this leg was measured rather than
+      # assumed to resemble its neighbour. It first shipped at the 200M that fits
+      # shared-gui-test-build, whose directory settles at 37 MB; on this leg 200M was
+      # immediately over-full — `ccache --show-stats` reported 110.3% of the cap and a
+      # 26.34% hit rate, i.e. the cap was evicting objects the next run needed. The two
+      # configures compile a similar number of units and land roughly six times apart in
+      # bytes, so neither leg's number transfers to the other. Measure per leg.
+      - name: Install ccache (Ubuntu x86_64)
+        if: matrix.cache_key == 'ubuntu-x64'
+        run: |
+          sudo apt-get install -y ccache
+          ccache --version
+          echo "LUMICE_COMPILER_LAUNCHER_ARGS=-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
+
+      # Discriminator first, as everywhere else in this file — but be precise about what that
+      # buys HERE, because it is not the collision the cpm keys were renamed to fix. The
+      # shared-gui leg is already keyed `ccache-sharedgui-ubuntu-x64-`, which
+      # `ccache-ubuntu-x64-` does not prefix: the two diverge at the first character after
+      # `ccache-`. So spelling this leg `ccache-ubuntu-x64-` would be safe against today's
+      # keys, and unsafe against tomorrow's — it is the one spelling that every future
+      # `ccache-ubuntu-x64-<anything>-` key would silently fall back into, which is exactly
+      # the shape that cost a measured 99.66% -> 2.35% hit rate when a branch tried it on the
+      # cpm keys. Discriminator-first is what makes that shape unreachable by construction
+      # instead of by nobody happening to add such a key. "static" is this leg's discriminator
+      # word, chosen to contrast with `shared-gui-test-build`'s `BUILD_SHARED_LIBS=ON`
+      # configure — this leg builds the static flavor, same sense as `-sj` meaning "shared
+      # flavor" in the build script docs.
+      - name: Cache ccache directory (Ubuntu x86_64)
+        if: matrix.cache_key == 'ubuntu-x64'
+        uses: actions/cache@v6
+        with:
+          path: ccache_cache
+          key: ccache-static-ubuntu-x64-${{ github.sha }}
+          restore-keys: ccache-static-ubuntu-x64-
 
       # GLAD2 runs the Python code generator at CMake configure time (needs Jinja2).
       - name: Install GLAD2 Python dependencies (MSVC)
@@ -248,7 +293,7 @@ jobs:
           -DBUILD_GUI=${{ matrix.build_gui }}
           -DLUMICE_NATIVE_ARCH=OFF
           ${{ env.LUMICE_PYTHON_ARGS }}
-          ${{ env.LUMICE_SCCACHE_ARGS }}
+          ${{ env.LUMICE_COMPILER_LAUNCHER_ARGS }}
 
       - name: Build
         run: cmake --build build --parallel
@@ -258,6 +303,10 @@ jobs:
       # slow Build was a cold cache or a real regression. Stopping the server afterwards
       # flushes its state to disk before actions/cache's post-step packs the directory; no
       # compilation happens after this point in the job.
+      - name: ccache statistics (Ubuntu x86_64)
+        if: always() && matrix.cache_key == 'ubuntu-x64'
+        run: ccache --show-stats --verbose || true
+
       - name: sccache statistics (Windows MSVC)
         if: always() && matrix.msvc
         shell: bash
@@ -609,12 +658,21 @@ jobs:
       # CUDA-enabled and CUDA-disabled configures cannot pollute either side.
       # Current CMakeLists.txt does not add CPM packages under
       # LUMICE_CUDA_ENABLED=ON, so this only costs one extra cache slot.
+      #
+      # The discriminator sits BEFORE the platform, not after it. `restore-keys`
+      # is a prefix match, so the older `cpm-windows-msvc-x64-cuda-` spelling was
+      # a *sub*namespace of the build job's `cpm-windows-msvc-x64-`: on any
+      # exact-key miss that job could fall back onto this 2.7 MB CUDA entry
+      # instead of its own ~175 MB one, silently re-downloading every dependency
+      # while the log still reads "Cache restored from key". Nothing about that
+      # failure is visible as a red — see the sibling comments on the two
+      # ubuntu-x64 sub-jobs below, which had the same shape.
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
           path: cpm_cache
-          key: cpm-windows-msvc-x64-cuda-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-windows-msvc-x64-cuda-
+          key: cpm-cuda-windows-msvc-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-cuda-windows-msvc-x64-
 
       # BUILD_GUI=OFF + BUILD_TEST=ON mirrors the Linux cuda-compile job: no
       # GLAD2/Python generator is invoked (that step is gated on
@@ -674,12 +732,24 @@ jobs:
       # Independent cache key: BUILD_BENCH=ON pulls in the google/benchmark CPM
       # package, so this configure's dependency set differs from the plain
       # ubuntu-x64 build job's. Sharing a key would let one pollute the other.
+      #
+      # "Independent" has to be spelled with the discriminator in FRONT of the
+      # platform. `restore-keys` matches by prefix, so `cpm-ubuntu-x64-bench-`
+      # was not a sibling of the build job's `cpm-ubuntu-x64-` but a subset of
+      # it, and the pollution the comment above rules out was reachable in the
+      # one direction that matters: this job's configure is the narrow one
+      # (BUILD_TEST=OFF, BUILD_GUI=OFF), so its entry is ~2.2 MB against the
+      # build job's ~171 MB. The direction that breaks is therefore the build
+      # job's, not this one's: its `cpm-ubuntu-x64-` fallback would land on this
+      # job's narrow entry, restore an almost-empty cpm_cache and re-download
+      # everything, reporting a hit the whole time. (This job's own restore-keys
+      # were never the problem — they have always been the narrower prefix.)
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
           path: cpm_cache
-          key: cpm-ubuntu-x64-bench-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-ubuntu-x64-bench-
+          key: cpm-bench-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-bench-ubuntu-x64-
 
       # BUILD_TEST=OFF + BUILD_GUI=OFF keep this job narrow: the build job above
       # already covers those targets, and skipping them avoids the OpenGL/X11
@@ -738,14 +808,65 @@ jobs:
 
       # Independent cache key: BUILD_SHARED_LIBS=ON is a distinct configure, so its
       # dependency set may differ from the plain ubuntu-x64 build job's. Sharing a key
-      # would let one pollute the other.
+      # would let one pollute the other. The discriminator leads the platform for the
+      # same reason as the bench job above: under the older
+      # `cpm-ubuntu-x64-shared-gui-test-` spelling this namespace was a prefix-subset
+      # of `cpm-ubuntu-x64-`, so "independent" held in name only.
       - name: Cache CPM dependencies
         uses: actions/cache@v6
         with:
           path: cpm_cache
-          key: cpm-ubuntu-x64-shared-gui-test-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: cpm-ubuntu-x64-shared-gui-test-
+          key: cpm-sharedgui-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-sharedgui-ubuntu-x64-
 
+      # ccache on this leg, and on the plain `Ubuntu x86_64` leg in the build job below —
+      # both are compile-bound Linux legs, so both get one, each with its own independently
+      # measured CCACHE_MAXSIZE (see the comment on that leg's Install ccache step for why
+      # its number is 800M rather than this leg's 200M: the two configures land roughly six
+      # times apart in working-set bytes, so neither leg's number transfers to the other).
+      #
+      # CCACHE_MAXSIZE is 200M, and that number is measured rather than copied. A full cold
+      # compile of this configure — 291 objects, nothing restored — leaves a 37 MB directory,
+      # and 200M leaves room for several generations of objects to accumulate through the
+      # restore-keys fallback.
+      #
+      # Do NOT read this leg's 200M against the Windows leg's SCCACHE_CACHE_SIZE (800M today,
+      # 2G before this task) and take the ratio for a fact about either leg: those are caps,
+      # and a cache cap is not a footprint — the discipline stated in §7.1 of
+      # doc/testing-architecture.md, and the one an earlier draft of this very comment broke
+      # by calling 800M "about four times the working set here" (800/37 is ~22, and the 37 MB
+      # is this leg's directory, not that leg's). What the two legs actually differ by is
+      # measured working set, roughly six times apart, which is why each cap is sized from its
+      # own leg's measurement. The reason the Windows cap was worth touching at all is a
+      # measured footprint, not a ratio between caps: that directory used to reach its own
+      # 2 GiB ceiling, which made the namespace ~1.5 GB per entry and 80% of the repository's
+      # cache quota at the time, while this one costs a rounding error.
+      #
+      # If `ccache --show-stats` ever reports Cache size at Max cache size, the cap is
+      # evicting live objects and has to go up. That shows up as a quietly lower hit rate and
+      # an unchanged-looking build, never as a red, so read the number rather than the wall
+      # clock.
+      - name: Install ccache
+        run: |
+          sudo apt-get install -y ccache
+          ccache --version
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ccache_cache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=200M" >> $GITHUB_ENV
+
+      # Same key shape as the sccache entry: one per commit, with a prefix fallback to the
+      # newest earlier one. The discriminator leads the platform for the reason spelled out
+      # on the cpm keys — `ccache-ubuntu-x64-...` would become a prefix-subset the moment the
+      # plain ubuntu-x64 leg ever gets a cache of its own.
+      - name: Cache ccache directory
+        uses: actions/cache@v6
+        with:
+          path: ccache_cache
+          key: ccache-sharedgui-ubuntu-x64-${{ github.sha }}
+          restore-keys: ccache-sharedgui-ubuntu-x64-
+
+      # The launcher flags are written out here rather than injected through an environment
+      # variable: this job has exactly one Configure step, so the indirection the build job
+      # needs (one step serving four matrix entries) would buy nothing here.
       - name: Configure (shared + test + GUI)
         run: >
           cmake -S . -B build -G Ninja
@@ -754,9 +875,19 @@ jobs:
           -DBUILD_GUI=ON
           -DBUILD_SHARED_LIBS=ON
           -DLUMICE_NATIVE_ARCH=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build (compile + link only, no run)
         run: cmake --build build --parallel
+
+      # Diagnostics, never a gate. The hit rate is what separates "the cache worked" from
+      # "this runner was faster", which wall clock alone cannot do: identical work on this
+      # provider was measured spanning 1.28x across runners while its link phase held to
+      # within 6%.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats --verbose || true
 
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
