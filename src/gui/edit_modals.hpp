@@ -129,12 +129,22 @@ struct WedgePreset {
 // remember. The cost is a handful of atan() calls on the frames a dropdown is open.
 std::vector<WedgePreset> GetWedgePresets();
 
-// The label a preset row shows: "{h,0,-h,l} X.XXX°", with the angle in the same precision the wedge
-// slider's input box uses, so the dropdown and the box agree once a preset is picked.
+// A Miller triple in the four-index notation this UI writes everywhere: "{h,k,i,l}", with the
+// redundant i derived as -(h+k) rather than taken from the caller, for the same reason the custom
+// input row displays it rather than accepting it.
 //
-// Public because the Settings panel's preset library renders saved entries too, and the format
-// string must have exactly one home — a second copy in defaults_panel.cpp would be a second thing
-// to remember on the day the notation changes.
+// The single owner of that notation. It is spelled in three places — the dropdown's preset rows,
+// the Settings panel's saved rows, and the same panel's rows for a triple the owner refuses (which
+// FormatWedgePresetLabel below cannot render, since those can carry a non-zero k and have no angle
+// to print). One function so the day the notation changes is one edit.
+std::string FormatMillerIndices(int h, int k, int l);
+
+// The label a preset row shows: the notation above, then the angle in the same precision the wedge
+// slider's input box uses, so the dropdown and the box agree once a preset is picked. k is 0 by
+// construction — a preset only exists for a triple the owner accepted, and it accepts none with a
+// non-zero k.
+//
+// Public because the Settings panel's preset library renders saved entries too.
 std::string FormatWedgePresetLabel(int h, int l, float angle_deg);
 
 // Is this triple one of the four built-in presets? False for every k != 0 (no built-in has one).

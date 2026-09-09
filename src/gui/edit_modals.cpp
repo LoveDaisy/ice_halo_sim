@@ -439,13 +439,20 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
 }  // namespace
 
+std::string FormatMillerIndices(int h, int k, int l) {
+  char buf[48];
+  std::snprintf(buf, sizeof(buf), "{%d,%d,%d,%d}", h, k, -(h + k), l);
+  return buf;
+}
+
 std::string FormatWedgePresetLabel(int h, int l, float angle_deg) {
   char buf[64];
   // Precision must match the fmt SliderWithPresetEdit is called with (currently "%.3f"), so the
   // number in the dropdown and the number in the input box agree once a preset is picked. The
   // degree sign is written as its UTF-8 bytes; it is inside the default font's glyph range, unlike
   // an em dash (see EvaluateCustomWedgeInput's messages).
-  std::snprintf(buf, sizeof(buf), "{%d,0,%d,%d} %.3f\xc2\xb0", h, -h, l, static_cast<double>(angle_deg));
+  std::snprintf(buf, sizeof(buf), "%s %.3f\xc2\xb0", FormatMillerIndices(h, 0, l).c_str(),
+                static_cast<double>(angle_deg));
   return buf;
 }
 

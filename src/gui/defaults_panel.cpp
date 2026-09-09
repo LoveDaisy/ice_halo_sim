@@ -974,7 +974,9 @@ bool RenderWedgePresetRow(size_t index, const WedgeMillerTriple& triple) {
     }
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("{%d,%d,%d,%d}", triple.h, triple.k, -(triple.h + triple.k), triple.l);
+    // The indices without an angle, because there is none: this is a triple the owner refused. Same
+    // notation owner as the row above all the same, so a change to it reaches both.
+    ImGui::TextUnformatted(FormatMillerIndices(triple.h, triple.k, triple.l).c_str());
   }
   return deleted;
 }
@@ -991,9 +993,7 @@ void RenderWedgePresetLibrary() {
 
   std::vector<WedgeMillerTriple> saved = CopyWedgePresets();
   for (size_t i = 0; i < saved.size(); ++i) {
-    ImGui::PushID(static_cast<int>(i));
     const bool deleted = RenderWedgePresetRow(i, saved[i]);
-    ImGui::PopID();
     if (deleted) {
       saved.erase(saved.begin() + static_cast<std::ptrdiff_t>(i));
       WriteWedgePresetsToDoc(g_copy_doc, saved);
