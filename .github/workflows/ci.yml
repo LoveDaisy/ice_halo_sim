@@ -31,6 +31,20 @@ concurrency:
 
 env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
+  # gtest suites contributed by the five CUDA-only test TUs, defined once here because both
+  # `cuda-compile` and `windows-cuda-compile` select on it. A sixth CUDA TU means editing this
+  # one line, not two job bodies that can drift.
+  #
+  # `Cuda*` and nothing else, on purpose. test_cuda_rich_exit.cpp also registers a
+  # `RngObservabilityFacilitySmoke` suite, and widening the filter to pick it up would be
+  # actively harmful: test_metal_root_gen.cpp registers a same-named suite behind
+  # `#if defined(__APPLE__)`, so on a hypothetical macOS leg that name alone would satisfy
+  # the "at least one case was selected" assertion in scripts/ci_verify_cuda_test_tus.sh with
+  # zero CUDA TUs compiled — the exact false green the assertion exists to prevent. Nothing is
+  # lost by excluding it: each of the five TUs still contributes at least one `Cuda*` suite
+  # (CudaKShapePool / CudaGeomPoolRebuild / CudaKShapeFilterParity / CudaComponentMaskParity /
+  # CudaRichExit), so every file is represented.
+  CUDA_TU_GTEST_FILTER: "Cuda*"
 
 jobs:
   # Build + unit tests run once per PR and once per push to main.
@@ -366,6 +380,10 @@ jobs:
   # (e.g. -Werror=switch breaking nvcc, scrum-295 commit 9b9cdacd) without
   # waiting for the rsync→docker→GPU-host loop.
   #
+  # It also configures with BUILD_TEST=ON so the CUDA-only test TUs are compiled
+  # (rationale on the Configure step below). "Compile-only" still describes this
+  # job exactly: the CUDA cases it builds all self-skip for want of a device.
+  #
   # PTX floor = compute_61 (Pascal/2016+); driver JIT-compiles to native sm on
   # any GPU >= sm_61. Matches CMakeLists.txt CMAKE_CUDA_ARCHITECTURES default.
   cuda-compile:
@@ -400,24 +418,52 @@ jobs:
           key: cpm-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-ubuntu-x64-
 
-      # BUILD_GUI=OFF avoids OpenGL/X11 deps; BUILD_TEST=OFF skips test
-      # targets (no .cu files live under test/, so coverage is complete).
-      # LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
+      # BUILD_GUI=OFF avoids OpenGL/X11 deps. LUMICE_NATIVE_ARCH=OFF matches the
+      # rest of CI.
+      #
+      # BUILD_TEST=ON, not OFF, and the reason is not "more coverage is nicer".
+      # No .cu file lives under test/, so this job's older comment concluded its
+      # coverage was already complete — but five test TUs there are wrapped in
+      # `#if defined(LUMICE_CUDA_ENABLED)`
+      # (test/{unit-correctness,parity-cross-backend}/backend/test_cuda_*.cpp),
+      # and that macro comes from lumice_obj, which the four build-matrix jobs
+      # never enable. CUDA=ON and BUILD_TEST=ON had therefore never been set
+      # together on ANY platform: both halves existed, the intersection was
+      # empty, and those five files compiled to nothing everywhere in CI. The
+      # cost was paid twice — three MSVC incompatibilities that sat unreported
+      # for three weeks, and two ctest wrappers that were never registered
+      # because the build jobs have no pytest.
+      #
+      # BUILD_GUI stays OFF and does not weaken this: the five TUs belong to
+      # unit_correctness_test and parity_test, which link lumice_obj only, while
+      # gui_unit_test / composition_correctness_test / gui_test sit inside
+      # `if(BUILD_GUI)` in test/CMakeLists.txt and are not defined here at all.
       - name: Configure (CUDA compile-only)
         env:
           CUDA_PATH: /usr/local/cuda
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TEST=OFF
+          -DBUILD_TEST=ON
           -DBUILD_GUI=OFF
           -DLUMICE_CUDA_ENABLED=ON
           -DLUMICE_NATIVE_ARCH=OFF
 
-      # Builds the Lumice CLI; this drives nvcc through cuda_trace_backend.cu
-      # and links CUDA::cudart, exercising both compile and link paths.
-      - name: Build (compiles cuda_trace_backend.cu)
+      # Builds the Lumice CLI plus the test binaries; this drives nvcc through
+      # cuda_trace_backend.cu and links CUDA::cudart, exercising both compile and
+      # link paths, and host-compiles the five CUDA test TUs with the macro on.
+      - name: Build (compiles cuda_trace_backend.cu + the CUDA test TUs)
         run: cmake --build build --parallel
+
+      # Compile coverage only — every case is expected to report SKIPPED, since no GPU is
+      # attached. This step exists to prove the CUDA TUs are non-empty and that their skip
+      # guard works; it does NOT give this job runtime or parity coverage, which still runs
+      # on the reference machines. GTEST_FILTER keeps it to ~26 cases instead of the ~1100
+      # the two binaries hold, so it costs seconds and does not duplicate the build-matrix
+      # jobs' full ctest.
+      - name: Verify CUDA test TUs compile in and self-skip (SKIPPED expected, not a GPU check)
+        shell: bash
+        run: ./scripts/ci_verify_cuda_test_tus.sh build "$CUDA_TU_GTEST_FILTER"
 
   # Windows CUDA compile-only: nvcc + MSVC on windows-2022.
   #
@@ -538,25 +584,39 @@ jobs:
           key: cpm-windows-msvc-x64-cuda-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-windows-msvc-x64-cuda-
 
-      # BUILD_GUI=OFF + BUILD_TEST=OFF mirrors the Linux cuda-compile job:
-      # no GLAD2/Python generator is invoked (that step is gated on
-      # matrix.build_gui == 'ON' in the build job above), and no test
-      # translation unit owns a .cu file so coverage is complete.
-      # LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
+      # BUILD_GUI=OFF + BUILD_TEST=ON mirrors the Linux cuda-compile job: no
+      # GLAD2/Python generator is invoked (that step is gated on
+      # matrix.build_gui == 'ON' in the build job above), and the five
+      # `#if defined(LUMICE_CUDA_ENABLED)` test TUs get compiled instead of
+      # collapsing to nothing. See the Linux job's Configure comment for why
+      # BUILD_TEST=OFF was the wrong reading of "no .cu file lives under test/".
+      #
+      # This leg is the one that matters most for that gap: the historical
+      # escapes it would have caught were MSVC-only source incompatibilities
+      # (POSIX setenv/unsetenv, M_PI) in test code, which no other job compiles
+      # with CUDA on. LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
       - name: Configure (CUDA compile-only)
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TEST=OFF
+          -DBUILD_TEST=ON
           -DBUILD_GUI=OFF
           -DLUMICE_CUDA_ENABLED=ON
           -DLUMICE_NATIVE_ARCH=OFF
 
-      # Build the Lumice CLI; this drives nvcc through cuda_trace_backend.cu
-      # and links CUDA::cudart, exercising both compile and link paths under
-      # MSVC. AC2 = this step's log must show nvcc invocation for the .cu TU.
-      - name: Build (compiles cuda_trace_backend.cu via nvcc)
+      # Build the Lumice CLI plus the test binaries; this drives nvcc through
+      # cuda_trace_backend.cu and links CUDA::cudart, exercising both compile and
+      # link paths under MSVC, and compiles the CUDA test TUs through cl.exe.
+      # This step's log must show nvcc invocation for the .cu TU.
+      - name: Build (compiles cuda_trace_backend.cu via nvcc + the CUDA test TUs)
         run: cmake --build build --parallel
+
+      # Same gate as the Linux job, same script, same expectation: every selected case
+      # SKIPPED because windows-2022 hosted runners have no GPU. `shell: bash` is deliberate —
+      # it lets both jobs share one implementation rather than maintaining a pwsh twin.
+      - name: Verify CUDA test TUs compile in and self-skip (SKIPPED expected, not a GPU check)
+        shell: bash
+        run: ./scripts/ci_verify_cuda_test_tus.sh build "$CUDA_TU_GTEST_FILTER"
 
   # Bench compile-only: builds the `lumice_bench` target so BUILD_BENCH=ON cannot
   # rot again. It does NOT run the benchmarks — numbers off a shared, throttled
