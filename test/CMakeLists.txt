@@ -95,6 +95,10 @@ add_executable(unit_correctness_test
   # test_render_consumer_print_mode.cpp asserts the pixels the operator writes; this one asserts
   # the composite it declines to produce and the notices it emits for the fields it drops.
   "${PROJ_TEST_DIR}/unit-correctness/server/test_print_mode_colour_exclusions.cpp"
+  # And the cross-cutting one: not "the operator computes the right thing" but "the mode resolves a
+  # scene the additive operator structurally cannot", which is the claim the whole mode was
+  # commissioned against and only measurable once every piece of it exists.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_print_mode_dynamic_range_gate.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_contrast_headroom_warning.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
