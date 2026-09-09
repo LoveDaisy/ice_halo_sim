@@ -350,18 +350,43 @@ mask (e.g. "one 2-bit `any` class" ↔ "two 1-bit classes") still rebuilds — a
 `RenderConsumer` would otherwise keep a stale per-class lane layout. This check is
 orthogonal to the per-renderer one above.
 
-### §5.2 sizeof Sentinel
+### §5.2 Field-Set Guard and Size Tripwire
+
+Two checks sit at the head of `NeedsRebuild`, and they are complements rather than
+one guard stated twice:
 
 ```cpp
-static_assert(sizeof(RenderConfig) == 136,
-              "Update NeedsRebuild when RenderConfig fields change");
+// render_config.hpp, beside the struct — the field-set guard
+inline void RenderConfigFieldSetGuard(const RenderConfig& c) {
+  [[maybe_unused]] const auto& [id, lens, /* ... one name per member ... */] = c;
+}
+
+// render_config.cpp, first statement of NeedsRebuild — the size tripwire
+static_assert(sizeof(RenderConfig) == 224,
+              "RenderConfig layout changed — re-check the classification in NeedsRebuild");
 ```
 
-This sentinel (`render_config.cpp:168`, first statement of `NeedsRebuild`) forces a
-compile error when any field is added to or removed from `RenderConfig`. The
-developer must then classify the new field as layout-affecting (add to
-`NeedsRebuild` comparisons) or appearance-only (no change needed). This prevents
-silent drift where a new layout field is added but `NeedsRebuild` is not updated.
+The **field-set guard** is what makes adding or removing a field a compile error. A
+structured binding is checked against the member *declarations*, so the count is
+unaffected by how the compiler lays the members out.
+
+The **size tripwire** does not make that guarantee, and an earlier revision of this
+section said it did. A field that lands in an alignment hole leaves `sizeof`
+unchanged and the assert silent — measured on this struct twice: adding a `bool` to
+the run below `horizon_` keeps it at 224, and removing `opacity_` (a `float`) once
+kept it at 136. What the tripwire *does* catch is a change **within** a field — a
+nested struct gaining a member, a type widening — which moves the byte size without
+moving the field count, and which the guard is in turn blind to. Hence both.
+
+Which one fired says what has to be classified, and the two are not the same
+question. The **guard** firing means a field was added or removed: classify that
+field as layout-affecting (add it to the `NeedsRebuild` comparisons) or
+appearance-only (no change needed). The **tripwire** firing alone means no field was
+added or removed — some existing field grew — so there is no new name to classify;
+the question is instead whether the grown field's new content changes what the
+accumulator buffer must be. Either way the pinned number is only safe again once
+that question has been answered, so that a layout change cannot silently drift past
+`NeedsRebuild`.
 
 ### §5.3 ResetWith Path
 

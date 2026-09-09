@@ -285,9 +285,23 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 
 
 // See doc/accumulator-consumer-architecture.md §5.1 (layout vs. appearance classification),
-// §5.2 (sizeof sentinel).
+// §5.2 (field-set guard and size tripwire).
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
-  // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
+  // A SIZE tripwire, not the field-set guard, and the distinction is what the two comments below
+  // about "an unchanged number" are already circling. RenderConfigFieldSetGuard
+  // (render_config.hpp) is what turns "a field was added or removed" into a compile error; it
+  // counts member declarations, so padding cannot hide one from it. The static_assert here sees
+  // a different class — a change WITHIN a field, a nested struct gaining a member or a type
+  // widening — which leaves the field count alone and moves the byte size. Neither subsumes the
+  // other, which is why both are kept.
+  // What this one is blind to, measured rather than theorised: a field that lands in an alignment
+  // hole. Adding a bool to the run below horizon_ leaves sizeof at 224 and this assert silent;
+  // removing opacity_ (a float) once left it at 136 the same way.
+  // Which one fired says what has to be classified, and the two are not the same question. The
+  // guard firing means a field was added or removed: classify that field, layout or appearance.
+  // This assert firing ALONE means no field was added or removed — some existing field grew — so
+  // there is no new field to classify; the question is whether the grown field's new content
+  // changes what the accumulator buffer must be. Do not go looking for a new name in that case.
   // Still 192 after the three text-label switches were added: they landed in the tail padding
   // `horizon_` already carried ahead of ZenithNadirParam's 4-byte alignment. The number is a
   // tripwire for "a field was added", not a size budget, so an unchanged one is only safe to leave
@@ -311,7 +325,8 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // APPEARANCE, for the same reason the label switches are: they decide whether a line is
   // composited onto the finished image, never the buffer it accumulates into, so a config that
   // flips one reaches an existing consumer through ResetWith() with no rebuild.
-  static_assert(sizeof(RenderConfig) == 224, "Update NeedsRebuild when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 224,
+                "RenderConfig layout changed — re-check the classification in NeedsRebuild");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.
 
