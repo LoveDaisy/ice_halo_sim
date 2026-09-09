@@ -522,18 +522,34 @@ struct RenderConfigResimFields {
 // WHEN ONE FIRES the compiler says "decomposes into N elements, but M names were provided". A
 // field was added to or removed from that struct, and the dispositions spelled out under the
 // platform gate below are what has to be decided.
-inline void RenderConfigFieldSetGuard(const RenderConfig& c) {
+//
+// Anonymous-namespace, not inline: unlike the shared RenderConfig (core) guard in
+// render_config.hpp, these two have no second consumer translation unit, so an internal-linkage
+// copy per including TU is the right shape — no reason to give a never-called probe external
+// linkage.
+namespace {
+[[maybe_unused]] void RenderConfigFieldSetGuard(const RenderConfig& c) {
   [[maybe_unused]] const auto& [lens_type, fov, elevation, azimuth, roll, sim_resolution_index, visible, front,
                                 background, ray_color, exposure_offset, ev_mode] = c;
 }
-inline void RenderConfigResimFieldsGuard(const RenderConfigResimFields& r) {
+[[maybe_unused]] void RenderConfigResimFieldsGuard(const RenderConfigResimFields& r) {
   [[maybe_unused]] const auto& [sim_resolution_index] = r;
 }
+}  // namespace
 
 // Apple Silicon + libc++ only. Layout pins, mirroring the EntryCard pattern (see below).
 // Linux/Windows CI still compiles both structs; this only pins the Apple main-dev platform.
 #if defined(__APPLE__) && defined(__aarch64__)
-// RenderConfig: if this fires, a field was added/removed — the author must decide between three
+// RenderConfig: this SIZE tripwire is not what turns "a field was added/removed" into a compile
+// error — that guarantee belongs to RenderConfigFieldSetGuard above, which counts member
+// declarations and fires unconditionally on every platform, not just this Apple-gated one.
+// Pinning the SIZE here does not by itself catch that case: sizeof is blind to a field that lands
+// in an alignment hole, the same failure mode measured on the two structs above (add a bool
+// somewhere padding-friendly and this assert stays silent). What this assert alone still catches,
+// that the guard does not, is a change WITHIN a field — a nested struct gaining a member, a type
+// widening — which moves the byte size without moving the member count.
+//
+// Once either one fires, a field was added/removed — the author must decide between three
 // dispositions: it belongs in RenderConfigResimFields above (participates in resim eligibility);
 // it is excluded outright, captured by nothing (like exposure_offset and the T-view fields); or it
 // is excluded from resim eligibility but still Revert-tracked through its own ConfigSnapshot slot
