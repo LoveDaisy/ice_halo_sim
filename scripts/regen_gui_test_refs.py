@@ -7,6 +7,11 @@ Phase A: Run gui_test N times with --keep-export-png, pixel-average the
 Phase B: Run gui_test N_calib times, parse PSNR output from stderr, and
   compute per-scene threshold recommendations
   (mean - max(SIGMA_MARGIN*sigma, MIN_MARGIN_DB), floor to 0.5 dB).
+  For a scene the binary compares under the pixel ruler (its stderr carries an
+  "n_diff=... maxcc=..." line), Phase B also records that ruler's tau and the largest
+  maxcc it saw on THIS machine (maxcc_tau / maxcc_local_max) — an audit that the
+  reference machine still matches its own references byte-for-byte, not a threshold
+  recommendation; the cross-machine K lives in the test source (see _MAXCC_RE).
 
 Both phases are driven by the GROUPS registry below: a reference group names the
 gui_test category it tags its output with, its scenes/modes, and the tmp/reference
@@ -143,15 +148,16 @@ GROUPS: dict[str, ReferenceGroup] = {
 
 # NOT registered here, and won't be reshot by any command in this file: the "visual" category in
 # test/gui/visual/test_preview_pixels.cpp (crystal_preview_prism/pyramid/wireframe/shaded,
-# left_panel). Its threshold is the compile-time constant kDeterministicThresholdDb=40.0, not a
-# Phase B calibrated statistic, and its reference filenames (crystal_prism_default.jpg,
-# left_panel_default.jpg, ...) do not follow the <ref_prefix><scene> convention every
+# left_panel). It compares under the pixel ruler at tau=0, K=0 (a compile-time constant, not a
+# Phase B statistic), and its reference filenames (crystal_prism_default.png,
+# left_panel_default.png, ...) do not follow the <ref_prefix><scene> convention every
 # ReferenceGroup above assumes — registering it would mean renaming those files and editing the
 # hardcoded ref-path strings in test_preview_pixels.cpp for a Phase A/B calibration this category
 # has no use for (deterministic scenes have nothing to average or calibrate). After a theme/layout
 # change, reshoot these by hand: one full-suite gui_test run (SUITE_ARGS below) with
 # --keep-export-png --export-dir, then copy the changed lumice_<scene>.png exports over the
-# matching test/gui/references/*.jpg (re-encode at the same JPEG quality the existing file uses).
+# matching test/gui/references/*.png as-is (PNG, never JPEG: the ruler demands byte-identity, and
+# JPEG quantisation alone reads as thousands of differing pixels).
 STAGING_DIR = "/tmp/gui_refs_build"
 
 # PSNR output pattern from lumice::test::CheckAgainstReference (test_screenshot.cpp).
@@ -162,13 +168,22 @@ STAGING_DIR = "/tmp/gui_refs_build"
 # "no PSNR output parsed" instead.
 _PSNR_RE = re.compile(r"\[(\w+)\]\s+(\S+):\s+PSNR=(inf|[0-9.]+)\s+dB")
 
+# Pixel-ruler output pattern from the same function, printed right after the PSNR line for a
+# scene compared under lumice::test::MaxCcRuler (test/support/pixel_diff_metrics.hpp). Phase B
+# records tau and the largest maxcc seen per scene as an audit trail only. It does NOT derive a
+# threshold from them: every deterministic group's K is a cross-machine number, measured from the
+# CI llvmpipe leg's captures against Metal-shot references (doc/testing-architecture.md §4.6), and
+# this driver only ever runs on the reference machine, where the honest reading is maxcc = 0.
+# A non-zero maxcc_local_max here therefore means the scene is no longer deterministic on the
+# machine that shot its reference, which is the thing to investigate before re-shooting.
+_MAXCC_RE = re.compile(r"\[(\w+)\]\s+(\S+):\s+n_diff=(\d+)\s+maxcc=(\d+)\s+dmax=(\d+)\s+\(tau=(\d+),\s+K=(\d+)\)")
+
 # Threshold recorded when every calibration run was pixel-identical to the reference, so
-# mean − kσ has nothing finite to work with. Bit-exactness cannot be demanded — references
-# are committed and compared on other machines — so this falls back to the value the repo's
-# other deterministic GL comparisons already use (the visual/left_panel and visual/<crystal>
-# cases in test/gui/visual/test_preview_pixels.cpp, whose kDeterministicThresholdDb is this
-# same 40.0): high enough that a moved widget or changed color fails, loose
-# enough to absorb encoder/driver noise.
+# mean − kσ has nothing finite to work with. Kept as the historical PSNR figure for such a
+# scene's `threshold` field, but it is no longer what any deterministic group is held to: those
+# groups compare under the pixel ruler (see _MAXCC_RE), because this floor measurably passed a
+# 127-px text-row drift at 45.4 dB and a 90-px scrollbar-thumb drift at 53.45 dB. A stochastic
+# scene that happens to come out identical on every calibration run would still receive it.
 DETERMINISTIC_FLOOR_DB = 40.0
 
 # Sigma margin behind each recommended threshold. 4, not 3: every threshold this repo
@@ -442,6 +457,8 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     print(f"[Phase B][{group.key}] Scenes : {sorted(wanted)}")
 
     psnr_data: dict[str, list[float]] = {}
+    # tag -> (tau, [maxcc per run]); only scenes the binary compares under the pixel ruler.
+    maxcc_data: dict[str, tuple[int, list[int]]] = {}
     for i in range(n_calib):
         print(f"[Phase B][{group.key}] Calibration run {i + 1}/{n_calib}...", flush=True)
         _, stderr = _run(binary, [], capture_stderr=True)
@@ -451,6 +468,19 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
                 continue
             tag, val = m.group(2), float(m.group(3))
             psnr_data.setdefault(tag, []).append(val)
+        for m in _MAXCC_RE.finditer(stderr):
+            if m.group(1) != group.key or m.group(2) not in wanted:
+                continue
+            tag, maxcc, tau = m.group(2), int(m.group(4)), int(m.group(6))
+            prev_tau, samples = maxcc_data.setdefault(tag, (tau, []))
+            if prev_tau != tau:
+                print(
+                    f"ERROR: [Phase B][{group.key}] tag '{tag}' printed tau={tau} after tau={prev_tau} "
+                    "— one scene, one ruler",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            samples.append(maxcc)
 
     if not psnr_data:
         print(
@@ -515,6 +545,17 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
             "threshold": threshold,
         }
 
+    # Pixel-ruler audit fields. Attached to the scene entry beside the PSNR statistics rather
+    # than replacing them: `threshold` keeps its meaning for the stochastic groups, and for a
+    # deterministic group it is now the historical PSNR figure, not the ruler.
+    for tag, (tau, samples) in sorted(maxcc_data.items()):
+        entry = scenes_out.setdefault(tag, {})
+        entry["maxcc_tau"] = tau
+        entry["maxcc_local_max"] = max(samples)
+        entry["maxcc_samples"] = len(samples)
+        note = "" if max(samples) == 0 else "  ← NOT byte-identical on this machine; investigate before re-shooting"
+        print(f"  {tag}: pixel ruler tau={tau}, local maxcc max={max(samples)} over {len(samples)} runs{note}")
+
     # Merge into existing thresholds.json at two levels: scenes this run did not touch keep
     # their audit history (e.g. --scene overlay_ea must not wipe the other lens_proj scenes),
     # and groups this run did not touch are left untouched entirely — including their
@@ -544,7 +585,11 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         json.dump(merged, fh, indent=2)
         fh.write("\n")
     print(f"\n[Phase B][{group.key}] Thresholds written to {json_path} (scenes={len(existing_scenes)})")
-    print(f"[Phase B][{group.key}] Copy 'threshold' values into {group.source}")
+    if maxcc_data and all(tag in maxcc_data for tag in scenes_out):
+        print(f"[Phase B][{group.key}] Every scene compares under the pixel ruler; its K lives in "
+              f"{group.source} and is not derived here — nothing to copy back.")
+    else:
+        print(f"[Phase B][{group.key}] Copy 'threshold' values into {group.source}")
 
 
 def phase_b(args: argparse.Namespace) -> None:
