@@ -552,18 +552,36 @@ script prints the path for whichever group it ran.
      `cd "$(git rev-parse --show-toplevel)"`, which inside a worktree resolves to the worktree
      root — so a commit there runs the worktree's own copy of the four checkers, and a branch that
      edits a hook script does not see its own edit take effect until it is merged.
-  Criterion 2 is machine-enforced for Claude Code sessions by
-  `scripts/hooks/claude-pretooluse-worktree-guard.py`, a `PreToolUse` hook on `Edit|Write` that
-  refuses to touch `src/` or `test/` when the target's worktree is the *main* one (git's own
-  structural test: `rev-parse --git-common-dir` resolves to `<toplevel>/.git` only there). The
-  script is tracked so its logic is reviewable; enabling it is per machine, via a
-  `.claude/settings.local.json` that is git-ignored and does nothing but name the script. It has
-  no override switch — no env var, no sentinel file — by design: if the owner wants a one-off edit
-  in the main worktree, they say so and the friction stays visible. Its reach is exactly the
-  structured `Edit`/`Write` calls: a file written from a Bash call (redirection, `sed -i`) never
-  passes through it, so the hook is a guard on the common path, not a complete fence — the
-  criterion above is what holds everywhere, the hook is what catches the incidents that actually
-  happened.
+  Criterion 2 is machine-enforced at the point every write converges on, whatever tool produced
+  it: `git commit`. Step 0 of `scripts/hooks/pre-commit` runs
+  `scripts/hooks/worktree-guard.py pre-commit`, which refuses the commit when the staged set
+  touches `src/` or `test/` and the toplevel is the *main* worktree (git's own structural test:
+  `rev-parse --git-common-dir` resolves to `<toplevel>/.git` only there). The commit is the gate
+  for a reason that was learned the expensive way: the first version of this guard was a Claude
+  Code `PreToolUse` hook on `Edit|Write` alone, and it was correct — and it would not have
+  caught the incident that produced it, because that edit was written through Bash
+  (`python3 - <<'PY'`), which a tool-call hook never sees. The same is true of shell
+  redirection, `sed -i`, `tee`, a heredoc; widening the hook to `Bash` would mean parsing
+  command lines for writes, a heuristic that both misses and false-alarms. The commit does not
+  care how the file was written, and the failure shape being closed ("edit a lot, then squeeze
+  it into one big commit") lands on it by construction. Its honest boundary: a change that is
+  never committed is invisible to it — and also never reaches the repository, which is a
+  different blast radius (a dirty main worktree, not a polluted history) and the residue this
+  design accepts. The escape is git's own explicit `git commit --no-verify`, not a switch of
+  ours — no env var, no sentinel file — so an owner-authorized one-off stays visible in the
+  shell history. The `PreToolUse` hook is kept as a second line, not the first: same script,
+  `claude-pretooluse` mode, enabled per machine by a git-ignored `.claude/settings.local.json`
+  in the **main** checkout only (a linked worktree needs none — everything is allowed there),
+  and it fires at the first keystroke rather than at the end. Its settings command tests that
+  the script exists before running it and degrades *loudly* otherwise (one stderr line, edit
+  proceeds) — the first enablement switched it on while the script still lived on an unmerged
+  branch, and a bare `python3 <missing path>` returns exit 2, which Claude Code treats as a
+  blocking error, so every `Edit`/`Write` in the main worktree was refused, not just `src/` and
+  `test/`. The canonical settings snippet, and the reasoning the JSON file cannot carry, are in
+  the script's module docstring; the main-worktree predicate lives in that script and nowhere
+  else. Criterion 1 (the task directory) is not machine-enforced; it is the criterion the commit
+  gate makes cheap to honour, because by the time a worktree exists the task directory is the
+  natural place to have named it.
 
 ## Documentation Index (`doc/`)
 

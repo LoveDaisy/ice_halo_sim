@@ -29,4 +29,5 @@ else
   echo "Copied pre-commit hook (symlink unavailable on this platform)."
 fi
 
-echo "Done. The pre-commit hook runs scripts/check_policies.py + clang-format on staged sources."
+echo "Done. The pre-commit hook runs the main-worktree guard (scripts/hooks/worktree-guard.py),"
+echo "scripts/check_policies.py + the diff-scoped checkers, and clang-format on staged sources."
