@@ -654,7 +654,9 @@ while the thumb drift reads 43, so |Δ| does not separate them.
 Run-to-run jitter on the CI leg, the one thing a single run cannot show, was measured from the two
 runs above: capture against capture, every scene differs in 27–122 pixels at τ = 0 with a largest
 blob of 1–5 px, and in **0** pixels at τ = 16; capture against reference, the τ = 16 blob sizes are
-identical to the pixel in both runs. The two-sided figures in the table are therefore not one
+identical to the pixel in both runs, and the first run under the enforced ruler (`34490184169`)
+printed them a third time: `maxcc=35 / 33 / 35 / 35` for `modal_layout`, `0` for every
+`defaults_panel_layout` scene. The two-sided figures in the table are therefore not one
 sample's luck. What they still are not is evidence about a *different* Mesa or runner image: the
 35-px segment is an anti-aliasing artefact of one rasteriser, and a Mesa upgrade that draws the
 preview's edges differently could move it. That is the case the 2.0× on that side exists to
