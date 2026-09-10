@@ -19,6 +19,15 @@ namespace lumice {
 // make the paper darker, while `L * c + background` is monotonically non-decreasing in radiance.
 // That is why the two are a mode enum rather than two ends of one knob.
 //
+// ⚠️ This curve exists THREE times — here, at its call site in render.cpp, and hand-transcribed as
+// `subtractiveInk()` in preview_renderer.cpp's GLSL. That is a constrained exception, NOT this
+// repository's pattern for a pure function two tiers share: a shader cannot include a C++ header,
+// so the third copy is the price of having a preview at all. It is held together by an explicit
+// "MUST equal" note at the shader copy and by a cross-implementation comparison test
+// (test_preview_print_mode.cpp). Do not read the shape as permission to copy the next operator
+// three ways — anything that CAN be linked gets one owner and is linked, the way src/util/'s other
+// shared helpers are.
+//
 // This file is that curve's SINGLE OWNER on the C++ side. It lives in src/util/ rather than in
 // either renderer for the reason AGENTS.md names for this exemption: src/gui/ may not include
 // core/ or config/ (the C API boundary, enforced by scripts/check_policies.py), so a rule written

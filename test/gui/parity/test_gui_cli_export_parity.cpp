@@ -763,7 +763,11 @@ struct ExportedRenderInfo {
   // while being unreadable to the CLI, which is the asymmetry a string check catches and a numeric
   // one would not.
   std::string tone;
-  float paper[3]{ -1.0f, -1.0f, -1.0f };
+  // `paper_read` is the ONLY answer to "did the export state a paper". The array carries no
+  // sentinel of its own on purpose: two representations of one fact drift the moment a later
+  // reader updates one of them, and this one would drift silently, since nothing reads the array
+  // before the flag is checked.
+  float paper[3]{};
   bool paper_read = false;
   bool ok = false;
 };

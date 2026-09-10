@@ -153,6 +153,12 @@ Frame SnapshotOnce(const RenderConfig& cfg) {
 
 // The paper as the writer leaves it: the same clamp / gamma / narrowing the pixel loop applies to
 // every channel, evaluated at transmittance 1.
+//
+// This RE-IMPLEMENTS the quantisation rule at render.cpp's `LinearToSrgb(...) * 255` narrowing
+// (truncation, not rounding), rather than calling it — the rule lives inline in the pixel loop and
+// has no callable form. The two must stay in step: change the production narrowing to round and
+// this assertion goes quietly wrong instead of failing, because it would be comparing the new
+// pixels against the old rule. If that narrowing is ever lifted into a helper, call it here.
 std::array<uint8_t, 3> PaperBytes() {
   std::array<uint8_t, 3> out{};
   for (int j = 0; j < 3; j++) {

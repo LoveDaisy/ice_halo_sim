@@ -3087,8 +3087,12 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     const bool ray_color_is_a_tint =
         ray_color_stated && (r.ray_color[0] != -1.0f || r.ray_color[1] != -1.0f || r.ray_color[2] != -1.0f);
     if (IsPrintTone(r) && ray_color_is_a_tint) {
-      const std::string msg = "render.ray_color is set to (" + std::to_string(r.ray_color[0]) + ", " +
-                              std::to_string(r.ray_color[1]) + ", " + std::to_string(r.ray_color[2]) +
+      // Two decimals, not std::to_string: that gives "1.000000", and this string is read by a user
+      // in a notification, next to panel text that states colours to two places.
+      char rgb_text[64];
+      std::snprintf(rgb_text, sizeof(rgb_text), "%.2f, %.2f, %.2f", static_cast<double>(r.ray_color[0]),
+                    static_cast<double>(r.ray_color[1]), static_cast<double>(r.ray_color[2]));
+      const std::string msg = "render.ray_color is set to (" + std::string(rgb_text) +
                               "), which has no effect while render.tone is print -- print lays one neutral ink and "
                               "does not read this field. The value was kept; it takes effect again under "
                               "tone=screen.";
