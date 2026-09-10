@@ -6,13 +6,35 @@
 # hooks live in other hook files and are left untouched).
 #
 # It NEVER prompts. On a violation it prints what failed and exits 1; the commit
-# is blocked. Bypass a single commit with:  git commit --no-verify
+# is blocked. Bypass a single commit with:  git commit --no-verify  (this is
+# also the only escape for the main-worktree guard in step 0 — deliberately
+# git's own explicit flag, not a switch of ours).
 #
 # The CI `policy` / `format-check` jobs are the authoritative gate — this hook
 # just gives faster local feedback so failures don't wait for CI.
 
 REPO_ROOT=$(git rev-parse --show-toplevel) || exit 0
 cd "$REPO_ROOT" || exit 0
+
+# 0) Where is this commit being made from? src/ and test/ changes are committed
+#    from a linked worktree, never from the main one (AGENTS.md, "Collaboration
+#    Constraints"). The commit is the gate because every write converges here
+#    whatever tool produced it — a Claude Code tool hook only sees Edit/Write,
+#    not a file written through Bash. The predicate lives in the Python script
+#    and nowhere else; do not restate it in shell here. A checkout that predates
+#    the script says so out loud and skips (loud, so nobody mistakes "not
+#    installed" for "checked and clean") instead of failing every commit.
+if [ -f scripts/hooks/worktree-guard.py ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    if ! python3 scripts/hooks/worktree-guard.py pre-commit; then
+      exit 1
+    fi
+  else
+    echo "pre-commit: python3 not found; main-worktree guard skipped." >&2
+  fi
+else
+  echo "pre-commit: scripts/hooks/worktree-guard.py not in this checkout; main-worktree guard skipped." >&2
+fi
 
 # 1) Deterministic policy checks (whole tree — fast) plus the two diff-scoped
 #    checks on what this commit adds. Separate entry points on purpose: the first

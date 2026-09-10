@@ -529,6 +529,63 @@ script prints the path for whichever group it ran.
   be right for the workflow to behave, and it carries the details this summary leaves out (what the
   duplication cost, and why tag pushes no longer run this workflow). Change the triggers and that
   comment is what you edit; this paragraph is a summary that has to be re-checked against it.
+- **Where a change lives, and from where it is made** — two criteria, not advice. Both attach to
+  an *action* rather than to a judgement, because the incidents that produced them were committed
+  by an agent that knew the rule and never asked itself whether it applied:
+  1. **Before the first edit to `src/` or `test/`, a `scratchpad/` task directory for that change
+     must already exist.** No directory → create one first (`scratchpad/tasks.md` is the ledger);
+     do not write code first. The trigger is the edit itself, not "does this feel like a task" —
+     the moment the rule hangs on that judgement, one wrong judgement switches the whole rule off.
+     This is also the reason the retrieval discipline under "Knowledge Base & Working Discipline"
+     below works at all: a change with no task directory leaves no notes for the next session to
+     retrieve.
+  2. **A task is worked on a branch in its own linked git worktree; the main worktree stays clean.
+     N=1 is not an exception.** A single task gets a worktree too, because the main worktree is
+     shared by every task on the machine and "nothing else is running right now" is exactly the
+     judgement (1) refuses to rely on — when this rule was written, three tasks were live in
+     three worktrees at once. Shape: `git worktree add ../ice-halo-wt-<n> -b feat/<name> main`,
+     then `ln -s "<main-repo-abs-path>/scratchpad" ../ice-halo-wt-<n>/scratchpad` (that symlink
+     is already covered by `info/exclude`, which lives in the common dir and so applies to every
+     worktree; do not add it again). Worktrees are cheap here on purpose — dependency sources are
+     cached per machine, see "Build trees..." above. One consequence worth knowing:
+     `.git/hooks/pre-commit` is shared across worktrees (hooks live in the common dir) but does
+     `cd "$(git rev-parse --show-toplevel)"`, which inside a worktree resolves to the worktree
+     root — so a commit there runs the worktree's own copy of the four checkers, and a branch that
+     edits a hook script does not see its own edit take effect until it is merged.
+  Criterion 2 is machine-enforced at the point every write converges on, whatever tool produced
+  it: `git commit`. Step 0 of `scripts/hooks/pre-commit` runs
+  `scripts/hooks/worktree-guard.py pre-commit`, which refuses the commit when the staged set
+  touches `src/` or `test/` and the toplevel is the *main* worktree (git's own structural test:
+  `rev-parse --git-common-dir` resolves to `<toplevel>/.git` only there). The commit is the gate
+  for a reason that was learned the expensive way: the first version of this guard was a Claude
+  Code `PreToolUse` hook on `Edit|Write` alone, and it was correct — and it would not have
+  caught the incident that produced it, because that edit was written through Bash
+  (`python3 - <<'PY'`), which a tool-call hook never sees. The same is true of shell
+  redirection, `sed -i`, `tee`, a heredoc; widening the hook to `Bash` would mean parsing
+  command lines for writes, a heuristic that both misses and false-alarms. The commit does not
+  care how the file was written, and the failure shape being closed ("edit a lot, then squeeze
+  it into one big commit") lands on it by construction. Its honest boundary: a change that is
+  never committed is invisible to it — and also never reaches the repository, which is a
+  different blast radius (a dirty main worktree, not a polluted history) and the residue this
+  design accepts. The escape is git's own explicit `git commit --no-verify`, not a switch of
+  ours — no env var, no sentinel file — so an owner-authorized one-off stays visible in the
+  shell history. The `PreToolUse` hook is kept as a second line, not the first: same script,
+  `claude-pretooluse` mode, enabled per machine by a git-ignored `.claude/settings.local.json`
+  in the **main** checkout only (a linked worktree needs none — everything is allowed there),
+  and it fires at the first keystroke rather than at the end. Its settings command tests that
+  the script exists before running it and degrades *loudly* otherwise (one stderr line, edit
+  proceeds) — the first enablement switched it on while the script still lived on an unmerged
+  branch, and a bare `python3 <missing path>` returns exit 2, which Claude Code treats as a
+  blocking error, so every `Edit`/`Write` in the main worktree was refused, not just `src/` and
+  `test/`. The canonical settings content is a constant in the script (`print-settings` writes
+  it; the reasoning the JSON file cannot carry is in the module docstring), and because a
+  git-ignored file is invisible to every diff, `check-settings` compares a checkout's copy
+  against it field for field (structural equality on the parsed JSON, so a narrowed matcher
+  reads as stale and reformatting does not) — `./scripts/install-hooks.sh` runs that last, so the one install
+  step after a clone or a merge also reports whether the Claude side is current, absent, or
+  stale. The main-worktree predicate lives in that script and nowhere else. Criterion 1 (the task directory) is not machine-enforced; it is the criterion the commit
+  gate makes cheap to honour, because by the time a worktree exists the task directory is the
+  natural place to have named it.
 
 ## Documentation Index (`doc/`)
 
@@ -613,6 +670,9 @@ This project carries a deliberate accumulated memory. Its value depends on it be
 **retrieved**, not just stored (信息价值 = 内在价值 × 被检索到的概率). The recurring
 failure mode is starting each session like a newcomer and re-deriving decisions the
 owner already settled. Avoid it:
+(The other half of this discipline — every change to `src/` or `test/` has a task directory
+before the first edit, and is made in a linked worktree, not the main one — is a criterion, not
+a habit, and lives under "Collaboration Constraints" above.)
 
 - **Retrieve before re-deriving.** Before starting work on a continuing/recurring topic
   (GPU/Metal perf, GUI perf, parity, batch/throughput, architecture decisions), FIRST:
