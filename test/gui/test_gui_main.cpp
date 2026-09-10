@@ -9,6 +9,7 @@
 #endif
 // clang-format on
 
+#include <cfloat>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -242,6 +243,41 @@ void ResetTestState() {
   // widget, and a per-case clear would have to be added by whoever next gets bitten — which is the
   // shape of leak this function exists to end.
   ImGui::ClearActiveID();
+
+  // The per-window state ImGui keeps for the life of the process — every window's ImGuiStorage
+  // (TreeNode fold flags, and whatever production code parks there through GetStateStorage(), such
+  // as the wedge add row's typed triple) and its scroll offset. Neither is torn down when the window
+  // stops being submitted, so a case that unfolds a node, types into a storage-backed box or scrolls
+  // a list hands that state to whichever case draws the same window next. Measured instances, each
+  // of them a reference that agreed with itself only under one test order: the presets library
+  // handed on unfolded (16.8 dB on presets_expanded / presets_warning), the add row's rejected
+  // triple sitting under those two scenes' fold and reaching the pixels through the child's
+  // scrollbar thumb (53.45 dB under --filter, inf under the pool), and ##RightPanel handed to the
+  // fullframe capture at Scroll.y=145.
+  //
+  // Cleared for EVERY window rather than for the ones this suite is known to write, because that
+  // list cannot be kept: the writes happen inside production code the case only reaches by typing
+  // or clicking, so the harness does not know which windows a case touched — the last enumeration
+  // pinned one of three preset scenes and missed the other two. "Every window" corresponds to a
+  // state with a definition, the one a fresh process starts in, which is the only state any
+  // reference can claim to have been shot in. A case whose scene wants a node open or a list
+  // scrolled still says so itself, as before; what it no longer has to do is undo the previous
+  // case. Window position and size are deliberately NOT reset here: the fixed-layout panels are
+  // re-pinned by the app every frame, and the floating windows are parked by the scenes that
+  // capture them (modal_layout's WindowMove) because the park spot is part of the scene, not a
+  // default to return to.
+  //
+  // Safe to do from here: the test coroutine runs from the engine's PostNewFrame hook, i.e. after
+  // NewFrame() and before any Begin() of this frame, so no widget holds a pointer into a storage
+  // that is being cleared. Scroll is written directly and the target reset to "none" (FLT_MAX is
+  // ImGui's own sentinel, see ImGuiWindow::ScrollTarget), so the rewind takes effect on the
+  // window's next Begin() with no frame in between where an old target could reapply.
+  ImGuiContext& g = *ImGui::GetCurrentContext();
+  for (ImGuiWindow* w : g.Windows) {
+    w->StateStorage.Clear();
+    w->Scroll = ImVec2(0.0f, 0.0f);
+    w->ScrollTarget = ImVec2(FLT_MAX, FLT_MAX);
+  }
 
   // Test state
   g_capture.Reset();

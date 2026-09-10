@@ -88,48 +88,29 @@ class ScopedPanel {
   ScopedPanel(const ScopedPanel&) = delete;
   ScopedPanel& operator=(const ScopedPanel&) = delete;
 
-  // Leaves the panel closed AND its preset nodes folded for whatever runs next in this
-  // single-process suite.
+  // Leaves the panel closed for whatever runs next in this single-process suite.
   //
-  // The fold state is the part that is easy to miss and expensive to get wrong. ImGui keeps a
-  // TreeNode's open flag in the panel window's own storage, which outlives every reset this suite
-  // performs: OpenDefaultsPanel re-derives the rows, the checkbox set and the section folds, and
-  // the panel's own reset hook clears its TU statics, but neither owns ImGui's storage. So a case
-  // that unfolds a preset hands the next one a library that is already open — and the visual
-  // reference scenes downstream capture exactly one preset unfolded, which is a 16 dB difference
-  // when a second one is showing. Measured, not assumed: with this teardown removed, the
-  // presets_expanded and presets_warning references fail at 16.8 dB while the same scenes pass
-  // when run on their own.
+  // What it no longer does is fold the preset nodes. A TreeNode's open flag lives in the panel
+  // window's ImGui storage, and this teardown used to be the only thing in the suite that put it
+  // back — measured, not assumed: with the fold removed, the presets_expanded and presets_warning
+  // references failed at 16.8 dB while the same scenes passed on their own. ResetTestState() now
+  // clears every window's storage at the start of the next case, which also closes the honest
+  // limit this teardown carried: the test context short-circuits every action once an error is
+  // on record, so a case that FAILED got no teardown at all and could still hand its open nodes
+  // to a reference scene. A reset at the next case's entry does not depend on this one exiting
+  // cleanly.
   //
-  // In the destructor rather than at the end of each case because IM_CHECK expands to a return: a
-  // case that fails halfway would otherwise hand its open nodes to the next one, and a cascade of
-  // unrelated reds is the worst possible report.
-  //
-  // Honest limit, so the next person reading a red run does not chase it: the test context
-  // short-circuits every action once an error is on record, so a case that FAILS gets no teardown
-  // at all and can still leave a node unfolded. ResetTestState clears the panel's own statics for
-  // the next case, but not ImGui's fold storage — so one genuine failure here may be followed by
-  // reference scenes going red for no reason of their own. Fix the first red, then re-run.
+  // In the destructor rather than at the end of each case because IM_CHECK expands to a return,
+  // and the exit below still has to happen on the failing path too.
   ~ScopedPanel() {
-    // Reopened when a case closed the panel itself: the nodes are only reachable while it is up,
-    // and whether this case ended with it open is not something the teardown should depend on.
+    // Reopened when a case closed the panel itself, so that the exit is always the button's:
+    // closing the way a user does also unwinds ImGui's popup stack, and a popup left on the stack
+    // eats the next case's first clicks. ResetTestState() does not reach that stack (see the
+    // ScopedPopups note in test_gui_shared.hpp), so the guard stays here.
     if (!gui::g_state.defaults_panel_open) {
       gui::OpenDefaultsPanel(gui::g_state, gui::DefaultsPanelSection::kPresets);
       ctx_->Yield(4);
-    } else {
-      ctx_->ItemOpen("**/###defaults_presets");
-      ctx_->Yield(2);
     }
-    for (const auto& entry : gui::kAxisPresets) {
-      if (entry.id == gui::AxisPreset::kCustom) {
-        continue;  // not a library entry; it has no node
-      }
-      ctx_->ItemClose((std::string("**/###preset_") + gui::AxisPresetLabel(entry.id)).c_str());
-    }
-    ctx_->Yield(2);
-
-    // Through the button rather than by zeroing the flag: closing the way a user does also unwinds
-    // ImGui's popup stack, and a popup left on the stack eats the next case's first clicks.
     ctx_->ItemClick("**/###defaults_close");
     ctx_->Yield(2);
     // Belt and braces for the one exit that does not answer the button (Esc re-opens the popup on
@@ -409,15 +390,6 @@ ImGuiTable* SettingsTable(ImGuiTestContext* ctx) {
 // GetID(name) that TableHeadersRow used.
 ImGuiTestItemInfo SettingsHeaderInfo(ImGuiTestContext* ctx, ImGuiTable* table, const char* column) {
   return ctx->ItemInfo(TableGetHeaderID(table, column));
-}
-
-// Put the settings list back at its top. ImGui keeps a scroll position per window ID and the
-// table's inner window is not torn down when the panel closes, so a case that scrolls to the
-// bottom hands the NEXT case a list already at the bottom. Rewinding here rather than at the end of
-// whoever scrolled makes each case depend on nothing but itself.
-void RewindSettingsList(ImGuiTestContext* ctx, ImGuiTable* table) {
-  ctx->ScrollToTop(table->InnerWindow->ID);
-  ctx->Yield(2);
 }
 
 // Scroll the list by the user's own gesture — point at a row and turn the wheel — rather than by
@@ -2129,7 +2101,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ImGuiTable* table = SettingsTable(ctx);
       IM_CHECK(table != nullptr);
       IM_CHECK(table->InnerWindow != nullptr);
-      RewindSettingsList(ctx, table);
 
       // The premise, asserted rather than assumed: the list is longer than the box it was given, so
       // there is something for the wheel to do. Without it, "the header did not move" would be just
@@ -2190,7 +2161,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ImGuiTable* table = SettingsTable(ctx);
       IM_CHECK(table != nullptr);
       IM_CHECK(table->InnerWindow != nullptr);
-      RewindSettingsList(ctx, table);
       IM_CHECK_GT(table->InnerWindow->ScrollMax.y, 0.0f);
 
       const auto presets_before = ctx->ItemInfo("**/###defaults_presets");

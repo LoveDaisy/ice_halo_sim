@@ -112,59 +112,14 @@ std::string ResolveReferencePath(const char* scene_name) {
   return base + ".jpg";
 }
 
-// The two pieces of ImGui window storage every preset scene inherits from whichever case ran
-// before it, pinned rather than cleared. Both outlive every reset this suite performs, and both
-// were measured in a reference, not assumed:
-//
-// - TreeNode fold flags. The first shoot of wedge_presets captured Column unfolded and the region
-//   under test pushed out of the child entirely — a reference that would have gone green forever
-//   while showing none of what it names.
-// - The add row's triple. A functional case ends by typing 0,0,2 into the same control, and the
-//   three-line refusal that goes with it sits under the fold of the two axis-preset scenes, where
-//   it is invisible in the capture but still counted in the child's content height — so it reached
-//   the pixels through the scrollbar thumb. Their references were shot with it (10/10 identical
-//   under the full pool, which runs that case first) and read 53.45 dB under `--filter`, which
-//   does not: 90 pixels of thumb, nothing else. Above the 40 dB floor, so never red.
-//
-// Typed to a triple the owner ACCEPTS, so the region is pinned in the state a user normally sees:
-// the angle line and a live Add button. The refusal grade is a functional case's proposition,
-// where it can be asserted rather than looked at (the message carries no item id). ItemInputValue
-// presses Enter, which deactivates the input — an ACTIVE InputText draws a caret whose phase
-// depends on the frame count, the same flake this file avoids elsewhere.
-//
-// The row has to be on screen to be typed into: ImGui records an item with the test engine only
-// AFTER its clipping test, so the add row — below a height-capped child's viewport when any axis
-// preset is open — is invisible to the engine until something scrolls it in. Hence fold first,
-// then scroll to the bottom BY WINDOW (ScrollToItemY fails the same way, reporting "Unable to
-// locate item"), then type. The child's own ID cannot be hashed by a caller either (BeginChild
-// composes the window name from its parent's name plus the hash of its string id), so it is taken
-// from an item known to be inside it, the same derivation the functional tests use for the preset
-// cells. The caller decides where the child is scrolled to afterwards.
-void FoldEveryAxisPreset(ImGuiTestContext* ctx) {
-  for (const auto& entry : gui::kAxisPresets) {
-    if (entry.id == gui::AxisPreset::kCustom) {
-      continue;  // not a library entry; it has no node
-    }
-    ctx->ItemClose((std::string("**/###preset_") + gui::AxisPresetLabel(entry.id)).c_str());
-  }
-  ctx->Yield(3);
-}
-
+// The preset child's window ID, for scrolling it by window. The child's own ID cannot be hashed by
+// a caller (BeginChild composes the window name from its parent's name plus the hash of its string
+// id), so it is taken from an item known to be inside it, the same derivation the functional tests
+// use for the preset cells.
 ImGuiID PresetChildWindowId(ImGuiTestContext* ctx) {
   const ImGuiTestItemInfo anchor = ctx->ItemInfo("**/###preset_Random");
   IM_CHECK_RETV(anchor.Window != nullptr, 0);
   return anchor.Window->ID;
-}
-
-void PinWedgeAddRowToAnAcceptedTriple(ImGuiTestContext* ctx) {
-  ctx->ScrollToBottom(PresetChildWindowId(ctx));
-  ctx->Yield(3);
-  IM_CHECK(ctx->ItemInfo("**/###wedge_preset_add").RectClipped.GetHeight() > 0.0f);
-  ctx->ItemInputValue("**/##custom_wedge_h", 3);
-  ctx->ItemInputValue("**/##custom_wedge_k", 0);
-  ctx->ItemInputValue("**/##custom_wedge_l", 1);
-  ctx->Yield(3);
-  IM_CHECK(!IsDisabled(ctx->ItemInfo("**/###wedge_preset_add")));
 }
 
 }  // namespace
@@ -241,24 +196,19 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       if (scene.kind == SceneKind::kWedgePresets) {
-        // Folding the axis list does not by itself make what sits under it visible: the preset
-        // child is height-capped, so the pin leaves the child scrolled to the bottom, which is
-        // where this scene wants it.
-        FoldEveryAxisPreset(ctx);
-        PinWedgeAddRowToAnAcceptedTriple(ctx);
+        // The region this scene exists to show sits below a height-capped child, so it has to be
+        // scrolled in — BY WINDOW, not by item: ImGui records an item with the test engine only
+        // AFTER its clipping test, so an item wholly outside the child's visible rect is invisible
+        // to the engine, and the add button starts there (measured: ScrollToItemY reported "Unable
+        // to locate item"). Nothing here folds the axis library first or types into the add row:
+        // ResetTestState() clears every window's ImGui storage, so this scene opens on the library
+        // folded and the row on its {1,0,-1,1} default, which is the state a user first sees.
+        ctx->ScrollToBottom(PresetChildWindowId(ctx));
+        ctx->Yield(3);
+        IM_CHECK(ctx->ItemInfo("**/###wedge_preset_add").RectClipped.GetHeight() > 0.0f);
+        IM_CHECK(!IsDisabled(ctx->ItemInfo("**/###wedge_preset_add")));
         IM_CHECK(ctx->ItemInfo("**/###wedge_preset_delete_0").RectClipped.GetHeight() > 0.0f);
       } else if (presets_scene) {
-        // Same two pins as the wedge scene, for the same reason — the add row is under this
-        // scene's fold, but its height is still the child's content height, i.e. the scrollbar
-        // thumb in the capture. Then back to the top: scroll is window storage too, so the pin
-        // (and the scene that shoots the bottom) would otherwise hand a position to whichever
-        // preset scene runs next. Anchoring here removes an ordering dependency between
-        // references rather than relying on the order kScenes happens to list them in.
-        FoldEveryAxisPreset(ctx);
-        PinWedgeAddRowToAnAcceptedTriple(ctx);
-        ctx->ScrollToTop(PresetChildWindowId(ctx));
-        ctx->Yield(2);
-
         // Column unfolded: the three axis rows, the disabled type/mean cells, the live std cell and
         // the warning column beside it. One preset is enough — the other five render through the
         // same two row functions, and unfolding all six would push the table past the panel.
