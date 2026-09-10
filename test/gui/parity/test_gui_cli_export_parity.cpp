@@ -266,6 +266,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -273,10 +275,13 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"
+#include "support/block_mean_psnr.hpp"
+#include "support/pixel_diff_metrics.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -832,6 +837,198 @@ const ParityScene kScenes[] = {
 constexpr int kSimResolutionIndex = 0;
 constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
 
+// ==================================== Lines-only scenes =====================================
+//
+// The annotation layer of a simulation scene, compared on its own, with the simulation turned off
+// on both arms. The simulation scenes above measure a STOCHASTIC frame — two independent Monte-
+// Carlo renders — and their ruler (block-mean PSNR, below) is built to see a coherent difference
+// through that noise. The curves are not stochastic: the two arms evaluate one definition, and
+// where they land is a per-pixel yes/no. A frame-average statistic is structurally blind to a
+// difference of that shape. Measured, on the CLI arm of these very scenes: dropping the last
+// meridian moves the single-lens whole-frame PSNR by 0.27 dB and the full-sky one by 0.2 dB,
+// switching one marker off by 0.02 dB — every one of them inside the honest run-to-run spread of
+// some row above. So the curves get a frame of their own and a ruler of their own.
+//
+// THE RULER. Each arm's frame is reduced to a MEMBERSHIP mask — "this pixel is not the canvas" —
+// and the two masks are XORed; the XOR's pixel count and its largest 8-connected blob are the
+// reading (support/pixel_diff_metrics.hpp, the mask entry). Membership rather than colour, because
+// the two arms do not agree on the BYTES of a half-transparent line and are not asked to here: the
+// CLI composites the sun circles (alpha 0.5) and the horizon (0.6) in linear light before the
+// transfer curve, the preview shader after it, so a circle pixel reads (255,242,193) on one arm
+// and (255,242,166) on the other — the GRID OPACITY note above the field table. Whether the pixel
+// IS a circle pixel is what the two arms must agree on, and the masks read identical counts
+// (4061 / 4697 / 3132 circle pixels on the three scenes, arm for arm).
+//
+// THE CANVAS IS WHITE AND THE GRID IS BLACK, and that is the mechanism that makes the simulation
+// absent rather than merely faint. Both arms compute out = clamp(L * scale + background) and
+// only then encode; with background = 1 the clamp returns 1 for every L >= 0, so the simulated
+// arcs leave NO trace — not a small one that a tolerance would have to absorb, none. (The same
+// algebra doc/print-mode-subtractive-ink.md records as "a white sky is always white" — the fact
+// that makes print mode a separate operator is the fact that makes this frame clean.) The
+// membership test is therefore exact: tau = 0, the canvas byte is (255,255,255) on both arms, and
+// each arm's most frequent colour is asserted to BE that byte so the premise is checked on every
+// run and not remembered from this comment. The grid moves to black only because a white grid on
+// a white canvas is not a grid; the circles and the horizon keep their colours, which are far from
+// white at every alpha in use.
+//
+// WHY NOT EXPOSURE ALONE. The first design was exposure_offset = -30 on the ordinary dark
+// background, on the observation that the CLI keeps drawing the annotation layer at any
+// ExposureScale() > 0. Two measured facts retired it. The GUI's EV slider clamps the field to
+// [-8, 16] on every frame it is drawn, so the value that reaches both arms is 2^-8, not 2^-30
+// (the intensity_factor assertion in RenderBothArms is the trace of that discovery). And at 2^-8
+// the frame is NOT clean: the sun's neighbourhood still lands 2-5 levels above the background on
+// both arms, and the background byte itself (0.10 * 255 = 25.5) sits on a rounding cliff that
+// sim energy of any size tips — the GUI rounds to 26, the CLI truncates to 25, and the two arms'
+// "not background" masks XOR to blobs of 1349 / 471 / 119 px at tau = 0, 156 / 74 / 6 at tau = 2,
+// and only reach 1 / 0 / 1 at tau = 4. Reading that as "use tau = 4" would be tuning a tolerance
+// to the size of the very residue it hides. With the white canvas the same three frames XOR to
+// 2 / 0 / 2 px (maxcc 1 / 0 / 1) at tau = 0. The -8 is kept anyway: the CLI blends a line into
+// (background + L) BEFORE the clamp (render.cpp PostSnapshot), so a circle crossing a bright
+// arc at full exposure could saturate to white on that arm alone and lose its membership; at 2^-8
+// L stays under 0.01 and the blend moves by less than one level.
+//
+// MARKERS OFF, in every lines-only scene. The rings are the one annotation whose two arms are two
+// EDGE MODELS rather than one definition read twice — a 2-px smoothstep ring on the GUI, a hard
+// 3-px distance test on the CLI (the markers row in the field table) — and under a membership
+// mask that difference is a ring-shaped XOR of ~100-200 px per marker, the size of the smallest
+// break this ruler is asked to catch. Where the rings land is pinned per pixel by
+// test/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp; the export encoding stays
+// asserted on the simulation scenes. Note the symmetry with the simulation scenes, which keep
+// the markers ON and whose ruler cannot see them: each family is measured where its ruler can.
+//
+// NO PRINT SCENE. Measured before deciding, on full_sky_dual_fisheye_print's framing at 2^-8 with
+// its own paper and every line switched on: the subtractive operator has no saturation floor —
+// paper * 10^(-D) can only go DOWN from the paper — so the sun's residue lands on the page (GUI
+// 21 colours, CLI 23; the two "not paper" masks XOR to 45347 px, largest blob 2708, at tau = 0,
+// and still 19 / 3 at tau = 2). No canvas colour removes it, and a tau that does is the tolerance
+// this file just refused. The print annotation blend itself is asserted per pixel elsewhere
+// (test_render_consumer_print_mode.cpp, test_preview_print_mode.cpp), which is the row's own
+// argument for keeping its four switches off.
+//
+// THRESHOLD. K is placed the way the deterministic groups' K is (doc/testing-architecture.md
+// §4.6): between the largest honest reading and the smallest break the scene must catch, and
+// both are stated per row below. The honest reading here is not a cross-machine number — both
+// arms are made on this machine in this run — which is why tau is 0 and K is small.
+struct LinesOnlyScene {
+  const char* name;
+  // The kScenes[] row whose framing (lens, fov, view, visible, canvas size, the three line
+  // switches) this scene takes, looked up BY NAME at test time so a re-ordered kScenes[] cannot
+  // silently re-parent it.
+  const char* base_scene;
+  // The XOR's largest 8-connected blob may not exceed this.
+  int max_cc_threshold;
+};
+
+//
+// CALIBRATION, all three rows, N=6 category runs on an otherwise idle machine and every break
+// applied single-sided to the CLI arm (the export document edited before the child process
+// reads it; the fixture's own ruler read the three starred rows, the Python twin of the same
+// definition the rest — checked against the fixture on the honest pair, reading identically).
+// The honest reading is the same in all six runs, to the pixel: the layer is deterministic on
+// both arms, and what the two disagree on is one isolated pixel at a time (the lens domain's
+// rim on single_lens_angled at (510,32) and (24,64); a line crossing on the rectilinear scene),
+// never a blob. K = 4 on every row: 4x the largest honest blob, and under every break below by
+// at least 2x. A break's XOR is the missing curve split at every crossing with a curve that is
+// still there, which is why a dropped PARALLEL — cut by every meridian — reads as many short
+// blobs (73 px on the single-lens scene, from 828 XOR pixels) while a dropped meridian, cut
+// only by the parallels, keeps a 135-px run. The largest blob is still the reading: a
+// tolerance on the COUNT would have to be placed against the two rim pixels, and 8 px of the
+// full-sky scene's last parallel is a real curve this ruler can see.
+//
+//   break (CLI arm only)             | single_lens_angled | full_sky_dual_fisheye | single_lens_rectilinear
+//   ---------------------------------|--------------------|-----------------------|------------------------
+//   honest (N=6, identical)          |     2 /   1        |     0 /   0           |     2 /   1
+//   the CLI drops the last meridian  |   162 / 135 *      |  1830 / 339           |   297 / 292
+//   the CLI drops the last parallel  |   828 /  73        |     8 /   8           |    13 /  11 *
+//   the CLI draws only the first     |  2500 / 462        |  2574 / 360           |  1769 / 640
+//     of two angular_dist lines      |                    |                       |
+//   the CLI drops the horizon        |   889 / 196        |  5097 / 272           |   917 / 305
+//   the CLI shifts every circle 1deg |  9475 / 921        |  7211 / 653           |  5615 / 1295
+//   the CLI draws ONE marker the     |   117 /  98        |   130 / 130 *         |   129 /  48
+//     scene switched off             |                    |                       |
+//   the export doubles a grid width  |     2 /   1        |     0 /   0           |     2 /   1
+//
+// Read as n_xor / maxcc. The marker row is the break the whole-frame PSNR could not see at any
+// radius (0.02 dB, and upward); here it is 12-32x over K. The full-sky parallel at 8 px is the
+// "n/a" the PSNR rows carry — an 80 deg parallel is a small circle near each disc centre — and
+// this ruler reads it at 2x over K. The grid-width row is not a break at all and is kept to say
+// so: GridLineParam::width_ is round-tripped but inert on both arms (render.cpp, the LineLayer
+// note), so the reading is the honest one. The smallest break each row is placed against is the
+// column's minimum above the honest line: 73, 8 and 11 px.
+// clang-format off
+const LinesOnlyScene kLinesOnlyScenes[] = {
+  {"single_lens_angled_lines", "single_lens_angled", /*max_cc_threshold=*/4},
+  {"full_sky_dual_fisheye_lines", "full_sky_dual_fisheye", /*max_cc_threshold=*/4},
+  {"single_lens_rectilinear_lines", "single_lens_rectilinear", /*max_cc_threshold=*/4},
+};
+// clang-format on
+constexpr int kLinesOnlySceneCount = sizeof(kLinesOnlyScenes) / sizeof(kLinesOnlyScenes[0]);
+
+// The three overrides a lines-only scene applies to its base row — see the note above for why
+// each is what it is. The exposure is the EV slider's domain floor, not a smaller number.
+constexpr float kLinesOnlyExposureOffset = -8.0f;
+constexpr float kLinesOnlyCanvasSrgb[3] = { 1.0f, 1.0f, 1.0f };
+constexpr float kLinesOnlyGridSrgb[3] = { 0.0f, 0.0f, 0.0f };
+// The canvas byte both arms must land on, packed 0xRRGGBB. kLinesOnlyCanvasSrgb is 1.0 in every
+// channel and the sRGB transfer of 1.0 is 1.0, so this is not a rounded number.
+constexpr uint32_t kLinesOnlyCanvasPacked = 0xFFFFFFu;
+
+const ParityScene* FindScene(const char* name) {
+  for (const ParityScene& s : kScenes) {
+    if (std::string(s.name) == name) {
+      return &s;
+    }
+  }
+  return nullptr;
+}
+
+ParityScene MakeLinesOnlyScene(const LinesOnlyScene& lines, const ParityScene& base) {
+  ParityScene s = base;
+  s.name = lines.name;
+  s.show_markers = false;
+  s.exposure_offset = kLinesOnlyExposureOffset;
+  std::copy(std::begin(kLinesOnlyCanvasSrgb), std::end(kLinesOnlyCanvasSrgb), std::begin(s.background_srgb));
+  std::copy(std::begin(kLinesOnlyGridSrgb), std::end(kLinesOnlyGridSrgb), std::begin(s.grid_srgb));
+  // Not consulted by the lines-only comparison; zeroed so a reader cannot mistake the base row's
+  // calibration for one that applies here.
+  s.psnr_threshold = 0.0;
+  return s;
+}
+
+// The most frequent byte triple of an RGB image, packed 0xRRGGBB. One pass over a hash map; the
+// frames here have under forty distinct colours.
+uint32_t ModeColour(const unsigned char* rgb, int w, int h) {
+  std::unordered_map<uint32_t, int> counts;
+  const size_t n_px = static_cast<size_t>(w) * h;
+  for (size_t p = 0; p < n_px; ++p) {
+    const uint32_t key = (static_cast<uint32_t>(rgb[p * 3]) << 16) | (static_cast<uint32_t>(rgb[p * 3 + 1]) << 8) |
+                         static_cast<uint32_t>(rgb[p * 3 + 2]);
+    ++counts[key];
+  }
+  uint32_t mode = 0;
+  int best = -1;
+  for (const auto& [key, n] : counts) {
+    if (n > best) {
+      best = n;
+      mode = key;
+    }
+  }
+  return mode;
+}
+
+// One byte per pixel, 1 where the pixel is not exactly `canvas`. Exact, not within a tolerance:
+// see the lines-only note for why the canvas byte is the same on both arms.
+std::vector<unsigned char> AnnotationMembership(const unsigned char* rgb, int w, int h, uint32_t canvas) {
+  const size_t n_px = static_cast<size_t>(w) * h;
+  std::vector<unsigned char> mask(n_px, 0);
+  for (size_t p = 0; p < n_px; ++p) {
+    const uint32_t key = (static_cast<uint32_t>(rgb[p * 3]) << 16) | (static_cast<uint32_t>(rgb[p * 3 + 1]) << 8) |
+                         static_cast<uint32_t>(rgb[p * 3 + 2]);
+    mask[p] = key != canvas ? 1 : 0;
+  }
+  return mask;
+}
+
 // Same shape and same reason as the guard in test/gui/visual/test_gui_lens_projection.cpp: every
 // IM_CHECK* below can return early, and only a destructor tears down a running server and restores
 // a widened watchdog on that path.
@@ -891,6 +1088,14 @@ struct ExportedRenderInfo {
   // before the flag is checked.
   float paper[3]{};
   bool paper_read = false;
+  // The exposure the document bakes for the CLI, 2^exposure_offset (file_io.cpp BuildScene,
+  // kJsonExport). Asserted against the scene's own field because the value the fixture WRITES is
+  // not necessarily the value that survives: the Display panel's EV slider clamps the GuiState
+  // slot to its domain every frame it is drawn (panels.cpp SliderWithInput; the domain is
+  // field_editor_registry.cpp's FixedDomain(-8, 16)), so a scene that asked for -30 would export
+  // 2^-8 and both arms would quietly agree on an exposure the scene never named. Read from the
+  // document, like the rest of this struct, because the document is what the child reads.
+  float intensity_factor = 0.0f;
   bool ok = false;
 };
 
@@ -925,6 +1130,7 @@ ExportedRenderInfo ParseExportedRenderInfo(const std::string& json_str) {
     }
     info.paper_read = true;
   }
+  info.intensity_factor = jr.value("intensity_factor", 0.0f);
   info.ok = info.width > 0 && info.height > 0;
   return info;
 }
@@ -1098,6 +1304,7 @@ void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServe
   // screen-toned, and the PSNR would look healthy.
   IM_CHECK_STR_EQ(info.tone.c_str(), scene.tone == 1 ? "print" : "screen");
   IM_CHECK(info.paper_read);
+  IM_CHECK_EQ(info.intensity_factor, std::pow(2.0f, scene.exposure_offset));
   // Three separate assertions rather than one iterated over the channels: a fatal check inside a
   // repeating scope hides every channel after the first to disagree, and here that would read as
   // a green channel rather than as an unreached one (scripts/check_loop_fatal_asserts.py states
@@ -1190,9 +1397,92 @@ void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServe
   out.ok = true;
 }
 
+// The two images as RGB, same size, with the CLI's channel contract asserted. Void with an `ok`
+// for the same reason RenderBothArms is.
+struct LoadedPair {
+  std::vector<unsigned char> gui_rgb;
+  std::vector<unsigned char> cli_rgb;
+  int w = 0;
+  int h = 0;
+  bool ok = false;
+};
+
+void LoadBothArms(const RenderedPair& pair, LoadedPair& out) {
+  std::vector<unsigned char> gui_data;
+  int gw = 0;
+  int gh = 0;
+  int gc = 0;
+  int cw = 0;
+  int ch = 0;
+  int cc = 0;
+  IM_CHECK(lumice::test::LoadPng(pair.gui_png.c_str(), gui_data, gw, gh, gc));
+  IM_CHECK(lumice::test::LoadPng(pair.cli_png.c_str(), out.cli_rgb, cw, ch, cc));
+  // A size disagreement is a finding in its own right and is reported as one rather than absorbed
+  // by a resize.
+  IM_CHECK_EQ(gw, cw);
+  IM_CHECK_EQ(gh, ch);
+  // The CLI's PNG writer emits RGB, never RGBA, so cc==3 is a format contract, not an assumption
+  // this fixture happens to get away with; if that writer ever gains an alpha channel this
+  // assertion is the thing that should tell you, not a silent 3-vs-4 mismatch.
+  IM_CHECK_EQ(cc, 3);
+  out.gui_rgb = gc == 4 ? lumice::test::StripAlpha(gui_data.data(), gw, gh) : gui_data;
+  out.w = gw;
+  out.h = gh;
+  out.ok = true;
+}
+
 }  // namespace
 
 void RegisterExportParityTests(ImGuiTestEngine* engine) {
+  for (int idx = 0; idx < kLinesOnlySceneCount; idx++) {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export_parity", kLinesOnlyScenes[idx].name);
+    t->ArgVariant = idx;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const LinesOnlyScene& lines = kLinesOnlyScenes[ctx->Test->ArgVariant];
+      const ParityScene* base = FindScene(lines.base_scene);
+      IM_CHECK(base != nullptr);
+      const ParityScene scene = MakeLinesOnlyScene(lines, *base);
+      ResetTestState();
+      ScopedServerAndWatchdogGuard guard(ctx->EngineIO);
+      RenderedPair pair;
+      RenderBothArms(ctx, scene, guard, pair);
+      IM_CHECK(pair.ok);
+      LoadedPair imgs;
+      LoadBothArms(pair, imgs);
+      IM_CHECK(imgs.ok);
+
+      // 9. Compare memberships. The canvas premise first, on each arm: if either arm's most
+      // frequent colour is not the white the scene asked for, the simulation (or something else)
+      // has reached the canvas and the masks below would be measuring that, not the curves.
+      IM_CHECK_EQ(ModeColour(imgs.gui_rgb.data(), imgs.w, imgs.h), kLinesOnlyCanvasPacked);
+      IM_CHECK_EQ(ModeColour(imgs.cli_rgb.data(), imgs.w, imgs.h), kLinesOnlyCanvasPacked);
+      const std::vector<unsigned char> gui_mask =
+          AnnotationMembership(imgs.gui_rgb.data(), imgs.w, imgs.h, kLinesOnlyCanvasPacked);
+      const std::vector<unsigned char> cli_mask =
+          AnnotationMembership(imgs.cli_rgb.data(), imgs.w, imgs.h, kLinesOnlyCanvasPacked);
+      std::vector<unsigned char> xor_mask(gui_mask.size(), 0);
+      int n_gui = 0;
+      int n_cli = 0;
+      for (size_t p = 0; p < xor_mask.size(); ++p) {
+        n_gui += gui_mask[p];
+        n_cli += cli_mask[p];
+        xor_mask[p] = gui_mask[p] ^ cli_mask[p];
+      }
+      const lumice::test::PixelDiffResult diff = lumice::test::ComputePixelDiffFromMask(xor_mask, imgs.w, imgs.h);
+      // Same "n_diff=... maxcc=..." spelling CheckAgainstReference prints under the pixel ruler,
+      // so one grep finds every reading of that ruler in this binary; n_diff is the XOR count.
+      fprintf(stderr, "[export_parity] %s: n_diff=%d maxcc=%d (|gui|=%d |cli|=%d, tau=0, K=%d) size=%dx%d\n",
+              scene.name, diff.n_diff, diff.max_cc, n_gui, n_cli, lines.max_cc_threshold, imgs.w, imgs.h);
+      IM_CHECK_GE(diff.max_cc, 0);
+      IM_CHECK_LE(diff.max_cc, lines.max_cc_threshold);
+
+      if (!g_keep_export_png) {
+        std::error_code ec;
+        std::filesystem::remove_all(pair.scratch_dir, ec);
+      }
+    };
+  }
+
   for (int idx = 0; idx < kSceneCount; idx++) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "export_parity", kScenes[idx].name);
     t->ArgVariant = idx;
@@ -1204,31 +1494,17 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       RenderBothArms(ctx, scene, guard, pair);
       IM_CHECK(pair.ok);
 
-      // 9. Compare. A size disagreement is a finding in its own right and is reported as one
-      // rather than absorbed by a resize.
-      std::vector<unsigned char> gui_data;
-      std::vector<unsigned char> cli_data;
-      int gw = 0;
-      int gh = 0;
-      int gc = 0;
-      int cw = 0;
-      int ch = 0;
-      int cc = 0;
-      IM_CHECK(lumice::test::LoadPng(pair.gui_png.c_str(), gui_data, gw, gh, gc));
-      IM_CHECK(lumice::test::LoadPng(pair.cli_png.c_str(), cli_data, cw, ch, cc));
-      IM_CHECK_EQ(gw, cw);
-      IM_CHECK_EQ(gh, ch);
-      // The CLI's PNG writer emits RGB, never RGBA, so cc==3 is a format contract, not an
-      // assumption this fixture happens to get away with; if that writer ever gains an alpha
-      // channel this assertion is the thing that should tell you, not a silent 3-vs-4 mismatch.
-      IM_CHECK_EQ(cc, 3);
-      std::vector<unsigned char> gui_rgb = gc == 4 ? lumice::test::StripAlpha(gui_data.data(), gw, gh) : gui_data;
-      const double psnr = lumice::test::ComputePsnr(gui_rgb.data(), cli_data.data(), gw, gh, 3);
+      LoadedPair imgs;
+      LoadBothArms(pair, imgs);
+      IM_CHECK(imgs.ok);
+
+      // 9. Compare.
+      const double psnr = lumice::test::ComputePsnr(imgs.gui_rgb.data(), imgs.cli_rgb.data(), imgs.w, imgs.h, 3);
       // Same "[<group>] <tag>: PSNR=" spelling every other pixel comparison in this binary prints,
       // so one grep finds them all. Deliberately not routed through CheckAgainstReference: that
       // function's subject is a committed reference file, which this suite does not have.
       fprintf(stderr, "[export_parity] %s: PSNR=%.2f dB (threshold=%.1f dB) size=%dx%d\n", scene.name, psnr,
-              scene.psnr_threshold, gw, gh);
+              scene.psnr_threshold, imgs.w, imgs.h);
       IM_CHECK_GE(psnr, scene.psnr_threshold);
 
       if (!g_keep_export_png) {
