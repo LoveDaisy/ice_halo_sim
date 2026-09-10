@@ -219,6 +219,23 @@ void FillCurveLabelSet(const AnnotationAnchors& cache, const std::vector<Annotat
   }
 }
 
+// Under print, label text is ink like every other annotation layer
+// (doc/print-mode-subtractive-ink.md §7): the family colour is not read, and no plate sits behind
+// it. ImGui's dst*(1-a)+src*a with a pure-black src is algebraically the same blend
+// BlendAnnotation()'s / blendAnnotationColor()'s print branch performs (both already ignore the
+// line-colour argument under print) — so this reproduces that formula rather than inventing a
+// second one. Applied in the BUILDERS, not in overlay_labels.cpp: has_bg is already pinned per
+// family at build time, tone is one more axis decided at the same moment, and the drawer keeps
+// knowing only shapes. Each builder calls this LAST, after every family-specific assignment, so
+// nothing written later can put the hue back.
+void ApplyPrintInk(const RenderConfig& rc, CurveLabelSet* set) {
+  if (!IsPrintTone(rc)) {
+    return;
+  }
+  set->color[0] = set->color[1] = set->color[2] = 0.0f;
+  set->has_bg = false;
+}
+
 }  // namespace
 
 CurveLabelSet BuildSunCirclesLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h) {
@@ -227,6 +244,7 @@ CurveLabelSet BuildSunCirclesLabelSet(const AnnotationAnchors& cache, const GuiS
   set.alpha = state.sun_circles_alpha;
   set.group = kGroupSunCircles;
   FillCurveLabelSet(cache, cache.AngularDistLabels(), vp_w, vp_h, &set);
+  ApplyPrintInk(state.renderer, &set);
   return set;
 }
 
@@ -239,6 +257,7 @@ CurveLabelSet BuildHorizonLabelSet(const AnnotationAnchors& cache, const GuiStat
   set.group = kGroupGrid;
   set.has_bg = false;  // as the walk this replaced drew it: numbers with no plate behind them
   FillCurveLabelSet(cache, cache.HorizonLabels(), vp_w, vp_h, &set);
+  ApplyPrintInk(state.renderer, &set);
   return set;
 }
 
@@ -281,6 +300,7 @@ std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationAnchors& cache, 
     if (!set.anchors.empty()) {
       set.anchors[0].py += state.markers_radius_px * CanvasToTargetScale(cache.Height(), vp_h) + kMarkerLabelGapPx;
     }
+    ApplyPrintInk(state.renderer, &set);
     out.push_back(std::move(set));
   }
   return out;
@@ -295,6 +315,7 @@ CurveLabelSet BuildGridLabelSet(const AnnotationAnchors& cache, const GuiState& 
   set.group = kGroupGrid;
   set.has_bg = false;  // the walk this replaced drew the grid's numbers with no plate behind them
   FillCurveLabelSet(cache, cache.GridLabels(), vp_w, vp_h, &set);
+  ApplyPrintInk(state.renderer, &set);
   return set;
 }
 

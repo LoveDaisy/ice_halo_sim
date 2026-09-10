@@ -64,6 +64,9 @@ struct CurveLabelSet {
   // Semi-transparent plate behind the text. On for the circles, off for the grid — which is not a
   // taste call but the appearance each family already had when it was walked here, kept so moving
   // the walk into core changes where the numbers come from and nothing about how they look.
+  // Under the print tone every builder overrides it to false at build time, along with `color`
+  // (ApplyPrintInk, app_panels.cpp): on paper the text is already the darkest ink there is, and a
+  // plate would only take the page around it down with it.
   bool has_bg = true;
 };
 void AppendCurveLabels(const CurveLabelSet& set, float vp_screen_x, float vp_screen_y, std::vector<OverlayLabel>& out);

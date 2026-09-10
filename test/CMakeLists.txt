@@ -323,6 +323,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_server_poller.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
+    # The print half of the labels: each Build*LabelSet hands the drawer ink (black, no plate) under
+    # the print tone and the family's own appearance under screen — the one path of the annotation
+    # layer that bypasses both the shader and the CLI blend, hence a gate of its own.
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_label_print_ink.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_lens_border_geometry.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
