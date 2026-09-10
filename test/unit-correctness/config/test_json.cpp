@@ -33,7 +33,8 @@ namespace {
 // RAII rather than a manual remove_sink at the end of each test, because
 // GetSharedSink() is a process-wide singleton: an ASSERT_* returning early with
 // the sink still attached would leave later tests in this binary writing into a
-// destroyed ostringstream.
+// destroyed ostringstream. Same shape as the copies in test_render_config.cpp
+// and test_crystal_sync_group.cpp.
 class LogCapture {
  public:
   LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) { GetSharedSink()->add_sink(sink_); }
@@ -58,28 +59,6 @@ class V3TestJson : public ::testing::Test {
   }
 
   nlohmann::json config_json_;
-};
-
-// Captures everything the global logger emits for the lifetime of the object; RAII because
-// GetSharedSink() is a process-wide singleton and an early return must not leave a dangling sink
-// attached for the rest of the binary. Same shape as the copies in test_render_config.cpp and
-// test_crystal_sync_group.cpp.
-class LogCapture {
- public:
-  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) {
-    lumice::GetSharedSink()->add_sink(sink_);
-  }
-
-  ~LogCapture() { lumice::GetSharedSink()->remove_sink(sink_); }
-
-  LogCapture(const LogCapture&) = delete;
-  LogCapture& operator=(const LogCapture&) = delete;
-
-  std::string Text() const { return oss_.str(); }
-
- private:
-  std::ostringstream oss_;
-  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
 };
 
 // =============== LightSource ===============
