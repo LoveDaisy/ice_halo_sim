@@ -224,8 +224,9 @@ def run_pre_commit() -> int:
         in_main = is_main_worktree(cwd, toplevel)
         # -z: NUL-separated and unquoted, so a path that core.quotePath would
         # otherwise wrap in quotes and escape cannot slip past the first-
-        # component test by arriving as `"src/..."`.
-        staged = _git(cwd, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRDT")
+        # component test by arriving as `"src/..."`. No --diff-filter: every
+        # change type counts, a file↔symlink swap and a conflicted path alike.
+        staged = _git(cwd, "diff", "--cached", "--name-only", "-z")
     except GitUnavailable as exc:
         print(f"worktree-guard: cannot run git ({exc}); refusing to guess", file=sys.stderr)
         return 1
@@ -357,19 +358,23 @@ def run_print_settings() -> int:
     return 0
 
 
-def _installed_commands(settings_path: str) -> list[str] | None:
-    """Every PreToolUse command in the file that names this script; None if unreadable."""
+def _installed_entries(settings_path: str) -> list[object] | None:
+    """Every PreToolUse entry whose commands name this script; None if unreadable.
+
+    The whole entry is returned, not just the command string, so that a
+    narrowed `matcher` or a changed `timeout` reads as stale too — the
+    comparison is against the entry in SETTINGS_SNIPPET, field for field.
+    """
     try:
         with open(settings_path, encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
-    found: list[str] = []
+    found: list[object] = []
     for entry in (data.get("hooks") or {}).get("PreToolUse") or []:
-        for hook in (entry or {}).get("hooks") or []:
-            cmd = (hook or {}).get("command")
-            if isinstance(cmd, str) and "worktree-guard" in cmd:
-                found.append(cmd)
+        cmds = [(h or {}).get("command") for h in (entry or {}).get("hooks") or []]
+        if any(isinstance(c, str) and "worktree-guard" in c for c in cmds):
+            found.append(entry)
     return found
 
 
@@ -399,24 +404,25 @@ def run_check_settings() -> int:
             return 1
         print(f"worktree-guard: {SETTINGS_RELPATH} absent in the {where}; none needed there.")
         return 0
-    cmds = _installed_commands(path)
-    if cmds is None:
+    entries = _installed_entries(path)
+    if entries is None:
         print(f"worktree-guard: {path} is not readable JSON", file=sys.stderr)
         return 1
-    if cmds == [SETTINGS_COMMAND]:
+    expected = SETTINGS_SNIPPET["hooks"]["PreToolUse"]
+    if entries == expected:
         print(f"worktree-guard: {SETTINGS_RELPATH} is current ({where}).")
         return 0
-    if not cmds:
+    if not entries:
         print(
-            f"worktree-guard: {path} exists but carries no PreToolUse command naming this script; "
+            f"worktree-guard: {path} exists but carries no PreToolUse entry naming this script; "
             f"merge in the output of `print-settings`.",
             file=sys.stderr,
         )
         return 1
     print(
-        f"worktree-guard: {path} carries a STALE PreToolUse command for this script — this is the "
+        f"worktree-guard: {path} carries a STALE PreToolUse entry for this script — this is the "
         f"shape that once blocked every edit in the main worktree. Replace it with the output of "
-        f"`print-settings`.\n  installed: {cmds}\n  expected:  [{SETTINGS_COMMAND!r}]",
+        f"`print-settings`.\n  installed: {json.dumps(entries)}\n  expected:  {json.dumps(expected)}",
         file=sys.stderr,
     )
     return 1
