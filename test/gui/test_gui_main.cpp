@@ -602,6 +602,7 @@ int main(int argc, char** argv) {
   RegisterLensBorderTests(engine);
   RegisterAngularDistCircleTests(engine);
   RegisterAnnotationLineTrackingTests(engine);
+  RegisterAnnotationLineSeamTests(engine);
   RegisterPreviewViewportTests(engine);
   RegisterPerfTests(engine);
   RegisterFaceNumberOverlayTests(engine);

@@ -1,31 +1,25 @@
-// The angular-distance circles, in rendered GUI pixels: that the whole chain from GuiState through
-// core's mask to the preview shader actually puts a circle on screen, in the right place, and that
-// the switch turns it off.
+// The angular-distance circles, in rendered GUI pixels: that the whole chain from the radius list
+// and the sun direction through the preview shader actually puts a circle on screen, in the right
+// place, and that the switch turns it off.
 //
 // What this suite is for. Every other test of this feature stops one layer short of the picture:
 // the CLI's own compositing is asserted in unit-correctness/server/test_render_consumer_angular_dist
-// .cpp, core's geometry in unit-correctness/core/test_annotation_overlay.cpp, and the request
-// AnnotationOverlayCache builds is plain C++. What none of them can see is whether the mask reaches
-// the shader at all — the texture upload, the sampler binding, and above all the uv mapping, where
-// core's top-left-origin row-major mask meets a v_ndc whose y points the other way. A y flip that
-// went missing would mirror every circle about the horizon and break nothing that compiles.
+// .cpp and core's geometry in unit-correctness/core/test_annotation_overlay.cpp. What none of them
+// can see is the shader's own evaluation of the curve — the radius list and the reference
+// direction reaching it as uniforms, the angular-distance field it derives from each fragment's
+// world direction, and above all the sense of that direction's y, where the world frame the
+// circles are defined in meets a v_ndc whose y points up. A sign that went missing would mirror
+// every circle about the horizon and break nothing that compiles.
 //
 // Capture path: RenderExportToRgba's own off-screen FBO, the same one test_lens_border.cpp uses, so
 // nothing here depends on window size or panel layout. No simulation is run, so the frame is black
 // everywhere the annotation is not and a coloured pixel is unambiguous.
-//
-// THE SETTLE DELAY IS PART OF WHAT IS TESTED. AnnotationOverlayCache deliberately does not compute
-// on the frame the view changes — the core call is far too expensive for a draw loop, so it waits
-// for the view to hold still (see that class's own comment). RequestFrame below therefore pumps
-// frames through RenderPreviewPanel before capturing, and the "circles eventually appear" assertion
-// is also the assertion that the debounce does eventually fire. A cache that never settled would
-// leave this suite red rather than silently drawing nothing.
 
 #include <cmath>
 #include <cstddef>
 #include <vector>
 
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_overlay_cache.hpp"  // GuiSunWorldDir
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
@@ -50,7 +44,7 @@ constexpr float kCircleB = 0.0f;
 constexpr float kSunAltitude = 90.0f;
 constexpr float kFov = 120.0f;
 // Wide enough that a ring centred 40 deg off-axis still fits: 40 + 22 = 62 deg < the 75 deg
-// half-FOV, with room for the mask's own width.
+// half-FOV, with room for the line's own width.
 constexpr float kWideFov = 150.0f;
 constexpr float kOffAxisSunAltitude = 40.0f;
 constexpr float kCircleDeg = 22.0f;
@@ -93,33 +87,12 @@ void RunRenderRequest() {
   params.overlay.sun_circles_color[2] = kCircleB;
   params.overlay.sun_circles_alpha = 1.0f;  // opaque: the pixel test reads a colour, not a blend
 
-  // The mask for THIS probe's view, at the probe's own size — not the live viewport's. Built here
-  // rather than borrowed from RenderPreviewPanel's cache because the probe renders a view of its
-  // own choosing; borrowing would sample a mask computed for whatever the panel happens to show.
-  static gui::AnnotationOverlayCache probe_cache;
-  gui::AnnotationOverlayCache::ViewKey key;
-  key.width = kProbeW;
-  key.height = kProbeH;
-  key.lens_type = params.view_proj.lens_type;
-  key.fov = params.view_proj.fov;
-  key.visible = params.view_proj.visible;
-  key.front = false;
-  key.azimuth = params.view_proj.azimuth;
-  key.elevation = params.view_proj.elevation;
-  key.roll = params.view_proj.roll;
-  gui::GuiSunWorldDir(g_req.sun_altitude, key.sun_dir);
-  key.angular_dist_deg = { kCircleDeg };
-  // Drive the debounce to its settle point. Doing it in a loop here rather than across GUI frames
-  // keeps the probe's own cache independent of how many frames the harness happens to pump.
-  for (int i = 0; i <= gui::AnnotationOverlayCache::kSettleFrames; ++i) {
-    probe_cache.Update(key);
-  }
-  if (probe_cache.HasResult()) {
-    params.overlay.angular_dist_mask = probe_cache.AngularDistMask().data();
-    params.overlay.angular_dist_mask_w = probe_cache.Width();
-    params.overlay.angular_dist_mask_h = probe_cache.Height();
-    params.overlay.angular_dist_mask_generation = probe_cache.Generation();
-  }
+  // WHERE the circle is, as the definition the shader evaluates per fragment: the radius list and
+  // the direction it is centred on — the same two things the anchor request carries — rather than
+  // a mask computed for a canvas. Nothing about the probe's size enters here; the shader derives
+  // the curve from each fragment's own direction.
+  params.overlay.angular_dist_deg = { kCircleDeg };
+  gui::GuiSunWorldDir(g_req.sun_altitude, params.overlay.reference_dir);
 
   g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH);
   g_req.done = true;
@@ -166,7 +139,7 @@ bool LooksLikeTheCircle(const unsigned char rgb[3]) {
   return rgb[1] > 100 && rgb[0] < 80 && rgb[2] < 80;
 }
 
-// Scan a short radial segment. The mask is a couple of pixels wide and the rounding above can land
+// Scan a short radial segment. The line is a few pixels wide and the rounding above can land
 // one pixel off, so demanding the circle at one exact coordinate would assert the rasteriser's
 // rounding rather than the circle's position. +-4 px absorbs that and is far too narrow to find a
 // circle that is somewhere else.
@@ -200,8 +173,8 @@ std::size_t CountCirclePixels(const std::vector<unsigned char>& rgba) {
 void RegisterAngularDistCircleTests(ImGuiTestEngine* engine) {
   // The whole chain, and the one assertion that catches a wrong uv mapping: with the sun at the
   // zenith under a linear lens pointed straight up, the 22 deg circle is a ring of a radius the
-  // lens fixes. A mask sampled with the wrong y sense, the wrong scale, or not at all fails to put
-  // green there — and a stray green pixel anywhere else fails the ring's own shape check.
+  // lens fixes. A field evaluated with the wrong y sense, the wrong scale, or not at all fails to
+  // put green there — and a stray green pixel anywhere else fails the ring's own shape check.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "angular_dist", "a_circle_is_drawn_at_the_radius_the_lens_predicts");
     t->GuiFunc = AngularDistGuiFunc;
@@ -231,22 +204,22 @@ void RegisterAngularDistCircleTests(ImGuiTestEngine* engine) {
       }
       IM_CHECK_EQ(found, 4);
 
-      // And nothing in the middle: the circle is a ring, not a filled disc. This is what a mask
-      // read as "everything inside" rather than "on the curve" would fail.
+      // And nothing in the middle: the circle is a ring, not a filled disc. This is what a level
+      // set read as "everything inside" rather than "on the curve" would fail.
       unsigned char centre[3] = {};
       IM_CHECK(ReadPixel(rgba, 0.0f, 0.0f, centre));
       IM_CHECK(!LooksLikeTheCircle(centre));
     };
   }
 
-  // The y sense of the mask, which the concentric case above is structurally blind to: a ring
-  // centred on the frame is symmetric about the horizontal axis, so a mask sampled upside down
-  // produces exactly the same picture. This case puts the sun 40 deg ABOVE the camera axis, where
-  // up and down are different answers — the whole ring must land in the upper half of the frame.
+  // The y sense of the reference direction, which the concentric case above is structurally blind
+  // to: a ring centred on the frame is symmetric about the horizontal axis, so a sun direction with
+  // its altitude sign flipped produces exactly the same picture. This case puts the sun 40 deg
+  // ABOVE the camera axis, where up and down are different answers — the whole ring must land in
+  // the upper half of the frame.
   //
-  // That is the failure a missing uv flip produces, and nothing else in the tree would see it:
-  // core's mask is row-major from the top-left while v_ndc.y points up, so the two conventions
-  // disagree by construction and only a rendered pixel can say which one won.
+  // That is the failure a sign error between GuiSunWorldDir's convention (altitude = asin(-z)) and
+  // the shader's would produce, and only a rendered pixel can say which one won.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "angular_dist", "an_off_axis_circle_lands_on_the_side_the_sun_is_on");
     t->GuiFunc = AngularDistGuiFunc;

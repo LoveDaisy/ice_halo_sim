@@ -9,6 +9,7 @@
 
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
+#include "util/annotation_line_width.hpp"
 
 namespace lumice::gui {
 
@@ -48,28 +49,50 @@ uniform float u_overlay_alpha;
 uniform vec2 u_bg_uv_scale;
 uniform vec2 u_bg_uv_offset;
 
-// Auxiliary line overlay uniforms
+// Auxiliary line overlay uniforms.
+//
+// The four curve families — the celestial horizon, the parallels and meridians of the coordinate
+// grid, the circles of constant angular distance from a reference direction — are evaluated HERE,
+// per fragment, from this fragment's own world direction. Each is a level set of a world-space
+// angle field, and the field, the levels and the line-width rule are the same definition the CLI
+// renderer evaluates on the CPU (src/core/annotation_overlay.cpp over
+// mask_detail::LevelSetMaskFromField); the two are one curve computed by two evaluators, and
+// test/gui/parity/test_gui_cli_export_parity.cpp is the gate that keeps their pixels on top of
+// each other. What this buys over having core rasterize the curve and uploading a mask is the
+// thing the picture itself already has: it is re-projected every frame, so the lines drawn from
+// the same per-fragment direction move with it, on the same frame, at no CPU cost and with no
+// debounce.
 uniform int u_show_horizon;
 uniform int u_show_grid;
 uniform int u_show_sun_circles;
-// 1 where an angular-distance circle passes, computed by core (annotation_overlay.cpp) once per
-// settled view and uploaded as an R8 texture. The shader used to derive this per fragment from
-// acos(dot(world_dir, sun_dir)); it no longer does, so that the CLI renderer and this preview draw
-// the SAME curve rather than two implementations of it. Sampled NEAREST, one texel per fragment.
-uniform sampler2D u_angular_dist_mask;
-uniform int u_has_angular_dist_mask;
-// 1 where a parallel or a meridian passes, from the same core computation and on the same terms as
-// the circle mask above. The shader used to derive this per fragment from mod(altitude, step) and
-// mod(azimuth, step); it no longer does, for the same reason — one curve, drawn by both the CLI
-// renderer and this preview, instead of two implementations of it.
-uniform sampler2D u_grid_mask;
-uniform int u_has_grid_mask;
-// 1 where the celestial horizon passes, from the same core computation and on the same terms as
-// the two masks above. The shader used to derive this per fragment from fwidth(altitude_deg) — the
-// last annotation either renderer still computed for itself, and the one whose two answers were
-// measurably different curves rather than one curve read twice.
-uniform sampler2D u_horizon_mask;
-uniform int u_has_horizon_mask;
+// The level lists, PACKED FOUR TO A vec4. Not `float u_x[N]`: default-block uniform packing is
+// implementation-defined and a float array commonly costs one whole vec4 register per element,
+// which at these lengths would exceed GL_MAX_FRAGMENT_UNIFORM_COMPONENTS on drivers that report
+// the common 4096. Packed, the lists take 516 registers (2064 components) and fit with room.
+// Element i of a list is list[i >> 2][i & 3] (levelAt below).
+//
+// The two grid families share ONE array: the parallels occupy [0, u_elevation_count), the
+// meridians [u_elevation_count, u_elevation_count + u_longitude_count), each range sorted
+// ascending by the uploader. One array rather than two so that the nearest-level search reads
+// the uniform in place through an index range — a uniform array handed to a GLSL function as a
+// parameter is passed BY VALUE, and this driver honours that with a copy of all 256 vec4 per
+// call per fragment (measured: 3 ms -> 950 ms a frame). The literal sizes are
+// 2 * kMaxOverlayLevels / 4 and kMaxSunCircles / 4 (preview_renderer.hpp / gui_constants.hpp);
+// static_asserts after this string pin the two spellings together.
+uniform vec4 u_grid_levels_deg[512];
+uniform int u_elevation_count;
+uniform int u_longitude_count;
+uniform vec4 u_angular_dist_deg[4];
+uniform int u_angular_dist_count;
+// The direction the angular-distance circles are centred on (the sun), a unit vector in the world
+// frame this shader's world_dir lives in — the direction light TRAVELS, altitude = asin(-z).
+uniform vec3 u_reference_dir;
+// The line-width rule's three constants, uploaded from src/util/annotation_line_width.hpp rather
+// than written here: GLSL cannot include the header, and the alternative — the same three digits
+// spelled a second time in this string — is exactly the drift the header exists to prevent.
+uniform float u_line_fwidth_min_deg;
+uniform float u_line_fwidth_max_deg;
+uniform float u_line_half_width_px;
 uniform vec3 u_horizon_color;
 uniform vec3 u_grid_color;
 uniform vec3 u_sun_circles_color;
@@ -493,55 +516,128 @@ vec4 globeInverse(vec2 pos, float half_fov, out float ri) {
   return vec4(normalize(hit_world), 1.0);
 }
 
+// The half-width, in degrees, of an annotation line through a fragment whose angle field reads
+// `field_deg` here — src/util/annotation_line_width.hpp's rule with the hardware derivative in the
+// fwidth slot. CPU twin: mask_detail::LevelSetMaskFromField (src/core/lens_proj_build.hpp).
+//
+// `fw` is passed in rather than computed here because the CIRCULAR field (azimuth) must not take
+// the raw fwidth(): see wrapAngleDiffDeg below.
+float lineHalfWidthDeg(float fw) {
+  return clamp(fw, u_line_fwidth_min_deg, u_line_fwidth_max_deg) * u_line_half_width_px;
+}
+
+// An angle difference in degrees folded into [-180, 180). For CIRCULAR fields only (azimuth): a
+// naive difference across the +/-180 seam reads the 179 -> -179 step as 358 instead of 2, both
+// when the local gradient is measured (fwidth would report a wall of gradient along the seam and
+// the clamp would turn it into a 3 px band down the anti-meridian) and when the distance to a
+// level is measured. Altitude ([-90, 90]) and angular distance ([0, 180]) have no seam and must
+// NOT go through this. CPU twin: mask_detail::WrapAngleDiffDeg, whose range is (-180, 180]; the
+// two differ only at exactly 180, where both sides take the absolute value and agree.
+float wrapAngleDiffDeg(float d) {
+  return d - 360.0 * floor((d + 180.0) / 360.0);
+}
+
+// The edge falloff of a line at distance `d_deg` (already wrapped for a circular field) from its
+// level: 1 on the curve, 0 at `half_width_deg` and beyond. Its `t > 0` set is exactly the set the
+// CPU twin marks (`|d| < half_width`); the ramp inside it is this renderer's antialiasing.
+float lineCoverage(float d_deg, float half_width_deg) {
+  return 1.0 - smoothstep(0.0, half_width_deg, abs(d_deg));
+}
+
+// Element i of the packed grid level array.
+float gridLevelAt(int i) {
+  return u_grid_levels_deg[i >> 2][i & 3];
+}
+
+// The distance, in degrees, from `field_deg` to the NEAREST level in u_grid_levels_deg[begin, end),
+// a range sorted ascending (the uploader sorts; see UploadGridLevels). Coverage falls off
+// monotonically with distance, so the largest coverage over a list is the coverage of its nearest
+// level, and finding that is a binary search — a dozen steps — where a linear pass over the list
+// is up to a thousand (720 meridians and 360 parallels at the narrowest field of view, per
+// fragment, per frame; measured at 1600x1200 on an M2 Max as +10 ms a frame linearly, most of a
+// 60 fps budget spent on an edge case).
+//
+// `circular` folds the field onto the azimuth circle: the nearest level may then be the range's
+// first or last element reached across the +/-180 seam, so those two are tried through
+// wrapAngleDiffDeg on top of the two neighbours the search finds.
+float nearestGridLevelDistDeg(float field_deg, int begin, int end, bool circular) {
+  if (end <= begin) return 1e9;
+  // First index in [begin, end) whose level is >= field_deg. 12 iterations halve 1024 to one.
+  int lo = begin;
+  int hi = end;
+  for (int it = 0; it < 12; ++it) {
+    if (lo >= hi) break;
+    int mid = (lo + hi) >> 1;
+    if (gridLevelAt(mid) < field_deg) lo = mid + 1; else hi = mid;
+  }
+  float d = 1e9;
+  if (lo < end) d = min(d, abs(field_deg - gridLevelAt(lo)));
+  if (lo > begin) d = min(d, abs(field_deg - gridLevelAt(lo - 1)));
+  if (circular) {
+    d = min(d, abs(wrapAngleDiffDeg(field_deg - gridLevelAt(begin))));
+    d = min(d, abs(wrapAngleDiffDeg(field_deg - gridLevelAt(end - 1))));
+  }
+  return d;
+}
+
 // Overlay auxiliary lines on top of final_color.
 //
-// It takes no world direction any more, and that absence is the statement: every CURVE this draws
-// now comes from a mask core computed for this exact view, so there is nothing left here to derive
-// from the fragment's own direction. What remains direction-free is the reference-point marker
-// family, whose points arrive as pixel-space uniforms.
-//
+// world_dir: this fragment's unit world-space direction (the one the picture was sampled at), in
+// the convention every annotation direction uses — altitude = asin(-z), azimuth = atan2(-y, -x).
+// The caller only reaches here for a fragment the lens images AND the hemisphere policy admits,
+// so the clip the CLI applies through its `drawable` mask is applied here by the call site.
 // pos_pix: pixel-space position of the current fragment, center-origin (0,0),
 // y-up. Matches the CPU helper ProjectWorldDirToScreen for marker overlays.
-vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
-  // Coordinate grid — geometry from core's mask, drawn first so the other lines overlay on top.
-  // Same sampling rule as the circles below (see the uv note there); the two blocks differ only in
-  // which mask and which colour they read.
-  if (u_show_grid != 0 && u_has_grid_mask != 0) {
-    vec2 grid_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
-    float t = texture(u_grid_mask, grid_uv).r > 0.0 ? 1.0 : 0.0;
+vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
+  const float DEG = 180.0 / PI;
+
+  // The three angle fields. Each formula is the shader-side twin of a core function, named here so
+  // a change on either side has somewhere to look:
+  //   altitude_deg      mask_detail::AltitudeDeg           (src/core/lens_proj_build.hpp)
+  //   azimuth_deg       annotation::AzimuthDegOfDir        (src/core/annotation_overlay.cpp)
+  //   angular_dist_deg  annotation::AngularDistDegOfDir    (src/core/annotation_overlay.cpp)
+  float altitude_deg = asin(clamp(-world_dir.z, -1.0, 1.0)) * DEG;
+  float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;
+  float angular_dist_deg = acos(clamp(dot(world_dir, u_reference_dir), -1.0, 1.0)) * DEG;
+
+  // Local gradients, degrees per pixel. Altitude and angular distance take fwidth as it comes;
+  // azimuth folds each partial across the seam first, for the reason wrapAngleDiffDeg states.
+  float hw_alt = lineHalfWidthDeg(fwidth(altitude_deg));
+  float fw_az = abs(wrapAngleDiffDeg(dFdx(azimuth_deg))) + abs(wrapAngleDiffDeg(dFdy(azimuth_deg)));
+  float hw_az = lineHalfWidthDeg(fw_az);
+  float hw_dist = lineHalfWidthDeg(fwidth(angular_dist_deg));
+
+  // Coordinate grid — drawn first so the other lines overlay on top. Parallels and meridians share
+  // one colour and one alpha, so their coverages are merged before the blend, exactly as the CLI
+  // composites the two families' masks into one layer.
+  if (u_show_grid != 0) {
+    int ec = u_elevation_count;
+    float t = lineCoverage(nearestGridLevelDistDeg(altitude_deg, 0, ec, false), hw_alt);
+    t = max(t, lineCoverage(nearestGridLevelDistDeg(azimuth_deg, ec, ec + u_longitude_count, true), hw_az));
     color = blendAnnotationColor(color, u_grid_color, t, u_grid_alpha, u_tone);
   }
 
-  // Sun angular distance circles. Geometry from core's mask; colour and alpha still this
-  // consumer's own, which is the whole shape of the split — core says where, the drawer says how.
-  //
-  // uv.y is flipped because the two coordinate systems disagree about which end is the top: the
-  // mask is row-major from the TOP-left (core's convention, shared with the CLI's image buffer)
-  // while v_ndc.y is +1 at the top. The 0.5 in the x term and the flip together put the sample at
-  // the CENTRE of the texel whose pixel centre core inverse-projected, so there is no half-pixel
-  // shift between where the mask says the line is and where it is drawn.
-  if (u_show_sun_circles != 0 && u_has_angular_dist_mask != 0) {
-    vec2 mask_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
-    // The mask stores 1, not 255, for a lit pixel; an R8 texture normalizes that to 1/255, which
-    // as a blend weight is a line you cannot see. It is a BOOLEAN, so read it as one rather than
-    // scaling it — any nonzero texel is on. (Sampled NEAREST, so there are no intermediate values
-    // to lose by thresholding.)
-    float t = texture(u_angular_dist_mask, mask_uv).r > 0.0 ? 1.0 : 0.0;
+  // Circles of constant angular distance from u_reference_dir. A linear pass: the list is at most
+  // kMaxSunCircles long, so there is nothing for a search to save.
+  if (u_show_sun_circles != 0) {
+    float t = 0.0;
+    for (int i = 0; i < u_angular_dist_count; ++i) {
+      t = max(t, lineCoverage(angular_dist_deg - u_angular_dist_deg[i >> 2][i & 3], hw_dist));
+    }
     color = blendAnnotationColor(color, u_sun_circles_color, t, u_sun_circles_alpha, u_tone);
   }
 
-  // Horizon line (altitude = 0) — geometry from core's mask, drawn last so it's most visible.
-  // Same sampling rule as the two blocks above; the uv note there applies here unchanged.
-  if (u_show_horizon != 0 && u_has_horizon_mask != 0) {
-    vec2 horizon_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
-    float t = texture(u_horizon_mask, horizon_uv).r > 0.0 ? 1.0 : 0.0;
-    color = blendAnnotationColor(color, u_horizon_color, t, u_horizon_alpha, u_tone);
+  // Horizon line (altitude = 0) — drawn last of the curves so it's most visible.
+  if (u_show_horizon != 0) {
+    color = blendAnnotationColor(color, u_horizon_color, lineCoverage(altitude_deg, hw_alt), u_horizon_alpha, u_tone);
   }
 
   // Sky reference-point ring markers — drawn last so they sit on top of all
-  // other overlays. CPU passes sentinel (-9999, -9999) for a marker that is
-  // switched off, offscreen or behind the camera; the distance test rejects it
-  // naturally, which is why there is no per-marker enable to read.
+  // other overlays. Their positions are NOT derived from world_dir: a marker is a named direction
+  // core projects (LUMICE_ComputeAnnotationAnchors), handed over as pixel-space uniforms. CPU
+  // passes sentinel (-9999, -9999) for a marker that is switched off, offscreen or behind the
+  // camera; the distance test rejects it naturally, which is why there is no per-marker enable to
+  // read.
   //
   // A constant-bound loop over the whole id space rather than six unrolled
   // blocks: the bound is a compile-time constant so there is no dynamic
@@ -787,7 +883,7 @@ void main() {
 
   // Auxiliary line overlay (on top of everything, only in visible region)
   if (result.w >= 0.5 && pixel_visible) {
-    final_color = overlayAuxLines(final_color, pos_ovl);
+    final_color = overlayAuxLines(world_dir, final_color, pos_ovl);
   }
 
   // Lens border — deliberately OUTSIDE the `result.w >= 0.5 && pixel_visible` gate.
@@ -808,6 +904,15 @@ void main() {
 static_assert(LUMICE_ANNOTATION_MARKER_COUNT == 6,
               "the fragment shader hard-codes 6 marker uniform slots; update kFragmentShader's "
               "u_marker_screen_pos[6] / u_marker_color[6] and its loop bound together with this");
+
+// The `512` and `4` written into u_grid_levels_deg[512] / u_angular_dist_deg[4] above, pinned the
+// same way: four levels per vec4, two grid families in one array, so the length is 2 * capacity / 4.
+static_assert(kMaxOverlayLevels % 4 == 0 && 2 * kMaxOverlayLevels / 4 == 512,
+              "the fragment shader hard-codes vec4 u_grid_levels_deg[512]; update kFragmentShader together "
+              "with kMaxOverlayLevels");
+static_assert(kMaxSunCircles % 4 == 0 && kMaxSunCircles / 4 == 4,
+              "the fragment shader hard-codes vec4 u_angular_dist_deg[4]; update kFragmentShader together "
+              "with kMaxSunCircles");
 
 // clang-format on
 
@@ -1743,6 +1848,42 @@ float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_
   return rad_per_px * kDragSensitivity * 180.0f / kPi;
 }
 
+// The two grid level lists into their shared packed vec4 uniform array, and the circles into
+// theirs. Each list is clamped to its capacity — the shader reads `count` elements and never past
+// what was uploaded — copied into a zero-padded scratch buffer so the last vec4 is whole, and the
+// two grid ranges are SORTED ascending, which is the precondition the shader's nearest-level
+// search (nearestGridLevelDistDeg) rests on. Sorting here rather than asking callers to is what
+// makes that precondition a fact of the upload instead of a contract every caller has to know
+// about; the order of a level list carries no meaning anywhere else.
+static void UploadGridLevels(unsigned int program, const std::vector<float>& elevation_deg,
+                             const std::vector<float>& longitude_deg) {
+  const int ec = std::min(static_cast<int>(elevation_deg.size()), kMaxOverlayLevels);
+  const int lc = std::min(static_cast<int>(longitude_deg.size()), kMaxOverlayLevels);
+  const int vec4_count = (ec + lc + 3) / 4;
+  std::vector<float> packed(static_cast<size_t>(vec4_count) * 4, 0.0f);
+  std::copy(elevation_deg.begin(), elevation_deg.begin() + ec, packed.begin());
+  std::copy(longitude_deg.begin(), longitude_deg.begin() + lc, packed.begin() + ec);
+  std::sort(packed.begin(), packed.begin() + ec);
+  std::sort(packed.begin() + ec, packed.begin() + ec + lc);
+  // "[0]" rather than the bare array name, for the reason the marker upload below gives.
+  if (vec4_count > 0) {
+    glUniform4fv(glGetUniformLocation(program, "u_grid_levels_deg[0]"), vec4_count, packed.data());
+  }
+  glUniform1i(glGetUniformLocation(program, "u_elevation_count"), ec);
+  glUniform1i(glGetUniformLocation(program, "u_longitude_count"), lc);
+}
+
+static void UploadCircleLevels(unsigned int program, const std::vector<float>& angular_dist_deg) {
+  const int count = std::min(static_cast<int>(angular_dist_deg.size()), kMaxSunCircles);
+  const int vec4_count = (count + 3) / 4;
+  std::vector<float> packed(static_cast<size_t>(vec4_count) * 4, 0.0f);
+  std::copy(angular_dist_deg.begin(), angular_dist_deg.begin() + count, packed.begin());
+  if (vec4_count > 0) {
+    glUniform4fv(glGetUniformLocation(program, "u_angular_dist_deg[0]"), vec4_count, packed.data());
+  }
+  glUniform1i(glGetUniformLocation(program, "u_angular_dist_count"), count);
+}
+
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
   if (!shader_program_ || !texture_ || vp_w <= 0 || vp_h <= 0) {
     return;
@@ -1844,6 +1985,16 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), ov.show_horizon ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), ov.show_grid ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), ov.show_sun_circles ? 1 : 0);
+  // The curve definitions: level lists, packed four to a vec4 (see the uniform block in
+  // kFragmentShader for why), the circles' centre, and the line-width rule's constants — the
+  // latter from their single owner in src/util/, never as digits in the GLSL source.
+  UploadGridLevels(shader_program_, ov.elevation_deg, ov.longitude_deg);
+  UploadCircleLevels(shader_program_, ov.angular_dist_deg);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_reference_dir"), ov.reference_dir[0], ov.reference_dir[1],
+              ov.reference_dir[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_line_fwidth_min_deg"), kAnnotationLineFwidthMinDeg);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_line_fwidth_max_deg"), kAnnotationLineFwidthMaxDeg);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_line_half_width_px"), kAnnotationLineHalfWidthPx);
   // Unit 2 (0 is the sim texture, 1 the background image). The mask is uploaded by
   // UploadAngularDistMask, which the caller drives off its AnnotationOverlayCache; a frame in
   // which nothing has been uploaded yet draws no circles rather than drawing them somewhere

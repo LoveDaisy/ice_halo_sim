@@ -1965,6 +1965,16 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.overlay.horizon_alpha = g_state.horizon_alpha;
     pp.overlay.grid_alpha = g_state.grid_alpha;
     pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
+    // WHERE the curves are, as the definition the shader evaluates per fragment: the same lists and
+    // reference direction the anchor request below carries, read from the one builder
+    // (AnnotationViewInputFor) so the line and the label on it cannot describe different curves.
+    {
+      const AnnotationViewInput curves = AnnotationViewInputFor(g_state, rc);
+      pp.overlay.elevation_deg = curves.elevation_deg;
+      pp.overlay.longitude_deg = curves.longitude_deg;
+      pp.overlay.angular_dist_deg = curves.angular_dist_deg;
+      GuiSunWorldDir(curves.sun_altitude_deg, pp.overlay.reference_dir);
+    }
     // Angular-distance circles and the coordinate grid: ask core where they are, once the view has
     // settled. ONE request covers every family, so the mask the shader samples and the label
     // anchors drawn below cannot end up describing different curves.

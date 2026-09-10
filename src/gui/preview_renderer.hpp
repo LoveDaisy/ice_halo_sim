@@ -12,6 +12,15 @@ namespace lumice::gui {
 
 inline constexpr float kOverlaySentinel = -9999.f;
 
+// How many parallels, and how many meridians, the preview shader can draw at once: the size of the
+// two level-list uniform arrays in kFragmentShader (preview_renderer.cpp, u_elevation_deg /
+// u_longitude_deg). Equal to LUMICE_MAX_ANNOTATION_LINES because the widest list the GUI builds —
+// 720 meridians at its narrowest field of view (ComputeGridLongitudeAngles at a 0.5 deg step) —
+// is what that ceiling was widened for, so the two are one number for one reason. A list longer
+// than this is TRUNCATED at upload (Render()), which the GUI cannot produce and core would reject.
+// The circles' capacity is kMaxSunCircles (gui_constants.hpp), the list's own ceiling.
+inline constexpr int kMaxOverlayLevels = LUMICE_MAX_ANNOTATION_LINES;
+
 // The "no marker anywhere" position array. A function for the same reason GuiState's
 // MakeDefaultMarkers() is one: the value is six identical pairs, and a member initializer spelling
 // them out is six lines that say nothing the name does not.
@@ -68,11 +77,21 @@ struct Exposure {
 struct OverlayDecoration {
   bool show_horizon = false;
   bool show_grid = false;
-  // The switch only. Where the circles are is no longer described here: it comes from the mask
-  // PreviewRenderer::UploadAngularDistMask was last given, which the caller fills from its
-  // AnnotationOverlayCache. sun_dir / sun_circle_angles / sun_circle_count used to live here and
-  // were the shader's inputs for deriving the curve itself; core derives it now.
   bool show_sun_circles = false;
+  // WHERE the curves are, stated as the definition the shader evaluates per fragment rather than as
+  // pixels: the parallels and meridians of the grid and the circles' radii, in degrees, and the
+  // direction the circles are centred on. The same three lists and the same direction go into the
+  // core anchor request (AnnotationViewInputFor, app_panels.cpp), which is what makes the drawn
+  // curve and the label placed on it two readings of one input rather than two inputs.
+  //
+  // Parallels/meridians past kMaxOverlayLevels and circles past kMaxSunCircles are not uploaded
+  // (Render() clamps the counts); the GUI's own lists never reach either bound.
+  std::vector<float> elevation_deg;
+  std::vector<float> longitude_deg;
+  std::vector<float> angular_dist_deg;
+  // Unit vector, world frame, the direction light TRAVELS (altitude = asin(-z)) — GuiSunWorldDir's
+  // output, the same value the anchor request's reference_dir carries.
+  float reference_dir[3] = { 0.0f, 0.0f, -1.0f };
   // BORROWED for the duration of the Render call: core's angular-distance mask for this view,
   // row-major mask_w*mask_h with a top-left origin, or null for "none computed". Owned by the
   // caller's AnnotationOverlayCache. Passed rather than uploaded directly because the upload needs
