@@ -1561,6 +1561,7 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       // so one grep finds every reading of that ruler in this binary; n_diff is the XOR count.
       fprintf(stderr, "[export_parity] %s: n_diff=%d maxcc=%d (|gui|=%d |cli|=%d, tau=0, K=%d) size=%dx%d\n",
               scene.name, diff.n_diff, diff.max_cc, n_gui, n_cli, lines.max_cc_threshold, imgs.w, imgs.h);
+      // -1 is the ruler's "malformed mask" return; asked first so it cannot pass as "under K".
       IM_CHECK_GE(diff.max_cc, 0);
       IM_CHECK_LE(diff.max_cc, lines.max_cc_threshold);
 
