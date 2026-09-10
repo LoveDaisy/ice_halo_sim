@@ -1154,6 +1154,71 @@ own rather than more files under `visual/`:
    feeds the preview from a live run. A parity scene has to be built out of the mode the product
    uses, or it will agree with itself about fields the shader never read.
 
+4. **Two layers, two rulers.** The CLI export-parity fixture's frame carries two kinds of content
+   with two different noise models, and one statistic cannot serve both. The simulated arcs are
+   two independent Monte-Carlo renders; the annotation curves (grid, sun circles, horizon) are one
+   definition evaluated twice and land on a per-pixel yes/no. Measured on that fixture, a
+   whole-frame PSNR fails each layer in its own way. On the deterministic layer it is blind:
+   dropping the last meridian from the CLI arm moves the single-lens scene by 0.27 dB and the
+   full-sky scene by 0.2 dB, switching one marker off by 0.02 dB — inside some row's honest
+   run-to-run spread every time. On the stochastic layer its **sign reverses**: darkening the CLI
+   arm by 0.25 stop read as an *improvement* (27.63 dB against a 27.54 mean on the single-lens
+   scene), because most of the difference energy is the two arms' own noise and a break that
+   lowers one arm's noise lowers that energy with it. So the fixture holds each layer to a ruler
+   built for it, in scenes of its own:
+   - **Simulation scenes → 4×4 block-mean PSNR** (`test/support/block_mean_psnr.hpp`), under
+     `mean − max(10σ, 1.0 dB)`. The block mean suppresses the per-pixel noise term and leaves the
+     coherent one, so the same 0.25-stop break reads −2.8 dB. Point 2 above argued the 1.0 dB floor
+     *away* for this tag, and that argument still holds for what it was about — cross-machine
+     drift of a committed reference, which a parity pair does not have. The floor is back for a
+     different reason: under the block mean the honest σ is 0.02–0.13 dB, so 10σ alone would place
+     three of the four thresholds within 0.2–0.7 dB of the mean, above breaks the whole-frame ruler
+     was also missing; the floor is what puts ±0.25 stop and a +0.02 background shift under every
+     threshold. Thresholds are 35.4 / 38.3 / 39.3 / 42.1 dB (N=12; the print row is the one where
+     10σ binds), and the fixture prints the whole-frame figure beside the block-mean one, marked
+     diagnostic, so the calibration history written in that unit stays readable. The full table of
+     breaks under both rulers is above `kScenes[]` in the source.
+   - **Lines-only scenes → membership mask, largest XOR blob ≤ K** (the mask entry of
+     `test/support/pixel_diff_metrics.hpp`, the same flood fill §4.6's deterministic groups use).
+     Each of the three screen-toned scenes has a `_lines` twin with the simulation turned off on
+     both arms. Each arm's frame becomes a "not the canvas" mask, the two are XORed, and the
+     largest 8-connected blob must not exceed K = 4. *Membership* rather than colour, because the
+     arms do not agree on the bytes of a half-transparent line (the CLI composites in linear light
+     before the transfer curve, the shader after it) and are not asked to; whether the pixel *is*
+     on the curve is what they must agree on, and the masks read identical counts. The honest
+     reading is one isolated pixel at most, identical across N=6; the smallest breaks each scene
+     is placed against are 73 / 8 / 11 px, and a marker the CLI draws with the scene's switch off
+     — invisible to the whole-frame PSNR at any radius — reads 98–130 px.
+     Two design facts were measured on the way, and both are the opposite of the first design:
+     (a) *the simulation is removed by saturation, not by exposure.* The plan was
+     `exposure_offset = −30`, since the CLI keeps drawing the annotation layer at any
+     `ExposureScale() > 0`; but the Display panel's EV slider clamps that GuiState field to its
+     domain floor of −8 on every frame it is drawn, and at 2^−8 the sun's neighbourhood still
+     lands 2–5 levels above a dark background on both arms — a residue that would need a
+     tolerance of 4 to hide, i.e. a tolerance tuned to the size of the thing it hides. The
+     lines-only scenes instead paint the canvas white, where the additive operator's
+     `clamp(L + 1)` returns 1 for every L ≥ 0 and the simulation leaves *no* trace (the fact
+     doc/print-mode-subtractive-ink.md records as "a white sky is always white"); the grid goes
+     black to stay visible, τ is 0, and each arm's most frequent colour is asserted to be that
+     white on every run. The −8 is kept so a circle crossing a bright arc cannot saturate on the
+     CLI arm alone. The fixture also asserts the export's `intensity_factor` against the scene's
+     exposure, so a clamped write can no longer pass silently. (b) *Markers are OFF in the
+     lines-only scenes.* The rings are the one annotation whose two arms are two edge models — a
+     2-px smoothstep ring against a hard 3-px distance test — and under a membership mask that is
+     a ring-shaped XOR of ~100–200 px per marker, the size of the smallest real break. Their
+     placement is pinned per pixel in `test_annotation_overlay_gui_parity.cpp`; their export
+     encoding stays asserted on the simulation scenes, whose ruler cannot see their pixels. Each
+     family is measured where its ruler can see it.
+   - **No lines-only twin for the print scene**, and that is a measured disposition rather than a
+     gap: the subtractive operator has no saturation floor — `paper · 10^(−D)` can only go down
+     from the paper — so at 2^−8 the sun's residue lands on the page (the two "not paper" masks
+     XOR to 45,347 px, largest blob 2,708, at τ = 0; still 19 / 3 at τ = 2), and no canvas colour
+     removes it. The print annotation blend is asserted per pixel elsewhere
+     (`test_render_consumer_print_mode.cpp`, `test_preview_print_mode.cpp`).
+   None of this changes the cadence: no CI job runs the `parity` tag (see below and §7.5), so
+   the 8 scenes are evaluated by `./scripts/test.sh {quick,full,pr}` on a machine with a GL
+   context and nowhere else.
+
 **Starting the CLI from a test binary.** This fixture is the first place in the tree where a test
 starts another of the repo's binaries as a child process. The mechanics, should a second one want
 them: `test/gui/CMakeLists.txt` passes `LUMICE_CLI_BIN_PATH="$<TARGET_FILE:Lumice>"` as a compile
