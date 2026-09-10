@@ -833,6 +833,11 @@ The one thing rejected outright is the fifth option nobody proposed but everythi
 loosening a threshold so the layer stops going red. That converts "not believed" into "does not
 report", which is the same zero detection power with the evidence removed.
 
+This section's `maxcc` ruler is row ① of §4.11's master table, which lines it up against the other
+three image-comparison categories in this tree and names the two footguns (block-mean PSNR read
+backwards; whole-frame PSNR's sign reversal on a darkened arm) that make each one the wrong tool
+for the others' layer.
+
 ### §4.7 Why `auto_ev` was retired, and `lens_proj` was not
 
 Both were once a set of reference images from stochastic renders, but they varied opposite axes.
@@ -1215,6 +1220,9 @@ own rather than more files under `visual/`:
      XOR to 45,347 px, largest blob 2,708, at τ = 0; still 19 / 3 at τ = 2), and no canvas colour
      removes it. The print annotation blend is asserted per pixel elsewhere
      (`test_render_consumer_print_mode.cpp`, `test_preview_print_mode.cpp`).
+   The lines-only membership-mask ruler and the simulation-scene block-mean ruler are rows ②
+   and ③ of §4.11's master table, alongside the deterministic-screenshot and `lens_proj` rows
+   this tag does not touch.
    None of this changes the cadence: no CI job runs the `parity` tag (see below and §7.5), so
    the 8 scenes are evaluated by `./scripts/test.sh {quick,full,pr}` on a machine with a GL
    context and nowhere else.
@@ -1235,6 +1243,97 @@ NEGATIVE filter, so a new category is included by default and `./scripts/test.sh
 runs it. CI is the exception and the trap — the one leg that runs `gui_test` passes a hand-picked
 POSITIVE filter naming two reference groups, so no CI job executes this layer today. Do not read a
 green CI as a green here (§4.6 has the wider argument about that leg).
+
+### §4.11 The comparison-ruler master table: category → ruler → threshold shape → red/green margin
+
+§4.6 and §4.10 each derived a ruler for the layer they cover, starting from a red the whole-frame
+statistic missed. This table puts all four image-comparison categories in this tree side by side —
+what is shared (the underlying pixel-diff / block-mean primitives) and what is not (which one
+applies where, and why swapping them makes things worse rather than stricter) — plus the one
+category that was measured and deliberately left alone.
+
+| Comparison category | Ruler | Threshold shape | Red sample (measured) | Green sample (measured) | Margin |
+|---|---|---|---|---|---|
+| ① Deterministic screenshots (`modal_layout` / `defaults_panel_layout` / `capture_harness` / `visual`) | `n_diff` at τ + largest 8-connected blob (`maxcc`) | `maxcc ≤ K`; τ=16 shared across the two CI-run groups, K per group (§4.6 has the sweep); `capture_harness`/`visual` run only on the reference machine at τ=0, K=0 | `wedge_presets@0a191bea` 127 px (42.6 dB — passed the old 40 dB floor); `presets_expanded`/`presets_warning@dcfa5f9e` 90 px (53.45 dB) | honest same-machine captures, maxcc=0; CI llvmpipe residue 35 px (`modal_layout`) / 0 px (`defaults_panel_layout`) | `modal_layout` 2.0× (K/blob) / 1.36× (drift/K); `defaults_panel_layout` ∞ / 2.15× (§4.6's table has the rest) |
+| ② Lines-only parity (`export_parity`'s `_lines` twins) | membership-mask XOR ("not the canvas" per pixel) + largest-blob `maxcc` — same primitive as row ①, applied to a mask instead of a raw Δ | `maxcc ≤ K=4`, τ=0 (a mask is binary already); markers OFF (§4.10 point 4b) | dropped last meridian 135–339 px; dropped last parallel 8–73 px; only one of two `angular_dist` lines drawn 360–640 px; horizon dropped 196–305 px; every circle shifted 1° 653–1295 px; a marker the scene switched OFF drawn anyway on one arm, 48–130 px (0.02 dB on whole-frame PSNR — invisible to it) | honest N=6 identical runs, 0–2 px of lens-domain rim antialiasing, `maxcc ≤ 1` | K=4 is 4× the honest blob; the tightest real break (`full_sky_dual_fisheye`'s dropped parallel, 8 px) is still 2× over K |
+| ③ `export_parity` simulation scenes (`single_lens_angled` / `full_sky_dual_fisheye` / `single_lens_rectilinear` / print) | 4×4 block-mean PSNR | `mean − max(10σ, 1.0 dB)`, N=12 — bm4 thresholds 35.4 / 38.3 / 39.3 / 42.1 dB | a ±0.25-stop exposure break on the CLI arm reads −1.19…−2.55 dB under the honest mean on bm4; the same break reads as an *improvement* under whole-frame PSNR (§4.10 point 4 — the sign reverses) | honest N=12 runs, σ = 0.016–0.105 dB per scene | 0.2–6.8 dB of headroom under the honest mean, depending on which term of `max(10σ, 1.0 dB)` binds (the print scene's σ=0.105 is the one row where 10σ exceeds the 1.0 dB floor) |
+| ③′ `lens_proj` / e2e references | whole-frame PSNR — unchanged | `mean − max(4σ, 1.0 dB)` — unchanged | none on record — see below | current calibrated thresholds, 17.5–27.0 dB | not applicable |
+
+**Two footguns, one per layer, each the wrong lesson for the other.** Neither of the following is
+a hedge on the numbers above — both were measured, not guessed at:
+
+1. **Block-mean PSNR reads a deterministic-layer drift as *more* passing, not less.** Row ③'s
+   4×4 averaging exists to suppress *incoherent* Monte-Carlo noise so a *coherent* break survives
+   it. Row ①'s frames have no noise to suppress, so the same averaging only dilutes the one
+   coherent signal that is there: the `presets_expanded`/`presets_warning` scrollbar-thumb drift
+   that read 53.45 dB whole-frame reads 53.96 dB under a 4×4 block mean — deeper into "pass," not
+   out of it. Block-mean PSNR belongs to row ③ only; it is never a stricter substitute for row ①'s
+   `maxcc` ruler, it is a wrong-direction one.
+2. **Whole-frame PSNR and SSIM sign-reverse when one arm of a stochastic pair is darkened.** §4.10
+   point 4 measured this directly: darkening the CLI arm by 0.25 stop reads as *higher* whole-frame
+   PSNR (27.63 dB against a 27.54 dB honest mean on the single-lens scene), because most of the
+   diff energy in a Monte-Carlo pair is each arm's own noise, and lowering one arm's brightness
+   lowers that arm's noise contribution with it. A statistic that can read a real break as an
+   improvement is not fixable by moving its threshold — this, not a wish for more sensitivity, is
+   why row ③ needed a different statistic rather than a stricter whole-frame one.
+
+**A third fact worth carrying, not a footgun but a precondition.** The `visual` group's five
+references were JPEG until 532.3 reshot them as PNG. Row ①'s τ=0 byte-identity ruler against a
+lossy-compressed reference reads 7,000–72,000 differing pixels on an otherwise-honest capture —
+not because anything moved, but because JPEG's own quantization noise is nonzero everywhere.
+Any future group entering row ① with lossy references needs the same reshoot before the ruler
+means anything; raising τ to swallow compression noise instead reopens the exact blind window
+row ① exists to close (§4.7's excluded-directions list below has the general form of this
+mistake).
+
+**Why `lens_proj` keeps whole-frame PSNR (a04: no unforced re-ruling).** Rows ① and ③ were both
+re-ruled starting from a *named* red the old statistic passed — a 127-px text row, a 90-px
+scrollbar thumb, a sign-reversed exposure break. `lens_proj` has no such sample: across this
+tree's history, no before/after reference pair shows a defect that was visible mean-vs-mean but
+invisible in a single run's own PSNR against the existing threshold — every pair that changed a
+scene changed it by the intended amount, reading 27.6–41.3 dB either way. Re-ruling it on no
+evidence would be spending calibration effort the same way §4.6's audit found the disposal habit
+spent detection power: on a problem nobody had shown existed. **Trigger condition, stated so it is
+checkable later**: the day a `lens_proj` regen pair shows a defect a mean-vs-mean comparison
+catches but the existing per-run PSNR threshold does not, this row is re-opened.
+
+**Excluded directions** (measured and rejected, not merely unconsidered):
+
+- **SSIM** — no incremental detection power over the pixel ruler on the deterministic layer
+  (already at maxcc=0/1 honest, byte-level precision), and it inherits the stochastic layer's
+  sign-reversal problem above for one more dependency to carry.
+- **σ-map z-score clustering** on row ③ — after the block-mean fix, the residual blind spot there
+  is a small global gain shift (< 0.1 stop) spread evenly across the frame, not a local structural
+  anomaly a z-cluster detector is built to find.
+- **Raising τ to swallow the `visual` group's JPEG noise** — the same mistake as the caveat above,
+  stated as a rejected option: a threshold sized to hide a reference-format artifact rather than a
+  measured noise floor. The PNG reshoot removes the noise source; widening τ would only have
+  widened the window a real drift can hide in.
+
+**As-built landing points** (`file:line`, current as of the parity and deterministic-ruler work
+this table summarizes):
+
+- Ruler primitives: `test/support/pixel_diff_metrics.hpp:41` (`MaxCcRuler`), `:57`
+  (`LargestComponent`), `:100` / `:141` (`ComputePixelDiff` / `ComputePixelDiffFromMask`);
+  `test/support/block_mean_psnr.hpp:34` (`ComputeBlockMeanPsnr`). Unit tests:
+  `test/unit-correctness/gui/test_pixel_diff_ruler.cpp`, `test_block_mean_psnr.cpp`.
+- `CheckAgainstReference`'s `MaxCcRuler*` parameter: `test/gui/test_screenshot.hpp:58`.
+- Row ① K values: `test/gui/visual/test_gui_modal_layout.cpp:72` (τ=16, K=70),
+  `test_gui_defaults_panel.cpp:78` (τ=16, K=40), `test_gui_capture_smoke.cpp:28` and
+  `test_preview_pixels.cpp:44` (τ=0, K=0).
+- Row ② scenes and K: `test/gui/parity/test_gui_cli_export_parity.cpp:1059–1065`
+  (`kLinesOnlyScenes[]`, K=4 on every row), with the calibration table immediately above it.
+- Row ③ thresholds: same file, the `bm4_threshold` fields at lines 639 / 722 / 846 / 931.
+- `regen_gui_test_refs.py` Phase B's row-① audit fields: `scripts/regen_gui_test_refs.py:553–555`
+  (`maxcc_tau` / `maxcc_local_max` / `maxcc_samples`).
+- CI capture upload feeding row ①'s cross-machine K measurement:
+  `.github/workflows/ci.yml`'s `GUI visual regression (Xvfb + Mesa llvmpipe)` step
+  (`--keep-export-png --export-dir`), artifact `gui-visual-regression-captures`.
+- A premise this table corrects rather than repeats: row ②'s design was originally planned around
+  `renderer.exposure_offset = -30` on the assumption the field had no UI-side clamp. It does —
+  `src/gui/field_editor_registry.cpp:570` fixes it to `FixedDomain(-8.0f, 16.0f)` — which is why
+  row ②'s scenes use `exposure_offset = -8` and remove the simulation by canvas saturation rather
+  than by exposure alone (the threshold-shape cell above).
 
 ---
 
@@ -1344,7 +1443,9 @@ double gate (267.3 corr-blind reinforcement), `test_capi_sentinel_overflow.py` a
 **buys over the one below it**, and who is required to do that arithmetic before spending it. It
 exists because the scope table in `AGENTS.md` answers "which command do I run" without answering
 "what does it cost and what does the cheaper one structurally miss" — and a recommendation to run
-the cheap scope first is only followed by someone who knows what the cheap scope cannot see.
+the cheap scope first is only followed by someone who knows what the cheap scope cannot see. Which
+ruler each layer's comparisons are judged by — and why one is not a stricter or looser version of
+another — is §4.11's table, not this section's; this section only prices running them.
 
 ### §7.0 What this section covers, and what it does not
 
