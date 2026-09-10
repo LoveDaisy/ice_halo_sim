@@ -570,9 +570,12 @@ vec4 inverseWorldDir(vec2 pos, float half_fov, out float ri, out vec2 pos_ovl) {
 
 // The local gradient of an angle field, clamped as src/util/annotation_line_width.hpp's rule
 // clamps it — the one number the line's width and its edge are both measured in. `fw` is the
-// hardware fwidth() for a non-circular field; the CIRCULAR field (azimuth) must not take the raw
-// fwidth(), see wrapAngleDiffDeg below. CPU twin: mask_detail::LevelSetMaskFromField
-// (src/core/lens_proj_build.hpp), with a forward difference in the fwidth slot.
+// caller's forward-difference sum against the right/bottom neighbour pixels (NOT the hardware
+// fwidth() intrinsic — its 2x2-quad granularity was measured to miscount on rectilinear scenes,
+// see overlayAuxLines below); the CIRCULAR field (azimuth) must additionally not take a raw
+// difference across the seam, see wrapAngleDiffDeg below. CPU twin:
+// mask_detail::LevelSetMaskFromField (src/core/lens_proj_build.hpp), the same forward-difference
+// shape.
 float lineGradientDeg(float fw) {
   return clamp(fw, u_line_fwidth_min_deg, u_line_fwidth_max_deg);
 }

@@ -520,12 +520,15 @@ inline float WrapAngleDiffDeg(float diff) {
 // the same rule per fragment (preview_renderer.cpp overlayAuxLines):
 //   half_width = clamp(fwidth(field), kAnnotationLineFwidthMinDeg, kAnnotationLineFwidthMaxDeg)
 //                * kAnnotationLineHalfWidthPx;   on the line <=> |field - level| < half_width
-// The shader tints with `1 - smoothstep(0, half_width, |field - level|)`, whose `t > 0` set is
-// exactly the set this returns. `fwidth` is |dFdx| + |dFdy|, which off the GPU is a forward
-// difference against the right and lower neighbours (the last row/column differences backwards
-// instead, the only place this can differ from a rasterizer's derivatives and only by which side
-// of the pixel is sampled). The three constants are read from that header rather than written
-// here, so the two evaluators cannot drift apart on the numbers.
+// The shader's `lineCoverage` applies that same `<` threshold directly (a hard set, not an
+// antialiased falloff — measured against a smoothstep profile and found to under-cover by half
+// the ink, see doc/testing-architecture.md §4.10). `fwidth` here is |dFdx| + |dFdy|, computed the
+// same way on both sides: a forward difference against the right and lower neighbours (the last
+// row/column differences backwards instead). The shader does this by re-projecting the
+// right/bottom neighbour pixels through `inverseWorldDir` rather than reading the hardware
+// `fwidth()` intrinsic — the hardware derivative's 2x2-quad granularity was measured to miscount
+// on rectilinear scenes (see overlayAuxLines). The three constants are read from that header
+// rather than written here, so the two evaluators cannot drift apart on the numbers.
 //
 // A FIXED angular half-width is not an option here, which is why this takes the trouble:
 // degrees-per-pixel spans orders of magnitude across the lens/FOV space this renderer supports, so
