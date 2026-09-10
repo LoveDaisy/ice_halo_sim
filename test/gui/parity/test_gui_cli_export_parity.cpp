@@ -35,8 +35,12 @@
 //
 // The fields src/gui/file_io.cpp's BuildScene fills only on its kJsonExport arm, and what each
 // scene does with them. The right-hand columns are MEASURED, not asserted: each is the PSNR the
-// scene lands at when that one field is broken single-sided in the export arm (and only there),
-// against a threshold of 25.5 / 26.0 dB. They are what says this gate can actually see the field.
+// scene lands at when that one field is broken single-sided in the export arm (and only there).
+// The annotation rows (horizon / angular_dist / elevation / longitude) and the overlap row were
+// re-measured at v4.28's operating point against thresholds of 27.2 / 31.0 dB; the view and
+// background rows are carried from the calibration before it, against 25.5 / 26.0 dB — those
+// fields did not move, and their breaks are an order of magnitude below any threshold this file
+// has held. They are what says this gate can actually see the field.
 //
 // Two of the three scenes appear here. The third, `single_lens_rectilinear`, is not a field-
 // coverage column: it holds the same view fields as `single_lens_angled` on purpose, and what it
@@ -53,11 +57,12 @@
 //   view_roll      | 15, applied             |  19.53 | forced to 0 (full-sky)    |   n/a
 //   background     | (0.10, 0.16, 0.28)      |  17.21 | (0.28, 0.14, 0.10)        |  18.16
 //   resolution     | 4:3 + portrait -> 512x683 | canvas assert | no ratio -> 1024x512 |  n/a
-//   horizon        | on                      |  26.79 | on                        |  26.05
-//   angular_dist   | on, {22, 46} deg        |  25.73 | on, {22, 46} deg          |  26.89
-//   elevation      | on, 10 deg step         |  24.72 | on, 30 deg step           |    n/a
-//   longitude      | on, 10 deg step         |  26.59 | on, 30 deg step           |  24.07
+//   horizon        | on                      |  27.23 | on                        |  29.72
+//   angular_dist   | on, {22, 46} deg        |  26.42 | on, {22, 46} deg          |  29.76
+//   elevation      | on, 10 deg step         |  24.98 | on, 30 deg step           |    n/a
+//   longitude      | on, 10 deg step         |  26.93 | on, 30 deg step           |  25.47
 //   markers        | all six, zenith imaged  |    n/a | all six, all imaged       |    n/a
+//   overlap        | n/a (single lens)       |    n/a | 0 (the screen's disc)     | 15.0 at 0.0872
 //
 //   tone           | screen (the default)    |    n/a | screen (the default)      |   n/a
 //   paper          | unused under screen     |    n/a | unused under screen       |   n/a
@@ -163,12 +168,28 @@
 //
 //     The sun circles USED to be on this list, with the note "re-add coverage here the day core
 //     gains an annotation layer". That day came, and the altitude grid followed it: both are now on
-//     in both scenes, and both are overlays whose two arms are not two implementations. Each builds
-//     its geometry from the same core call (LUMICE_ComputeAnnotationOverlay), the CLI once per line
-//     in server/render.cpp and the GUI once per settled view in gui/annotation_anchors.cpp.
-//     That is why turning either ON RAISES both scenes' PSNR rather than lowering it — the curves
-//     land on identical pixels, so where the two frames used to differ they now agree. A drop is
-//     therefore the signal, and the thresholds below are set against the measured breaks.
+//     in both scenes. The two arms are two EVALUATORS of one definition rather than two
+//     implementations of a curve: each family is a level set of a world-space angle field with the
+//     line-width rule src/util/annotation_line_width.hpp owns, and the CLI evaluates it on the CPU
+//     (server/render.cpp through core's LevelSetMaskFromField, once per line) while the preview
+//     evaluates it per fragment in its shader (preview_renderer.cpp overlayAuxLines, from the same
+//     forward differences, as the hard set with no antialiasing — see the ANNOTATION EVALUATION
+//     note below for the three ways of doing it differently that this fixture measured and
+//     rejected). The curves land on the same pixels to within a handful per frame, so turning a
+//     family ON raises both scenes' PSNR rather than lowering it, and a drop is the signal the
+//     thresholds below are set against.
+//
+//     ANNOTATION EVALUATION, measured when the curves went back to the shader (v4.28). Three
+//     shapes of "the same definition, evaluated differently" were tried, and this fixture is what
+//     rejected each: an antialiased smoothstep line (half the CLI's ink: 18.2 / 14.8 / 19.9 dB
+//     against thresholds of 27 / 27.1 / 34), a pixel-coverage ramp of the CLI's set (positions
+//     within half a pixel, but a one-pixel fringe on every edge against a hard band: 24.2 / 15.0 /
+//     27.4), and the hardware fwidth() in place of the CPU's forward differences (a quad-based
+//     derivative that disagrees with the CPU on ~200 pixels a frame: -1.8 dB on the rectilinear
+//     scene). What survived is the CPU's own rule, evaluated per fragment. The fourth number in
+//     each triple above, 15 dB on full_sky_dual_fisheye, was not the line at all: it was the
+//     export arm carrying a dual-fisheye `overlap` the screen never shows, which put the CLI's
+//     whole disc 4 % outside the GUI's — see the RE-MEASURED note on that scene's row.
 //
 //     The zenith/nadir markers left the list the same way and are on in both scenes, but they are
 //     the member that does NOT raise the figure: measured at the default radius, switching the two
@@ -290,13 +311,14 @@ struct ParityScene {
   // not two implementations of the same curve — they are two readings of one. See the exclusion
   // note above for why that makes turning them on raise the PSNR rather than lower it.
   bool show_sun_circles;
-  // The coordinate grid, on in both scenes for the same reason the circles are: since this task
-  // both arms build it from one core call, so it is two readings of one curve rather than two
+  // The coordinate grid, on in both scenes for the same reason the circles are: both arms
+  // evaluate the same level-set definition, so it is one curve twice rather than two
   // implementations. See the exclusion note above.
   bool show_grid;
-  // The sky reference-point ring markers, on in both scenes and the newest member of the "two
-  // readings of one call" family: both arms take the points from LUMICE_ComputeAnnotationOverlay
-  // and draw a ring of the config's radius around each. Unlike the three line families this one is
+  // The sky reference-point ring markers, on in both scenes and the one family that IS two
+  // readings of one call: both arms take the points from core's anchor walk
+  // (LUMICE_ComputeAnnotationAnchors on the GUI side) and draw a ring of the config's radius
+  // around each. Unlike the three line families this one is
   // a SET of six independent members, each with its own colour — which is what the encoding
   // assertion below reads, since the pixels cannot (see the markers row in the field table).
   //
@@ -478,13 +500,32 @@ const ParityScene kScenes[] = {
   // at 26.39 dB (the CLI drawing only the first of two angular_dist lines). Both bounds hold with
   // room, so this row needed no move — unlike its full-sky neighbour below, whose 27.2 had become
   // too tight against the same shift.
+  //
+  // RECALIBRATED 27.0 -> 27.2 when the curves went back to the preview shader (v4.28; see the
+  // ANNOTATION EVALUATION note in the header). mean 27.553 sigma 0.0236 (N=12 category runs on an
+  // idle machine, range 27.508-27.587), up 0.15 dB from 27.402 — the two evaluators of one
+  // definition agree at least as well as one mask read twice did. Every break re-measured in the
+  // same session, each applied single-sided so only the CLI arm saw it:
+  //
+  //   break                                                   | PSNR   | disposition
+  //   --------------------------------------------------------|--------|-------------------------
+  //   the CLI draws only the first of two angular_dist lines  | 26.42  | caught, 0.78 dB clear
+  //   the CLI drops the last meridian                         | 26.93  | caught, 0.27 dB clear
+  //   the CLI drops the last parallel                         | 24.98  | caught, 2.2 dB clear
+  //   the CLI drops the horizon                               | 27.23  | NOT this row (see below)
+  //   the GUI doubles its line half-width (shader-side break) | 14.31  | caught, 13 dB clear
+  //
+  // 27.2 = mean - 0.35 dB = 15 sigma, 0.31 dB below the worst honest run and 0.27 dB above the
+  // largest break it is asked to catch. The horizon stays with its neighbour, as before: catching
+  // 27.23 here would need a threshold within 4 sigma of the worst honest run, and the full-sky row
+  // catches the same break at 1.3 dB of margin.
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/512, /*expect_h=*/683},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.2, /*expect_w=*/512, /*expect_h=*/683},
   // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
   // 0.31 dB above the smallest break this scene owns — the CLI drawing only the first of two
   // angular_dist lines, at 26.89 dB. Raised from 27.0 when the grid was switched on: the mean moved
@@ -532,13 +573,40 @@ const ParityScene kScenes[] = {
   // The break was RE-MEASURED, not scaled from the old number: the CLI arm was fed an export whose
   // grid.angular_dist had been truncated to its first entry, and this scene landed at 26.68 dB
   // (against 26.89 before the family grew). Its neighbour above measured 26.39 in the same run.
+  //
+  // RE-MEASURED when the curves went back to the preview shader (v4.28), and this is the row that
+  // found the divergence the mask era had been hiding. Drawn from each fragment's own direction
+  // the curves land on the GUI's disc, and this scene fell to 15.0 dB — the CLI's disc was 4 %
+  // LARGER than the GUI's. The preview's dual-fisheye target projection (dualFisheyeInverse) images
+  // exactly one hemisphere per disc and has no overlap band; the export carried
+  // kDualFisheyeOverlap, so the CLI imaged 5 deg past each equator into the same radius, its
+  // horizon a dozen pixels inside the rim the GUI's sits on. The mask era read 27.4 dB here only
+  // because BOTH arms drew the curves at the CLI's overlap — core's masks and anchors were asked
+  // for at kDualFisheyeOverlap, i.e. registered to a disc the GUI never drew. The export arm now
+  // writes overlap = 0 (file_io.cpp BuildScene, kJsonExport; `overlap` is a diverging key,
+  // test_scene_commit_chain.cpp), which is the disc on screen.
+  //
+  // RECALIBRATED 27.1 -> 31.0. mean 31.356 sigma 0.0191 (N=12, range 31.320-31.386), up 3.99 dB
+  // from 27.366 — the two pictures finally share a disc. Breaks re-measured in the same session:
+  //
+  //   break                                                   | PSNR   | disposition
+  //   --------------------------------------------------------|--------|-------------------------
+  //   the CLI draws only the first of two angular_dist lines  | 29.76  | caught, 1.24 dB clear
+  //   the CLI drops the last meridian                         | 25.47  | caught, 5.5 dB clear
+  //   the CLI drops the last parallel                         | 31.27  | n/a (inside the noise)
+  //   the CLI drops the horizon                               | 29.72  | caught, 1.28 dB clear
+  //   the GUI doubles its line half-width (shader-side break) | 14.42  | caught, 17 dB clear
+  //
+  // 31.0 = mean - 0.36 dB = 18.7 sigma, 0.32 dB below the worst honest run and 1.24 dB above the
+  // largest break it is asked to catch. The parallel's "n/a" is the same measured fact as before
+  // (the 80 deg parallel is a small circle near each disc centre); its neighbour catches it.
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.1, /*expect_w=*/1024, /*expect_h=*/512},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.0, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
   // — which is what makes a drop here readable as the Jacobian rather than as some other field.
@@ -629,13 +697,38 @@ const ParityScene kScenes[] = {
   // pushed into it: the binding consideration on this row is the same caveat every other row here
   // carries, N=12 on a mean that has just moved a long way, so it keeps roughly the same dB of
   // headroom over the worst honest run that the previous two calibrations used (1.02, 1.14).
+  //
+  // RECALIBRATED 34.0 -> 34.2 when the curves went back to the preview shader (v4.28). This is the
+  // row that priced the derivative estimate: with the hardware fwidth() in the shader it read
+  // 33.66 dB, 1.8 dB under its old mean, and the whole loss was ~200 line pixels lit on one side
+  // only — grid 52, circles 161 — because a quad-based derivative is not the CPU's forward
+  // difference. With the shader taking the CPU's own differences the row reads mean 34.599 sigma
+  // 0.0183 (N=12, range 34.567-34.618), 0.64 dB under the mask era's 35.235; what is left is the
+  // GRID OPACITY residual on the circles (drawn at 0.5 here) plus a few dozen rim pixels where the
+  // two inverses disagree about the lens's domain edge. Breaks re-measured in the same session:
+  //
+  //   break                                                   | PSNR   | disposition
+  //   --------------------------------------------------------|--------|-------------------------
+  //   the CLI draws only the first of two angular_dist lines  | 31.13  | caught, 3.1 dB clear
+  //   the CLI drops the last meridian                         | 30.40  | caught, 3.8 dB clear
+  //   the CLI drops the last parallel                         | 34.33  | NOT this row (see below)
+  //   the CLI drops the horizon                               | 33.14  | caught, 1.06 dB clear
+  //   the GUI doubles its line half-width (shader-side break) | 15.89  | caught, 18 dB clear
+  //   the relative-illumination factor absent from the shader | 25.4   | caught, 8.8 dB clear
+  //
+  // 34.2 = mean - 0.40 dB = 22 sigma and 0.37 dB below the worst honest run. The parallel drop
+  // lands 0.27 dB under the mean here, which is the same shape as the single-lens row's horizon:
+  // gating it would need a threshold within 8 sigma of the worst honest run, and its neighbour
+  // single_lens_angled catches the identical break at 2.2 dB of margin. The relative-illumination
+  // figure is carried over from the previous calibration, not re-measured — the shader's factor
+  // did not change and the row's whole purpose still stands 8 dB clear of it.
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.0, /*expect_w=*/512, /*expect_h=*/683},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.2, /*expect_w=*/512, /*expect_h=*/683},
   // The TONE scene. Every field except `tone`, `paper_srgb` and the four annotation switches is
   // copied verbatim from full_sky_dual_fisheye above, so a drop here reads as the tone operator and
   // not as some other part of the framing.
@@ -695,13 +788,30 @@ const ParityScene kScenes[] = {
   // a noisier instrument. What it adds that nothing else can is the END-TO-END half — that a print
   // document leaves the GUI as print, with the paper the user picked, and comes back out of a child
   // CLI process as the same page. That half is what the two caught breaks above are.
+  //
+  // RECALIBRATED 23.5 -> 32.0 with the export arm's dual-fisheye `overlap` (see the RE-MEASURED
+  // note on full_sky_dual_fisheye, whose framing this row copies): the two pages finally share a
+  // disc, and a row whose whole frame is paper with a halo on it gains more from that than its
+  // screen-toned neighbour does. mean 33.204 sigma 0.1055 (N=12, range 32.976-33.349), up 9.2 dB.
+  // Sigma is 6x its neighbours' and the reason is the operator: the density transfer lays the
+  // Monte-Carlo noise of both arms onto the page at full contrast where the additive chain
+  // leaves it in the dark. The two caught breaks re-measured at the new operating point:
+  //
+  //   break                                                         | PSNR   | caught by
+  //   --------------------------------------------------------------|--------|------------------
+  //   the CLI ignores the document's `tone` (renders screen)         |  3.29  | threshold, 29 dB clear
+  //   the CLI ignores the document's `paper` (keeps default white)   | 19.95  | threshold, 12 dB clear
+  //
+  // 32.0 = mean - 1.20 dB = 11.4 sigma, 0.98 dB below the worst honest run — the loosest of the
+  // four rows in dB and the tightest in sigma, because this row's noise is what sets it. The
+  // kInkGamma disposition above is unchanged: still not this row's to gate.
   {"full_sky_dual_fisheye_print",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    /*tone=*/1, /*paper_srgb=*/{ 0.96f, 0.92f, 0.84f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false, /*show_sun_circles=*/false,
    /*show_grid=*/false, /*show_markers=*/false,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/23.5, /*expect_w=*/1024, /*expect_h=*/512},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/32.0, /*expect_w=*/1024, /*expect_h=*/512},
 };
 // clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the

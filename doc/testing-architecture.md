@@ -1052,6 +1052,27 @@ own rather than more files under `visual/`:
    preview shader keeps inverting past a single fisheye's image circle where core stops; and
    relative-EV self-anchoring uses a different pixel population on each side. A new parity case
    should expect to spend most of its design effort here, and to state what it found.
+   The annotation curves added three more when the preview went back to evaluating them per
+   fragment (v4.28) instead of sampling a mask core had rasterized — each measured on this fixture,
+   and each settled in the shader rather than in the threshold. (a) **Line profile**: the CLI
+   composites a hard band (`|field − level| < half-width`); an antialiased shader line is not that
+   band. A smoothstep from the level out to the half-width lays down half the CLI's ink and read
+   18 / 15 / 20 dB against thresholds of 27 / 27 / 34; a pixel-coverage ramp of the same set put the
+   positions within half a pixel and still read 24 / 15 / 27, because a one-pixel fringe on every
+   edge of every line is thousands of half-covered pixels against a hard band. The shader draws the
+   hard set. (b) **Derivative estimate**: the hardware `fwidth()` is a quad-based derivative, so
+   half the fragments read a backward difference and the rim's helper invocations reach outside the
+   lens's domain; against the CPU's forward differences that lit ~200 pixels per frame one side
+   only, 1.8 dB on the rectilinear scene. The shader re-runs the inverse at the right and lower
+   neighbours and takes the same forward differences. (c) **The dual-fisheye overlap band**: the
+   preview's target dual-fisheye projection has none — each disc is exactly one hemisphere — while
+   the CLI's carries the export's `overlap` and images a disc 4 % larger. The mask era hid this by
+   asking core for masks and anchors at the CLI's overlap, which registered them to the CLI's disc
+   and a dozen pixels inside the GUI's own horizon; drawn from the fragment's own direction the
+   curves land on the GUI's horizon, and the fixture read 15 dB on `full_sky_dual_fisheye` until the
+   export arm stopped carrying a band the screen never showed (`overlap` is a diverging key now,
+   doc/gui-state-governance.md §9.4). That scene reads 31 dB since — above what it read when both
+   arms drew the misregistered line.
    The same-process member found its own, of a different kind — not a divergence between the paths
    but a **blindness in the scene**: built on the shared 8-bit `InitSynthTexture()` /
    `UploadTexture()` pair, it lands in `PreviewRenderer::TextureMode::kSrgbComposited`, whose
