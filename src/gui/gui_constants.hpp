@@ -3,6 +3,8 @@
 
 #include <cstddef>
 
+#include "include/lumice.h"  // LUMICE_MAX_ANNOTATION_CIRCLES (kMaxSunCircles invariant below)
+
 namespace lumice::gui {
 
 // Layout constants
@@ -162,6 +164,15 @@ constexpr float kCameraTiltDeg = 15.0f;
 
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
+// AnnotationAnchors::Compute() (annotation_anchors.cpp) clamps the angular-distance-circle list to
+// kMaxSunCircles before it ever reaches LUMICE_ComputeAnnotationAnchors, so the API's own ceiling
+// (LUMICE_MAX_ANNOTATION_CIRCLES) is never actually tested there — this assert is what makes that
+// clamp a real bound instead of a coincidence. If kMaxSunCircles is ever raised past the API
+// ceiling, a request the GUI itself built would be REJECTED rather than truncated
+// (LUMICE_ComputeAnnotationAnchors's contract), which clears the whole frame's result (grid,
+// horizon and markers included, not just the circles) instead of just dropping the excess circles.
+static_assert(kMaxSunCircles <= LUMICE_MAX_ANNOTATION_CIRCLES,
+              "kMaxSunCircles must not exceed LUMICE_MAX_ANNOTATION_CIRCLES: see comment above");
 
 // Lens projection types. Order must match kLensTypeNames in gui_state.hpp
 // and Core's LensParam::LensType enum. Static asserts in gui_state.hpp guard
