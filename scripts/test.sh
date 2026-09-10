@@ -28,7 +28,8 @@
 # This script runs tests; it does not build the static flavor. `quick`/`full`
 # expect `./scripts/build.sh -tgj <type>` to have been run already, and say so
 # when it has not. `pr` is the one scope that may build, and only the shared
-# flavor, because the slow e2e layer loads liblumice through ctypes.
+# flavor, because the slow e2e layer loads liblumice_testapi (the test-only
+# superset of liblumice, see test/e2e/capi_runner.py) through ctypes.
 
 set -u
 set -o pipefail
@@ -53,7 +54,7 @@ usage() {
   echo ""
   echo "ENVIRONMENT:"
   echo "  LUMICE_SKIP_GUI_TESTS / CI:  skip the gui_test layers (as build.sh does)."
-  echo "  LUMICE_LIB:                  absolute path to liblumice; when set, the"
+  echo "  LUMICE_LIB:                  absolute path to liblumice_testapi; when set, the"
   echo "                               pr scope trusts it and never rebuilds."
   echo ""
   echo "Builds the static flavor? No — run ./scripts/build.sh -tgj <type> first."
@@ -317,7 +318,7 @@ for p in lib_candidates(Path("."), sys.argv[1]):
   # point of reading it from the loader), but it does catch a refactor that
   # leaves the function importable while returning something that is no longer
   # a list of library paths.
-  bad=$(printf '%s\n' "${out}" | grep -vE 'liblumice\.(dylib|so)$')
+  bad=$(printf '%s\n' "${out}" | grep -vE 'liblumice_testapi\.(dylib|so)$')
   [[ -z ${bad} ]] || die "shared-lib candidates: capi_runner.py::lib_candidates returned a non-library path:
 ${bad}"
   printf '%s' "${out}"
@@ -410,7 +411,7 @@ ensure_shared_lib() {
     if find_shared_lib > /dev/null; then
       : > "${SHARED_STAMP}" || printf 'test.sh: warning: could not write %s\n' "${SHARED_STAMP}" >&2
     else
-      annotate_last_layer "build succeeded but no liblumice found in any candidate path"
+      annotate_last_layer "build succeeded but no liblumice_testapi found in any candidate path"
       rc=1
       LAYER_STATUS[$(( ${#LAYER_STATUS[@]} - 1 ))]=FAIL
     fi

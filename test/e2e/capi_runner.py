@@ -10,14 +10,28 @@ commits the requested config, polls until the server returns to IDLE with
 valid data (or the timeout fires), reads the scalar result, and destroys
 the server.
 
+Which library. This runner loads ``liblumice_testapi``, not ``liblumice``. The
+two are built from the same ``lumice_obj`` objects, so every ``LUMICE_*`` call
+behaves identically; the test library additionally exports the ``LUMICE_TEST_*``
+hooks declared in ``test/support/lumice_test_api.h`` -- test-only entry points
+that the product ABI (``src/include/lumice.h``) must never carry. It is a
+superset stand-in rather than a companion: ``-fvisibility=hidden`` leaves a side
+library nothing to link against, so the hooks ship with their own copy of the
+engine, and a test process loads exactly ONE of the two (two would be two engines
+with two sets of statics). Nothing in this module calls a hook itself; the tests
+that need one reach it through the same handle.
+
 Library lookup order:
     1. ``LUMICE_LIB`` environment variable (full path to the shared library).
-    2. ``build/Release/shared/lib/liblumice.{dylib,so}``
-    3. ``build/cmake_install/shared/{liblumice.{dylib,so}, lib/liblumice.{dylib,so}}``
-    4. ``build/cmake_build/shared/liblumice.{dylib,so}``
+    2. ``build/Release/shared/lib/liblumice_testapi.{dylib,so}``
+    3. ``build/cmake_install/shared/{liblumice_testapi.{dylib,so}, lib/liblumice_testapi.{dylib,so}}``
+    4. ``build/cmake_build/shared/liblumice_testapi.{dylib,so}``
 
-The library must be built with ``BUILD_SHARED_LIBS=ON`` (the default release
-recipe). If lookup fails, raises :class:`FileNotFoundError`.
+The library must be built with ``BUILD_SHARED_LIBS=ON`` (``./scripts/build.sh -s``),
+which produces both shared libraries side by side. On Windows the file is
+``lumice_testapi.dll`` (no ``lib`` prefix); there is no automatic candidate for
+it, as there was none for ``lumice.dll`` -- point ``LUMICE_LIB`` at it. If lookup
+fails, raises :class:`FileNotFoundError`.
 
 **Test-only module**: the first call to :func:`run_scene_capi_buffered` installs
 a process-level log callback into the C library (``LUMICE_SetLogCallback``).
@@ -306,14 +320,17 @@ def lib_candidates(root: Path, build_type: str = "Release") -> List[Path]:
         # Every candidate is under the "shared" flavor: this runner loads the
         # dylib through ctypes, which only exists in a BUILD_SHARED_LIBS=ON build.
         # A static build writes to .../static/ and is correctly not found here.
-        root / "build" / build_type / "shared" / "lib" / "liblumice.dylib",
-        root / "build" / build_type / "shared" / "lib" / "liblumice.so",
-        root / "build" / "cmake_install" / "shared" / "liblumice.dylib",
-        root / "build" / "cmake_install" / "shared" / "liblumice.so",
-        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.dylib",
-        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.so",
-        root / "build" / "cmake_build" / "shared" / "liblumice.dylib",
-        root / "build" / "cmake_build" / "shared" / "liblumice.so",
+        # And every candidate is the TEST library, never liblumice -- see the
+        # module docstring for why the two are not interchangeable in a test
+        # process even though every product call behaves the same in both.
+        root / "build" / build_type / "shared" / "lib" / "liblumice_testapi.dylib",
+        root / "build" / build_type / "shared" / "lib" / "liblumice_testapi.so",
+        root / "build" / "cmake_install" / "shared" / "liblumice_testapi.dylib",
+        root / "build" / "cmake_install" / "shared" / "liblumice_testapi.so",
+        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice_testapi.dylib",
+        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice_testapi.so",
+        root / "build" / "cmake_build" / "shared" / "liblumice_testapi.dylib",
+        root / "build" / "cmake_build" / "shared" / "liblumice_testapi.so",
     ]
 
 
@@ -322,7 +339,7 @@ def _announce_chosen_lib(path: Path) -> None:
 
     `scripts/build.sh -k` deletes `build/cmake_build/<flavor>` and
     `build/cmake_install/<flavor>` but NOT the compiler output tree
-    `build/<BUILD_TYPE>/<flavor>/` — and `build/Release/shared/lib/liblumice.dylib`
+    `build/<BUILD_TYPE>/<flavor>/` — and `build/Release/shared/lib/liblumice_testapi.dylib`
     is the FIRST candidate `lib_candidates` returns. So "I cleaned" can be followed
     by ctypes loading a dylib from before the clean, with nothing on screen saying
     so: a stale library produces a coherent-looking pass or a failure blamed on the
@@ -359,8 +376,10 @@ def _find_lib() -> Path:
             _announce_chosen_lib(c)
             return c
     raise FileNotFoundError(
-        "liblumice shared library not found. Build with BUILD_SHARED_LIBS=ON "
-        "(./scripts/build.sh -j release), or set LUMICE_LIB to the absolute path."
+        "liblumice_testapi shared library not found (the test-only superset of liblumice; "
+        "liblumice itself is deliberately not a candidate). Build the shared flavor with "
+        "./scripts/build.sh -sj release, or set LUMICE_LIB to the absolute path "
+        "(lumice_testapi.dll on Windows)."
     )
 
 

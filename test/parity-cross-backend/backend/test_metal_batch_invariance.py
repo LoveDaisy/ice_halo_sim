@@ -111,7 +111,7 @@ def _spawn_run(config_name: str, batch: int):
     env["LUMICE_DISPATCH_RAY_NUM"] = str(batch)
     env["LUMICE_COMMIT_RAY_NUM"] = str(batch)
     env.setdefault(
-        "LUMICE_LIB", str(root / "build" / "Release" / "shared" / "lib" / "liblumice.dylib")
+        "LUMICE_LIB", str(root / "build" / "Release" / "shared" / "lib" / "liblumice_testapi.dylib")
     )
     env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
     # Invoke this file by absolute path (not `-m module`): after the 270.4 reorg
