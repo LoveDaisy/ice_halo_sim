@@ -21,7 +21,10 @@
 // `g_preview_vp` publishes (device pixels, bottom-left origin, exactly what glReadPixels wants), the
 // same protocol test/gui/parity/test_gui_preview_export_parity.cpp reads the screen arm through.
 // The pixels come back TOP-DOWN (ReadbackGlRegionToRgba flips them), so row 0 is the top of the
-// viewport; the two predictors below convert the shader's y-up answer into that space.
+// viewport; the two predictors below convert the shader's y-up answer into that space. The frame
+// timing — which view a captured frame was rendered with — is spelled out at
+// CaptureViewportThenWrite, because it is the one thing about this harness that is easy to get
+// wrong by one frame.
 
 #include <algorithm>
 #include <array>
@@ -132,15 +135,25 @@ void InstallScene(gui::GuiState& s) {
 }
 
 // One frame's worth of the preview viewport, read back off the default framebuffer AFTER that
-// frame's render pass, rows top-down. Returns false if the hook did not answer within a few frames.
+// frame's render pass, rows top-down, together with the view that frame was rendered with.
 struct Frame {
   std::vector<unsigned char> rgba;
   int w = 0;
   int h = 0;
-  gui::ViewProjection view;  // the view THIS frame was rendered with, as the panel published it
+  gui::ViewProjection view;
 };
 
-bool CaptureViewport(ImGuiTestContext* ctx, Frame* out) {
+// WHEN THIS RUNS, relative to the frame. A TestFunc is resumed by the test engine at
+// ImGui::EndFrame — after every panel of the current frame has run, and before that frame's render
+// pass. So at the moment this is called, RenderPreviewPanel has ALREADY published `g_preview_vp`
+// for the frame about to be drawn and captured, and a write to `g_state.renderer` made here lands
+// in the NEXT frame, not this one. The snapshot of `view` is therefore taken here, before the
+// yield, and it is the view the captured pixels were rendered with; `next_elevation` is written
+// after the snapshot so the following frame sees a new view, which is what keeps every frame of
+// the sweep different from the one before it.
+//
+// Returns false if the hook did not answer within a few frames.
+bool CaptureViewportThenWrite(ImGuiTestContext* ctx, float next_elevation, Frame* out) {
   const int vp_x = gui::g_preview_vp.vp_x;
   const int vp_y = gui::g_preview_vp.vp_y;
   const int vp_w = gui::g_preview_vp.vp_w;
@@ -148,15 +161,16 @@ bool CaptureViewport(ImGuiTestContext* ctx, Frame* out) {
   if (!gui::g_preview_vp.active || vp_w <= 0 || vp_h <= 0) {
     return false;
   }
+  out->view = gui::g_preview_vp.params.view_proj;
   g_fullframe_capture.Reset();
   g_fullframe_capture.rect_x = vp_x;
   g_fullframe_capture.rect_y = vp_y;
   g_fullframe_capture.rect_w = vp_w;
   g_fullframe_capture.rect_h = vp_h;
   g_fullframe_capture.requested.store(true);
-  // ONE yield is the expectation: the request is consumed after the very next frame's render pass,
-  // which is the frame that first sees the view the caller just wrote. The loop bound is a safety
-  // net, not the mechanism.
+  gui::g_state.renderer.elevation = next_elevation;
+  // ONE yield is the expectation: the request is consumed after this frame's render pass. The loop
+  // bound is a safety net, not the mechanism.
   for (int i = 0; i < 4 && !g_fullframe_capture.done.load(); ++i) {
     ctx->Yield(1);
   }
@@ -166,7 +180,6 @@ bool CaptureViewport(ImGuiTestContext* ctx, Frame* out) {
   out->rgba = g_fullframe_capture.pixels;
   out->w = g_fullframe_capture.width;
   out->h = g_fullframe_capture.height;
-  out->view = gui::g_preview_vp.params.view_proj;
   return out->rgba.size() == static_cast<size_t>(out->w) * static_cast<size_t>(out->h) * 4;
 }
 
@@ -266,22 +279,20 @@ void SetUpScene(ImGuiTestContext* ctx) {
   ctx->Yield(6);
 }
 
-// One sweep step: write the view, capture the frame it produces, and check that the frame was
-// rendered with that view. Every check reports and returns rather than asserting, so a failure on
-// one frame leaves the rest of the sweep to run and be reported — the per-frame log is the
-// evidence, and a sweep that stopped at its first bad frame would hide how many there were.
+// One sweep step: capture the frame that carries view k, and hand the next view to the frame after
+// it. Every check reports and returns rather than asserting, so a failure on one frame leaves the
+// rest of the sweep to run and be reported — the per-frame log is the evidence, and a sweep that
+// stopped at its first bad frame would hide how many there were.
 bool CaptureSweepFrame(ImGuiTestContext* ctx, int k, Frame* f) {
-  gui::g_state.renderer.elevation = SweepElevation(k);
-  if (!CaptureViewport(ctx, f)) {
+  if (!CaptureViewportThenWrite(ctx, SweepElevation(k + 1), f)) {
     fprintf(stderr, "[annotation_tracking] frame %2d: the capture hook did not answer\n", k);
     return false;
   }
-  // The frame was rendered with the view just written — the premise of comparing its pixels
-  // against a prediction from that view. A capture that lagged the write by a frame would make
-  // the prediction and the picture disagree for a reason that has nothing to do with the
-  // annotation.
+  // The frame was rendered with view k — the premise of comparing its pixels against a prediction
+  // from that view. View 0 is what SetUpScene installed; every later one is what the previous
+  // step wrote after its own snapshot.
   if (std::fabs(f->view.elevation - SweepElevation(k)) > 1e-4f) {
-    fprintf(stderr, "[annotation_tracking] frame %2d: rendered with elevation %.3f, not the %.3f just written\n", k,
+    fprintf(stderr, "[annotation_tracking] frame %2d: rendered with elevation %.3f, not the expected %.3f\n", k,
             f->view.elevation, SweepElevation(k));
     return false;
   }
