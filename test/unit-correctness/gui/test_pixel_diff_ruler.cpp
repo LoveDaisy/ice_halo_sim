@@ -180,3 +180,44 @@ TEST(PixelDiffRuler, RejectsNullAndEmptyInput) {
   EXPECT_EQ(lumice::test::ComputePixelDiff(nullptr, a.data(), kW, kH, kCh, 0).n_diff, -1);
   EXPECT_EQ(lumice::test::ComputePixelDiff(a.data(), a.data(), 0, kH, kCh, 0).max_cc, -1);
 }
+
+// The mask entry point shares the flood fill with the tau entry point rather than carrying a
+// second one. Pinned by the one input on which the two must agree exactly: a mask that IS the
+// tau = 0 difference mask of a pair. Two blobs of different sizes and a diagonal join, so a
+// second implementation that got connectivity or ranking subtly wrong would read differently.
+TEST(PixelDiffRuler, MaskEntryAgreesWithTauEntryOnTheTauZeroMask) {
+  const auto a = FlatFrame(60);
+  auto b = a;
+  PaintBlock(b, 100, 100, 3, 3, 50);
+  PaintBlock(b, 103, 103, 2, 2, 50);  // diagonal touch: joins the 3x3 into one 13-px blob
+  PaintBlock(b, 300, 300, 5, 4, 7);   // a separate 20-px blob, |delta| well under the other's
+  PaintBlock(b, 700, 500, 1, 1, 1);   // a lone pixel
+
+  std::vector<unsigned char> mask(static_cast<size_t>(kW) * kH, 0);
+  for (size_t p = 0; p < mask.size(); ++p) {
+    for (int c = 0; c < kCh; ++c) {
+      if (a[p * kCh + c] != b[p * kCh + c]) {
+        mask[p] = 1;
+      }
+    }
+  }
+  const auto from_tau = lumice::test::ComputePixelDiff(a.data(), b.data(), kW, kH, kCh, /*tau=*/0);
+  const auto from_mask = lumice::test::ComputePixelDiffFromMask(mask, kW, kH);
+  EXPECT_EQ(from_tau.n_diff, 34);
+  EXPECT_EQ(from_tau.max_cc, 20);
+  EXPECT_EQ(from_mask.n_diff, from_tau.n_diff);
+  EXPECT_EQ(from_mask.max_cc, from_tau.max_cc);
+  EXPECT_EQ(from_mask.dmax, 0);  // a mask carries no per-channel delta
+  // Any non-zero byte is a set pixel, not just 1.
+  for (auto& m : mask) {
+    m = m ? 255 : 0;
+  }
+  EXPECT_EQ(lumice::test::ComputePixelDiffFromMask(mask, kW, kH).max_cc, 20);
+}
+
+TEST(PixelDiffRuler, MaskEntryRejectsAMaskOfTheWrongSize) {
+  const std::vector<unsigned char> mask(static_cast<size_t>(kW) * kH - 1, 0);
+  EXPECT_EQ(lumice::test::ComputePixelDiffFromMask(mask, kW, kH).n_diff, -1);
+  const std::vector<unsigned char> empty;
+  EXPECT_EQ(lumice::test::ComputePixelDiffFromMask(empty, 0, 0).max_cc, -1);
+}
