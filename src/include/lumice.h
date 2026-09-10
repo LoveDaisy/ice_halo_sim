@@ -236,7 +236,29 @@ extern "C" {
 // Both fields are LIVE: LUMICE_TONE_PRINT selects the subtractive operator in the renderer
 // (src/server/render.cpp's PostSnapshot, through src/util/ink_transfer.hpp) and in the GUI's preview
 // shader, and `paper` is the ground it lays ink on.
-#define LUMICE_API_VERSION 427
+//
+// BREAKING (v4.28): the annotation overlay query no longer returns rasterized masks. REMOVED:
+// LUMICE_ComputeAnnotationOverlay, LUMICE_ReleaseAnnotationOverlay, the LUMICE_AnnotationOverlay
+// struct (its `drawable` / `horizon` / `elevation` / `longitude` / `angular_dist` masks and its
+// `zenith_*` / `nadir_*` fields with it), and the `zenith_nadir` and `want_labels` fields of
+// LUMICE_AnnotationRequest — the struct's layout changes, so every caller recompiles. ADDED:
+// LUMICE_ComputeAnnotationAnchors / LUMICE_ReleaseAnnotationAnchors and the LUMICE_AnnotationAnchors
+// struct, which carry the label anchors and the marker points the old result also carried, and
+// nothing proportional to the canvas.
+// The reason is a change of contract, not of shape. The old call cost a width*height
+// inverse-projection sweep and was documented as "not a per-frame call"; its one interactive
+// consumer answered by freezing every annotation for the duration of a camera drag. The curves are
+// level sets of three world-space angle fields, which a fragment shader evaluates for free from the
+// direction it already has — so a consumer that re-projects per frame draws the curves itself, from
+// the definition, and asks core only where the text and the points go. The new call is designed to
+// be made every frame: it runs the curve walk and the point sampling alone, tens of microseconds,
+// and there is no field in it a caller could accidentally scale with the canvas.
+// The CLI renderer is unaffected: it composites through core's C++ ComputeOverlay in-process, and
+// still bakes the same masks into its finished image. LUMICE_AnnotationLabel,
+// LUMICE_AnnotationMarkerPoint, LUMICE_AnnotationView, the LUMICE_ANNOTATION_* constants and the
+// error contract are unchanged. `zenith_nadir` goes because `marker_ids` superseded it in v4.24 and
+// nothing in this tree set it; `want_labels` goes because the anchors are all this call computes.
+#define LUMICE_API_VERSION 428
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -995,8 +1017,8 @@ typedef struct LUMICE_RenderParam_ {
   // no annotation, which is what the JSON path also gives a config with no "grid" object.
   int horizon;
   // Circles of constant angular distance from the sun, in degrees (22 and 46 being the halos
-  // every consumer draws). RENDERED: the CLI renderer builds each entry's mask through
-  // LUMICE_ComputeAnnotationOverlay and composites it with that entry's own `opacity` and
+  // every consumer draws). RENDERED: the CLI renderer builds each entry's mask through core's
+  // in-process annotation layer and composites it with that entry's own `opacity` and
   // `color`. `width` is read and round-tripped but does NOT affect the image — the mask
   // generator derives its own local half-width and takes no width input.
   // RENAMED (v4.17) from central_grid / central_grid_count; see the BREAKING note at
@@ -1004,8 +1026,8 @@ typedef struct LUMICE_RenderParam_ {
   LUMICE_GridLine angular_dist[LUMICE_MAX_CONFIG_GRID_LINES];
   int angular_dist_count;
   // Parallels: lines of constant elevation, in degrees. RENDERED as of v4.18 — the CLI renderer
-  // builds each entry's mask through LUMICE_ComputeAnnotationOverlay and composites it with that
-  // entry's own `opacity` and `color`, exactly as it does for angular_dist. `width` is read and
+  // builds each entry's mask through core's in-process annotation layer and composites it with
+  // that entry's own `opacity` and `color`, exactly as it does for angular_dist. `width` is read and
   // round-tripped but does NOT affect the image.
   // The model mismatch that kept this unrendered for years (this schema names every parallel
   // individually, while the GUI derives ONE FOV-adaptive step and one shared colour) is resolved
@@ -1025,9 +1047,10 @@ typedef struct LUMICE_RenderParam_ {
   // ADDED (v4.19). The zenith / nadir ring markers. Non-zero `zenith_nadir` = draw them; opt-in for
   // the same reason `horizon` is, so a zero-initialized struct asks for no annotation.
   //
-  // APPEARANCE ONLY. WHERE the rings land comes from LUMICE_ComputeAnnotationOverlay's
-  // zenith_px/zenith_py/nadir_px/nadir_py, which is also what the GUI preview reads: this struct
-  // carries no position, and there is nothing here for a consumer to project.
+  // APPEARANCE ONLY. WHERE the rings land comes from the annotation anchors (the CLI renderer's
+  // in-process marker points, LUMICE_ComputeAnnotationAnchors's marker_points for a C consumer,
+  // which is also what the GUI preview reads): this struct carries no position, and there is
+  // nothing here for a consumer to project.
   //
   // One block for the PAIR, not one per marker: the GUI has a single switch, colour picker and
   // radius slider for both, and core's ZenithNadirParam mirrors that. `zenith_nadir_color` is
@@ -1079,7 +1102,7 @@ typedef struct LUMICE_RenderParam_ {
   // arbitration, instead of each producer having to remember to apply it.
   //
   // APPEARANCE ONLY, like `zenith_nadir`: WHERE each ring lands comes from
-  // LUMICE_ComputeAnnotationOverlay's marker_points, and there is no position to set here.
+  // LUMICE_ComputeAnnotationAnchors's marker_points, and there is no position to set here.
   //
   // `markers_opacity` / `markers_radius_px` are FAMILY-WIDE — see LUMICE_MarkerStyle for why only
   // colour is per entry.
@@ -1622,20 +1645,24 @@ typedef struct LUMICE_CrystalMesh_ {
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsigned long long sample_seed,
                                        LUMICE_CrystalMesh* out);
 
-// =============== Annotation Overlay ===============
-// Where a view's auxiliary lines land, in pixels: the celestial horizon, parallels (constant
-// altitude), meridians (constant azimuth), circles of constant angular distance from a direction
-// (the sun, in every use so far), and the zenith / nadir points. GEOMETRY AND LABEL ANCHORS ONLY —
-// colour, line width, glyphs and collision avoidance belong to whoever draws. That split is the
-// point: the GUI preview and the CLI renderer draw the same lines their own way, and neither one
-// re-derives where they are.
+// =============== Annotation Anchors ===============
+// Where a view's auxiliary-line LABELS and its reference-point MARKERS land, in pixels. The lines
+// themselves — the celestial horizon, parallels (constant altitude), meridians (constant azimuth),
+// circles of constant angular distance from a direction (the sun, in every use so far) — are level
+// sets of three world-space angle fields, and a consumer draws them from that definition on its
+// own hardware (the CLI renderer rasterizes them on the CPU through core's in-process C++; the GUI
+// preview evaluates them per fragment in its shader). What neither can derive locally is where
+// along a curve its text should sit, and where a named direction lands on this canvas: that needs
+// a forward projection walked along the curve, and that is what this query answers. ANCHORS AND
+// POINTS ONLY — colour, line width, glyphs and collision avoidance belong to whoever draws.
 //
-// ⚠ THIS IS NOT A PER-FRAME CALL. Every mask costs a width*height inverse-projection sweep —
-// single-digit milliseconds from 1024x1024 upward even with the internal row-parallel split, which
-// is a whole 60 fps frame budget. Call it once when the view SETTLES and cache the result; a
-// caller driving an interactive control must debounce, or freeze the annotation for the duration
-// of a drag. The contract is stated here because it is a property of the computation, not of any
-// one caller's discipline.
+// THIS IS A PER-FRAME CALL, BY DESIGN. It runs a curve walk (a few hundred forward projections per
+// requested curve) and one projection per requested marker: tens of microseconds for a full grid,
+// with nothing in it proportional to the canvas — `width`/`height` decide only whether a point is
+// inside the frame. An interactive consumer calls it on every frame the view changes, so the text
+// and the points move with the picture rather than catching up after it stops. (Its predecessor,
+// LUMICE_ComputeAnnotationOverlay, returned width*height masks and carried the opposite warning; see
+// the v4.28 note at LUMICE_API_VERSION.)
 //
 // Sanity ceilings on the request lists. As with the LUMICE_MAX_CONFIG_* family these guard against
 // malformed input rather than expressing a design limit; a request past one is rejected with
@@ -1704,9 +1731,11 @@ typedef struct LUMICE_AnnotationView_ {
   int front;
 } LUMICE_AnnotationView;
 
-// What to draw. Angle lists are caller-owned and read only for the duration of the call (the same
-// borrow rule as the Scene family's leaf structs), so a stack array is fine. A NULL list with a
-// zero count means "none of that category".
+// Which curves to place labels on, and which markers to place. Angle lists are caller-owned and
+// read only for the duration of the call (the same borrow rule as the Scene family's leaf structs),
+// so a stack array is fine. A NULL list with a zero count means "none of that category". A curve
+// listed here gets its label anchors; the curve's own pixels are the caller's to draw from the same
+// angle, so a family the caller draws but does not label need not be listed at all.
 typedef struct LUMICE_AnnotationRequest_ {
   LUMICE_AnnotationView view;
 
@@ -1725,22 +1754,10 @@ typedef struct LUMICE_AnnotationRequest_ {
   int angular_dist_count;
   float reference_dir[3];
 
-  // Report where zenith and nadir land. Points, not curves: they carry no mask and no text,
-  // because a marker's glyph is the consumer's vocabulary, not core's.
-  int zenith_nadir;
-
-  // Zero skips the curve walk. The masks alone are several times cheaper than masks plus anchors,
-  // and a consumer that draws no text has no use for the anchors.
-  int want_labels;
-
   // Named reference directions (LUMICE_ANNOTATION_MARKER_*) to report canvas positions for; NULL
   // with a zero count means none. Borrowed for the duration of the call, like the angle lists
-  // above. Duplicates are legal and are reported once each, in request order.
-  //
-  // Independent of `zenith_nadir`: setting one says nothing about the other, and a caller may set
-  // both. MARKER_ZENITH / MARKER_NADIR here reach the SAME two points that field reports, computed
-  // by the same code inside core rather than by a parallel implementation, so the two routes cannot
-  // disagree.
+  // above. Duplicates are legal and are reported once each, in request order. The two poles are
+  // asked for here like any other id (MARKER_ZENITH / MARKER_NADIR); there is no separate switch.
   const int* marker_ids;
   int marker_count;
 } LUMICE_AnnotationRequest;
@@ -1767,83 +1784,54 @@ typedef struct LUMICE_AnnotationMarkerPoint_ {
 } LUMICE_AnnotationMarkerPoint;
 
 // The result. The caller allocates this struct (stack is fine); core allocates what the pointers
-// point at, and LUMICE_ReleaseAnnotationOverlay frees it. Every pointer below is owned by core and
+// point at, and LUMICE_ReleaseAnnotationAnchors frees it. Every pointer below is owned by core and
 // stays valid until that call — the same acquire/release discipline LUMICE_Scene and
 // LUMICE_ResultFrame use, with the same rule: exactly one Release per successful Compute, and
 // nothing dereferenced afterwards.
-typedef struct LUMICE_AnnotationOverlay_ {
-  int width;
-  int height;
-
-  // 1 where the lens images a piece of sky this request may annotate: imaged, inside `visible`,
-  // and inside the front hemisphere when `front` is set. Row-major width*height, indexed
-  // py * width + px — the same layout LUMICE_RawXyzResult uses. Every mask below is a subset of
-  // this one. NULL only when the view is degenerate.
-  const unsigned char* drawable;
-
-  // One mask per annotation CATEGORY, each the union of that category's lines, NULL when the
-  // category was not requested. Per category rather than per line because that is the granularity
-  // a consumer colours at; a per-line mask set would be tens of megabytes at 4K.
-  const unsigned char* horizon;
-  const unsigned char* elevation;
-  const unsigned char* longitude;
-  const unsigned char* angular_dist;
-
-  // Marker positions, valid only when the request asked for them AND the point is on the canvas
-  // and inside the requested hemisphere.
-  float zenith_px;
-  float zenith_py;
-  int zenith_valid;
-  float nadir_px;
-  float nadir_py;
-  int nadir_valid;
-
+typedef struct LUMICE_AnnotationAnchors_ {
+  // One entry per label core placed, in no particular order; `kind` and `index` say which curve
+  // each belongs to. NULL when there are none.
   const LUMICE_AnnotationLabel* labels;
   int label_count;
 
-  // Opaque handle to the storage the pointers above live in. Do not read, write, copy or free it;
-  // pass this struct to LUMICE_ReleaseAnnotationOverlay exactly once instead. Copying the struct
-  // copies the handle, so only ONE copy may be released — treat it as a move, not a value.
-  void* storage;
-
   // Parallel to the request's marker_ids: marker_points[i] is where marker_ids[i] landed.
-  // marker_count equals the request's, and the array is NULL when it is zero. Owned by `storage`
-  // like every other pointer here, and released with it.
-  //
-  // Placed after `storage` rather than beside zenith/nadir where it belongs semantically, because
-  // this is an APPEND: every field above keeps the offset it was published with. Reading order is
-  // worth less than not moving a field a compiled caller already knows the offset of.
+  // marker_count equals the request's, and the array is NULL when it is zero.
   const LUMICE_AnnotationMarkerPoint* marker_points;
   int marker_count;
-} LUMICE_AnnotationOverlay;
 
-// Compute the overlay for one view. `*out` is fully overwritten on success and left untouched on
+  // Opaque handle to the storage the pointers above live in. Do not read, write, copy or free it;
+  // pass this struct to LUMICE_ReleaseAnnotationAnchors exactly once instead. Copying the struct
+  // copies the handle, so only ONE copy may be released — treat it as a move, not a value.
+  void* storage;
+} LUMICE_AnnotationAnchors;
+
+// Compute the anchors for one view. `*out` is fully overwritten on success and left untouched on
 // failure, so a failed call leaves nothing to release.
 //
 // Contract:
 //   - Pure and deterministic: identical `request` => identical output. No Server, no Scene, no
 //     global state, and safe to call from any thread (including concurrently with a running
 //     simulation — it shares nothing with one).
-//   - A degenerate view (width or height <= 0) is not an error: it yields an overlay with
-//     width = height = 0, every pointer NULL and label_count = 0, which still must be Released.
-//   - The masks and the anchors agree by construction: both come from one inverse sweep and one
-//     forward, the same forward the trace backends run.
+//   - A degenerate view (width or height <= 0) is not an error: it yields label_count = 0,
+//     marker_count = 0 and NULL pointers, which still must be Released.
+//   - The forward projection is the one the trace backends run, so an anchor sits on the curve a
+//     consumer draws from the same angle field.
 //
 // Returns LUMICE_ERR_NULL_ARG if `request` or `out` is NULL, or a list pointer is NULL with a
 // non-zero count; LUMICE_ERR_INVALID_VALUE for an unknown lens_type / visible, a negative count,
 // a count past LUMICE_MAX_ANNOTATION_LINES / _CIRCLES / _MARKERS, or a marker id outside
 // [0, LUMICE_ANNOTATION_MARKER_COUNT); LUMICE_ERR_UNKNOWN on allocation failure.
-LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
-                                                 LUMICE_AnnotationOverlay* out);
+LUMICE_ErrorCode LUMICE_ComputeAnnotationAnchors(const LUMICE_AnnotationRequest* request,
+                                                 LUMICE_AnnotationAnchors* out);
 
-// Release the storage a successful LUMICE_ComputeAnnotationOverlay allocated, and NULL out the
+// Release the storage a successful LUMICE_ComputeAnnotationAnchors allocated, and NULL out the
 // pointers so a double release is a no-op rather than a double free. NULL-safe, and safe on an
 // already-released or zero-initialized struct (same wording as LUMICE_SceneDestroy: calling it on
-// a live overlay exactly once is required; calling it on anything else does nothing).
-void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay);
+// a live result exactly once is required; calling it on anything else does nothing).
+void LUMICE_ReleaseAnnotationAnchors(LUMICE_AnnotationAnchors* anchors);
 
 // A named reference direction as a WORLD DIRECTION, for a caller that wants to POINT THE CAMERA at
-// it rather than find where it lands on a canvas. LUMICE_ComputeAnnotationOverlay answers the
+// it rather than find where it lands on a canvas. LUMICE_ComputeAnnotationAnchors answers the
 // second question and needs a whole view (lens, fov, resolution, hemisphere policy) to do it; these
 // two need none of that and cost O(1). They are thin forwards to core's single owner of the symbol
 // rule, so a view preset and a drawn marker cannot drift into two spellings of "where is the

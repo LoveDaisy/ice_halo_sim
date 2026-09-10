@@ -73,7 +73,7 @@ struct Exposure {
 // The show_* fields here control **line** rendering only (shader uniforms
 // u_show_horizon / u_show_grid / u_show_sun_circles). They are sourced from
 // GuiState::show_<x>_line. The companion fields GuiState::show_<x>_label are read where the
-// label anchors are consumed (app_panels.cpp / app.cpp, through AnnotationOverlayCache), not here.
+// label anchors are consumed (app_panels.cpp / app.cpp, through AnnotationAnchors), not here.
 struct OverlayDecoration {
   bool show_horizon = false;
   bool show_grid = false;
@@ -92,29 +92,6 @@ struct OverlayDecoration {
   // Unit vector, world frame, the direction light TRAVELS (altitude = asin(-z)) — GuiSunWorldDir's
   // output, the same value the anchor request's reference_dir carries.
   float reference_dir[3] = { 0.0f, 0.0f, -1.0f };
-  // BORROWED for the duration of the Render call: core's angular-distance mask for this view,
-  // row-major mask_w*mask_h with a top-left origin, or null for "none computed". Owned by the
-  // caller's AnnotationOverlayCache. Passed rather than uploaded directly because the upload needs
-  // a GL context and this struct is filled during the ImGui build phase; `generation` is what lets
-  // Render() re-upload only when the mask is actually new instead of once per frame.
-  const unsigned char* angular_dist_mask = nullptr;
-  int angular_dist_mask_w = 0;
-  int angular_dist_mask_h = 0;
-  unsigned long long angular_dist_mask_generation = 0;
-  // The coordinate grid's mask, on the same borrowed-for-the-call terms as the circles' above.
-  // ONE mask for parallels and meridians together: they share this struct's single grid_color /
-  // grid_alpha, so nothing downstream could tell the two apart even if they arrived separately.
-  const unsigned char* grid_mask = nullptr;
-  int grid_mask_w = 0;
-  int grid_mask_h = 0;
-  unsigned long long grid_mask_generation = 0;
-  // The celestial horizon's mask, on the same borrowed-for-the-call terms as the two above. Its
-  // own channel rather than a third contributor to grid_mask because it carries its own colour and
-  // alpha — the same reason core keeps it a separate Overlay member.
-  const unsigned char* horizon_mask = nullptr;
-  int horizon_mask_w = 0;
-  int horizon_mask_h = 0;
-  unsigned long long horizon_mask_generation = 0;
   float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
   float grid_color[3] = { 1.0f, 1.0f, 1.0f };
   float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
@@ -246,23 +223,6 @@ class PreviewRenderer {
   // Render preview into the given viewport region (in framebuffer pixels)
   void Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params);
 
-  // Hand the renderer core's angular-distance mask for the current view: row-major
-  // width*height bytes, 1 where a circle passes, top-left origin. NOT per frame — the caller
-  // uploads when its AnnotationOverlayCache produces a new result, and the texture persists
-  // until the next one. A null / degenerate argument clears it.
-  void UploadAngularDistMask(const unsigned char* data, int width, int height);
-  void ClearAngularDistMask();
-
-  // The same for the coordinate grid's mask, on texture unit 3. Same contract in every respect;
-  // see UploadAngularDistMask above.
-  void UploadGridMask(const unsigned char* data, int width, int height);
-  void ClearGridMask();
-
-  // The same for the celestial horizon's mask, on texture unit 4. Same contract in every respect;
-  // see UploadAngularDistMask above.
-  void UploadHorizonMask(const unsigned char* data, int width, int height);
-  void ClearHorizonMask();
-
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
@@ -314,19 +274,6 @@ class PreviewRenderer {
 
   // Background image texture (no CPU-side copy — loaded from file path)
   unsigned int bg_texture_ = 0;
-  // R8, one texel per viewport pixel: core's angular-distance mask for the last SETTLED view.
-  // Zero when nothing has been uploaded, which the shader reads as "draw no circles" rather than
-  // as an empty mask — the two are the same picture but only one of them is honest about why.
-  unsigned int angular_dist_tex_ = 0;
-  // Which AnnotationOverlayCache generation angular_dist_tex_ holds. 0 means "nothing uploaded",
-  // which is why the cache's counter starts at 1.
-  unsigned long long angular_dist_tex_generation_ = 0;
-  // The coordinate grid's mask, same lifetime and same sentinel rules as the two above.
-  unsigned int grid_tex_ = 0;
-  unsigned long long grid_tex_generation_ = 0;
-  // The celestial horizon's mask, likewise.
-  unsigned int horizon_tex_ = 0;
-  unsigned long long horizon_tex_generation_ = 0;
   int bg_width_ = 0;
   int bg_height_ = 0;
   float bg_aspect_ = 1.0f;

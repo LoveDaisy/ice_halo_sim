@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
-#include "gui/annotation_overlay_cache.hpp"  // GuiSunWorldDir — the GUI's one spelling of the sun
-#include "gui/gui_state.hpp"                 // kMarkerDisplayNames — the Overlay list's own labels
+#include "gui/annotation_anchors.hpp"  // GuiSunWorldDir — the GUI's one spelling of the sun
+#include "gui/gui_state.hpp"           // kMarkerDisplayNames — the Overlay list's own labels
 
 namespace lumice::gui {
 

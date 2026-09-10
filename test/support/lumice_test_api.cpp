@@ -34,12 +34,12 @@ LUMICE_ErrorCode LUMICE_TEST_ComputeRenderDomainMask(const LUMICE_AnnotationView
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  // Same view translation LUMICE_ComputeAnnotationOverlay performs (ToAnnotationViewSnapshot,
-  // server/c_api_internal.hpp — a56: single owner), feeding the same core sweep. No line list, no
-  // markers, and no label walk: every other Request field keeps its default (empty lists,
-  // zenith_nadir = false), and `labels` is switched off explicitly because its default is on. The
-  // drawable sweep is independent of all of them — the parity test in
-  // test/unit-correctness/server/ is what holds that claim to the product API's output.
+  // Same view translation LUMICE_ComputeAnnotationAnchors performs (ToAnnotationViewSnapshot,
+  // server/c_api_internal.hpp — a56: single owner), feeding the core sweep the CLI renderer
+  // composites against. No line list, no markers, and no label walk: every other Request field
+  // keeps its default (empty lists, zenith_nadir = false), and `labels` is switched off explicitly
+  // because its default is on. The drawable sweep is independent of all of them — the parity test
+  // in test/unit-correctness/server/ is what holds that claim against a core call made WITH them.
   lumice::annotation::Request req;
   req.view = ToAnnotationViewSnapshot(*view);
   req.labels = false;

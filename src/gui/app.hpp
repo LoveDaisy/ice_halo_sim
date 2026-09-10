@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
@@ -194,29 +194,28 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 // enum: it is a pure function of the preset and file_io.cpp's export path needs it too.
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
-// The one AnnotationOverlayCache the live preview drives (app_panels.cpp), and the label set built
-// from whatever it currently holds. Exposed so the off-screen export renders the SAME circles the
-// preview is showing rather than recomputing them at its own moment — an export is a picture of
-// what is on screen, and a second computation could settle on a different view.
-AnnotationOverlayCache& PreviewAnnotationOverlay();
+// The one AnnotationAnchors the live preview drives (app_panels.cpp, once per frame), and the
+// label sets built from what it holds for that frame. Exposed so the screenshot export renders
+// the SAME anchors the preview is showing rather than recomputing them at its own moment — an
+// export is a picture of what is on screen.
+AnnotationAnchors& PreviewAnnotationAnchors();
 AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc);
 // `vp_w`/`vp_h` are the target draw list's size; the anchors are scaled from the cache's own canvas
 // into it, so a caller rendering at a size the cache was not built for still gets them in the right
 // place (see the function's own note on the HiDPI case).
-CurveLabelSet BuildSunCirclesLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
-                                      float vp_h);
+CurveLabelSet BuildSunCirclesLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h);
 // The coordinate grid's twin of the above: same anchors-to-draw-list conversion, reading the grid
 // half of the same cache result and carrying the grid's own colour, alpha and collision group.
-CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
+CurveLabelSet BuildGridLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h);
 // The horizon's. Same conversion again, reading the horizon half of the same result. It joins the
 // GRID's collision group (the horizon is the parallel at altitude 0) while carrying its own colour
 // and alpha, which is why it is a third set rather than a third family folded into the grid's.
-CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
+CurveLabelSet BuildHorizonLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h);
 // The reference-point markers' names. A VECTOR of sets, unlike the three above, and that is the
 // whole reason it is a separate function rather than a fourth Build*LabelSet: a set carries ONE
 // colour, and these six points are told apart by colour. One set per marker whose label switch is
 // on and whose point this view actually images; empty when none is.
-std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationAnchors& cache, const GuiState& state, float vp_w,
                                                 float vp_h);
 
 // Pick the coordinate grid step (in degrees) for a given FOV. Single source of truth for every

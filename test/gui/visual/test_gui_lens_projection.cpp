@@ -25,7 +25,7 @@
 #include <iterator>
 #include <string>
 
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
@@ -286,11 +286,13 @@ static const LensProjScene kScenes[] = {
   // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
   // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had
   // been its sole owner.
-  // RE-SHOT when the grid stopped being a shader expression and became a sampled core mask. The
-  // curves moved: the analytic version derived its own half-width per fragment from fwidth() of
-  // the altitude and azimuth fields, core derives one from the local gradient of the same fields on
-  // the CPU, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so the
-  // scene is no noisier than it was; only its operating point moved.
+  // RE-SHOT when the grid stopped being a shader expression and became a sampled core mask, and
+  // RE-SHOT AGAIN when it became a shader expression once more — this time of the same definition
+  // core evaluates (level lists + the shared line-width rule), evaluated per fragment so the curves
+  // follow a drag. The curves moved both times for the same reason in opposite directions: the
+  // shader's half-width comes from the hardware fwidth() of the fields, core's from a CPU forward
+  // difference, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so
+  // the scene is no noisier than it was; only its operating point moved.
   {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
@@ -501,17 +503,17 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       }
 
       // 7b. Overlay scenes only (overlay_ea): place the zenith/nadir markers and turn the grid on.
-      // Mirrors the runtime path in app_panels.cpp — both families now take their geometry from
-      // core's LUMICE_ComputeAnnotationOverlay and the shader only rasterizes it, so this block is
-      // part of what the reference covers, not test scaffolding. Must run after the switch above:
-      // it reads the view_proj the scene just installed.
+      // Mirrors the runtime path in app_panels.cpp — the markers take their positions from core's
+      // LUMICE_ComputeAnnotationAnchors, the grid is a level-list definition the shader evaluates
+      // per fragment — so this block is part of what the reference covers, not test scaffolding.
+      // Must run after the switch above: it reads the view_proj the scene just installed.
       if (scene.enable_overlay) {
         if (scene.overlay_zenith_nadir) {
           // Computed AT THIS CANVAS and converted through the one owner of the canvas -> shader
           // transform, for the same reasons the grid block below gives. The markers used to be
           // placed by ProjectWorldDirToScreen, a GUI-only second copy of the forward projection;
           // that copy is no longer on this path.
-          static gui::AnnotationOverlayCache marker_overlay;
+          static gui::AnnotationAnchors marker_overlay;
           gui::AnnotationViewInput in;
           in.lens_type = vp.params.view_proj.lens_type;
           in.fov = vp.params.view_proj.fov;
@@ -522,7 +524,7 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           in.front = vp.params.view_proj.front;
           in.overlap = gui::kDualFisheyeOverlap;
           in.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
-          marker_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
+          marker_overlay.Compute(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
           IM_CHECK(marker_overlay.HasResult());
           // The scene exists to cover the ring, and a ring is small enough that its ABSENCE would
           // cost less PSNR than this group's noise — so a marker that stopped being placed would
@@ -546,30 +548,16 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
         }
         if (scene.overlay_grid) {
           vp.params.overlay.show_grid = true;
-          // The grid's geometry comes from core's annotation overlay now, not from a shader
-          // uniform, so the reference covers the mask path the live preview and the CLI both use.
-          // Computed AT THIS CANVAS for the reason ExportPreviewPng gives for doing the same: a
-          // mask built for another size is an image rescale of the curves.
-          static gui::AnnotationOverlayCache grid_overlay;
-          gui::AnnotationViewInput in;
-          in.lens_type = vp.params.view_proj.lens_type;
-          in.fov = vp.params.view_proj.fov;
-          in.azimuth = vp.params.view_proj.azimuth;
-          in.elevation = vp.params.view_proj.elevation;
-          in.roll = vp.params.view_proj.roll;
-          in.visible = vp.params.view_proj.visible;
-          in.front = vp.params.view_proj.front;
-          in.overlap = gui::kDualFisheyeOverlap;
+          // The grid is DEFINED here — the level lists the shader evaluates per fragment, from the
+          // same expansion the live preview and the exported config use — and rasterized by the
+          // shader from each fragment's own direction. Nothing about the canvas enters: the
+          // definition is the same at any size, which is what lets the reference cover the
+          // shader's evaluation rather than a resampled image of a mask.
           const float step = gui::ComputeGridStep(vp.params.view_proj.fov);
-          in.elevation_deg = gui::ComputeGridElevationAngles(step);
-          in.longitude_deg = gui::ComputeGridLongitudeAngles(step);
-          grid_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
-          IM_CHECK(grid_overlay.HasResult());
-          IM_CHECK(!grid_overlay.GridMask().empty());
-          vp.params.overlay.grid_mask = grid_overlay.GridMask().data();
-          vp.params.overlay.grid_mask_w = grid_overlay.Width();
-          vp.params.overlay.grid_mask_h = grid_overlay.Height();
-          vp.params.overlay.grid_mask_generation = grid_overlay.Generation();
+          vp.params.overlay.elevation_deg = gui::ComputeGridElevationAngles(step);
+          vp.params.overlay.longitude_deg = gui::ComputeGridLongitudeAngles(step);
+          IM_CHECK(!vp.params.overlay.elevation_deg.empty());
+          IM_CHECK(!vp.params.overlay.longitude_deg.empty());
         }
       }
 

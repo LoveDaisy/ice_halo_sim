@@ -454,18 +454,18 @@ void DoExportPreviewPng() {
   const float label_h = DeviceToLogical(h, dpi_y);
   std::vector<CurveLabelSet> curve_labels;
   if (g_state.show_horizon_label) {
-    curve_labels.push_back(BuildHorizonLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));
+    curve_labels.push_back(BuildHorizonLabelSet(PreviewAnnotationAnchors(), g_state, label_w, label_h));
   }
   if (g_state.show_sun_circles_label) {
-    curve_labels.push_back(BuildSunCirclesLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));
+    curve_labels.push_back(BuildSunCirclesLabelSet(PreviewAnnotationAnchors(), g_state, label_w, label_h));
   }
   if (g_state.show_grid_label) {
-    curve_labels.push_back(BuildGridLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));
+    curve_labels.push_back(BuildGridLabelSet(PreviewAnnotationAnchors(), g_state, label_w, label_h));
   }
   // No outer switch to gate on, unlike the three above: each marker carries its own label switch,
   // so the builder returns an empty vector when none of the six is on and the gate would only
   // restate that. Built at label_w/label_h like the three above, for the same reason.
-  for (CurveLabelSet& set : BuildMarkerLabelSets(PreviewAnnotationOverlay(), g_state, label_w, label_h)) {
+  for (CurveLabelSet& set : BuildMarkerLabelSets(PreviewAnnotationAnchors(), g_state, label_w, label_h)) {
     curve_labels.push_back(std::move(set));
   }
   auto rgba = RenderExportToRgba(g_preview, params, w, h, curve_labels, dpi_x, dpi_y);

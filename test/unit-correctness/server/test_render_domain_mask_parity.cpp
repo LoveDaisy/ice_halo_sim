@@ -1,22 +1,25 @@
 // LUMICE_TEST_ComputeRenderDomainMask (test/support/lumice_test_api.h, the test-only export
-// surface) must hand out the SAME bytes as LUMICE_AnnotationOverlay::drawable, the product API's
-// answer to the same view. The two are meant to be one computation behind two doors — the hook
-// exists so pytest can read the render-domain mask without the product ABI carrying a test-only
-// reason to export anything — and this file is what makes "same computation" a checked claim
-// rather than a comment.
+// surface) must hand out the SAME bytes as core's own render-domain mask,
+// lumice::annotation::ComputeOverlay(...).drawable — the mask the CLI renderer composites against
+// in-process. The hook exists so pytest can read that mask without the product ABI carrying a
+// test-only reason to export anything, and this file is what makes "same computation" a checked
+// claim rather than a comment.
 //
 // It is also the direct refutation path for the one shortcut the hook takes: it feeds the core
 // sweep a Request with every line list empty and `labels = false`, on the assumption that the
 // drawable sweep does not depend on any of them. If ComputeOverlay ever couples the drawable to
 // the label walk or to a requested line family, this test goes red before any downstream consumer
-// notices a shifted mask.
+// notices a shifted mask — because the oracle below asks core with the line families ON.
 //
-// The product API is the oracle here rather than lumice::annotation::ComputeOverlay itself,
-// because the hook calls ComputeOverlay directly — comparing against that would be the hook
-// checking its own homework. This is the only window in which the product API can serve as that
-// oracle: should LUMICE_ComputeAnnotationOverlay ever be removed from lumice.h, the change that
-// removes it must either re-point this test at core's ComputeOverlay (accepting the weaker,
-// self-referential comparison) or delete the test — that decision belongs to that change.
+// THE ORACLE IS CORE ITSELF, and that is a weaker comparison than this file once made. Until
+// v4.28 the product API exported the mask (LUMICE_AnnotationOverlay::drawable) and stood here as
+// an independent door onto the same computation; the hook calls ComputeOverlay directly, so
+// comparing it against ComputeOverlay is the hook checking its own homework as far as the sweep
+// is concerned. What the comparison still holds honestly: the hook's view translation
+// (ToAnnotationViewSnapshot, shared by construction), its storage and pointer handling, its
+// degenerate-view and error contract, and the independence of the sweep from the line lists —
+// the oracle request below carries lines and labels, the hook's carries none. The product API no
+// longer has a mask to compare against, by design: see the v4.28 note at LUMICE_API_VERSION.
 //
 // Flavor note: unit_correctness_test compiles lumice_test_api.cpp into a static, test-flavor
 // binary, while pytest loads the same source compiled into the shared-flavor liblumice_testapi.
@@ -29,7 +32,9 @@
 #include <string>
 #include <vector>
 
+#include "core/annotation_overlay.hpp"
 #include "include/lumice.h"
+#include "server/c_api_internal.hpp"  // ToAnnotationViewSnapshot
 #include "support/lumice_test_api.h"
 
 namespace {
@@ -72,18 +77,23 @@ const Scene kScenes[] = {
                                                             0, 0, 0.1f, 90.0f, 20.0f, 0.0f, LUMICE_VISIBLE_UPPER, 1) },
 };
 
-// The product API's answer for a view, with nothing but the view filled in — the same shape of
-// request the pytest fixture used to send before it switched to the hook.
-struct ProductOverlay {
-  LUMICE_AnnotationOverlay overlay{};
-  explicit ProductOverlay(const LUMICE_AnnotationView& view) {
-    LUMICE_AnnotationRequest request{};
-    request.view = view;
-    EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&request, &overlay), LUMICE_OK);
+// Core's own answer for a view, asked WITH lines and labels so the comparison also says the
+// drawable does not depend on them (the hook asks with none). The view goes through the same
+// translation the hook uses — there is one, on purpose (a56) — so what this compares is the sweep
+// and the hook's handling of its result, not two hand-copied field mappings.
+struct CoreOverlay {
+  lumice::annotation::Overlay overlay;
+  explicit CoreOverlay(const LUMICE_AnnotationView& view) {
+    lumice::annotation::Request req;
+    req.view = ToAnnotationViewSnapshot(view);
+    req.horizon = true;
+    req.elevation_deg = { -30.0f, 30.0f };
+    req.longitude_deg = { 0.0f, 90.0f };
+    req.angular_dist_deg = { 22.0f };
+    req.markers = { lumice::annotation::kMarkerZenith };
+    req.labels = true;
+    overlay = lumice::annotation::ComputeOverlay(req);
   }
-  ~ProductOverlay() { LUMICE_ReleaseAnnotationOverlay(&overlay); }
-  ProductOverlay(const ProductOverlay&) = delete;
-  ProductOverlay& operator=(const ProductOverlay&) = delete;
 };
 
 struct HookMask {
@@ -98,24 +108,24 @@ struct HookMask {
 
 // One scene's comparison, in its own function so a fatal assert ends THIS scene and not the loop
 // that drives the others (scripts/check_loop_fatal_asserts.py pins that shape).
-void ExpectHookMatchesProduct(const Scene& scene) {
+void ExpectHookMatchesCore(const Scene& scene) {
   SCOPED_TRACE(scene.name);
-  const ProductOverlay product(scene.view);
+  const CoreOverlay core(scene.view);
   const HookMask hook(scene.view);
-  const LUMICE_AnnotationOverlay& o = product.overlay;
+  const lumice::annotation::Overlay& o = core.overlay;
   const LUMICE_TEST_RenderDomainMask& m = hook.mask;
 
   EXPECT_EQ(m.width, o.width);
   EXPECT_EQ(m.height, o.height);
   EXPECT_EQ(m.width, scene.view.width);
   EXPECT_EQ(m.height, scene.view.height);
-  ASSERT_NE(o.drawable, nullptr);
+  ASSERT_FALSE(o.drawable.empty());
   ASSERT_NE(m.imaged, nullptr);
-  // Distinct allocations: the hook owns its own storage, it does not alias the product's.
-  EXPECT_NE(m.imaged, o.drawable);
+  // Distinct allocations: the hook owns its own storage, it does not alias core's.
+  EXPECT_NE(m.imaged, o.drawable.data());
 
   const size_t n = static_cast<size_t>(o.width) * static_cast<size_t>(o.height);
-  EXPECT_EQ(std::memcmp(m.imaged, o.drawable, n), 0);
+  EXPECT_EQ(std::memcmp(m.imaged, o.drawable.data(), n), 0);
 
   // A mask that is all-0 or all-1 would satisfy memcmp without exercising the predicate; every
   // scene here is built to have both inside and outside pixels.
@@ -130,9 +140,9 @@ void ExpectHookMatchesProduct(const Scene& scene) {
 }  // namespace
 
 
-TEST(RenderDomainMaskParity, HookMatchesProductDrawableByteForByte) {
+TEST(RenderDomainMaskParity, HookMatchesCoreDrawableByteForByte) {
   for (const Scene& scene : kScenes) {
-    ExpectHookMatchesProduct(scene);
+    ExpectHookMatchesCore(scene);
   }
 }
 
@@ -151,7 +161,7 @@ TEST(RenderDomainMaskParity, DegenerateViewIsNotAnErrorAndStillReleases) {
 }
 
 
-TEST(RenderDomainMaskParity, ArgumentValidationMirrorsProductApi) {
+TEST(RenderDomainMaskParity, ArgumentValidationMirrorsTheAnchorsApi) {
   LUMICE_TEST_RenderDomainMask mask{};
   EXPECT_EQ(LUMICE_TEST_ComputeRenderDomainMask(nullptr, &mask), LUMICE_ERR_NULL_ARG);
   EXPECT_EQ(LUMICE_TEST_ComputeRenderDomainMask(&kScenes[0].view, nullptr), LUMICE_ERR_NULL_ARG);

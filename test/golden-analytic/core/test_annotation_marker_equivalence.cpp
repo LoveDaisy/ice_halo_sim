@@ -23,7 +23,7 @@
 //     with the sampler, so the cases spread across four lens families, both hemispheric clips and
 //     the front clip.
 //
-// What this file does NOT cover: the C API bridge (LUMICE_ComputeAnnotationOverlay's id
+// What this file does NOT cover: the C API bridge (LUMICE_ComputeAnnotationAnchors's id
 // validation and array copy). That is a transport layer over this one and is pinned in
 // test/unit-correctness/server/test_c_api.cpp.
 

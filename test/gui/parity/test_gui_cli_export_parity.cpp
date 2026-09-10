@@ -165,7 +165,7 @@
 //     gains an annotation layer". That day came, and the altitude grid followed it: both are now on
 //     in both scenes, and both are overlays whose two arms are not two implementations. Each builds
 //     its geometry from the same core call (LUMICE_ComputeAnnotationOverlay), the CLI once per line
-//     in server/render.cpp and the GUI once per settled view in gui/annotation_overlay_cache.cpp.
+//     in server/render.cpp and the GUI once per settled view in gui/annotation_anchors.cpp.
 //     That is why turning either ON RAISES both scenes' PSNR rather than lowering it — the curves
 //     land on identical pixels, so where the two frames used to differ they now agree. A drop is
 //     therefore the signal, and the thresholds below are set against the measured breaks.
@@ -1027,22 +1027,18 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
       IM_CHECK_EQ(vp.params.overlay.markers_alpha, 1.0f);
       IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
+      // The curve DEFINITIONS the shader evaluates reached PreviewParams: the circle radii and the
+      // grid's level lists. What this pins is the half the fixture can see from here; whether the
+      // shader draws the same curve the CLI does from the same definition is what the PSNR below
+      // is for.
       if (scene.show_sun_circles) {
-        IM_CHECK(vp.params.overlay.angular_dist_mask != nullptr);
+        IM_CHECK(!vp.params.overlay.angular_dist_deg.empty());
       }
       if (scene.show_grid) {
-        IM_CHECK(vp.params.overlay.grid_mask != nullptr);
+        IM_CHECK(!vp.params.overlay.elevation_deg.empty());
+        IM_CHECK(!vp.params.overlay.longitude_deg.empty());
       }
-      // The horizon's own mask. Until this task there was none to check for — the preview DERIVED
-      // the horizon in its fragment shader from fwidth(altitude), which is what made this the one
-      // annotation the two arms drew differently. What this pins is the half the fixture can see
-      // from here: that the mask reached PreviewParams at all. Whether the SHADER reads it is
-      // pinned by the PSNR below, which drops 1.6 dB on the full-sky scene the moment the two
-      // arms stop drawing the same curve.
       IM_CHECK_EQ(vp.params.overlay.horizon_alpha, 0.6f);
-      if (scene.show_horizon) {
-        IM_CHECK(vp.params.overlay.horizon_mask != nullptr);
-      }
       const std::string gui_png = (scratch_dir / "gui.png").string();
       IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, gui_png));
 

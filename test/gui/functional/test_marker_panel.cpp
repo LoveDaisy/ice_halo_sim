@@ -142,17 +142,16 @@ void InstallFullSkyView(gui::GuiState& s) {
   s.sun.altitude = 25.0f;
 }
 
-// Fill the overlay half of a PreviewParams from GuiState + a settled cache, the same way
+// Fill the overlay half of a PreviewParams from GuiState + computed anchors, the same way
 // app_panels.cpp does per frame. Deliberately NOT a hand-written mirror of the marker positions:
 // the point of the pixel cases is to check the SHADER against core's answer, and a fixture that
 // projected the six directions itself would be checking the fixture.
-void FillMarkerOverlay(gui::PreviewParams& params, const gui::AnnotationOverlayCache& cache, const gui::GuiState& s) {
+void FillMarkerOverlay(gui::PreviewParams& params, const gui::AnnotationAnchors& cache, const gui::GuiState& s) {
   params.overlay.markers_alpha = 1.0f;  // fully opaque: the pixel test reads a colour, not a blend
   params.overlay.markers_radius_px = s.markers_radius_px;
   for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
     std::copy(std::begin(s.markers[i].color), std::end(s.markers[i].color), params.overlay.marker_color[i].begin());
-    const gui::AnnotationOverlayCache::Point p =
-        s.markers[i].show ? cache.MarkerPoint(i) : gui::AnnotationOverlayCache::Point{};
+    const gui::AnnotationAnchors::Point p = s.markers[i].show ? cache.MarkerPoint(i) : gui::AnnotationAnchors::Point{};
     gui::CanvasPointToShaderScreenPos(p, s.renderer.lens_type, kProbeW, kProbeH,
                                       params.overlay.marker_screen_pos[i].data());
   }
@@ -409,8 +408,8 @@ void RegisterMarkerPanelTests(ImGuiTestEngine* engine) {
 
       // Positions from the production path — AnnotationViewInputFor reads the same GuiState the
       // panel edits, and the cache is the same class the live preview drives.
-      gui::AnnotationOverlayCache cache;
-      cache.Refresh(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer),
+      gui::AnnotationAnchors cache;
+      cache.Compute(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer),
                                                kProbeW, kProbeH));
       IM_CHECK(cache.HasResult());
       for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
@@ -503,8 +502,8 @@ void RegisterMarkerPanelTests(ImGuiTestEngine* engine) {
       }
       ctx->Yield(3);
 
-      gui::AnnotationOverlayCache cache;
-      cache.Refresh(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer),
+      gui::AnnotationAnchors cache;
+      cache.Compute(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer),
                                                kProbeW, kProbeH));
       IM_CHECK(cache.HasResult());
 
@@ -654,8 +653,8 @@ void RegisterMarkerPanelTests(ImGuiTestEngine* engine) {
         IM_CHECK_GE(g_fullframe_capture.rect_x, 0);
         IM_CHECK_GE(g_fullframe_capture.rect_y, 0);
         fprintf(stderr, "[marker_panel] name-cell capture: has_result=%d subsun_valid=%d show=%d rect=(%d,%d,%d,%d)\n",
-                gui::PreviewAnnotationOverlay().HasResult() ? 1 : 0,
-                gui::PreviewAnnotationOverlay().MarkerPoint(LUMICE_ANNOTATION_MARKER_SUBSUN).valid ? 1 : 0,
+                gui::PreviewAnnotationAnchors().HasResult() ? 1 : 0,
+                gui::PreviewAnnotationAnchors().MarkerPoint(LUMICE_ANNOTATION_MARKER_SUBSUN).valid ? 1 : 0,
                 gui::g_state.markers[LUMICE_ANNOTATION_MARKER_SUBSUN].show ? 1 : 0, g_fullframe_capture.rect_x,
                 g_fullframe_capture.rect_y, g_fullframe_capture.rect_w, g_fullframe_capture.rect_h);
         g_fullframe_capture.requested.store(true);
@@ -697,8 +696,8 @@ void RegisterMarkerPanelTests(ImGuiTestEngine* engine) {
       }
       // The premise. Without it the two captures would differ for no reason at all and the case
       // would be asserting noise.
-      IM_CHECK(gui::PreviewAnnotationOverlay().HasResult() ||
-               !gui::PreviewAnnotationOverlay().MarkerPoint(subsun).valid);
+      IM_CHECK(gui::PreviewAnnotationAnchors().HasResult() ||
+               !gui::PreviewAnnotationAnchors().MarkerPoint(subsun).valid);
 
       // State 3 — not ticked, same cropped view.
       gui::g_state.markers[subsun].show = false;

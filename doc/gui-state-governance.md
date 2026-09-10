@@ -262,6 +262,7 @@
 | `visible` | 半球裁剪：恒 `full` vs 用户的 |
 | `background` | 显示期合成 vs CLI 烤进图里 |
 | `resolution` | 2:1 纹理 vs 用户的画幅 |
+| `overlap` | 双鱼眼重叠带：commit 臂写 `kDualFisheyeOverlap`（预览 shader 靠它在源**纹理**的两半球拼缝上混合）vs export 臂写 `0`（屏幕上那张画的双鱼眼目标投影 `dualFisheyeInverse` 每盘恰好一个半球，根本没有重叠带；带着它导出会让 CLI 把每个盘画大 4%，地平线缩进盘沿十几像素——用户从没看过那张画）。加入理由见 §9.4 |
 | `front` | 第二道裁剪：恒关 vs 用户的开关（与 `visible` 正交，见 §9.3） |
 | `grid.horizon` | 恒开 vs 用户的开关 |
 | `grid.angular_dist` / `grid.elevation` / `grid.longitude` | 角度表：commit 臂留空 vs export 臂写用户的表（理由见 §9.4） |
@@ -330,6 +331,15 @@
   （附带一条仍然成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
   `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它；
   `angular_dist` 在 commit 臂留空是同一个理由的另一面。）
+- **`overlap` 的加入理由**（辅助线改回 shader 逐 fragment 求值时暴露）：以前 GUI 的辅助线掩码与锚点都是
+  向 core 按 `overlap = kDualFisheyeOverlap` 请求的，与 export 臂写的值一致，于是跨进程 parity 在双鱼眼
+  场景上很高——但那些线和 marker 在 **GUI 自己的画面**上是错位的：预览 shader 的双鱼眼目标投影每盘
+  恰好一个半球（没有重叠带），而 core 按重叠带算出来的地平线在盘沿内侧 4%（512 像素的盘上十几像素）。
+  线改成从 fragment 自己的方向求值后，它们自然落在画面自己的地平线上，锚点请求也随之改为 `overlap = 0`
+  （`AnnotationViewInputFor`），parity 闸立刻暴露出被掩盖的那条真实分歧：CLI 的盘比屏幕上的大 4%。
+  裁决按本节的通则——export 臂描述的是**屏幕上那张画**，屏幕上没有重叠带 ⇒ export 臂写 `0`；commit 臂
+  仍写 `kDualFisheyeOverlap`，因为源纹理的两半球拼缝混合要用它。⚠️ 这是一条**会改变导出 config 内容**的
+  裁决（双鱼眼导出的 `overlap` 从 0.0872 变为 0），由实施者按本节通则推出而非 owner 逐字裁定，可质疑。
 - **`grid.elevation_line` / `grid.longitude_line` / `grid.angular_dist_line` 三个子键的加入理由**
   （按本节纪律，先在这里说明再改清单）：在它们存在之前，这三族「画不画线」等价于「角度表空不空」，
   于是 export 臂遇到「用户开着 label、关着 line」这个合法 GUI 状态时只有两条路——填表（画出用户

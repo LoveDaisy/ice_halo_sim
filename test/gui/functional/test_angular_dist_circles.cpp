@@ -19,7 +19,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "gui/annotation_overlay_cache.hpp"  // GuiSunWorldDir
+#include "gui/annotation_anchors.hpp"  // GuiSunWorldDir
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"

@@ -97,8 +97,8 @@ def test_product_prefix_is_not_flagged(src_root: Path) -> None:
     """LUMICE_* without the TEST_ segment is the product surface and is the point."""
     out = _violations(
         src_root,
-        "LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* r,\n"
-        "                                                 LUMICE_AnnotationOverlay* o);\n"
+        "LUMICE_ErrorCode LUMICE_ComputeAnnotationAnchors(const LUMICE_AnnotationRequest* r,\n"
+        "                                                 LUMICE_AnnotationAnchors* o);\n"
         "#define LUMICE_TESTING_MODE 1\n",
     )
     assert out == []

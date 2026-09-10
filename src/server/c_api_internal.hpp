@@ -159,7 +159,7 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr);
 
 // Translate the public LUMICE_AnnotationView into core's internal
 // lumice::annotation::ViewSnapshot. This is the single implementation of that field mapping
-// (a56: same semantics, one owner) — shared by LUMICE_ComputeAnnotationOverlay (c_api.cpp) and
+// (a56: same semantics, one owner) — shared by LUMICE_ComputeAnnotationAnchors (c_api.cpp) and
 // the test-only lumice_test_api.cpp LUMICE_TEST_ComputeRenderDomainMask hook, which otherwise
 // carried a hand-copied second translation of the same struct.
 lumice::annotation::ViewSnapshot ToAnnotationViewSnapshot(const LUMICE_AnnotationView& v);

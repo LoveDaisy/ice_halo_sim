@@ -88,7 +88,7 @@ struct RenderRequest {
 
   // Annotation overlays whose colour the print arm varies. Two families rather than one, because
   // they exercise the two DIFFERENT shader functions the tone branch had to be threaded through:
-  // the horizon goes through overlayAuxLines() (mask-driven), the lens border through
+  // the horizon goes through overlayAuxLines() (evaluated per fragment), the lens border through
   // overlayLensBorder() (geometry derived in the shader). A change that fixed only one of them
   // would pass a single-family check.
   bool show_horizon = false;
@@ -125,32 +125,12 @@ void RunRenderRequest() {
   lumice::SrgbToLinearRgb(g_req.paper_srgb, params.paper_color_linear);
   params.tone = g_req.tone;
 
-  // The horizon's geometry comes from a mask core would normally supply; a synthetic band is
-  // enough and keeps this file free of the annotation cache. Static so it outlives the borrow the
-  // params make of it.
-  //
-  // ONE generation token for every render, not a per-render counter. The token means "this is a
-  // different mask from the last one you uploaded", and this fixture's mask never changes — so
-  // bumping it per render asserts something false. It is also not free to do: the value is
-  // compared with != against whatever the renderer last saw, which in a full-suite run is another
-  // test's token, and a fixture counter starting from 1 can collide with it. The constant is
-  // arbitrary but distinctive, so a collision would have to be deliberate.
-  static std::vector<unsigned char> horizon_mask;
-  constexpr unsigned long long kMaskGeneration = 0x707269'6E74ULL;  // "print"
+  // The horizon is evaluated by the shader from each fragment's own direction (altitude = 0), so
+  // there is nothing to supply here but the switch, the colour and the alpha: with the camera on
+  // the horizon it crosses the frame through the centre row.
   if (g_req.show_horizon) {
-    horizon_mask.assign(static_cast<std::size_t>(g_req.canvas_w) * g_req.canvas_h, 0);
-    const int band_row = g_req.canvas_h / 2;
-    for (int row = band_row - 1; row <= band_row + 1; ++row) {
-      for (int col = 0; col < g_req.canvas_w; ++col) {
-        horizon_mask[static_cast<std::size_t>(row) * g_req.canvas_w + col] = 1;
-      }
-    }
     params.overlay.show_horizon = true;
     params.overlay.horizon_alpha = 0.6f;
-    params.overlay.horizon_mask = horizon_mask.data();
-    params.overlay.horizon_mask_w = g_req.canvas_w;
-    params.overlay.horizon_mask_h = g_req.canvas_h;
-    params.overlay.horizon_mask_generation = kMaskGeneration;
     std::copy(std::begin(g_req.annotation_color), std::end(g_req.annotation_color),
               std::begin(params.overlay.horizon_color));
   }
@@ -432,16 +412,6 @@ void RegisterPreviewPrintModeTests(ImGuiTestEngine* engine) {
         RenderFrame(ctx);
         return g_req.rgba;
       };
-
-      // Prime the renderer's horizon-mask slot before the four arms: a render with a null mask
-      // resets the stored generation token to 0 unconditionally, so the arms below start from a
-      // known state rather than from whatever token the previously-run test left behind. Cheap
-      // insurance on a suite whose cases share one PreviewRenderer, and the reason it is worth
-      // buying is that the failure it prevents is invisible — a skipped upload renders someone
-      // else's mask, which looks like a plausible frame rather than like an error.
-      g_req.Reset();
-      g_req.tone = 1;
-      RenderFrame(ctx);
 
       const std::vector<unsigned char> print_red = render_with(1, 1.0f, 0.0f, 0.0f);
       const std::vector<unsigned char> print_green = render_with(1, 0.0f, 1.0f, 0.0f);
