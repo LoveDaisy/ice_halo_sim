@@ -1432,11 +1432,16 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    // Exposure mode. Display-time only: it changes which anchor the client-side conversion in
+    // The exposure anchor. Display-time only: it changes which anchor the client-side conversion in
     // mono_exposure_scale.hpp divides by, so the picture re-lights on the next frame with no
     // commit and no re-run. Not rust-tinted like Resolution above for exactly that reason —
     // nothing is discarded.
-    ImGui::Combo("Mode##display", &r.ev_mode, kEvModeNames, kEvModeCount);
+    //
+    // Labelled "EV Anchor" rather than "Mode": this section now carries two combos that both
+    // select a mode, and a bare "Mode" on either would leave the other's meaning to be inferred
+    // from position. This one names what it anchors and sits directly above the EV slider it
+    // qualifies, so the two rows read as one pair.
+    ImGui::Combo("EV Anchor##display", &r.ev_mode, kEvModeNames, kEvModeCount);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
           "Which anchor display brightness is measured against.\n\n"
@@ -1476,64 +1481,18 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             g_state.ev_auto, r.exposure_offset + g_state.ev_auto);
       }
     }
-    // The sky behind the halo, next to EV rather than anywhere else in the panel. The two are the
-    // same KIND of field, and that is the whole argument: gui_state.hpp's RenderConfigResimFields
-    // carves exactly these two sub-fields out of the re-sim projection while keeping them in the
-    // Revert baseline, and the PreviewParams build below pushes them through the same display-time
-    // channel (ShouldPushCompositeExposure; the sky no longer needs a push of its own — the
-    // preview shader adds it to every texture mode, see PreviewRenderer::TextureMode).
-    // A control that changes what the finished rays look like belongs beside the other one.
-    //
-    // Not in the Overlays table: those five rows share one data model (a line, an optional text
-    // label, an alpha, sometimes a radius) and are drawn ON TOP of the image. The sky is the image.
-    // Not in the "Background" block below either — that one is the loaded reference PHOTOGRAPH and
-    // its transform; two different things under one word in one screen is how the word stops
-    // meaning anything.
-    //
-    // ColorEdit3 with NoInputs, the same swatch form the overlay rows and the defaults table use.
-    // Its label sits beside the swatch rather than in the panel's right-hand label column, which is
-    // what every fixed-size widget here does (Checkbox included) — ImGui hardcodes that gap at
-    // ItemInnerSpacing.x inside the widget where no caller can reach it.
-    ImGui::ColorEdit3("Sky Color##display_sky_color", r.background, ImGuiColorEditFlags_NoInputs);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "Colour of the empty sky, added to the halo in linear RGB before the\n"
-          "gamma curve — so an empty pixel renders exactly the colour picked here.\n"
-          "Only where the lens images something: outside the image circle, and\n"
-          "outside the visible hemisphere, stays black.");
-    }
-
-    // Eyedropper: take the sky colour off the imported photograph instead of dialling it. The
-    // point is not convenience alone — the shader composites the photo as
-    // `photo*(1-alpha) + render*alpha`, so where `background` already equals the photo's own sky
-    // that lerp is the identity and the halo arrives as a pure addition rather than washing the
-    // photo out. Which is why the tooltip says to sample SKY: a pixel off the treeline sets the
-    // whole empty sky to dark green.
-    ImGui::SameLine();
-    const bool bg_pick_ok = BgPhotoOnScreen(g_state);
-    ImGui::BeginDisabled(!bg_pick_ok);
-    if (ImGui::Button(ICON_FA_EYE_DROPPER "##display_sky_pick")) {
-      g_bg_pick.active = !g_bg_pick.active;
-    }
-    ImGui::EndDisabled();
-    // AllowWhenDisabled: the disabled case is the one that most needs to say why.
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (!g_preview.HasBackground()) {
-        ImGui::SetTooltip("No background photo loaded — use Load Bg under Background first.");
-      } else if (!g_state.bg_show) {
-        ImGui::SetTooltip("The background photo is hidden. Tick Show under Background to sample it.");
-      } else {
-        ImGui::SetTooltip(
-            "Pick the sky colour off the background photo.\n"
-            "The preview shows the photo alone while picking; click a patch of\n"
-            "SKY (the halo is composited over the sky, not the ground), or press\n"
-            "Esc to cancel.");
-      }
-    }
 
     // Permanent readout, not a tooltip: exposure_offset is saved per document, so in absolute
     // mode two open files can sit at different heights on one shared scale. A single-document GUI
     // cannot compare them for the user, but it can refuse to leave the current height implicit.
+    //
+    // Directly under the EV slider, because it reports the EV slider and nothing else — the two
+    // numbers it prints are this row's value and the auto anchor. It used to sit one row further
+    // down, below the sky swatch, on the reading that the swatch belonged to an exposure trio of
+    // Anchor / EV / Sky and this line was that trio's footer. The swatch has since been paired
+    // with the ground control it alternates with instead (see below), which leaves nothing between
+    // a reading and the row it is a reading of.
+    //
     // Rendered as a disabled Selectable rather than TextDisabled because an ImGui::Text* submits
     // with id == 0 and never enters the test engine's item registry — "the value is on screen"
     // would then not be assertable at all. "##" rather than "###" on purpose: the double form
@@ -1547,19 +1506,29 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         false, ImGuiSelectableFlags_Disabled);
     ImGui::PopStyleColor();
 
-    // The print mode, at the END of the display block rather than directly under the sky colour it
-    // is the counterpart of: the EV readout above belongs to the exposure trio (Mode / EV / Sky
-    // Color) and reads as a footer to it, so inserting between them would split a group. Two controls
-    // rather than one because a black ground under the subtractive operator renders an all-black
-    // page, so the tone switch alone would have no ground worth laying ink on
-    // (doc/print-mode-subtractive-ink.md decision D5).
+    // The tone-reproduction operator, and directly under it the ONE ground control that operator
+    // reads. Two rows, not three: `background` and `paper` are separate fields on purpose
+    // (doc/print-mode-subtractive-ink.md decision D5 — a single field would make "print onto the
+    // default black background" render an all-black page), but at any instant exactly one of them
+    // is live. render.cpp's `if (!print_mode)` at the background term means Screen alone reads the
+    // sky; the paper is read only by the kPrint colour branch and by FillZeroEnergyImage. So the
+    // panel shows the one the current operator reads, and the row's identity changes with the
+    // combo above it.
     //
-    // The paper swatch is NOT greyed out under Screen, and that is a decision rather than an
-    // omission: both fields are authored state that survives a tone switch, so greying the one the
-    // live operator is not reading would hide a value the user is about to need. The mutual
-    // exclusions the operator does impose are the colour-carrying fields of
-    // doc/print-mode-subtractive-ink.md §7, which are greyed where they live.
-    ImGui::Combo("Tone##display_tone", &r.tone, kToneNames, kToneCount);
+    // This REVERSES an earlier decision recorded here, which was that the paper swatch should not
+    // even be greyed out under Screen because "greying the one the live operator is not reading
+    // would hide a value the user is about to need". Hiding is the stronger form of that same move
+    // and the reversal is deliberate (owner, 2026-09-10). What made the earlier reasoning give way:
+    // nothing is hidden except the control — both fields stay authored state, survive the switch,
+    // go into the .lmc and the Revert baseline, and keep their own rows in the Settings panel — so
+    // the value the user is "about to need" is intact and one combo click away, at the moment they
+    // need it and can see its effect. What the old arrangement cost was paid every frame instead:
+    // two swatches of which one did nothing, with no indication of which.
+    //
+    // Labelled "Mode" now that the exposure combo above is "EV Anchor". Screen/Print is the pair
+    // the user thinks in, and the two entries say what they do without the word "tone", which is
+    // opaque to anyone who has not met tone mapping.
+    ImGui::Combo("Mode##display_tone", &r.tone, kToneNames, kToneCount);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip(
           "Which operator turns the simulated light into pixels.\n\n"
@@ -1569,12 +1538,73 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           "Print: light is laid down as INK on the paper below, so the picture darkens where the "
           "halo is — the way it would come off a printer.");
     }
-    ImGui::ColorEdit3("Paper##display_paper_color", r.paper, ImGuiColorEditFlags_NoInputs);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "Colour of the paper the ink is laid on under Print tone.\n\n"
-          "Separate from Sky Color, and white rather than black by default: ink only\n"
-          "ever darkens what is beneath it, so black paper would render a black page.");
+
+    // ColorEdit3 with NoInputs, the same swatch form the overlay rows and the defaults table use.
+    // Its label sits beside the swatch rather than in the panel's right-hand label column, which is
+    // what every fixed-size widget here does (Checkbox included) — ImGui hardcodes that gap at
+    // ItemInnerSpacing.x inside the widget where no caller can reach it.
+    //
+    // The two arms keep their own ids and their own labels rather than sharing one: the ids are
+    // what tests and the defaults panel address, and a single id serving two fields would make
+    // "which field did the user just edit" a question about a mode variable.
+    //
+    // Neither swatch belongs in the Overlays table: those five rows share one data model (a line,
+    // an optional text label, an alpha, sometimes a radius) and are drawn ON TOP of the image. The
+    // ground is the image. Nor in the "Background" block below — that one is the loaded reference
+    // PHOTOGRAPH and its transform; two different things under one word in one screen is how the
+    // word stops meaning anything.
+    if (!IsPrintTone(r)) {
+      ImGui::ColorEdit3("Sky Color##display_sky_color", r.background, ImGuiColorEditFlags_NoInputs);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Colour of the empty sky, added to the halo in linear RGB before the\n"
+            "gamma curve — so an empty pixel renders exactly the colour picked here.\n"
+            "Only where the lens images something: outside the image circle, and\n"
+            "outside the visible hemisphere, stays black.");
+      }
+
+      // Eyedropper: take the sky colour off the imported photograph instead of dialling it. The
+      // point is not convenience alone — the shader composites the photo as
+      // `photo*(1-alpha) + render*alpha`, so where `background` already equals the photo's own sky
+      // that lerp is the identity and the halo arrives as a pure addition rather than washing the
+      // photo out. Which is why the tooltip says to sample SKY: a pixel off the treeline sets the
+      // whole empty sky to dark green.
+      //
+      // Inside the Screen arm, and not by mere association with the swatch it follows: the photo it
+      // samples from is itself disabled under Print (doc/print-mode-subtractive-ink.md §7 instance
+      // 1), so under Print this button could only ever render disabled.
+      ImGui::SameLine();
+      const bool bg_pick_ok = BgPhotoOnScreen(g_state);
+      ImGui::BeginDisabled(!bg_pick_ok);
+      if (ImGui::Button(ICON_FA_EYE_DROPPER "##display_sky_pick")) {
+        g_bg_pick.active = !g_bg_pick.active;
+      }
+      ImGui::EndDisabled();
+      // AllowWhenDisabled: the disabled case is the one that most needs to say why.
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        if (!g_preview.HasBackground()) {
+          ImGui::SetTooltip("No background photo loaded — use Load Bg under Background first.");
+        } else if (!g_state.bg_show) {
+          ImGui::SetTooltip("The background photo is hidden. Tick Show under Background to sample it.");
+        } else {
+          ImGui::SetTooltip(
+              "Pick the sky colour off the background photo.\n"
+              "The preview shows the photo alone while picking; click a patch of\n"
+              "SKY (the halo is composited over the sky, not the ground), or press\n"
+              "Esc to cancel.");
+        }
+      }
+    } else {
+      // "Paper Color", not "Paper": it alternates in place with "Sky Color" and the pair reads as
+      // one row wearing two faces only if both name a colour.
+      ImGui::ColorEdit3("Paper Color##display_paper_color", r.paper, ImGuiColorEditFlags_NoInputs);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Colour of the paper the ink is laid on under Print mode.\n\n"
+            "A separate field from Sky Color, and white rather than black by default: ink\n"
+            "only ever darkens what is beneath it, so black paper would render a black page.\n"
+            "Switch Mode back to Screen to get the sky colour back — it is kept, not reset.");
+      }
     }
 
     // doc/print-mode-subtractive-ink.md §8 (owner decision D6), GUI half. Each operator has one
@@ -1603,13 +1633,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         ImGui::SetTooltip("%s", print_tone ?
                                     "Ink only ever darkens the paper, and never reaches black. With the paper "
                                     "this dark\nevery feature lands within a few 8-bit levels of the page, so "
-                                    "the image reads as blank.\n\nLighten the paper, or switch Tone back to "
+                                    "the image reads as blank.\n\nLighten the paper, or switch Mode back to "
                                     "Screen." :
                                     "Light is ADDED to the sky colour and clamps at white, so with the sky this "
                                     "bright a halo\nhas almost nowhere left to go. Grid and overlay lines are "
                                     "blended rather than added, so\nthey stay perfectly visible — which is why "
                                     "this looks like a failed simulation rather than\na colour choice.\n\nDarken "
-                                    "the sky, or switch Tone to Print, which lays ink ON a pale ground instead.");
+                                    "the sky, or switch Mode to Print, which lays ink ON a pale ground instead.");
       }
       ImGui::SameLine();
       // The repair itself lives in gui_state.hpp (ApplyHeadroomFix) rather than here, so that what
