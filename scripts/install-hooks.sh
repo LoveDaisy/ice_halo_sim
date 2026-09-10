@@ -54,3 +54,12 @@ fi
 
 echo "Done. The pre-commit hook runs the main-worktree guard (scripts/hooks/worktree-guard.py),"
 echo "scripts/check_policies.py + the diff-scoped checkers, and clang-format on staged sources."
+
+# The guard's Claude Code side lives in a git-ignored settings file that no diff
+# can show is current; ask the script, which owns the canonical content. Its
+# exit code is reported, not enforced: a stale or absent file is something to
+# fix by hand (see the script's docstring), not a reason to undo the git hook.
+if command -v python3 >/dev/null 2>&1; then
+  (cd "$REPO_ROOT" && python3 scripts/hooks/worktree-guard.py check-settings) || \
+    echo "(Claude Code PreToolUse line not current — see the message above.)" >&2
+fi

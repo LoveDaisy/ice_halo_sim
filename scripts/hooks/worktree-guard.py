@@ -3,6 +3,8 @@ r"""Main-worktree guard for src/ and test/: one predicate, two entry points.
 
     python3 scripts/hooks/worktree-guard.py pre-commit          # from the git pre-commit hook
     python3 scripts/hooks/worktree-guard.py claude-pretooluse   # from a Claude Code PreToolUse hook
+    python3 scripts/hooks/worktree-guard.py print-settings      # the canonical settings.local.json
+    python3 scripts/hooks/worktree-guard.py check-settings      # is this checkout's settings file current?
 
 The rule it enforces (stated in full in AGENTS.md, "Collaboration Constraints")
 -----------------------------------------------------------------------------
@@ -76,35 +78,28 @@ Enabling the PreToolUse entry point (per machine, git-ignored)
 --------------------------------------------------------------
 `.claude/settings.local.json` in the MAIN checkout — the one worktree this
 guard is about; a linked worktree needs no settings because everything is
-allowed there. The command tests for the script before running it. That is
-the lesson of the first enablement: settings were switched on while this file
-still lived on an unmerged branch, and a command that simply ran
-`python3 <missing path>` returned exit 2 — which Claude Code reads as a
-BLOCKING error — so every Edit/Write in the main worktree was refused, not
-just src/ and test/. A missing script now degrades *loudly* (one stderr line,
-exit 1, edit proceeds) rather than either silently (exit 0, the gate is
-invisibly off) or catastrophically (exit 2). Loud degradation is the
+allowed there. The canonical content is `SETTINGS_SNIPPET` below, printed by
+`print-settings`; it is a Python constant rather than prose so that a change
+to it is a diff a reviewer sees. Its command tests for the script before
+running it. That is the lesson of the first enablement: settings were
+switched on while this file still lived on an unmerged branch, and a command
+that simply ran `python3 <missing path>` returned exit 2 — which Claude Code
+reads as a BLOCKING error — so every Edit/Write in the main worktree was
+refused, not just src/ and test/. A missing script now degrades *loudly* (one
+stderr line, exit 1, edit proceeds) rather than either silently (exit 0, the
+gate is invisibly off) or catastrophically (exit 2). Loud degradation is the
 permitted kind: the user can read on screen that the guard is not installed
-in this checkout. The file cannot carry this reasoning (JSON has no comments
-and it is not tracked), which is why the canonical snippet lives here:
+in this checkout.
 
-    {
-      "hooks": {
-        "PreToolUse": [
-          {
-            "matcher": "Edit|Write",
-            "hooks": [
-              {
-                "type": "command",
-                "command": "f=\"$CLAUDE_PROJECT_DIR/scripts/hooks/worktree-guard.py\"; if [ -f \"$f\" ]; then python3 \"$f\" claude-pretooluse; else echo \"worktree-guard: $f not in this checkout (guard did not run; edit not blocked)\" >&2; exit 1; fi",
-                "timeout": 10,
-                "statusMessage": "worktree guard: checking edit target"
-              }
-            ]
-          }
-        ]
-      }
-    }
+The settings file is git-ignored, so no diff can show whether a machine's
+copy still matches this script — and a stale copy is exactly how the first
+enablement failed (it named a path that did not exist). `check-settings`
+closes that gap mechanically: it reads the checkout's settings file, finds
+the PreToolUse command, and compares it byte-for-byte with the snippet.
+`scripts/install-hooks.sh` runs it last, so the one-time install step after
+a clone or a merge also says whether the Claude side is current, absent, or
+stale; the exit code is what the caller reads (0 current or absent-in-a-
+linked-worktree, 1 stale or absent-in-the-main-worktree).
 
 This script must stay runnable on its own: standard library only, no repo
 imports, no private tooling.
@@ -123,6 +118,32 @@ GUARDED_TOOLS = frozenset({"Edit", "Write"})
 # the bullet's own title, and the bullet is the only one in that section about
 # worktrees, so the reader lands on it either way.
 RULE_LOCATION = 'AGENTS.md, "Collaboration Constraints"'
+
+SETTINGS_RELPATH = os.path.join(".claude", "settings.local.json")
+# The command is a plain string, not the JSON file's decoded form, so the
+# comparison in `check-settings` is byte-for-byte and needs no normalisation.
+SETTINGS_COMMAND = (
+    'f="$CLAUDE_PROJECT_DIR/scripts/hooks/worktree-guard.py"; '
+    'if [ -f "$f" ]; then python3 "$f" claude-pretooluse; '
+    'else echo "worktree-guard: $f not in this checkout (guard did not run; edit not blocked)" >&2; exit 1; fi'
+)
+SETTINGS_SNIPPET = {
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": SETTINGS_COMMAND,
+                        "timeout": 10,
+                        "statusMessage": "worktree guard: checking edit target",
+                    }
+                ],
+            }
+        ]
+    }
+}
 
 
 
@@ -201,7 +222,10 @@ def run_pre_commit() -> int:
             print("worktree-guard: not inside a git repository; nothing to check", file=sys.stderr)
             return 0
         in_main = is_main_worktree(cwd, toplevel)
-        staged = _git(cwd, "diff", "--cached", "--name-only", "--diff-filter=ACMRD")
+        # -z: NUL-separated and unquoted, so a path that core.quotePath would
+        # otherwise wrap in quotes and escape cannot slip past the first-
+        # component test by arriving as `"src/..."`.
+        staged = _git(cwd, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRDT")
     except GitUnavailable as exc:
         print(f"worktree-guard: cannot run git ({exc}); refusing to guess", file=sys.stderr)
         return 1
@@ -213,7 +237,7 @@ def run_pre_commit() -> int:
     # `git diff --name-only` prints paths relative to the toplevel with `/`
     # separators regardless of platform; normalise so the first-component
     # test sees the native separator.
-    hits = [p for p in staged.splitlines() if p and is_guarded_path(os.path.normpath(p))]
+    hits = [p for p in staged.split("\0") if p and is_guarded_path(os.path.normpath(p))]
     if not hits:
         return 0
     print(commit_refusal(hits, os.path.realpath(toplevel)), file=sys.stderr)
@@ -323,9 +347,86 @@ def run_claude_pretooluse() -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# settings entry points
+# --------------------------------------------------------------------------
+
+
+def run_print_settings() -> int:
+    print(json.dumps(SETTINGS_SNIPPET, indent=2))
+    return 0
+
+
+def _installed_commands(settings_path: str) -> list[str] | None:
+    """Every PreToolUse command in the file that names this script; None if unreadable."""
+    try:
+        with open(settings_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    found: list[str] = []
+    for entry in (data.get("hooks") or {}).get("PreToolUse") or []:
+        for hook in (entry or {}).get("hooks") or []:
+            cmd = (hook or {}).get("command")
+            if isinstance(cmd, str) and "worktree-guard" in cmd:
+                found.append(cmd)
+    return found
+
+
+def run_check_settings() -> int:
+    cwd = os.getcwd()
+    try:
+        toplevel = _git(cwd, "rev-parse", "--show-toplevel")
+        if toplevel is None:
+            print("worktree-guard: not inside a git repository", file=sys.stderr)
+            return 1
+        in_main = is_main_worktree(cwd, toplevel)
+    except GitUnavailable as exc:
+        print(f"worktree-guard: cannot run git ({exc})", file=sys.stderr)
+        return 1
+    if in_main is None:
+        print("worktree-guard: git rev-parse --git-common-dir failed", file=sys.stderr)
+        return 1
+    path = os.path.join(toplevel, SETTINGS_RELPATH)
+    where = "main worktree" if in_main else "linked worktree"
+    if not os.path.exists(path):
+        if in_main:
+            print(
+                f"worktree-guard: {SETTINGS_RELPATH} absent in the {where} — the PreToolUse line is "
+                f"not enabled here. Write it from `{os.path.basename(sys.argv[0])} print-settings`.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"worktree-guard: {SETTINGS_RELPATH} absent in the {where}; none needed there.")
+        return 0
+    cmds = _installed_commands(path)
+    if cmds is None:
+        print(f"worktree-guard: {path} is not readable JSON", file=sys.stderr)
+        return 1
+    if cmds == [SETTINGS_COMMAND]:
+        print(f"worktree-guard: {SETTINGS_RELPATH} is current ({where}).")
+        return 0
+    if not cmds:
+        print(
+            f"worktree-guard: {path} exists but carries no PreToolUse command naming this script; "
+            f"merge in the output of `print-settings`.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"worktree-guard: {path} carries a STALE PreToolUse command for this script — this is the "
+        f"shape that once blocked every edit in the main worktree. Replace it with the output of "
+        f"`print-settings`.\n  installed: {cmds}\n  expected:  [{SETTINGS_COMMAND!r}]",
+        file=sys.stderr,
+    )
+    return 1
+
+
 MODES = {
     "pre-commit": run_pre_commit,
     "claude-pretooluse": run_claude_pretooluse,
+    "print-settings": run_print_settings,
+    "check-settings": run_check_settings,
 }
 
 

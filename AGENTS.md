@@ -577,9 +577,12 @@ script prints the path for whichever group it ran.
   proceeds) — the first enablement switched it on while the script still lived on an unmerged
   branch, and a bare `python3 <missing path>` returns exit 2, which Claude Code treats as a
   blocking error, so every `Edit`/`Write` in the main worktree was refused, not just `src/` and
-  `test/`. The canonical settings snippet, and the reasoning the JSON file cannot carry, are in
-  the script's module docstring; the main-worktree predicate lives in that script and nowhere
-  else. Criterion 1 (the task directory) is not machine-enforced; it is the criterion the commit
+  `test/`. The canonical settings content is a constant in the script (`print-settings` writes
+  it; the reasoning the JSON file cannot carry is in the module docstring), and because a
+  git-ignored file is invisible to every diff, `check-settings` compares a checkout's copy
+  against it byte-for-byte — `./scripts/install-hooks.sh` runs that last, so the one install
+  step after a clone or a merge also reports whether the Claude side is current, absent, or
+  stale. The main-worktree predicate lives in that script and nowhere else. Criterion 1 (the task directory) is not machine-enforced; it is the criterion the commit
   gate makes cheap to honour, because by the time a worktree exists the task directory is the
   natural place to have named it.
 
