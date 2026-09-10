@@ -33,7 +33,11 @@
 //      not an open question.
 //   3. Dual fisheye with a non-zero overlap ring. core's r_scale changes the mapping; the GUI's
 //      display dual-fisheye is fixed at 180 deg per hemisphere and ignores it. Held at overlap = 0
-//      throughout, for the same reason test_visible_mask_gui_parity.cpp holds it there.
+//      throughout, for the same reason test_visible_mask_gui_parity.cpp holds it there — and,
+//      since v4.28, the same value the production request carries (AnnotationViewInputFor): the
+//      anchors annotate the disc the shader draws, which has no band. Before that the production
+//      request said kDualFisheyeOverlap and every anchor sat on a disc 4 % larger than the one on
+//      screen; this file never saw it because it held the value the projection actually has.
 //
 // PIXEL CONVENTIONS. Core answers a PIXEL INDEX in image space (x right, y down, origin top-left),
 // binning with floor(v) about res/2; the GUI answers a CONTINUOUS offset from the viewport centre,

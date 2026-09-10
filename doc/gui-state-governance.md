@@ -317,9 +317,11 @@
   `grid.elevation` / `grid.longitude`）、三个文字标注开关，以及后来补上的三个 `*_line` 开关，
   在 `kDivergingKeys` 处一律按子键豁免。
   上一版这里写的是「`grid.angular_dist` 已分叉、`grid.elevation` 仍不分叉」，后半句已经过期。
-  裁定结果是上面两个候选里的**第一个**：core 算注解几何（`LUMICE_ComputeAnnotationOverlay`），
-  但 GUI 仍然自己画 overlay，因为标注属于**成品图**而不是那张全天纹理——往纹理里烤线会被重投影
-  一起重采样，线宽与位置都变形。所以 export 臂填数据、commit 臂留空。
+  裁定结果是上面两个候选里的**第一个**：core 算注解几何（当时是 `LUMICE_ComputeAnnotationOverlay`
+  产掩码；v4.28 起 GUI 的线由预览 shader 按同一水平集定义逐 fragment 求值、只向 core 要文字锚点与
+  marker 点——`LUMICE_ComputeAnnotationAnchors`），但 GUI 仍然自己画 overlay，因为标注属于**成品图**
+  而不是那张全天纹理——往纹理里烤线会被重投影一起重采样，线宽与位置都变形。所以 export 臂填数据、
+  commit 臂留空。
   `grid.elevation` / `grid.longitude` 后来按同一条理由并入分叉面，但它们比角距圈多一步：
   角距圈本来就是一份显式角度表，等高线/经度线在 GUI 那边只有**一个 FOV 自适应步长 + 共用外观**。
   对齐方案是**「模型按 core、步长自适应算显示层便利」**——export 臂把当前步长展开成显式列表
