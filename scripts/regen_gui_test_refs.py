@@ -182,7 +182,7 @@ _MAXCC_RE = re.compile(r"\[(\w+)\]\s+(\S+):\s+n_diff=(\d+)\s+maxcc=(\d+)\s+dmax=
 # mean − kσ has nothing finite to work with. Kept as the historical PSNR figure for such a
 # scene's `threshold` field, but it is no longer what any deterministic group is held to: those
 # groups compare under the pixel ruler (see _MAXCC_RE), because this floor measurably passed a
-# 127-px text-row drift at 45.4 dB and a 90-px scrollbar-thumb drift at 53.45 dB. A stochastic
+# 127-px text-row drift at 42.6 dB and a 90-px scrollbar-thumb drift at 53.45 dB. A stochastic
 # scene that happens to come out identical on every calibration run would still receive it.
 DETERMINISTIC_FLOOR_DB = 40.0
 

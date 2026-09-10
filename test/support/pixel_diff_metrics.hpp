@@ -8,7 +8,7 @@
 // capture) carries no noise, so any spatially coherent difference is a semantic change — a moved
 // scrollbar thumb, a re-flowed text row, a widget one pixel over. PSNR is an energy average over the
 // whole frame and is structurally blind to a coherent block that covers 0.1% of it: two real drifts
-// in this tree passed the 40 dB floor at 45.4 dB (a 127-px text row) and 53.45 dB (a 4x23 px
+// in this tree passed the 40 dB floor at 42.6 dB (a 127-px text row) and 53.45 dB (a 4x23 px
 // scrollbar thumb, 90 px), and both were only found by eye. Counting pixels, and measuring the
 // largest blob they form, sees exactly what PSNR averages away.
 //

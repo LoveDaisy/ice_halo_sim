@@ -604,6 +604,73 @@ outcome threatens the conclusion — the tightest real margin is 46.88 dB agains
 6.88 dB of headroom — but the second row is why the caveat below was worth writing rather than
 assuming portability. The remaining rows are still arm64-only: nothing runs them on amd64.
 
+**The ruler the deterministic groups are held to, and why it is no longer PSNR (2026-09-10).**
+The dB figures above are kept as the measurement record they are, but they are no longer what
+`modal_layout`, `defaults_panel_layout`, `capture_harness` or `visual` pass or fail on. Two real
+drifts in this layer cleared the 40 dB floor and were found by eye: a 127-px text row in
+`wedge_presets` at 42.6 dB (fixed in `0a191bea`) and a 4×23-px scrollbar thumb, 90 px, in
+`presets_expanded` / `presets_warning` at 53.45 dB (fixed in `dcfa5f9e`). Both are the same shape:
+a frame with **no noise** in which a small, spatially coherent block changed. PSNR is an energy
+average over the whole frame and is structurally blind to that shape — a block covering 0.02% of
+the frame moves the mean-square error by almost nothing however semantically total the change
+is. The ruler that sees it is the one in `test/support/pixel_diff_metrics.hpp`: count the pixels
+whose max-channel |Δ| exceeds a threshold τ, take the largest 8-connected blob of them
+(`maxcc`), and fail when `maxcc > K`. `CheckAgainstReference` applies it whenever the caller
+passes a `MaxCcRuler`, prints `n_diff=… maxcc=… dmax=… (tau=…, K=…)` beside the PSNR line, and
+enforces nothing about the PSNR itself.
+
+The values in use, and where each number comes from:
+
+| Group | τ | K | Largest non-semantic blob at this τ (CI llvmpipe vs. Metal-shot reference) | Smallest real drift on record at this τ | Margins |
+|---|---|---|---|---|---|
+| `modal_layout` | 16 | 70 | **35 px** — one anti-aliased segment of the crystal preview, same position and size in all three prism scenes; 33 px in `crystal_pyramid` | **95 px** (`92d8551a` `crystal_pyramid`; `crystal_prism` 149) | K/blob = 2.0×, drift/K = 1.36× |
+| `defaults_panel_layout` | 16 | 40 | **0 px** (isolated |Δ|=14 checkbox-corner pixels survive to τ=12, nothing to τ=16) | **86 px** (`dcfa5f9e` thumb; `0a191bea` text row 101) | K/blob = ∞, drift/K = 2.15× |
+| `capture_harness`, `visual` | 0 | 0 | — not run on CI; byte-identical on the reference machine | — | byte-identity demanded |
+
+Why τ is 16 and shared, while K is per group. llvmpipe differs from the Metal-shot references in
+exactly two non-semantic ways, both measured from the CI leg's own captures (the
+`gui-visual-regression-captures` artifact, PR #344 runs `34478871712` and `34485014043`): flat
+fills one quantisation level apart — |Δ| ≤ 2 across whole header bars and scrollbar tracks, which
+at τ = 0 join into blobs of 8288–9380 px (`modal_layout`) and 245–1131 px
+(`defaults_panel_layout`), larger than any real drift and the reason τ = 0 has no solution across
+machines — and anti-aliasing coverage at glyph, line and rounded-corner edges, |Δ| up to 98 but in
+small disconnected specks that only shrink as τ rises. τ therefore describes the noise between two
+GL stacks, not a scene, and one value serves every group; 16 is the smallest τ at which the
+tighter group (`modal_layout`, whose crystal preview is the source of every surviving blob) meets
+the admission rule the task was set — K at least 2× above the largest non-semantic blob **or** at
+least 2× below the smallest real drift, and at least 1.3× on the other side. The sweep that
+decided it, over τ ∈ {0, 1, 2, 4, 8, 12, 16, 24, 32}: `modal_layout`'s largest green blob reads
+9380 / 177 / 166 / 132 / 68 / 43 / 35 / 31 / 20 px against a red minimum of
+149 / 110 / 110 / 107 / 100 / 97 / 95 / 88 / 80, so the window opens at τ = 8 (1.47×), passes
+2.6× only from τ = 16 (2.71×), and widens to 4.0× at τ = 32. The higher τ was not taken because it
+spends the other margin: the lowest-contrast real drift on record, the scrollbar thumb, has
+|Δ| = 43, so τ = 16 keeps a 2.7× contrast margin under it where τ = 32 would leave 1.34× — a
+slightly fainter thumb, or a hover state, would simply vanish from the ruler. K is per group
+because the residual blob size depends on what is in the frame (a crystal preview or not), and
+the sweep's numbers are what set it, not a preference. A block-internal |Δ| filter was measured
+and rejected as the way to widen `modal_layout`'s window: the AA segment's block reads dmax 52–53
+while the thumb drift reads 43, so |Δ| does not separate them.
+
+Run-to-run jitter on the CI leg, the one thing a single run cannot show, was measured from the two
+runs above: capture against capture, every scene differs in 27–122 pixels at τ = 0 with a largest
+blob of 1–5 px, and in **0** pixels at τ = 16; capture against reference, the τ = 16 blob sizes are
+identical to the pixel in both runs. The two-sided figures in the table are therefore not one
+sample's luck. What they still are not is evidence about a *different* Mesa or runner image: the
+35-px segment is an anti-aliasing artefact of one rasteriser, and a Mesa upgrade that draws the
+preview's edges differently could move it. That is the case the 2.0× on that side exists to
+absorb, and the disposition below is what to do when it is not enough — re-measure from the
+artifact, do not re-fit K to the red.
+
+Two consequences for anyone reading the numbers. First, a red in one of these groups now names a
+blob, not a dB: `maxcc=92 (tau=16, K=40)` is the sentence to paste, and `dmax` beside it says how
+strong the difference inside that blob is. Second, the 40 dB figure `_thresholds.json` still
+records under `threshold` for these groups is history, not a bound — Phase B keeps writing it
+and additionally writes `maxcc_tau` / `maxcc_local_max`, whose honest value on the reference
+machine is 0 (anything else means the scene stopped being deterministic on the machine that shot
+its reference, which is a bug to find before re-shooting). The unit case that pins the ruler on
+the two drift shapes, red under it and green under a 40 dB floor on the same synthetic input, is
+`test/unit-correctness/gui/test_pixel_diff_ruler.cpp`.
+
 **A caveat the table cannot carry silently.** Every number below, and every arm64 figure above,
 was measured on an **arm64**
 Docker container (`ubuntu:24.04` + Xvfb + Mesa llvmpipe, run on an Apple Silicon host) standing in
@@ -702,9 +769,11 @@ is what the audit above found and could not act on.
 2. **Reproduce it on the same base commit, in the same run mode.** Not "re-run and see": run it
    on the base with the same filter and the same pool (`--fixed-dt` or not) as the run that went
    red. A red that survives on the base is a pre-existing condition; a red that does not is yours.
-3. **Record the numbers, not the verdict.** The PSNR of the failing scene, its threshold, and how
-   many of how many repeats failed. `[<group>] <scene>: PSNR=... (threshold=...)` is printed on
-   stderr by every comparison; paste it. A disposition with no number in it is not reviewable.
+3. **Record the numbers, not the verdict.** The failing scene's measurement, its bound, and how
+   many of how many repeats failed. Every comparison prints them on stderr — for a stochastic
+   group `[<group>] <scene>: PSNR=... (threshold=...)`, for a deterministic one the
+   `n_diff=... maxcc=... dmax=... (tau=..., K=...)` line beside its diagnostic PSNR; paste that.
+   A disposition with no number in it is not reviewable.
 4. **Name the mechanism before calling it environmental.** A red that is genuinely not a
    rendering regression still has a cause, and it is nearly always locatable —
    `test_gui_lens_projection.cpp:276` above read as "stochastic flake" for as long as nobody

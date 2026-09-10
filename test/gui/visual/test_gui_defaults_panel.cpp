@@ -65,7 +65,7 @@ struct DefaultsPanelScene {
 // anywhere but an explicitly set GuiState field or the scene's own override file. On the reference
 // machine they compare pixel-identical (PSNR=inf, n_diff=0), so the ruler is the differing-pixel
 // one from support/pixel_diff_metrics.hpp, not a PSNR statistic: this is the group where the 40 dB
-// floor passed a 127-px text-row drift at 45.4 dB and a 90-px scrollbar-thumb drift at 53.45 dB.
+// floor passed a 127-px text-row drift at 42.6 dB and a 90-px scrollbar-thumb drift at 53.45 dB.
 //
 // The values are set by the CI llvmpipe leg, where this group also runs against Metal-shot
 // references. There the only non-semantic difference is flat fills one quantisation level apart
