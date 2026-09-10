@@ -200,6 +200,13 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
 // export is a picture of what is on screen.
 AnnotationAnchors& PreviewAnnotationAnchors();
 AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc);
+// The same input with every curve family whose LABEL switch is off left out. What the shader draws
+// is AnnotationViewInputFor's business; what core is asked to walk is only what will be read —
+// the label anchors of the labelled families and the marker points — and the walk is what costs
+// (a curve is ~360 forward projections, and the narrowest field of view expands the grid to a
+// thousand curves). Same view, same sun, same marker list; only the three angle lists and the
+// horizon flag are narrowed, so the anchors that are computed sit on the curves the shader draws.
+AnnotationViewInput AnnotationAnchorRequestFor(const GuiState& state, const RenderConfig& rc);
 // `vp_w`/`vp_h` are the target draw list's size; the anchors are scaled from the cache's own canvas
 // into it, so a caller rendering at a size the cache was not built for still gets them in the right
 // place (see the function's own note on the HiDPI case).

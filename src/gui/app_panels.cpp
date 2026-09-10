@@ -170,6 +170,19 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
   return in;
 }
 
+AnnotationViewInput AnnotationAnchorRequestFor(const GuiState& state, const RenderConfig& rc) {
+  AnnotationViewInput in = AnnotationViewInputFor(state, rc);
+  if (!state.show_sun_circles_label) {
+    in.angular_dist_deg.clear();
+  }
+  if (!state.show_grid_label) {
+    in.elevation_deg.clear();
+    in.longitude_deg.clear();
+  }
+  in.horizon = state.show_horizon_label;
+  return in;
+}
+
 namespace {
 
 // Clearance between a marker ring's outer edge and the top of its name. Small enough to read as
@@ -1982,19 +1995,22 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // still needs the curve definition. Which families the request actually carries is decided
     // inside AnnotationViewInputFor, off the same switches; each switch then gates its own half.
     //
-    // EVERY FRAME, unconditionally. The anchors are a curve walk — tens of microseconds — and
+    // EVERY FRAME, unconditionally. The anchors are a curve walk — ~0.1 ms for an ordinary grid,
+    // 2.4 ms at the narrowest field of view with every family LABELLED (a thousand curves) — and
     // asking on every frame is what makes the text and the rings move with a drag on the frame it
     // happens, exactly as the shader-drawn lines do. There is deliberately no "has the view
     // changed" check in front of this: the check would cost about what the call does, and a stale
     // answer surviving a missed field in the comparison is the defect the per-frame call exists to
-    // rule out.
+    // rule out. What IS trimmed is the request: a family whose label switch is off is drawn by the
+    // shader and not walked by core (AnnotationAnchorRequestFor).
     {
       const AnnotationViewInput curves = AnnotationViewInputFor(g_state, rc);
       pp.overlay.elevation_deg = curves.elevation_deg;
       pp.overlay.longitude_deg = curves.longitude_deg;
       pp.overlay.angular_dist_deg = curves.angular_dist_deg;
       GuiSunWorldDir(curves.sun_altitude_deg, pp.overlay.reference_dir);
-      g_annotation_anchors.Compute(MakeAnnotationViewKey(curves, g_preview_vp.vp_w, g_preview_vp.vp_h));
+      g_annotation_anchors.Compute(
+          MakeAnnotationViewKey(AnnotationAnchorRequestFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
     }
 
     // The reference-point markers. The APPEARANCE below is the GUI's own state; the POSITIONS come

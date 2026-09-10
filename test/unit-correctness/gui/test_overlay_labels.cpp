@@ -564,19 +564,42 @@ TEST(OverlayToggle, TheAnnotationRequestCarriesOnlyTheFamiliesWhoseSwitchesAreOn
   EXPECT_TRUE(off.longitude_deg.empty());
   EXPECT_TRUE(off.angular_dist_deg.empty());
 
-  // The LINE switch alone is enough: a user drawing curves and no numbers still needs the mask.
+  // The LINE switch alone is enough: a user drawing curves and no numbers still needs the
+  // definition the shader draws from.
   s.show_grid_line = true;
   auto lines_only = gui::AnnotationViewInputFor(s, s.renderer);
   EXPECT_FALSE(lines_only.elevation_deg.empty());
   EXPECT_FALSE(lines_only.longitude_deg.empty());
   EXPECT_TRUE(lines_only.angular_dist_deg.empty()) << "the circles' switches are still off";
+  // ...but not for the ANCHOR request: with no label to place, core must not be asked to walk the
+  // grid's curves — at the narrowest field of view that walk is a thousand curves per frame.
+  auto lines_only_anchors = gui::AnnotationAnchorRequestFor(s, s.renderer);
+  EXPECT_TRUE(lines_only_anchors.elevation_deg.empty());
+  EXPECT_TRUE(lines_only_anchors.longitude_deg.empty());
 
-  // ...and so is the LABEL switch alone, for the mirror-image reason.
+  // ...and so is the LABEL switch alone, for the mirror-image reason — on both requests.
   s.show_grid_line = false;
   s.show_grid_label = true;
   auto labels_only = gui::AnnotationViewInputFor(s, s.renderer);
   EXPECT_FALSE(labels_only.elevation_deg.empty());
   EXPECT_FALSE(labels_only.longitude_deg.empty());
+  auto labels_only_anchors = gui::AnnotationAnchorRequestFor(s, s.renderer);
+  EXPECT_FALSE(labels_only_anchors.elevation_deg.empty());
+  EXPECT_FALSE(labels_only_anchors.longitude_deg.empty());
+  EXPECT_EQ(labels_only_anchors.elevation_deg, labels_only.elevation_deg)
+      << "the anchors are walked on the same curves the shader draws";
+
+  // The horizon and the markers follow the same split: the horizon's anchor request needs the
+  // label switch, a marker joins either request on either of its switches (its ring is placed
+  // from the anchor, so a ring-only marker is still walked).
+  s.show_horizon_line = true;
+  s.show_horizon_label = false;
+  s.markers[LUMICE_ANNOTATION_MARKER_SUN].show = true;
+  s.markers[LUMICE_ANNOTATION_MARKER_SUN].label = false;
+  auto horizon_line_only = gui::AnnotationAnchorRequestFor(s, s.renderer);
+  EXPECT_TRUE(gui::AnnotationViewInputFor(s, s.renderer).horizon);
+  EXPECT_FALSE(horizon_line_only.horizon);
+  EXPECT_EQ(horizon_line_only.marker_ids, std::vector<int>{ LUMICE_ANNOTATION_MARKER_SUN });
 }
 
 // ---- The horizon owns the zero, and the grid must not print a second one ----

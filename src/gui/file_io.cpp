@@ -3776,7 +3776,8 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   // than the preview's, for the same reason: a different canvas is a different answer.
   if (AnyMarkerRequested(g_state)) {
     static AnnotationAnchors export_anchors;
-    export_anchors.Compute(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
+    export_anchors.Compute(
+        MakeAnnotationViewKey(AnnotationAnchorRequestFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
     for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
       const AnnotationAnchors::Point p =
           g_state.markers[i].show ? export_anchors.MarkerPoint(i) : AnnotationAnchors::Point{};
