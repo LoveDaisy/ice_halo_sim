@@ -56,11 +56,13 @@ predicate (any direction landing in a pixel deposits energy there, so a pixel st
 collects some) while the mask is a POINT predicate on the pixel centre. Both are correct and the
 product agrees with itself: the preview shader discards that ring too. What did not carry the
 mask was this fixture's simplified GUI arm, so the mask is applied here, read from core's own
-answer -- ``LUMICE_ComputeAnnotationOverlay``'s ``drawable``, which is built from the same
-``mask_detail::PixelToWorld`` + ``VisibleByRange`` + ``FrontVisible`` predicate as the
-``BuildVisibleMask`` the renderer bakes with. Mirroring the geometry in Python instead would put a
-second authority on which pixels the lens images, which is the class of defect this suite exists
-to catch rather than to add.
+answer -- ``LUMICE_TEST_ComputeRenderDomainMask``'s ``imaged`` (``test/support/lumice_test_api.h``),
+which is built from the same ``mask_detail::PixelToWorld`` + ``VisibleByRange`` + ``FrontVisible``
+predicate as the ``BuildVisibleMask`` the renderer bakes with. Mirroring the geometry in Python
+instead would put a second authority on which pixels the lens images, which is the class of defect
+this suite exists to catch rather than to add. It is read through a test-only hook rather than the
+product annotation API because a mask a test wants is not a reason for ``lumice.h`` to export
+anything; the hook lives in ``liblumice_testapi``, the superset of ``liblumice`` this harness loads.
 
 Not necessarily byte-identical, and the residual is understood rather than tolerated: the GUI
 path routes its scale through ``2^log2(x)`` while the CLI computes the ratio directly, so the two
@@ -125,12 +127,13 @@ _CONTROL_MIN_DIFFERING_FRACTION = 1e-2
 # The render-domain mask, read from core rather than re-derived. See the fifth item in the module
 # docstring for why the GUI arm needs it at all.
 #
-# These four ctypes structs mirror lumice.h field for field. The mirror matters more here than for
-# a read-only result struct: the CALLER allocates LUMICE_AnnotationOverlay and core fills it, so a
-# mirror short by one field is not a wrong number but a write past the end of Python's storage.
-# _assert_mirrors_match_header() below reads the header and checks the field NAMES, which is the
-# same guard capi_runner.py puts on LUMICE_StatsResult and for the same reason: a size assertion
-# compares this file to a number typed in this file.
+# These two ctypes structs mirror their headers field for field: _AnnotationView is a product type
+# (lumice.h), _RenderDomainMask a test-only one (test/support/lumice_test_api.h). The mirror
+# matters more here than for a read-only result struct: the CALLER allocates the mask struct and
+# core fills it, so a mirror short by one field is not a wrong number but a write past the end of
+# Python's storage. _assert_mirrors_match_header() below reads each header and checks the field
+# NAMES, which is the same guard capi_runner.py puts on LUMICE_StatsResult and for the same reason:
+# a size assertion compares this file to a number typed in this file.
 # ---------------------------------------------------------------------------------------------
 
 
@@ -150,66 +153,29 @@ class _AnnotationView(ctypes.Structure):
     ]
 
 
-class _AnnotationRequest(ctypes.Structure):
-    _fields_ = [
-        ("view", _AnnotationView),
-        ("horizon", ctypes.c_int),
-        ("elevation_deg", ctypes.POINTER(ctypes.c_float)),
-        ("elevation_count", ctypes.c_int),
-        ("longitude_deg", ctypes.POINTER(ctypes.c_float)),
-        ("longitude_count", ctypes.c_int),
-        ("angular_dist_deg", ctypes.POINTER(ctypes.c_float)),
-        ("angular_dist_count", ctypes.c_int),
-        ("reference_dir", ctypes.c_float * 3),
-        ("zenith_nadir", ctypes.c_int),
-        ("want_labels", ctypes.c_int),
-        # Named reference directions. This fixture asks for none, so the pair stays NULL/0 --
-        # they are mirrored because the struct is allocated HERE and read by core, which makes a
-        # short mirror a wrong size rather than a missing feature.
-        ("marker_ids", ctypes.POINTER(ctypes.c_int)),
-        ("marker_count", ctypes.c_int),
-    ]
-
-
-class _AnnotationOverlay(ctypes.Structure):
+class _RenderDomainMask(ctypes.Structure):
     _fields_ = [
         ("width", ctypes.c_int),
         ("height", ctypes.c_int),
-        ("drawable", ctypes.POINTER(ctypes.c_ubyte)),
-        ("horizon", ctypes.POINTER(ctypes.c_ubyte)),
-        ("elevation", ctypes.POINTER(ctypes.c_ubyte)),
-        ("longitude", ctypes.POINTER(ctypes.c_ubyte)),
-        ("angular_dist", ctypes.POINTER(ctypes.c_ubyte)),
-        ("zenith_px", ctypes.c_float),
-        ("zenith_py", ctypes.c_float),
-        ("zenith_valid", ctypes.c_int),
-        ("nadir_px", ctypes.c_float),
-        ("nadir_py", ctypes.c_float),
-        ("nadir_valid", ctypes.c_int),
-        ("labels", ctypes.c_void_p),
-        ("label_count", ctypes.c_int),
+        ("imaged", ctypes.POINTER(ctypes.c_ubyte)),
         ("storage", ctypes.c_void_p),
-        # Appended after `storage` in the header so every field above keeps its published offset.
-        # Opaque here for the same reason `labels` is: this fixture reads neither, and a second
-        # mirror of the point struct would be one more thing to keep in step for no use.
-        ("marker_points", ctypes.c_void_p),
-        ("marker_count", ctypes.c_int),
     ]
 
 
 _HEADER = get_project_root() / "src" / "include" / "lumice.h"
+_TEST_API_HEADER = get_project_root() / "test" / "support" / "lumice_test_api.h"
 
 
-def _header_struct_fields(tag: str) -> list[str] | None:
-    """Field names of one `typedef struct <tag>_ { ... } <tag>;` in lumice.h, in order."""
-    if not _HEADER.is_file():  # source tree not available (e.g. installed wheel)
+def _header_struct_fields(tag: str, header: Path = _HEADER) -> list[str] | None:
+    """Field names of one `typedef struct <tag>_ { ... } <tag>;` in `header`, in order."""
+    if not header.is_file():  # source tree not available (e.g. installed wheel)
         return None
     body = re.search(
         rf"typedef struct {tag}_\s*\{{(.*?)\}}\s*{tag};",
-        _HEADER.read_text(encoding="utf-8"),
+        header.read_text(encoding="utf-8"),
         re.DOTALL,
     )
-    assert body is not None, f"could not locate {tag} in lumice.h"
+    assert body is not None, f"could not locate {tag} in {header.name}"
     decls = re.sub(r"//.*", "", body.group(1))
     names = []
     for decl in decls.split(";"):
@@ -220,17 +186,16 @@ def _header_struct_fields(tag: str) -> list[str] | None:
 
 
 def _assert_mirrors_match_header() -> None:
-    for tag, mirror in (
-        ("LUMICE_AnnotationView", _AnnotationView),
-        ("LUMICE_AnnotationRequest", _AnnotationRequest),
-        ("LUMICE_AnnotationOverlay", _AnnotationOverlay),
+    for tag, mirror, header in (
+        ("LUMICE_AnnotationView", _AnnotationView, _HEADER),
+        ("LUMICE_TEST_RenderDomainMask", _RenderDomainMask, _TEST_API_HEADER),
     ):
-        header_fields = _header_struct_fields(tag)
+        header_fields = _header_struct_fields(tag, header)
         if header_fields is None:
             return
         mirror_fields = [name for name, *_ in mirror._fields_]
         assert header_fields == mirror_fields, (
-            f"{tag} drift -- lumice.h has {header_fields}, this mirror has {mirror_fields}. "
+            f"{tag} drift -- {header.name} has {header_fields}, this mirror has {mirror_fields}. "
             "Core writes this struct through a pointer Python sized from the mirror, so fix the "
             "mirror before running anything else"
         )
@@ -260,9 +225,9 @@ def _header_enum_map(prefix: str) -> dict[str, int]:
 def _render_domain_mask(doc: dict) -> np.ndarray:
     """The pixels the renderer bakes, as core answers it: True where the lens images sky.
 
-    One `LUMICE_ComputeAnnotationOverlay` call with no annotation family requested, which makes it
-    the `drawable` sweep and nothing else (the header's own note: "The masks alone are several
-    times cheaper than masks plus anchors").
+    One `LUMICE_TEST_ComputeRenderDomainMask` call: the render-domain sweep and nothing else, no
+    curve masks and no label walk (the product API's own note on the cost of the latter: "The
+    masks alone are several times cheaper than masks plus anchors").
     """
     render = doc["render"][0]
     width, height = (int(v) for v in render["resolution"])
@@ -279,29 +244,28 @@ def _render_domain_mask(doc: dict) -> np.ndarray:
         visible=_header_enum_map("LUMICE_VISIBLE_")[render.get("visible", "full")],
         front=1 if render.get("front", False) else 0,
     )
-    request = _AnnotationRequest(view=view)
-    overlay = _AnnotationOverlay()
+    mask = _RenderDomainMask()
 
     lib = ctypes.CDLL(str(_find_lib()))
-    lib.LUMICE_ComputeAnnotationOverlay.restype = ctypes.c_int
-    lib.LUMICE_ComputeAnnotationOverlay.argtypes = [
-        ctypes.POINTER(_AnnotationRequest),
-        ctypes.POINTER(_AnnotationOverlay),
+    lib.LUMICE_TEST_ComputeRenderDomainMask.restype = ctypes.c_int
+    lib.LUMICE_TEST_ComputeRenderDomainMask.argtypes = [
+        ctypes.POINTER(_AnnotationView),
+        ctypes.POINTER(_RenderDomainMask),
     ]
-    lib.LUMICE_ReleaseAnnotationOverlay.restype = None
-    lib.LUMICE_ReleaseAnnotationOverlay.argtypes = [ctypes.POINTER(_AnnotationOverlay)]
+    lib.LUMICE_TEST_ReleaseRenderDomainMask.restype = None
+    lib.LUMICE_TEST_ReleaseRenderDomainMask.argtypes = [ctypes.POINTER(_RenderDomainMask)]
 
     try:
-        err = lib.LUMICE_ComputeAnnotationOverlay(ctypes.byref(request), ctypes.byref(overlay))
-        assert err == 0, f"LUMICE_ComputeAnnotationOverlay failed err={err}"
-        assert (overlay.width, overlay.height) == (width, height), (
-            f"overlay canvas {overlay.width}x{overlay.height} != config {width}x{height}"
+        err = lib.LUMICE_TEST_ComputeRenderDomainMask(ctypes.byref(view), ctypes.byref(mask))
+        assert err == 0, f"LUMICE_TEST_ComputeRenderDomainMask failed err={err}"
+        assert (mask.width, mask.height) == (width, height), (
+            f"mask canvas {mask.width}x{mask.height} != config {width}x{height}"
         )
-        assert overlay.drawable, "core returned a NULL drawable mask for a non-degenerate view"
+        assert mask.imaged, "core returned a NULL render-domain mask for a non-degenerate view"
         # Copied, not viewed: the buffer belongs to core and dies at Release below.
-        flat = np.ctypeslib.as_array(overlay.drawable, shape=(height * width,)).copy()
+        flat = np.ctypeslib.as_array(mask.imaged, shape=(height * width,)).copy()
     finally:
-        lib.LUMICE_ReleaseAnnotationOverlay(ctypes.byref(overlay))
+        lib.LUMICE_TEST_ReleaseRenderDomainMask(ctypes.byref(mask))
     return flat.reshape(height, width) != 0
 
 
