@@ -159,16 +159,11 @@ void RegisterModalLayoutTests(ImGuiTestEngine* engine) {
       ctx->ItemClick(scene.tab == gui::EditTarget::kFilter ? "**/###filter_tab" : "**/###crystal_tab");
       ctx->Yield(3);
 
-      // Face Distance is a collapsible section whose open state lives in ImGui storage and
-      // survives ResetTestState. ItemOpen/ItemClose are idempotent (they read the item's
-      // Opened status first), so normalizing it here makes each scene independent of
-      // whatever the previous test left behind, in either direction.
-      if (scene.tab == gui::EditTarget::kCrystal) {
-        if (scene.expand_face_distance) {
-          ctx->ItemOpen("**/Face Distance##modal");
-        } else {
-          ctx->ItemClose("**/Face Distance##modal");
-        }
+      // Face Distance is a collapsible section whose open flag lives in ImGui window storage.
+      // ResetTestState() clears that storage, so every scene starts with it folded and only the
+      // scene that wants it open has anything to say.
+      if (scene.tab == gui::EditTarget::kCrystal && scene.expand_face_distance) {
+        ctx->ItemOpen("**/Face Distance##modal");
         ctx->Yield(3);
       }
 
@@ -252,16 +247,6 @@ void RegisterModalLayoutTests(ImGuiTestEngine* engine) {
                                           g_fullframe_capture.height);
       IM_CHECK(lumice::test::SavePng(tmp_path.c_str(), rgb.data(), g_fullframe_capture.width,
                                      g_fullframe_capture.height, 3));
-
-      // Leave the collapsible section as this suite found it. On an IM_CHECK failure above
-      // this line is not reached (the macro expands to a bare `return`) and ImGuiTestContext
-      // methods no-op once the test is in error, so a *failing* modal_layout scene can leave
-      // Face Distance expanded for later tests. That is accepted: the suite is already red at
-      // that point, and every scene here normalizes the section on entry anyway.
-      if (scene.tab == gui::EditTarget::kCrystal && scene.expand_face_distance) {
-        ctx->ItemClose("**/Face Distance##modal");
-        ctx->Yield(2);
-      }
 
       // Close the modal. Not strictly required — ResetTestState -> ResetModalState clears
       // g_active_modal, and BeginPopupModal closes a popup whose p_open reads false on the very

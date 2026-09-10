@@ -112,6 +112,16 @@ std::string ResolveReferencePath(const char* scene_name) {
   return base + ".jpg";
 }
 
+// The preset child's window ID, for scrolling it by window. The child's own ID cannot be hashed by
+// a caller (BeginChild composes the window name from its parent's name plus the hash of its string
+// id), so it is taken from an item known to be inside it, the same derivation the functional tests
+// use for the preset cells.
+ImGuiID PresetChildWindowId(ImGuiTestContext* ctx) {
+  const ImGuiTestItemInfo anchor = ctx->ItemInfo("**/###preset_Random");
+  IM_CHECK_RETV(anchor.Window != nullptr, 0);
+  return anchor.Window->ID;
+}
+
 }  // namespace
 
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
@@ -186,63 +196,19 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
 
       if (scene.kind == SceneKind::kWedgePresets) {
-        // Fold every axis preset FIRST. ImGui keeps a TreeNode's open flag in the panel window's own
-        // storage for the whole process, so the two scenes above — which unfold Column on purpose —
-        // hand it to this one already open. Measured, not assumed: the first shoot of this scene
-        // captured Column unfolded and the region under test pushed out of the child entirely, i.e.
-        // a reference that would have gone green forever while showing none of what it names.
-        for (const auto& entry : gui::kAxisPresets) {
-          if (entry.id == gui::AxisPreset::kCustom) {
-            continue;  // not a library entry; it has no node
-          }
-          ctx->ItemClose((std::string("**/###preset_") + gui::AxisPresetLabel(entry.id)).c_str());
-        }
-        ctx->Yield(3);
-
-        // Then scroll the region into the child's viewport, because folding the axis list does not
-        // by itself make what sits under it visible: the preset child is height-capped.
-        //
-        // Scrolled BY WINDOW, not by item. ScrollToItemY cannot be used here and the reason is worth
-        // stating, because the obvious call fails in a way that reads like the item not existing:
-        // ImGui records an item with the test engine only AFTER its clipping test, so an item wholly
-        // outside the child's visible rect is invisible to the engine — and the button this scene
-        // exists to show starts there. Measured: ScrollToItemY reported "Unable to locate item".
-        // The child's own ID cannot be hashed by a caller either (BeginChild composes the window
-        // name from its parent's name plus the hash of its string id), so it is taken from an item
-        // known to be inside it, the same derivation the functional tests use for the preset cells.
-        const ImGuiTestItemInfo anchor = ctx->ItemInfo("**/###preset_Random");
-        IM_CHECK(anchor.Window != nullptr);
-        ctx->ScrollToBottom(anchor.Window->ID);
+        // The region this scene exists to show sits below a height-capped child, so it has to be
+        // scrolled in — BY WINDOW, not by item: ImGui records an item with the test engine only
+        // AFTER its clipping test, so an item wholly outside the child's visible rect is invisible
+        // to the engine, and the add button starts there (measured: ScrollToItemY reported "Unable
+        // to locate item"). Nothing here folds the axis library first or types into the add row:
+        // ResetTestState() clears every window's ImGui storage, so this scene opens on the library
+        // folded and the row on its {1,0,-1,1} default, which is the state a user first sees.
+        ctx->ScrollToBottom(PresetChildWindowId(ctx));
         ctx->Yield(3);
         IM_CHECK(ctx->ItemInfo("**/###wedge_preset_add").RectClipped.GetHeight() > 0.0f);
-        IM_CHECK(ctx->ItemInfo("**/###wedge_preset_delete_0").RectClipped.GetHeight() > 0.0f);
-
-        // The add row's boxes are ImGui window storage, which no reset in this suite clears, so it
-        // opens on whatever a functional case last typed into the same control rather than on the
-        // (1,0,1) default. Measured: the first shoot of this scene captured 0,0,0,2 and the
-        // three-line refusal that goes with it — a reference that would have started failing the day
-        // someone edited the last triple of an unrelated case. Typed explicitly, and typed to a
-        // triple the owner ACCEPTS, so the region is pinned in the state a user normally sees: the
-        // angle line and a live Add button. The refusal grade is a functional case's proposition,
-        // where it can be asserted rather than looked at (the message carries no item id).
-        // ItemInputValue presses Enter, which deactivates the input — an ACTIVE InputText draws a
-        // caret whose phase depends on the frame count, the same flake this file avoids elsewhere.
-        ctx->ItemInputValue("**/##custom_wedge_h", 3);
-        ctx->ItemInputValue("**/##custom_wedge_k", 0);
-        ctx->ItemInputValue("**/##custom_wedge_l", 1);
-        ctx->Yield(3);
         IM_CHECK(!IsDisabled(ctx->ItemInfo("**/###wedge_preset_add")));
+        IM_CHECK(ctx->ItemInfo("**/###wedge_preset_delete_0").RectClipped.GetHeight() > 0.0f);
       } else if (presets_scene) {
-        // Scroll is window storage, so it outlives every reset this suite performs and the scene
-        // that scrolls to the bottom (above) would otherwise hand its position to whichever preset
-        // scene runs next. Anchoring each of these at the top costs nothing when they are already
-        // there, and removes an ordering dependency between references rather than relying on the
-        // order kScenes happens to list them in.
-        const ImGuiTestItemInfo anchor = ctx->ItemInfo("**/###preset_Random");
-        IM_CHECK(anchor.Window != nullptr);
-        ctx->ScrollToTop(anchor.Window->ID);
-        ctx->Yield(2);
-
         // Column unfolded: the three axis rows, the disabled type/mean cells, the live std cell and
         // the warning column beside it. One preset is enough — the other five render through the
         // same two row functions, and unfolding all six would push the table past the panel.
