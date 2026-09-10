@@ -153,6 +153,41 @@ void RegisterBgColorPickerModeTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Print takes the photo out of the frame (doc/print-mode-subtractive-ink.md §7 instance 1), and
+  // the eyedropper's button leaves the panel with it — it lives in the Screen arm of the ground
+  // row. So an armed pick has to be dropped by the mode switch itself, the same way it is dropped
+  // by hiding the photo: otherwise the mode stays armed with no visible way out, the photo
+  // gestures stay locked, and the next click samples a photo the preview is not showing. The
+  // frame, the gestures and the pick read one predicate, so one switch has to move all three.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "bg_color_picker", "print_mode_takes_the_photo_off_screen_and_drops_an_armed_pick");
+    t->GuiFunc = ProbeGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      InstallProbeBackground(ctx);
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, true);
+
+      ctx->ItemClick(kPickButton);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_bg_pick.active, true);
+
+      gui::g_state.renderer.tone = LUMICE_TONE_PRINT;
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::BgPhotoOnScreen(gui::g_state), false);
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, false);
+      IM_CHECK_EQ(gui::g_bg_pick.active, false);
+      IM_CHECK_EQ(ctx->ItemExists(kPickButton), false);
+
+      // `bg_show` was never touched, so Screen brings the photo — and the button — straight back.
+      IM_CHECK_EQ(gui::g_state.bg_show, true);
+      gui::g_state.renderer.tone = LUMICE_TONE_SCREEN;
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::BgPhotoOnScreen(gui::g_state), true);
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, true);
+      IM_CHECK_EQ(ctx->ItemExists(kPickButton), true);
+    };
+  }
+
   // AC2 — while picking, the frame published to the renderer is the photo alone; leaving restores.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "bg_color_picker", "pick_mode_publishes_the_photo_alone");

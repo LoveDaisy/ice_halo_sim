@@ -1939,12 +1939,14 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     lumice::SrgbToLinearRgb(rc.paper, pp.paper_color_linear);
     pp.tone = rc.tone;
 
-    // The third term is doc/print-mode-subtractive-ink.md §7 instance 1, and it is what makes the
-    // exclusion real rather than advisory: `bg_show` is left exactly as the user set it, so
-    // switching Tone back to Screen brings the photograph straight back. See the matching
+    // The predicate's Print term is doc/print-mode-subtractive-ink.md §7 instance 1, and it is
+    // what makes the exclusion real rather than advisory: `bg_show` is left exactly as the user
+    // set it, so switching Mode back to Screen brings the photograph straight back. Read through
+    // BgPhotoOnScreen rather than spelled out again here, so the eyedropper and the photo gestures
+    // cannot disagree with the frame about whether the photo is in it. See the matching
     // WhenBackgroundLoaded gate in field_editor_registry.cpp for why additive-over-subtractive is
     // wrong in kind and not merely in taste.
-    pp.bg.enabled = g_state.bg_show && g_preview.HasBackground() && !IsPrintTone(rc);
+    pp.bg.enabled = BgPhotoOnScreen(g_state);
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
     pp.bg.pan_x = g_state.bg_offset_x;
