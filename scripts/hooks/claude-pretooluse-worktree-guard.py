@@ -51,6 +51,12 @@ also what python3 itself returns when the script path does not exist — keeping
 the two distinct means "the guard said no" and "the guard is not installed" can
 be told apart from the exit code alone.
 
+Coverage boundary, stated so nobody reads this as a complete fence: the hook
+sees the structured Edit and Write tool calls and nothing else. A file written
+from a Bash call (shell redirection, `sed -i`, a script) never passes through
+it. That is the shape of every guard built on tool-call hooks, and it is
+accepted here because the incidents being closed were all Edit/Write.
+
 This script must stay runnable on its own: standard library only, no repo
 imports, no private tooling.
 """
@@ -71,6 +77,15 @@ def _warn(msg: str) -> int:
     return 1
 
 
+class GitUnavailable(Exception):
+    """git itself could not be run (not on PATH, not executable).
+
+    Kept distinct from "git ran and said no": the latter means the target is
+    not in a repository and there is nothing to guard, the former means the
+    guard cannot do its job and must say so instead of silently passing.
+    """
+
+
 def _git(cwd: str, *args: str) -> str | None:
     try:
         out = subprocess.run(
@@ -79,8 +94,8 @@ def _git(cwd: str, *args: str) -> str | None:
             text=True,
             check=False,
         )
-    except (OSError, ValueError):
-        return None
+    except OSError as exc:
+        raise GitUnavailable(str(exc)) from exc
     if out.returncode != 0:
         return None
     return out.stdout.strip()
@@ -105,11 +120,12 @@ def deny_message(target_rel: str, toplevel: str) -> str:
         "Production code (src/, test/) is changed on a task branch in a linked git worktree, "
         "never in the main worktree — it is shared by every task on this machine, and N=1 is "
         "not an exception. Before editing:\n"
-        "  1. Make sure this change has a task directory under `scratchpad/` "
-        "(AGENTS.md, Collaboration Constraints). No directory → create it first, do not write code first.\n"
-        "  2. Create a worktree for it and edit there:\n"
-        "       git worktree add ../ice-halo-wt-<n> -b feat/<name> main\n"
-        "       ln -s \"<main-repo-abs-path>/scratchpad\" ../ice-halo-wt-<n>/scratchpad\n"
+        "  1. Make sure this change has a task directory under `scratchpad/`. "
+        "No directory → create it first, do not write code first.\n"
+        "  2. Create a linked worktree for the task and work there. The recipe (naming, the "
+        "`scratchpad` symlink, what the shared pre-commit hook does inside a worktree) is written "
+        "once, in AGENTS.md → \"Collaboration Constraints\" → \"Where a change lives, and from where "
+        "it is made\"; read it there rather than from memory.\n"
         "  3. Re-issue this edit against the file inside that worktree.\n"
         "\n"
         "This guard has no override switch by design (scripts/hooks/claude-pretooluse-worktree-guard.py). "
@@ -139,11 +155,14 @@ def main() -> int:
     target = os.path.normpath(target)
 
     anchor = _nearest_existing_dir(target)
-    toplevel = _git(anchor, "rev-parse", "--show-toplevel")
-    if toplevel is None:
-        # Not a git repository (or git unavailable): nothing to guard.
-        return 0
-    common_dir = _git(anchor, "rev-parse", "--git-common-dir")
+    try:
+        toplevel = _git(anchor, "rev-parse", "--show-toplevel")
+        if toplevel is None:
+            # git ran and found no repository above the target: nothing to guard.
+            return 0
+        common_dir = _git(anchor, "rev-parse", "--git-common-dir")
+    except GitUnavailable as exc:
+        return _warn(f"cannot run git ({exc})")
     if common_dir is None:
         return _warn("git rev-parse --git-common-dir failed")
 

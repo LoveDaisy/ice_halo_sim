@@ -559,7 +559,11 @@ script prints the path for whichever group it ran.
   script is tracked so its logic is reviewable; enabling it is per machine, via a
   `.claude/settings.local.json` that is git-ignored and does nothing but name the script. It has
   no override switch — no env var, no sentinel file — by design: if the owner wants a one-off edit
-  in the main worktree, they say so and the friction stays visible.
+  in the main worktree, they say so and the friction stays visible. Its reach is exactly the
+  structured `Edit`/`Write` calls: a file written from a Bash call (redirection, `sed -i`) never
+  passes through it, so the hook is a guard on the common path, not a complete fence — the
+  criterion above is what holds everywhere, the hook is what catches the incidents that actually
+  happened.
 
 ## Documentation Index (`doc/`)
 
