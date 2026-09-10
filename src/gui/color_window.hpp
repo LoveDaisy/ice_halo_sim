@@ -161,8 +161,8 @@ bool NoVisibleMatchedColorClass(const GuiState& state, const std::vector<int>& s
 // themselves are untouched and come back with Screen.
 inline constexpr const char* kColorsDisabledPrintModeTooltip =
     "Print mode lays one neutral ink, so there is no hue left to tell the color classes apart.\n"
-    "The colored composite is not produced while Tone is Print. Your color classes are kept --\n"
-    "switch Tone back to Screen to see them again.";
+    "The colored composite is not produced while Mode is Print. Your color classes are kept --\n"
+    "switch Mode back to Screen to see them again.";
 
 inline constexpr const char* kColorsDisabledNoMatchTooltip =
     "No visible color class currently matches any rays -- the composite would be empty.\n"

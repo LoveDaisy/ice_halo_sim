@@ -312,7 +312,7 @@ Applicability WhenBackgroundLoaded(const GuiState& state) {
   if (IsPrintTone(state.renderer)) {
     return { false,
              "A background photo is additive — the halo is drawn on top of the sky in it. Print lays "
-             "subtractive ink on paper, which can only darken it. Disabled while Tone is Print." };
+             "subtractive ink on paper, which can only darken it. Disabled while Mode is Print." };
   }
   if (!g_preview.HasBackground()) {
     return { false, "No background image is loaded." };
