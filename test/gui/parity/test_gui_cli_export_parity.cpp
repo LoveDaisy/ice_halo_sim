@@ -248,6 +248,14 @@
 //     could be dishonest about.
 //   * The exposure anchor. See the note above kScenes[]: both scenes pin relative EV, and what is
 //     left over after that is a measured, stated residual rather than an evasion.
+//   * A lines-only (member-mask) variant of full_sky_dual_fisheye_print. Measured before deciding,
+//     not assumed: the subtractive print operator (doc/print-mode-subtractive-ink.md) has no
+//     saturation floor the way the additive screen operator does — paper * 10^(-D) can only go
+//     DOWN from the paper colour, so the simulated arcs' residue always lands on the page rather
+//     than being clamped away. At the same exposure floor the screen scenes use (2^-8), the two
+//     "not paper" masks XOR to 45347 px (largest blob 2708) at tau = 0, still 19 px (largest blob
+//     3) at tau = 2 — the same "use tau to hide it" tolerance this file's screen scenes refuse.
+//     See the NO PRINT SCENE note above kLinesOnlyScenes[] for the full numbers.
 //
 // ====================================== Platform reach =======================================
 //
@@ -337,14 +345,18 @@ struct ParityScene {
   // The document's manual EV offset (GuiState::RenderConfig::exposure_offset), written as-is. It
   // is the ONE knob both arms read: the export bakes 2^offset into the CLI's intensity_factor
   // (file_io.cpp BuildScene, kJsonExport) and the preview shader multiplies by 2^(offset+ev_auto)
-  // (mono_exposure_scale.hpp; only ev_auto is clamped). 0 for the simulation scenes; -30 for the
-  // lines-only scenes, where it turns the simulated arcs off on both sides at once — the CLI keeps
-  // drawing the annotation layer as long as ExposureScale() > 0 (server/render.cpp PostSnapshot),
-  // so a frame at 2^-30 is the annotation layer alone.
+  // (mono_exposure_scale.hpp; only ev_auto is clamped). 0 (the field's own default, byte-unchanged)
+  // for the simulation scenes; -8 for the lines-only scenes — the GUI's own EV slider clamps this
+  // field to [-8, 16] every frame it is drawn (src/gui/field_editor_registry.cpp:570
+  // FixedDomain), so -8 is the floor actually reachable, not a chosen offset. See the WHY NOT
+  // EXPOSURE ALONE note above kLinesOnlyScenes[] for why -8 alone is not enough and the white
+  // canvas below is what does the work.
   float exposure_offset;
   // The coordinate grid's colour, sRGB (GuiState::grid_color, exported as GridLineParam::color_).
-  // The default white for the simulation scenes; black for the lines-only scenes, whose canvas is
-  // white — see the note above kLinesOnlyScenes[].
+  // White `{1,1,1}` for the simulation scenes — GuiState::grid_color's own default
+  // (src/gui/gui_state.hpp:1374), so this field is byte-unchanged for those four rows, not merely
+  // asserted to be; black for the lines-only scenes, whose canvas is white — see the note above
+  // kLinesOnlyScenes[].
   float grid_srgb[3];
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
@@ -1085,7 +1097,7 @@ ParityScene MakeLinesOnlyScene(const LinesOnlyScene& lines, const ParityScene& b
 
 // The most frequent byte triple of an RGB image, packed 0xRRGGBB. One pass over a hash map; the
 // frames here have under forty distinct colours.
-uint32_t ModeColour(const unsigned char* rgb, int w, int h) {
+uint32_t ModeColor(const unsigned char* rgb, int w, int h) {
   std::unordered_map<uint32_t, int> counts;
   const size_t n_px = static_cast<size_t>(w) * h;
   for (size_t p = 0; p < n_px; ++p) {
@@ -1519,6 +1531,16 @@ void LoadBothArms(const RenderedPair& pair, LoadedPair& out) {
   out.ok = true;
 }
 
+// The "render then load" glue every scene needs before it can compare anything, pulled out so the
+// two TestFuncs below differ only in step 9 — how each family reads the loaded pair.
+void RenderAndLoadBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServerAndWatchdogGuard& guard,
+                           RenderedPair& pair, LoadedPair& imgs) {
+  RenderBothArms(ctx, scene, guard, pair);
+  IM_CHECK(pair.ok);
+  LoadBothArms(pair, imgs);
+  IM_CHECK(imgs.ok);
+}
+
 }  // namespace
 
 void RegisterExportParityTests(ImGuiTestEngine* engine) {
@@ -1533,17 +1555,14 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ScopedServerAndWatchdogGuard guard(ctx->EngineIO);
       RenderedPair pair;
-      RenderBothArms(ctx, scene, guard, pair);
-      IM_CHECK(pair.ok);
       LoadedPair imgs;
-      LoadBothArms(pair, imgs);
-      IM_CHECK(imgs.ok);
+      RenderAndLoadBothArms(ctx, scene, guard, pair, imgs);
 
       // 9. Compare memberships. The canvas premise first, on each arm: if either arm's most
       // frequent colour is not the white the scene asked for, the simulation (or something else)
       // has reached the canvas and the masks below would be measuring that, not the curves.
-      IM_CHECK_EQ(ModeColour(imgs.gui_rgb.data(), imgs.w, imgs.h), kLinesOnlyCanvasPacked);
-      IM_CHECK_EQ(ModeColour(imgs.cli_rgb.data(), imgs.w, imgs.h), kLinesOnlyCanvasPacked);
+      IM_CHECK_EQ(ModeColor(imgs.gui_rgb.data(), imgs.w, imgs.h), kLinesOnlyCanvasPacked);
+      IM_CHECK_EQ(ModeColor(imgs.cli_rgb.data(), imgs.w, imgs.h), kLinesOnlyCanvasPacked);
       const std::vector<unsigned char> gui_mask =
           AnnotationMembership(imgs.gui_rgb.data(), imgs.w, imgs.h, kLinesOnlyCanvasPacked);
       const std::vector<unsigned char> cli_mask =
@@ -1580,12 +1599,8 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ScopedServerAndWatchdogGuard guard(ctx->EngineIO);
       RenderedPair pair;
-      RenderBothArms(ctx, scene, guard, pair);
-      IM_CHECK(pair.ok);
-
       LoadedPair imgs;
-      LoadBothArms(pair, imgs);
-      IM_CHECK(imgs.ok);
+      RenderAndLoadBothArms(ctx, scene, guard, pair, imgs);
 
       // 9. Compare.
       const double psnr = lumice::test::ComputePsnr(imgs.gui_rgb.data(), imgs.cli_rgb.data(), imgs.w, imgs.h, 3);
