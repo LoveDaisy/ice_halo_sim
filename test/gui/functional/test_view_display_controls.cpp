@@ -119,6 +119,11 @@ bool SwatchOnScreen(ImGuiTestContext* ctx, const char* label) {
 // of the whole case on its first miss and silently skips every channel after it
 // (scripts/check_loop_fatal_asserts.py), whereas this reports the first miss with its field,
 // channel and both values and lets the caller's single IM_CHECK decide fatality.
+//
+// Exact float comparison, on purpose and with a precondition: between the install and the check
+// the two fields are only ever shown by a ColorEdit3 or hidden, never passed through arithmetic,
+// so a single ulp of drift would itself be a defect. Do not reuse this on a path that converts
+// colour spaces or otherwise computes on the values — there the strict `!=` reads as a false red.
 bool GroundValuesHeld(const float* sky, const float* paper, const char* stage) {
   const float* fields[2] = { gui::g_state.renderer.background, gui::g_state.renderer.paper };
   const float* wants[2] = { sky, paper };
