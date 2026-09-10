@@ -120,18 +120,36 @@ def changelog_has_version(text: str, version: str) -> bool:
     return re.search(version_heading_re(version), text, re.MULTILINE) is not None
 
 
+def semver_key(version: str) -> tuple[int, int, int]:
+    """Sort key for an ``X.Y.Z`` string."""
+    major, minor, patch = version.split(".")
+    return int(major), int(minor), int(patch)
+
+
 def latest_version_link(text: str) -> tuple[str, str, int]:
     """Return ``(version, base_url, offset)`` of the topmost version link definition.
 
     CHANGELOG.md keeps its link definitions newest-first, so the first ``[X.Y.Z]:`` line
     names the latest released version. ``offset`` is where that line starts, which is
-    where the next version's definition is inserted.
+    where the next version's definition is inserted. The newest-first order is checked,
+    not assumed: a hand edit that moved an older definition to the top would otherwise
+    make ``set`` derive the wrong previous version and write a compare link spanning the
+    wrong range, silently.
     """
-    m = VERSION_LINK_RE.search(text)
-    if not m:
+    matches = list(VERSION_LINK_RE.finditer(text))
+    if not matches:
         print("Error: CHANGELOG.md has no [X.Y.Z]: .../compare/... link definition", file=sys.stderr)
         sys.exit(1)
-    return m.group(1), m.group(2), m.start()
+    top = matches[0]
+    newest = max(matches, key=lambda m: semver_key(m.group(1)))
+    if newest is not top:
+        print(
+            f"Error: the topmost link definition is [{top.group(1)}] but [{newest.group(1)}] "
+            "is newer — CHANGELOG.md's link definitions must be ordered newest-first",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return top.group(1), top.group(2), top.start()
 
 
 def validate_changelog(text: str, new_version: str, allow_empty: bool) -> str:
@@ -166,6 +184,12 @@ def validate_changelog(text: str, new_version: str, allow_empty: bool) -> str:
         )
         sys.exit(1)
     prev_version, base_url, offset = latest_version_link(text)
+    if semver_key(new_version) <= semver_key(prev_version):
+        print(
+            f"Error: {new_version} is not newer than the latest released version {prev_version}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     new_line = f"[{new_version}]: {base_url}/compare/v{prev_version}...v{new_version}\n"
     return text[:offset] + new_line + text[offset:]
 
