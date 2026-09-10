@@ -952,6 +952,244 @@ bool RunCliRender(const std::string& config_path, const std::string& out_dir) {
   return true;
 }
 
+// What RenderBothArms hands back: the two images and the export they were made from. `ok` is the
+// only success signal — the helper returns void so every IM_CHECK* inside it keeps printing its
+// operands, and a caller reads `ok` through one more IM_CHECK.
+struct RenderedPair {
+  std::filesystem::path scratch_dir;
+  std::string gui_png;
+  std::string cli_png;
+  ExportedRenderInfo info;
+  bool ok = false;
+};
+
+// Steps 1-8 of every scene in this file: load the document, apply the scene to GuiState, run to
+// completion, export through the production builder, capture the GUI image at the export's canvas,
+// stop the server, render the export with the CLI. Shared by the simulation scenes and the
+// lines-only scenes, which differ only in what they do with the two images afterwards. `guard`
+// is the caller's so that its destructor outlives the comparison.
+void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServerAndWatchdogGuard& guard,
+                    RenderedPair& out) {
+  gui::g_server = LUMICE_CreateServer();
+  LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
+
+  // 1. Load the document exactly as the product does when a .json is opened
+  // (src/gui/app.cpp DoOpen -> DeserializeFromJson, which resets GuiState internally).
+  {
+    std::ifstream in(LUMICE_E2E_CONFIG_DIR "/halo_22.json");
+    IM_CHECK(in.is_open());
+    const std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    IM_CHECK(gui::DeserializeFromJson(json_str, gui::g_state));
+  }
+
+  // 2. Apply the scene. These are writes to GuiState only — no PreviewParams is touched here,
+  // because the whole point is to let the production per-frame assembly do that translation.
+  {
+    auto& rc = gui::g_state.renderer;
+    rc.lens_type = scene.lens_type;
+    rc.fov = scene.fov;
+    rc.azimuth = scene.azimuth;
+    rc.elevation = scene.elevation;
+    rc.roll = scene.roll;
+    rc.visible = scene.visible;
+    rc.front = false;
+    rc.ev_mode = 0;  // relative; see the exposure note above kScenes[]
+    rc.exposure_offset = scene.exposure_offset;
+    std::copy(std::begin(scene.background_srgb), std::end(scene.background_srgb), std::begin(rc.background));
+    // The tone operator and its ground. Written as plain GuiState fields like everything else in
+    // this block: `tone` reaches the preview shader through app_panels.cpp's per-frame assembly
+    // and the CLI through BuildScene's export arm, and whether those two agree is the subject.
+    rc.tone = scene.tone;
+    std::copy(std::begin(scene.paper_srgb), std::end(scene.paper_srgb), std::begin(rc.paper));
+    rc.sim_resolution_index = kSimResolutionIndex;
+  }
+  gui::g_state.aspect_preset = scene.aspect_preset;
+  gui::g_state.aspect_portrait = scene.aspect_portrait;
+  gui::g_state.show_horizon_line = scene.show_horizon;
+  gui::g_state.show_sun_circles_line = scene.show_sun_circles;
+  gui::g_state.show_grid_line = scene.show_grid;
+  std::copy(std::begin(scene.grid_srgb), std::end(scene.grid_srgb), std::begin(gui::g_state.grid_color));
+  for (gui::MarkerAppearance& m : gui::g_state.markers) {
+    m.show = scene.show_markers;
+  }
+  // FULL OPACITY, deliberately, and not the 0.3 a user gets. The two arms composite an overlay
+  // line in different colour spaces — the CLI blends it into radiance before the transfer curve
+  // (server/render.cpp PostSnapshot), the preview shader after it (overlayAuxLines runs on the
+  // already-gamma-encoded colour) — so a partially transparent line lands on different bytes on
+  // the two sides even when it covers the same pixels. Measured on this scene at alpha 0.3 over
+  // its background: 129 vs 160 per channel, 2.7 dB off the whole-frame PSNR. At alpha 1 the
+  // background term drops out of both formulas and they agree exactly, which is what lets this
+  // gate measure WHERE the curves land — the thing this task changed — instead of re-measuring
+  // a divergence it did not introduce and does not fix. See the exclusion note in the header.
+  gui::g_state.grid_alpha = 1.0f;
+  // The markers take the same override for the same reason, and they need it more than the
+  // lines do: a ring is a handful of pixels, so a per-pixel byte difference on every one of
+  // them is most of what the marker contributes to the frame at all.
+  gui::g_state.markers_alpha = 1.0f;
+  // The horizon is the one line that CANNOT take that override, and the reason is a decision
+  // rather than an oversight: core has no per-annotation appearance fields for it (unlike
+  // GridLineParam) and paints it from a file-scope constant, kOutlineAlpha = 0.6 in
+  // server/render.cpp, chosen to equal this GUI default. Raising the GUI side to 1 would make
+  // the two arms disagree about the line's COLOUR, which is a larger error than the
+  // colour-space residual the shared 0.6 leaves. So the value is pinned rather than overridden
+  // — pinned, and not merely left at its default, so that a change to either constant fails
+  // here instead of quietly re-introducing the residual at a new size.
+  gui::g_state.horizon_alpha = 0.6f;
+  // The default list, {22, 46}, is what a user gets; keeping it means this scene compares the
+  // circles anyone would actually draw.
+  gui::g_state.sun_circle_angles = { 22.0f, 46.0f };
+  gui::g_state.sim.infinite = false;
+  gui::g_state.sim.ray_num_millions = scene.ray_num_millions;
+
+  // 3. Run to completion. kDone means the backend reported the committed epoch complete, so the
+  // capture below is taken on a fixed amount of work rather than on whatever a poll happened to
+  // pick up. The wall-clock deadline (and the watchdog raised out of its way) is the same
+  // arrangement the lens-projection suite arrived at: under --fixed-dt the engine's watchdog
+  // measures SIMULATED time and can fire while a real-time budget still has minutes left.
+  gui::DoRun(/*user_initiated=*/true);
+  IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunning);
+  guard.engine_io->ConfigWatchdogWarning = 50000.0f;
+  guard.engine_io->ConfigWatchdogKillTest = 100000.0f;
+  const auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(170);
+  while (gui::g_state.sim_state != gui::GuiState::SimState::kDone && std::chrono::steady_clock::now() < wait_deadline) {
+    ctx->Yield(1);
+  }
+  IM_CHECK_EQ((int)gui::g_state.sim_state, (int)gui::GuiState::SimState::kDone);
+  IM_CHECK_EQ((unsigned long long)gui::g_state.stats_sim_ray_num, ExpectedSimRayNum(scene.ray_num_millions));
+
+  // 4. Let the product's own per-frame assembly fill g_preview_vp.params from GuiState. This is
+  // the step that makes the GUI side of this comparison the real one: src/gui/app_panels.cpp
+  // reads lens/fov/view/visible/background/horizon out of GuiState every frame, and it is that
+  // translation — not a hand-written copy of it — that has to agree with the export.
+  //
+  // Asserted, not assumed: the assembly is gated on the preview owning a texture, so "the
+  // frames went by" is not evidence it ran.
+  ctx->Yield(3);
+  IM_CHECK(gui::g_preview.HasTexture());
+  IM_CHECK(gui::g_preview_vp.active);
+  // The full-sky branch of that same assembly zeroes the three view angles. Reading it back
+  // here states which side of the branch this scene is on before anything is rendered.
+  if (gui::LensIsFullSky(scene.lens_type)) {
+    IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
+    IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
+    IM_CHECK_EQ(gui::g_state.renderer.roll, 0.0f);
+  } else {
+    IM_CHECK_EQ(gui::g_state.renderer.elevation, scene.elevation);
+  }
+
+  // 5. The export, through the production builder. A scene that reaches this point must not be
+  // one the builder refuses (only the front-hemisphere clip is refused, and no scene sets it).
+  std::string export_json;
+  std::string warning;
+  IM_CHECK(gui::BuildExportJsonOrWarn(gui::g_state, &export_json, &warning));
+  const ExportedRenderInfo info = ParseExportedRenderInfo(export_json);
+  out.info = info;
+  IM_CHECK(info.ok);
+  IM_CHECK_EQ(info.width, scene.expect_w);
+  IM_CHECK_EQ(info.height, scene.expect_h);
+  // Six entries always, regardless of the switch — the constant-shape export BuildScene argues
+  // for. Their `enabled` is what the switch moves.
+  IM_CHECK_EQ(info.markers_listed, LUMICE_ANNOTATION_MARKER_COUNT);
+  IM_CHECK_EQ(info.markers_enabled, scene.show_markers ? LUMICE_ANNOTATION_MARKER_COUNT : 0);
+  IM_CHECK_EQ(info.horizon, scene.show_horizon);
+  // The tone fields, asserted on the DOCUMENT rather than on GuiState for the reason the marker
+  // and horizon checks above give: this is the text the child process reads. A scene whose paper
+  // never reached the export would otherwise compare two frames that agreed because both were
+  // screen-toned, and the PSNR would look healthy.
+  IM_CHECK_STR_EQ(info.tone.c_str(), scene.tone == 1 ? "print" : "screen");
+  IM_CHECK(info.paper_read);
+  // Three separate assertions rather than one iterated over the channels: a fatal check inside a
+  // repeating scope hides every channel after the first to disagree, and here that would read as
+  // a green channel rather than as an unreached one (scripts/check_loop_fatal_asserts.py states
+  // the rule). Written out, each channel reports itself.
+  IM_CHECK_EQ(info.paper[0], scene.paper_srgb[0]);
+  IM_CHECK_EQ(info.paper[1], scene.paper_srgb[1]);
+  IM_CHECK_EQ(info.paper[2], scene.paper_srgb[2]);
+
+  const std::filesystem::path scratch_dir = GuiTestTempPath(std::string("export_parity_") + scene.name).parent_path() /
+                                            (std::string("export_parity_") + scene.name);
+  std::error_code ec;
+  std::filesystem::create_directories(scratch_dir, ec);
+  out.scratch_dir = scratch_dir;
+  IM_CHECK(!ec);
+  const std::filesystem::path json_path = scratch_dir / "export.json";
+  {
+    std::ofstream json_out(json_path);
+    IM_CHECK(json_out.is_open());
+    json_out << export_json;
+  }
+
+  // 6. The GUI image, at the canvas the export just asked for. The params are the ones the
+  // product assembled; only the output size is imposed, and it is imposed from the export so
+  // both pictures land on the same pixel grid.
+  gui::PreviewViewport vp = gui::g_preview_vp;
+  vp.vp_w = info.width;
+  vp.vp_h = info.height;
+  // The fixture checks itself before it compares anything. g_preview_vp is filled by
+  // RenderPreviewPanel on whatever frame it last ran, so everything below is a statement that
+  // the picture about to be captured is being taken in the state this test asked for — not in
+  // an earlier test's, and not with an annotation silently switched off. Without these, a
+  // scene that quietly lost half its setup still produces two images and a plausible PSNR, and
+  // the number moves for a reason no one can attribute. Measured worth: this suite read 2.4 dB
+  // lower under the full-suite invocation than under --filter, and it was these values that
+  // said which of the two arms had drifted.
+  IM_CHECK_EQ(vp.params.overlay.show_sun_circles, scene.show_sun_circles);
+  IM_CHECK_EQ(vp.params.overlay.show_grid, scene.show_grid);
+  // The preview arm's own reading of the same switch. There is no enable flag in this struct —
+  // a marker that is off is written as the sentinel position — so the check is that every slot
+  // did or did not receive a real coordinate. `>=` and not `==` on the count: a marker whose
+  // direction this view does not image is ALSO written as the sentinel, legitimately, so the
+  // assertion is that the family reached the shader at all, not that all six landed.
+  {
+    int placed = 0;
+    for (const auto& pos : vp.params.overlay.marker_screen_pos) {
+      if (pos[0] != gui::kOverlaySentinel || pos[1] != gui::kOverlaySentinel) {
+        placed++;
+      }
+    }
+    if (scene.show_markers) {
+      IM_CHECK_GT(placed, 0);
+    } else {
+      IM_CHECK_EQ(placed, 0);
+    }
+  }
+  IM_CHECK_EQ(vp.params.overlay.show_horizon, scene.show_horizon);
+  IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
+  IM_CHECK_EQ(vp.params.overlay.markers_alpha, 1.0f);
+  IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
+  // The curve DEFINITIONS the shader evaluates reached PreviewParams: the circle radii and the
+  // grid's level lists. What this pins is the half the fixture can see from here; whether the
+  // shader draws the same curve the CLI does from the same definition is what the PSNR below
+  // is for.
+  if (scene.show_sun_circles) {
+    IM_CHECK(!vp.params.overlay.angular_dist_deg.empty());
+  }
+  if (scene.show_grid) {
+    IM_CHECK(!vp.params.overlay.elevation_deg.empty());
+    IM_CHECK(!vp.params.overlay.longitude_deg.empty());
+  }
+  IM_CHECK_EQ(vp.params.overlay.horizon_alpha, 0.6f);
+  out.gui_png = (scratch_dir / "gui.png").string();
+  IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, out.gui_png));
+
+  // 7. Stop the server before handing the machine to the child process: the CLI is about to
+  // want every core it can get, and nothing below needs the server.
+  guard.server_owned = false;
+  gui::g_server_poller.Stop();
+  LUMICE_StopServer(gui::g_server);
+  LUMICE_DestroyServer(gui::g_server);
+  gui::g_server = nullptr;
+  gui::g_state.run_intent = gui::RunIntent::kNone;
+
+  // 8. The CLI image. The filename carries the renderer id the exported document states, not a
+  // hardcoded 0 — src/main.cpp names its output after that id.
+  IM_CHECK(RunCliRender(json_path.string(), scratch_dir.string()));
+  char cli_name[32];
+  snprintf(cli_name, sizeof(cli_name), "img_%02d.png", info.renderer_id);
+  out.cli_png = (scratch_dir / cli_name).string();
+  out.ok = true;
+}
+
 }  // namespace
 
 void RegisterExportParityTests(ImGuiTestEngine* engine) {
@@ -961,225 +1199,10 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       const auto& scene = kScenes[ctx->Test->ArgVariant];
       ResetTestState();
-
-      gui::g_server = LUMICE_CreateServer();
       ScopedServerAndWatchdogGuard guard(ctx->EngineIO);
-      LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
-
-      // 1. Load the document exactly as the product does when a .json is opened
-      // (src/gui/app.cpp DoOpen -> DeserializeFromJson, which resets GuiState internally).
-      {
-        std::ifstream in(LUMICE_E2E_CONFIG_DIR "/halo_22.json");
-        IM_CHECK(in.is_open());
-        const std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        IM_CHECK(gui::DeserializeFromJson(json_str, gui::g_state));
-      }
-
-      // 2. Apply the scene. These are writes to GuiState only — no PreviewParams is touched here,
-      // because the whole point is to let the production per-frame assembly do that translation.
-      {
-        auto& rc = gui::g_state.renderer;
-        rc.lens_type = scene.lens_type;
-        rc.fov = scene.fov;
-        rc.azimuth = scene.azimuth;
-        rc.elevation = scene.elevation;
-        rc.roll = scene.roll;
-        rc.visible = scene.visible;
-        rc.front = false;
-        rc.ev_mode = 0;  // relative; see the exposure note above kScenes[]
-        rc.exposure_offset = scene.exposure_offset;
-        std::copy(std::begin(scene.background_srgb), std::end(scene.background_srgb), std::begin(rc.background));
-        // The tone operator and its ground. Written as plain GuiState fields like everything else in
-        // this block: `tone` reaches the preview shader through app_panels.cpp's per-frame assembly
-        // and the CLI through BuildScene's export arm, and whether those two agree is the subject.
-        rc.tone = scene.tone;
-        std::copy(std::begin(scene.paper_srgb), std::end(scene.paper_srgb), std::begin(rc.paper));
-        rc.sim_resolution_index = kSimResolutionIndex;
-      }
-      gui::g_state.aspect_preset = scene.aspect_preset;
-      gui::g_state.aspect_portrait = scene.aspect_portrait;
-      gui::g_state.show_horizon_line = scene.show_horizon;
-      gui::g_state.show_sun_circles_line = scene.show_sun_circles;
-      gui::g_state.show_grid_line = scene.show_grid;
-      std::copy(std::begin(scene.grid_srgb), std::end(scene.grid_srgb), std::begin(gui::g_state.grid_color));
-      for (gui::MarkerAppearance& m : gui::g_state.markers) {
-        m.show = scene.show_markers;
-      }
-      // FULL OPACITY, deliberately, and not the 0.3 a user gets. The two arms composite an overlay
-      // line in different colour spaces — the CLI blends it into radiance before the transfer curve
-      // (server/render.cpp PostSnapshot), the preview shader after it (overlayAuxLines runs on the
-      // already-gamma-encoded colour) — so a partially transparent line lands on different bytes on
-      // the two sides even when it covers the same pixels. Measured on this scene at alpha 0.3 over
-      // its background: 129 vs 160 per channel, 2.7 dB off the whole-frame PSNR. At alpha 1 the
-      // background term drops out of both formulas and they agree exactly, which is what lets this
-      // gate measure WHERE the curves land — the thing this task changed — instead of re-measuring
-      // a divergence it did not introduce and does not fix. See the exclusion note in the header.
-      gui::g_state.grid_alpha = 1.0f;
-      // The markers take the same override for the same reason, and they need it more than the
-      // lines do: a ring is a handful of pixels, so a per-pixel byte difference on every one of
-      // them is most of what the marker contributes to the frame at all.
-      gui::g_state.markers_alpha = 1.0f;
-      // The horizon is the one line that CANNOT take that override, and the reason is a decision
-      // rather than an oversight: core has no per-annotation appearance fields for it (unlike
-      // GridLineParam) and paints it from a file-scope constant, kOutlineAlpha = 0.6 in
-      // server/render.cpp, chosen to equal this GUI default. Raising the GUI side to 1 would make
-      // the two arms disagree about the line's COLOUR, which is a larger error than the
-      // colour-space residual the shared 0.6 leaves. So the value is pinned rather than overridden
-      // — pinned, and not merely left at its default, so that a change to either constant fails
-      // here instead of quietly re-introducing the residual at a new size.
-      gui::g_state.horizon_alpha = 0.6f;
-      // The default list, {22, 46}, is what a user gets; keeping it means this scene compares the
-      // circles anyone would actually draw.
-      gui::g_state.sun_circle_angles = { 22.0f, 46.0f };
-      gui::g_state.sim.infinite = false;
-      gui::g_state.sim.ray_num_millions = scene.ray_num_millions;
-
-      // 3. Run to completion. kDone means the backend reported the committed epoch complete, so the
-      // capture below is taken on a fixed amount of work rather than on whatever a poll happened to
-      // pick up. The wall-clock deadline (and the watchdog raised out of its way) is the same
-      // arrangement the lens-projection suite arrived at: under --fixed-dt the engine's watchdog
-      // measures SIMULATED time and can fire while a real-time budget still has minutes left.
-      gui::DoRun(/*user_initiated=*/true);
-      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunning);
-      guard.engine_io->ConfigWatchdogWarning = 50000.0f;
-      guard.engine_io->ConfigWatchdogKillTest = 100000.0f;
-      const auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(170);
-      while (gui::g_state.sim_state != gui::GuiState::SimState::kDone &&
-             std::chrono::steady_clock::now() < wait_deadline) {
-        ctx->Yield(1);
-      }
-      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)gui::GuiState::SimState::kDone);
-      IM_CHECK_EQ((unsigned long long)gui::g_state.stats_sim_ray_num, ExpectedSimRayNum(scene.ray_num_millions));
-
-      // 4. Let the product's own per-frame assembly fill g_preview_vp.params from GuiState. This is
-      // the step that makes the GUI side of this comparison the real one: src/gui/app_panels.cpp
-      // reads lens/fov/view/visible/background/horizon out of GuiState every frame, and it is that
-      // translation — not a hand-written copy of it — that has to agree with the export.
-      //
-      // Asserted, not assumed: the assembly is gated on the preview owning a texture, so "the
-      // frames went by" is not evidence it ran.
-      ctx->Yield(3);
-      IM_CHECK(gui::g_preview.HasTexture());
-      IM_CHECK(gui::g_preview_vp.active);
-      // The full-sky branch of that same assembly zeroes the three view angles. Reading it back
-      // here states which side of the branch this scene is on before anything is rendered.
-      if (gui::LensIsFullSky(scene.lens_type)) {
-        IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
-        IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
-        IM_CHECK_EQ(gui::g_state.renderer.roll, 0.0f);
-      } else {
-        IM_CHECK_EQ(gui::g_state.renderer.elevation, scene.elevation);
-      }
-
-      // 5. The export, through the production builder. A scene that reaches this point must not be
-      // one the builder refuses (only the front-hemisphere clip is refused, and no scene sets it).
-      std::string export_json;
-      std::string warning;
-      IM_CHECK(gui::BuildExportJsonOrWarn(gui::g_state, &export_json, &warning));
-      const ExportedRenderInfo info = ParseExportedRenderInfo(export_json);
-      IM_CHECK(info.ok);
-      IM_CHECK_EQ(info.width, scene.expect_w);
-      IM_CHECK_EQ(info.height, scene.expect_h);
-      // Six entries always, regardless of the switch — the constant-shape export BuildScene argues
-      // for. Their `enabled` is what the switch moves.
-      IM_CHECK_EQ(info.markers_listed, LUMICE_ANNOTATION_MARKER_COUNT);
-      IM_CHECK_EQ(info.markers_enabled, scene.show_markers ? LUMICE_ANNOTATION_MARKER_COUNT : 0);
-      IM_CHECK_EQ(info.horizon, scene.show_horizon);
-      // The tone fields, asserted on the DOCUMENT rather than on GuiState for the reason the marker
-      // and horizon checks above give: this is the text the child process reads. A scene whose paper
-      // never reached the export would otherwise compare two frames that agreed because both were
-      // screen-toned, and the PSNR would look healthy.
-      IM_CHECK_STR_EQ(info.tone.c_str(), scene.tone == 1 ? "print" : "screen");
-      IM_CHECK(info.paper_read);
-      // Three separate assertions rather than one iterated over the channels: a fatal check inside a
-      // repeating scope hides every channel after the first to disagree, and here that would read as
-      // a green channel rather than as an unreached one (scripts/check_loop_fatal_asserts.py states
-      // the rule). Written out, each channel reports itself.
-      IM_CHECK_EQ(info.paper[0], scene.paper_srgb[0]);
-      IM_CHECK_EQ(info.paper[1], scene.paper_srgb[1]);
-      IM_CHECK_EQ(info.paper[2], scene.paper_srgb[2]);
-
-      const std::filesystem::path scratch_dir =
-          GuiTestTempPath(std::string("export_parity_") + scene.name).parent_path() /
-          (std::string("export_parity_") + scene.name);
-      std::error_code ec;
-      std::filesystem::create_directories(scratch_dir, ec);
-      IM_CHECK(!ec);
-      const std::filesystem::path json_path = scratch_dir / "export.json";
-      {
-        std::ofstream out(json_path);
-        IM_CHECK(out.is_open());
-        out << export_json;
-      }
-
-      // 6. The GUI image, at the canvas the export just asked for. The params are the ones the
-      // product assembled; only the output size is imposed, and it is imposed from the export so
-      // both pictures land on the same pixel grid.
-      gui::PreviewViewport vp = gui::g_preview_vp;
-      vp.vp_w = info.width;
-      vp.vp_h = info.height;
-      // The fixture checks itself before it compares anything. g_preview_vp is filled by
-      // RenderPreviewPanel on whatever frame it last ran, so everything below is a statement that
-      // the picture about to be captured is being taken in the state this test asked for — not in
-      // an earlier test's, and not with an annotation silently switched off. Without these, a
-      // scene that quietly lost half its setup still produces two images and a plausible PSNR, and
-      // the number moves for a reason no one can attribute. Measured worth: this suite read 2.4 dB
-      // lower under the full-suite invocation than under --filter, and it was these values that
-      // said which of the two arms had drifted.
-      IM_CHECK_EQ(vp.params.overlay.show_sun_circles, scene.show_sun_circles);
-      IM_CHECK_EQ(vp.params.overlay.show_grid, scene.show_grid);
-      // The preview arm's own reading of the same switch. There is no enable flag in this struct —
-      // a marker that is off is written as the sentinel position — so the check is that every slot
-      // did or did not receive a real coordinate. `>=` and not `==` on the count: a marker whose
-      // direction this view does not image is ALSO written as the sentinel, legitimately, so the
-      // assertion is that the family reached the shader at all, not that all six landed.
-      {
-        int placed = 0;
-        for (const auto& pos : vp.params.overlay.marker_screen_pos) {
-          if (pos[0] != gui::kOverlaySentinel || pos[1] != gui::kOverlaySentinel) {
-            placed++;
-          }
-        }
-        if (scene.show_markers) {
-          IM_CHECK_GT(placed, 0);
-        } else {
-          IM_CHECK_EQ(placed, 0);
-        }
-      }
-      IM_CHECK_EQ(vp.params.overlay.show_horizon, scene.show_horizon);
-      IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
-      IM_CHECK_EQ(vp.params.overlay.markers_alpha, 1.0f);
-      IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
-      // The curve DEFINITIONS the shader evaluates reached PreviewParams: the circle radii and the
-      // grid's level lists. What this pins is the half the fixture can see from here; whether the
-      // shader draws the same curve the CLI does from the same definition is what the PSNR below
-      // is for.
-      if (scene.show_sun_circles) {
-        IM_CHECK(!vp.params.overlay.angular_dist_deg.empty());
-      }
-      if (scene.show_grid) {
-        IM_CHECK(!vp.params.overlay.elevation_deg.empty());
-        IM_CHECK(!vp.params.overlay.longitude_deg.empty());
-      }
-      IM_CHECK_EQ(vp.params.overlay.horizon_alpha, 0.6f);
-      const std::string gui_png = (scratch_dir / "gui.png").string();
-      IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, gui_png));
-
-      // 7. Stop the server before handing the machine to the child process: the CLI is about to
-      // want every core it can get, and nothing below needs the server.
-      guard.server_owned = false;
-      gui::g_server_poller.Stop();
-      LUMICE_StopServer(gui::g_server);
-      LUMICE_DestroyServer(gui::g_server);
-      gui::g_server = nullptr;
-      gui::g_state.run_intent = gui::RunIntent::kNone;
-
-      // 8. The CLI image. The filename carries the renderer id the exported document states, not a
-      // hardcoded 0 — src/main.cpp names its output after that id.
-      IM_CHECK(RunCliRender(json_path.string(), scratch_dir.string()));
-      char cli_name[32];
-      snprintf(cli_name, sizeof(cli_name), "img_%02d.png", info.renderer_id);
-      const std::string cli_png = (scratch_dir / cli_name).string();
+      RenderedPair pair;
+      RenderBothArms(ctx, scene, guard, pair);
+      IM_CHECK(pair.ok);
 
       // 9. Compare. A size disagreement is a finding in its own right and is reported as one
       // rather than absorbed by a resize.
@@ -1191,8 +1214,8 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       int cw = 0;
       int ch = 0;
       int cc = 0;
-      IM_CHECK(lumice::test::LoadPng(gui_png.c_str(), gui_data, gw, gh, gc));
-      IM_CHECK(lumice::test::LoadPng(cli_png.c_str(), cli_data, cw, ch, cc));
+      IM_CHECK(lumice::test::LoadPng(pair.gui_png.c_str(), gui_data, gw, gh, gc));
+      IM_CHECK(lumice::test::LoadPng(pair.cli_png.c_str(), cli_data, cw, ch, cc));
       IM_CHECK_EQ(gw, cw);
       IM_CHECK_EQ(gh, ch);
       // The CLI's PNG writer emits RGB, never RGBA, so cc==3 is a format contract, not an
@@ -1209,7 +1232,8 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       IM_CHECK_GE(psnr, scene.psnr_threshold);
 
       if (!g_keep_export_png) {
-        std::filesystem::remove_all(scratch_dir, ec);
+        std::error_code ec;
+        std::filesystem::remove_all(pair.scratch_dir, ec);
       }
     };
   }
