@@ -781,6 +781,37 @@ if(BUILD_SHARED_LIBS)
   install(TARGETS lumice LIBRARY DESTINATION lib)
 endif()
 
+# Test-only export surface: the same lumice_obj objects liblumice is made of, plus the handful of
+# LUMICE_TEST_* hooks pytest needs and lumice.h must never carry (a test-only entry point in the
+# product ABI is the shape the owner rejected). It is a SUPERSET STAND-IN for liblumice, not a
+# companion: -fvisibility=hidden leaves nothing for a side library to link against, so the hooks
+# must ship with their own copy of the engine, and the ctypes harness loads this one library
+# instead of liblumice — two copies in one process would be two engines and two sets of statics.
+# Gated on BUILD_SHARED_LIBS alone (NOT BUILD_TEST) so CI's e2e-slow leg, configured with
+# -DBUILD_TEST=OFF -DBUILD_GUI=OFF -DBUILD_SHARED_LIBS=ON, still produces it; the static flavor
+# has no shared library at all, so the target simply does not exist there. The hooks' sources
+# live under test/, and scripts/check_policies.py's no-test-symbol-in-src rule keeps the
+# LUMICE_TEST_ prefix out of src/ so the two surfaces cannot grow back together.
+if(BUILD_SHARED_LIBS)
+  add_library(lumice_testapi SHARED
+    "${PROJ_TEST_DIR}/support/lumice_test_api.cpp")
+  # PRIVATE: nothing links against this target — it is only ever dlopen'ed by ctypes.
+  target_link_libraries(lumice_testapi PRIVATE lumice_obj)
+  if(NOT MSVC)
+    # Same export discipline as lumice_obj: only the #pragma GCC visibility block in
+    # lumice_test_api.h (and, through lumice_obj's own objects, lumice.h) is exported.
+    target_compile_options(lumice_testapi PRIVATE
+      $<$<CONFIG:Release>:-fvisibility=hidden>
+      $<$<CONFIG:MinSizeRel>:-fvisibility=hidden>)
+  endif()
+  if(WIN32)
+    # Mirrors the `lumice` target's Windows block above: the pragma is a GCC/Clang mechanism, so
+    # MSVC needs the auto-export escape hatch to produce a loadable DLL at all.
+    set_target_properties(lumice_testapi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  endif()
+  install(TARGETS lumice_testapi LIBRARY DESTINATION lib)
+endif()
+
 
 # ==================================================================================================
 # Add subdirectory
