@@ -328,6 +328,18 @@ struct ParityScene {
   // child process to place them where the preview did. A subset that left them out would leave the
   // whole sun-relative half of the id space unexercised end to end.
   bool show_markers;
+  // The document's manual EV offset (GuiState::RenderConfig::exposure_offset), written as-is. It
+  // is the ONE knob both arms read: the export bakes 2^offset into the CLI's intensity_factor
+  // (file_io.cpp BuildScene, kJsonExport) and the preview shader multiplies by 2^(offset+ev_auto)
+  // (mono_exposure_scale.hpp; only ev_auto is clamped). 0 for the simulation scenes; -30 for the
+  // lines-only scenes, where it turns the simulated arcs off on both sides at once — the CLI keeps
+  // drawing the annotation layer as long as ExposureScale() > 0 (server/render.cpp PostSnapshot),
+  // so a frame at 2^-30 is the annotation layer alone.
+  float exposure_offset;
+  // The coordinate grid's colour, sRGB (GuiState::grid_color, exported as GridLineParam::color_).
+  // The default white for the simulation scenes; black for the lines-only scenes, whose canvas is
+  // white — see the note above kLinesOnlyScenes[].
+  float grid_srgb[3];
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
   float ray_num_millions;
@@ -524,7 +536,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_markers=*/true,
+   /*show_grid=*/true, /*show_markers=*/true, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.2, /*expect_w=*/512, /*expect_h=*/683},
   // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
   // 0.31 dB above the smallest break this scene owns — the CLI drawing only the first of two
@@ -605,7 +617,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_markers=*/true,
+   /*show_grid=*/true, /*show_markers=*/true, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.0, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
@@ -727,7 +739,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_markers=*/true,
+   /*show_grid=*/true, /*show_markers=*/true, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.2, /*expect_w=*/512, /*expect_h=*/683},
   // The TONE scene. Every field except `tone`, `paper_srgb` and the four annotation switches is
   // copied verbatim from full_sky_dual_fisheye above, so a drop here reads as the tone operator and
@@ -810,7 +822,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    /*tone=*/1, /*paper_srgb=*/{ 0.96f, 0.92f, 0.84f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false, /*show_sun_circles=*/false,
-   /*show_grid=*/false, /*show_markers=*/false,
+   /*show_grid=*/false, /*show_markers=*/false, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/32.0, /*expect_w=*/1024, /*expect_h=*/512},
 };
 // clang-format on
@@ -975,7 +987,7 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
         rc.visible = scene.visible;
         rc.front = false;
         rc.ev_mode = 0;  // relative; see the exposure note above kScenes[]
-        rc.exposure_offset = 0.0f;
+        rc.exposure_offset = scene.exposure_offset;
         std::copy(std::begin(scene.background_srgb), std::end(scene.background_srgb), std::begin(rc.background));
         // The tone operator and its ground. Written as plain GuiState fields like everything else in
         // this block: `tone` reaches the preview shader through app_panels.cpp's per-frame assembly
@@ -989,6 +1001,7 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       gui::g_state.show_horizon_line = scene.show_horizon;
       gui::g_state.show_sun_circles_line = scene.show_sun_circles;
       gui::g_state.show_grid_line = scene.show_grid;
+      std::copy(std::begin(scene.grid_srgb), std::end(scene.grid_srgb), std::begin(gui::g_state.grid_color));
       for (gui::MarkerAppearance& m : gui::g_state.markers) {
         m.show = scene.show_markers;
       }
