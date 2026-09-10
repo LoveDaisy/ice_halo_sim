@@ -20,11 +20,13 @@
 
 #include "test_gui_shared.hpp"
 
-// Set by scripts/regen_gui_test_refs.py Phase B (--group capture_harness); see
-// test/gui/references/_thresholds.json. This scene renders pixel-identical across runs, so
-// there is no finite PSNR distribution to take mean − 3σ from and the driver reports its
-// deterministic floor instead — the same 40 dB the repo's other deterministic GL
-// comparisons use (visual/left_panel, visual/crystal_preview_prism).
+// The ruler this scene is held to. It renders pixel-identical across runs and is evaluated only
+// on the reference machine (the CI llvmpipe leg's filter does not name capture_harness), so it
+// demands byte-identity outright: tau = 0, K = 0. PSNR is still printed beside it — the
+// scripts/regen_gui_test_refs.py Phase B audit trail (test/gui/references/_thresholds.json)
+// records both — but it no longer decides pass/fail; see support/pixel_diff_metrics.hpp.
+static constexpr lumice::test::MaxCcRuler kRuler{ /*tau=*/0, /*max_cc_threshold=*/0 };
+// The PSNR floor the old ruler applied, kept for the diagnostic line only.
 static constexpr double kPsnrThreshold = 40.0;
 
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
@@ -89,6 +91,6 @@ void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
         lumice::test::SavePng(tmp_path.c_str(), rgb.data(), g_fullframe_capture.width, g_fullframe_capture.height, 3));
 
     IM_CHECK(lumice::test::CheckAgainstReference("capture_harness", "fullframe", tmp_path, ref_path, kPsnrThreshold,
-                                                 g_keep_export_png));
+                                                 g_keep_export_png, &kRuler));
   };
 }

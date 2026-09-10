@@ -159,6 +159,11 @@ add_executable(unit_correctness_test
   # bottom of this file (test/unit-correctness/gui/test_defaults_diff.cpp), or in gui_test when it
   # also needs a window (test/gui/functional/test_gui_user_defaults.cpp).
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults_eligibility.cpp"
+  # The deterministic screenshot ruler (test/support/pixel_diff_metrics.hpp) pinned on synthetic
+  # forms of the two drifts the PSNR floor missed — red under the new ruler, green under the old,
+  # on the same input. Header-only and GL-free, so it belongs here rather than in gui_test.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_pixel_diff_ruler.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_block_mean_psnr.cpp"
   # backend/: CUDA-only white-box tests for the geometry-pool rebuild gate.
   # Body is `#if LUMICE_CUDA_ENABLED`, so on non-CUDA hosts the TU is empty
   # (zero contributed symbols).

@@ -588,6 +588,9 @@ log` 步骤会把它保留 30 天），也就是说合入后的第一次真实�
 被直接否决的是第五个选项——没人提议、但一切都会朝它漂移的那个：把阈值放松到这一层不再变红。那是把
 "不被相信"换成"不再报告"，检出力同样是零，只是连证据一起抹掉了。
 
+本节的 `maxcc` 尺子是 §4.11 总表的第①行；该表把它与本仓其余三类图像比对并排列出，并点名两个
+互为误用的陷阱（块均值 PSNR 倒读、整帧 PSNR 在压暗一臂时符号反转）——每一个都是拿错层用的尺子。
+
 ### §4.7 为什么 `auto_ev` 被退役了，而 `lens_proj` 没有
 
 两者都曾是一组来自随机渲染的参考图，但它们变的是相反的轴。`lens_proj` 的场景钉死仿真——六景全共用
@@ -770,6 +773,86 @@ ImGuiTestEngine 的 `IM_CHECK*`），会在第一行失败时就中止**整个�
 驱动这个上下文；扫描器现在绑定的是宿主 lambda 实际的参数名，绝不是硬编码的标识符）。一个停在
 这些泛化之一的检查器，比没有检查器更危险：一次干净的扫描结果会被读作"这里不存在这种缺陷形状"，
 而一条已知有误的阴性对照，恰好就在它本该抓住的输入上，制造了这种虚假的信心。
+
+### §4.11 比对尺子总表：类别 → 尺子 → 阈值形态 → 红/绿样本余量
+
+> 英文版 `testing-architecture.md` 已有 §4.10（`parity` tag：比对两次现场渲染，并从 `gui_test`
+> 内部拉起 CLI）；本文件尚未镜像那整个 §4.10（属于既有缺口，不由本节引入），下面第②③行涉及的
+> 场景设计细节以「英文版 §4.10」标注，这里只同步新增的本节，其编号与英文版 §4.11 对齐，供两侧
+> 交叉引用。
+
+§4.6 从一次整帧统计量漏检的红出发，为它所覆盖的那一层推出了一把尺子；英文版 §4.10 为
+`parity` tag 的两层各自做了同样的事。本表把本仓四类图像比对并排列出——共用的底层原语（像素差分 /
+块均值）与不共用的适用范围（哪把尺子用在哪一行，以及互换为什么不是"更严格"而是"用错"）——外加
+一类被实测后主动不动的类别。
+
+| 比对类别 | 尺子 | 阈值形态 | 红态样本（实测） | 绿态样本（实测） | 余量 |
+|---|---|---|---|---|---|
+| ① 确定性截图（`modal_layout` / `defaults_panel_layout` / `capture_harness` / `visual`） | τ 处的 `n_diff` + 最大 8-连通块 `maxcc` | `maxcc ≤ K`；τ=16 在两个进 CI 的组间共用（§4.6 有扫描过程），K 按组各定；`capture_harness`/`visual` 只在参考机本机跑，τ=0，K=0 | `wedge_presets@0a191bea` 127 px（42.6 dB——曾越过旧 40 dB 地板）；`presets_expanded`/`presets_warning@dcfa5f9e` 90 px（53.45 dB） | 同机诚实拍摄 maxcc=0；CI llvmpipe 残留 35 px（`modal_layout`）/ 0 px（`defaults_panel_layout`） | `modal_layout` 2.0×（K/blob）/ 1.36×（drift/K）；`defaults_panel_layout` ∞ / 2.15×（§4.6 表里有其余数字） |
+| ② 辅助线层 parity（`export_parity` 的 `_lines` 孪生场景） | 成员掩码 XOR（"是不是画布本身"逐像素判定）+ 同一套最大连通块 `maxcc`，只是作用在掩码而非原始 Δ 上 | `maxcc ≤ K=4`，τ=0（掩码本就是二值的）；标记 OFF（英文版 §4.10 point 4b） | 丢末经线 135–339 px；丢末纬线 8–73 px；两条 `angular_dist` 线只画一条 360–640 px；丢地平线 196–305 px；每个圆移 1° 653–1295 px；场景已关的标记仍在某一臂画出 48–130 px（整帧 PSNR 上仅 0.02 dB——对它不可见） | 诚实 N=6 完全相同重复，0–2 px 的镜头域边缘抗锯齿残留，`maxcc ≤ 1` | K=4 是诚实块的 4×；最紧的真实破坏（`full_sky_dual_fisheye` 丢末纬线，8 px）仍是 K 的 2× |
+| ③ `export_parity` 仿真场景（`single_lens_angled` / `full_sky_dual_fisheye` / `single_lens_rectilinear` / print） | 4×4 块均值 PSNR | `mean − max(10σ, 1.0 dB)`，N=12——bm4 阈值 35.4 / 38.3 / 39.3 / 42.1 dB | CLI 臂 ±0.25 stop 曝光破坏在 bm4 下读 −1.19…−2.55 dB（低于诚实均值）；同一破坏在整帧 PSNR 下读作*改善*（英文版 §4.10 point 4——符号反转） | 诚实 N=12 次，各场景 σ = 0.016–0.105 dB | 低于诚实均值 0.2–6.8 dB，取决于 `max(10σ, 1.0 dB)` 哪一项起作用（print 场景 σ=0.105，是唯一 10σ 超过 1.0 dB 地板的一行） |
+| ③′ `lens_proj` / e2e 参考图 | 整帧 PSNR——未换 | `mean − max(4σ, 1.0 dB)`——未换 | 无在册样本——见下 | 现行标定阈值，17.5–27.0 dB | 不适用 |
+
+**两个陷阱，各属一层，互为误用。** 以下两条都是实测出来的，不是猜的：
+
+1. **块均值 PSNR 会把确定性层的一次漂移读得更"通过"，而不是更严。** ③行的 4×4 均值是为了压低
+   *非相干*的蒙特卡洛噪声，让*相干*的破坏在平均后存活下来。①行的画面本就没有噪声可压，同一次
+   平均只会把唯一那个相干信号稀释掉：`presets_expanded`/`presets_warning` 的滚动条拇指漂移在
+   整帧口径下读 53.45 dB，换成 4×4 块均值反而读 53.96 dB——更深地落进"通过"，不是跳出来。块均值
+   PSNR 只属于③行；它绝不是①行 `maxcc` 尺子的更严格替代，而是方向反了的替代。
+2. **压暗随机对里的一臂时，整帧 PSNR / SSIM 会符号反转。** 英文版 §4.10 point 4 直接测过：把 CLI
+   臂调暗 0.25 stop，整帧 PSNR 反而读更高（single-lens 场景 27.63 dB，高于诚实均值 27.54 dB）——
+   因为一对蒙特卡洛渲染的差分能量大半来自各自的噪声，调暗一臂连带压低了那一臂的噪声贡献。一把能
+   把真实破坏读成改善的统计量，挪动阈值救不了它——这才是③行需要换一把不同的尺子、而不是换一个更
+   严阈值的原因。
+
+**第三件事值得记住，不是陷阱而是前提。** `visual` 组的五张参考图在 532.3 重拍为 PNG 之前一直是
+JPEG。①行 τ=0 的逐位比对对着一张有损压缩的参考图，会在一次诚实拍摄上读出 7,000–72,000 个差异
+像素——不是因为任何东西真的变了，是因为 JPEG 自身的量化噪声处处非零。将来任何要进①行的组若带着
+有损参考图，都需要先做同样的重拍；拉高 τ 来吞掉压缩噪声则会重新打开①行本来要关上的那扇盲窗
+（下面"被排除方向"里有这个错误的一般形式）。
+
+**为什么 `lens_proj` 维持整帧 PSNR（a04：无实据不重标）。** ①③两行的重标都始于一个*具名*的、被
+旧统计量放过的红——127 px 的文字行、90 px 的滚动条拇指、一次符号反转的曝光破坏。`lens_proj` 没有
+这样的样本：翻遍本树历史，没有任何一对重拍前后参考图显示过"均值对均值可见、但单跑自己对旧阈值的
+PSNR 看不见"的缺陷——每一对因场景改动而变化的读数，都精确对应那次改动的强度，在两侧都读
+27.6–41.3 dB。在没有实据的情况下重标它，等同于把标定的力气花在一个还没人证明存在的问题上——这
+正是 §4.6 那次审计里发现"处置习惯"所浪费掉的同一种检出力。**触发条件，写成将来可核查的样子**：
+哪天 `lens_proj` 的一次重拍对显示出"均值对均值能抓到、但既有单跑 PSNR 阈值抓不到"的缺陷，这一行
+就重新打开。
+
+**被排除的方向**（实测后否决，不是没考虑过）：
+
+- **SSIM**——在确定性层上相对像素尺没有增量检出力（那里已经是 maxcc=0/1 的逐位精度），在随机层上
+  又继承了上面那条符号反转问题，只多背一个依赖。
+- **③行的 σ 图 z-score 聚类**——块均值修好之后，那里剩下的盲区是一个铺满全帧的小全局增益偏移
+  （< 0.1 stop），不是 z-聚类探测器要找的局部结构异常。
+- **拉高 τ 去吞掉 `visual` 组的 JPEG 噪声**——与上面那条前提说明同一个错误，作为被否决的选项单独
+  列出：把阈值调成迁就一种参考图格式的伪影，而不是迁就一个实测的噪声地板。PNG 重拍消除了噪声源；
+  拉宽 τ 只会拉宽一次真实漂移可以藏身的窗口。
+
+**as-built 落点**（`file:line`，随本表所总结的 parity 与确定性重标工作同步）：
+
+- 尺子原语：`test/support/pixel_diff_metrics.hpp:41`（`MaxCcRuler`）、`:57`
+  （`LargestComponent`）、`:100` / `:141`（`ComputePixelDiff` / `ComputePixelDiffFromMask`）；
+  `test/support/block_mean_psnr.hpp:34`（`ComputeBlockMeanPsnr`）。单测：
+  `test/unit-correctness/gui/test_pixel_diff_ruler.cpp`、`test_block_mean_psnr.cpp`。
+- `CheckAgainstReference` 的 `MaxCcRuler*` 参数：`test/gui/test_screenshot.hpp:58`。
+- ①行的 K 值：`test/gui/visual/test_gui_modal_layout.cpp:72`（τ=16，K=70）、
+  `test_gui_defaults_panel.cpp:78`（τ=16，K=40）、`test_gui_capture_smoke.cpp:28` 与
+  `test_preview_pixels.cpp:44`（τ=0，K=0）。
+- ②行的场景与 K：`test/gui/parity/test_gui_cli_export_parity.cpp:1059–1065`
+  （`kLinesOnlyScenes[]`，每行 K=4），紧邻其上的标定表。
+- ③行阈值：同一文件，`bm4_threshold` 字段，行号 639 / 722 / 846 / 931。
+- `regen_gui_test_refs.py` Phase B 对①行的审计字段：`scripts/regen_gui_test_refs.py:553–555`
+  （`maxcc_tau` / `maxcc_local_max` / `maxcc_samples`）。
+- 喂给①行跨机 K 实测的 CI 捕获上传：`.github/workflows/ci.yml` 的
+  `GUI visual regression (Xvfb + Mesa llvmpipe)` 步骤（`--keep-export-png --export-dir`），
+  artifact 名 `gui-visual-regression-captures`。
+- 本表纠正而非重复的一个前提：②行的设计最初按 `renderer.exposure_offset = -30` 规划，前提是该
+  字段没有 UI 侧钳制。实际上有——`src/gui/field_editor_registry.cpp:570` 把它钳成
+  `FixedDomain(-8.0f, 16.0f)`——这正是②行场景改用 `exposure_offset = -8`、靠画布饱和而非单靠曝光
+  移除仿真的原因（见上面"阈值形态"一列）。
 
 ---
 

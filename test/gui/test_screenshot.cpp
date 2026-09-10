@@ -104,7 +104,7 @@ std::vector<unsigned char> StripAlpha(const unsigned char* rgba, int width, int 
 }
 
 bool CheckAgainstReference(const char* group, const char* tag, const std::string& tmp_path, const std::string& ref_path,
-                           double threshold, bool keep_capture_png) {
+                           double threshold, bool keep_capture_png, const MaxCcRuler* ruler) {
   std::vector<unsigned char> ref_data;
   int ref_w = 0;
   int ref_h = 0;
@@ -145,10 +145,24 @@ bool CheckAgainstReference(const char* group, const char* tag, const std::string
   }
 
   double psnr = ComputePsnr(cmp_ptr, ref_data.data(), ref_w, ref_h, cmp_channels);
-  fprintf(stderr, "[%s] %s: PSNR=%.2f dB (threshold=%.1f dB)\n", group, tag, psnr, threshold);
-  if (psnr < threshold) {
-    fprintf(stderr, "[%s] %s: PSNR below threshold — possible regression\n", group, tag);
-    return false;
+  if (ruler) {
+    // Deterministic frame: the pixel ruler decides and PSNR is diagnostic only, so its line names
+    // no threshold — a reader must not take the old floor for an enforced bound. Both line formats
+    // are parsed by scripts/regen_gui_test_refs.py (_PSNR_RE / _MAXCC_RE): change them together.
+    fprintf(stderr, "[%s] %s: PSNR=%.2f dB (diagnostic only; the pixel ruler below decides)\n", group, tag, psnr);
+    const PixelDiffResult diff = ComputePixelDiff(cmp_ptr, ref_data.data(), ref_w, ref_h, cmp_channels, ruler->tau);
+    fprintf(stderr, "[%s] %s: n_diff=%d maxcc=%d dmax=%d (tau=%d, K=%d)\n", group, tag, diff.n_diff, diff.max_cc,
+            diff.dmax, ruler->tau, ruler->max_cc_threshold);
+    if (diff.max_cc > ruler->max_cc_threshold) {
+      fprintf(stderr, "[%s] %s: largest differing blob exceeds K — possible regression\n", group, tag);
+      return false;
+    }
+  } else {
+    fprintf(stderr, "[%s] %s: PSNR=%.2f dB (threshold=%.1f dB)\n", group, tag, psnr, threshold);
+    if (psnr < threshold) {
+      fprintf(stderr, "[%s] %s: PSNR below threshold — possible regression\n", group, tag);
+      return false;
+    }
   }
   // Callers pass the binary's --keep-export-png flag here; scripts/regen_gui_test_refs.py
   // relies on it to collect the per-run PNGs it pixel-averages into a mean reference.

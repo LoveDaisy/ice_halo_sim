@@ -59,26 +59,35 @@ enum class SceneKind {
 struct DefaultsPanelScene {
   const char* name;
   SceneKind kind;
-  double psnr_threshold;
 };
 
 // Every scene is deterministic: no simulation, no RNG, and no value in the panel comes from
-// anywhere but an explicitly set GuiState field or the scene's own override file. They therefore
-// compare pixel-identical (PSNR=inf), which leaves mean − 4σ no finite sample; 40 dB is the
-// repo-wide floor for deterministic GL comparisons rather than a calibrated statistic, because
-// bit-exactness cannot be demanded of a reference compared on another machine's GL stack.
-// See groups.defaults_panel_layout in test/gui/references/_thresholds.json.
+// anywhere but an explicitly set GuiState field or the scene's own override file. On the reference
+// machine they compare pixel-identical (PSNR=inf, n_diff=0), so the ruler is the differing-pixel
+// one from support/pixel_diff_metrics.hpp, not a PSNR statistic: this is the group where the 40 dB
+// floor passed a 127-px text-row drift at 42.6 dB and a 90-px scrollbar-thumb drift at 53.45 dB.
+//
+// The values are set by the CI llvmpipe leg, where this group also runs against Metal-shot
+// references. There the only non-semantic difference is flat fills one quantisation level apart
+// (the scrollbar track: 245–1131-px blobs at tau = 0, all |delta| = 1) plus a few isolated
+// |delta| = 14 pixels on checkbox corners; at tau = 16 nothing survives (maxcc = 0). K = 40 keeps
+// the smallest real drift on record for this group (86 px at this tau) 2.15x above it. tau is the
+// same 16 as modal_layout's because it describes the llvmpipe-vs-Metal noise, not the scene; K
+// differs because the AA blob size does. Measurements and provenance:
+// doc/testing-architecture.md §4.6.
+constexpr lumice::test::MaxCcRuler kRuler{ /*tau=*/16, /*max_cc_threshold=*/40 };
+// The PSNR floor the old ruler applied; printed on the diagnostic line, not enforced.
 constexpr double kDeterministicThresholdDb = 40.0;
 
 // clang-format off
 const DefaultsPanelScene kScenes[] = {
-  { "pending_changes",  SceneKind::kPendingChanges,  kDeterministicThresholdDb },
-  { "other_expanded",   SceneKind::kOtherExpanded,   kDeterministicThresholdDb },
-  { "filtered",         SceneKind::kFiltered,        kDeterministicThresholdDb },
-  { "no_changes",       SceneKind::kNoChanges,       kDeterministicThresholdDb },
-  { "presets_expanded", SceneKind::kPresetsExpanded, kDeterministicThresholdDb },
-  { "presets_warning",  SceneKind::kPresetsWarning,  kDeterministicThresholdDb },
-  { "wedge_presets",    SceneKind::kWedgePresets,    kDeterministicThresholdDb },
+  { "pending_changes",  SceneKind::kPendingChanges  },
+  { "other_expanded",   SceneKind::kOtherExpanded   },
+  { "filtered",         SceneKind::kFiltered        },
+  { "no_changes",       SceneKind::kNoChanges       },
+  { "presets_expanded", SceneKind::kPresetsExpanded },
+  { "presets_warning",  SceneKind::kPresetsWarning  },
+  { "wedge_presets",    SceneKind::kWedgePresets    },
 };
 // clang-format on
 constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -314,7 +323,7 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       IM_CHECK(lumice::test::CheckAgainstReference("defaults_panel_layout", scene.name, tmp_path, ref_path,
-                                                   scene.psnr_threshold, g_keep_export_png));
+                                                   kDeterministicThresholdDb, g_keep_export_png, &kRuler));
     };
   }
 }

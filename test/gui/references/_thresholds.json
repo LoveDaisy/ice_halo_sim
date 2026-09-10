@@ -1,7 +1,7 @@
 {
   "groups": {
     "capture_harness": {
-      "generated_at": "2026-09-10T12:03:46",
+      "generated_at": "2026-09-10T22:32:47",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -10,7 +10,10 @@
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 0,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         }
       }
     },
@@ -85,7 +88,7 @@
       }
     },
     "modal_layout": {
-      "generated_at": "2026-08-30T06:34:10",
+      "generated_at": "2026-09-10T22:13:28",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -94,33 +97,45 @@
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "crystal_pyramid": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "filter_ee": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "filter_raypath": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         }
       }
     },
     "defaults_panel_layout": {
-      "generated_at": "2026-09-10T18:26:15",
+      "generated_at": "2026-09-10T22:23:14",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -129,49 +144,70 @@
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "no_changes": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "other_expanded": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "pending_changes": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "presets_expanded": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "presets_warning": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         },
         "wedge_presets": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
           "n_samples": 10,
-          "threshold": 40.0
+          "threshold": 40.0,
+          "maxcc_tau": 16,
+          "maxcc_local_max": 0,
+          "maxcc_samples": 10
         }
       }
     }

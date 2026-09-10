@@ -251,8 +251,10 @@ before downloading into it).
   `visual/`'s cross-machine 1.0 dB floor, which does not apply when both images are made in the
   same run — and where the two paths share a process and one snapshot of inputs, that smallest
   break puts the bar at **byte-exact** rather than at any dB figure at all (skipping the export's
-  label layer, the shape of a real past defect, measures 44.75 dB, i.e. above `visual/`'s 40 dB
-  deterministic floor: every calibrated threshold in this tree would have stayed green on it);
+  label layer, the shape of a real past defect, measures 44.75 dB — far above this tag's own
+  25.5 / 26.0 dB thresholds, and above the 40 dB floor `visual/` used to be judged on before its
+  532.3 switch to the pixel ruler (§4.11 row ①); that floor is not a dB figure at all today, so
+  the comparison is now historical rather than a live "every threshold" claim);
   and a parity comparison inherits every divergence between the two paths, so its scene
   design is constrained by measured facts (only equal-area projections are comparable across the
   CLI seam, since the CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of
@@ -371,8 +373,8 @@ worth knowing before reading a threshold: every scene shipping today calibrates 
 **full-suite** runs under `scripts/build.sh`'s correctness-pool invocation, never a single group
 in isolation: isolated runs measured 0.34–0.62 dB optimistic, which is how the since-retired
 `auto_ev` references once ended up flaking. The driver has no switch for this. `lens_proj` is
-currently the only stochastic group; the other three are deterministic and take the 40 dB floor
-described further down.
+currently the only stochastic group; the other three are deterministic and are held to the
+pixel ruler described further down, not to a PSNR floor.
 
 The `lens_proj` references cover the preview fragment shader's projection math
 (`src/gui/preview_renderer.cpp`: `linearInverse` / `fisheyeInverse` / `dualFisheyeInverse` /
@@ -400,17 +402,25 @@ or its gate, or to `export_fbo_renderer.cpp`'s render path. Command:
 The `modal_layout` references cover the edit-modal's internal control layout
 (`src/gui/edit_modals.cpp`) via an on-screen capture of the live "Edit Entry" window rectangle — see
 the docking-coupling note below. All four scenes are deterministic (no simulation, no RNG) and
-compare pixel-identical, so their thresholds sit at the shared 40 dB deterministic floor rather than
-a calibrated mean − 4σ. Regen trigger: any layout change to the edit modal (slider/input widths,
-property-table columns, control ordering, auto-resize behavior), or a harness window size / font
-atlas / ImGui style change. Command: `python scripts/regen_gui_test_refs.py --group modal_layout`.
-Threshold backfill: the `psnr_threshold` field of each `kScenes[]` row in
-`test/gui/visual/test_gui_modal_layout.cpp` — normally left at `kDeterministicThresholdDb` unless a
-scene stops comparing pixel-identical.
+compare pixel-identical on the reference machine, so their judge is the pixel ruler
+(`test/support/pixel_diff_metrics.hpp`: differing pixels at τ, largest 8-connected blob ≤ K), not
+a PSNR statistic — the 40 dB floor they used to sit at let a 127-px text row through at 42.6 dB.
+This group's `kRuler` is τ=16, K=70, set by the CI llvmpipe leg's residue (a 35-px anti-aliased
+segment of the crystal preview) against the smallest real drift on record (95 px); the
+measurements and margins are in `doc/testing-architecture.md` §4.6. Regen trigger: any layout
+change to the edit modal (slider/input widths, property-table columns, control ordering,
+auto-resize behavior), or a harness window size / font atlas / ImGui style change. Command:
+`python scripts/regen_gui_test_refs.py --group modal_layout`. There is no threshold to copy back:
+K is a cross-machine number Phase B cannot measure, so it lives in the source; Phase B writes
+`maxcc_tau` / `maxcc_local_max` as an audit that the reference machine still reads 0.
 
 The `defaults_panel_layout` references cover the `Settings` modal
 (`src/gui/defaults_panel.cpp`) through the same on-screen sub-region capture as `modal_layout`, and
-inherit the same docking coupling. Seven deterministic scenes at the 40 dB floor: four over the merged
+inherit the same docking coupling. Seven deterministic scenes under the same pixel ruler as
+`modal_layout` — τ=16 again (τ describes the llvmpipe-vs-Metal noise, not the scene) but K=40,
+because with no crystal preview in the frame nothing survives τ=16 on the CI leg (largest blob
+0 px) while this group's smallest real drift on record, the 90-px scrollbar thumb the 40 dB floor
+passed at 53.45 dB, reads 86 px: four over the merged
 settings list (`pending_changes` / `other_expanded` / `filtered` / `no_changes` — the two-section
 diff/adopt split these names once referred to was merged into one list with an inline-edited "Current
 value" column; see `doc/gui-state-governance.md` §8.5), two over the preset library
@@ -436,8 +446,8 @@ every deterministic group `--filter <group>` in isolation must read `inf` exactl
 does — measured so for `capture_harness`, `modal_layout` and this group after the reset took over,
 with the leaking functional case run first as the positive control. Regen trigger: any layout change to the panel's section headers, the settings
 table's columns, the preset table's columns, or the pinned action row. Command:
-`python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. Threshold backfill: the
-`psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_defaults_panel.cpp`.
+`python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. No threshold to copy back
+(same reason as `modal_layout`); `kRuler` in `test/gui/visual/test_gui_defaults_panel.cpp` holds K.
 
 **`--keep-export-png` / `--export-dir` flags** — `--keep-export-png` makes
 `CheckAgainstReference` skip its `std::remove`, so the per-run export PNGs survive for the driver
@@ -465,8 +475,9 @@ test must compare via `lumice::test::CheckAgainstReference` so Phase B can parse
 
 Not every `CheckAgainstReference` caller is in `GROUPS`. The `visual` category
 (`test/gui/visual/test_preview_pixels.cpp`: `crystal_preview_prism/pyramid/wireframe/shaded`,
-`left_panel`) compares at a compile-time constant (`kDeterministicThresholdDb`), not a Phase-B-
-calibrated one, and its reference filenames do not follow the `<ref_prefix><scene>` convention
+`left_panel`) compares under the pixel ruler at τ=0, K=0 — byte-identity, which is why its five
+references are PNG and must stay PNG — not a Phase-B-calibrated statistic, and its reference
+filenames do not follow the `<ref_prefix><scene>` convention
 every `ReferenceGroup` above assumes — see the comment above `STAGING_DIR` in
 `scripts/regen_gui_test_refs.py` for why registering it buys nothing and how to reshoot it by
 hand. A theme/layout change that reaches the left panel or the crystal-preview FBO needs that
@@ -475,8 +486,11 @@ groups leaves `visual`'s references stale with no automated signal pointing at i
 
 A scene whose frame is deterministic (no simulation, no RNG) compares pixel-identical, i.e.
 `PSNR=inf`, which leaves `mean − 4σ` no finite sample. Phase B records `identical_runs` for such
-scenes and reports a fixed 40 dB floor instead of a calibrated statistic — bit-exactness is not
-demandable of a committed reference compared on other machines.
+scenes and still writes the historical 40 dB `threshold`, but that number is no longer a bound:
+the deterministic groups are judged by the pixel ruler, whose cross-machine K is measured from CI
+llvmpipe captures (`doc/testing-architecture.md` §4.6) and lives in the test source. What Phase B
+adds for them is `maxcc_tau` / `maxcc_local_max`, the audit that the reference machine still
+matches its own references byte-for-byte.
 
 **Regeneration workflow:**
 ```bash
@@ -676,7 +690,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
     仍然只在参照机上按本节协议手动跑 ⇒ 动 `test/` 或 `bench/` 后，语法与可移植性有自动信号了，
     但别拿 CI 的绿推断 CUDA 运行时行为也验过。
     与 `windows-remote-testing.md`（GUI VSync 物理桌面）场景正交。
-  - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. **§7 is the test-scope contract**: measured per-scope cost (local `quick`/`full`/`pr` and all 16 CI jobs), what each scope catches that the cheaper one structurally cannot, the budget rule (who declares expected test spend, and when they reconcile it), and why independent re-verification is a fixed-cost multiplier that makes cutting base suite cost worth more than its face value. Read before adding or reorganizing any test — and before claiming any change shortens CI.
+  - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. **§7 is the test-scope contract**: measured per-scope cost (local `quick`/`full`/`pr` and all 16 CI jobs), what each scope catches that the cheaper one structurally cannot, the budget rule (who declares expected test spend, and when they reconcile it), and why independent re-verification is a fixed-cost multiplier that makes cutting base suite cost worth more than its face value. **§4.11 is the comparison-ruler master table**: category → ruler → threshold shape → red/green sample → margin for all four image-comparison categories in this tree (deterministic screenshots' `maxcc`, lines-only parity's membership-mask `maxcc`, `export_parity`'s simulation-scene block-mean PSNR, `lens_proj`'s unchanged whole-frame PSNR), plus the two footguns each ruler is for the others (block-mean reads a deterministic drift as more passing; whole-frame PSNR/SSIM sign-reverses on a darkened stochastic arm) and why `lens_proj` was measured and left alone. Read before adding or reorganizing any test — and before claiming any change shortens CI, or before picking a ruler for a new image comparison.
 - **Engineering policy**: `env-var-policy.md` — **环境变量使用策略**: user-facing behavior switches must NOT live only in env vars (they cause silent per-machine drift / undebuggable bugs); use CLI/config/API instead. A-class runtime knobs (`LUMICE_TRACE_BACKEND` + 6 perf knobs, with file:line) vs B-class test/build infra (leave alone); three disposition rules; and the **decision gate to answer before adding any new `getenv`**. Read before introducing a new env knob.
 - Example config: `examples/config_example.json`
 
