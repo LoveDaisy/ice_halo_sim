@@ -379,8 +379,15 @@ jobs:
         run: |
           set -o pipefail
           rc=0
+          # --keep-export-png / --export-dir are the same two flags scripts/regen_gui_test_refs.py
+          # passes: the per-scene capture PNGs survive the comparison and land in a directory we
+          # name, so the step below can upload them. They change nothing about the comparison
+          # itself. The directory is created up front, as that driver does, rather than trusting
+          # the binary to.
+          mkdir -p gui_captures
           xvfb-run -a build/Release/static/bin/gui_test \
             --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config \
+            --keep-export-png --export-dir "$GITHUB_WORKSPACE/gui_captures" \
             2>&1 | tee gui_visual.log || rc=$?
           # Same hazard, and the same answer, as the gui_unit_test verification above: a filter
           # that stops matching, a renamed category or a binary that registered no cases would
@@ -402,6 +409,24 @@ jobs:
         with:
           name: gui-visual-regression-log
           path: gui_visual.log
+          retention-days: 30
+
+      # The log above carries one PSNR per scene, and a PSNR is a single number over the whole
+      # frame: it cannot tell a scene whose every glyph edge differs by one level of anti-aliasing
+      # from one where a whole row of text has moved, and both read as "some dB below inf". This
+      # runner is the only software-rasterizer (llvmpipe) sample the project has — the references
+      # are shot on a developer machine, where these deterministic scenes compare pixel-identical —
+      # so the pixels themselves are the only evidence of what cross-machine drift actually looks
+      # like (how many pixels, how large a connected region, where in the frame). Any comparison
+      # rule that has to tolerate this runner but not a real layout change has to be derived from
+      # these captures, not from the log. Same condition, action and retention as the log: one
+      # diagnostic family, one policy.
+      - name: Upload GUI visual-regression captures
+        if: always() && matrix.run_gui_visual == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-visual-regression-captures
+          path: gui_captures
           retention-days: 30
 
       - name: Benchmark
