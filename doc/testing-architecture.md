@@ -1117,10 +1117,11 @@ own rather than more files under `visual/`:
    difference is a real divergence. `test_gui_preview_export_parity.cpp` is that case, and the cost
    of settling for a threshold there is measured rather than asserted: making its export arm skip
    the label layer — the shape of a defect PR #304 actually fixed — moves 1,362 of its 820,800
-   pixels, a whole-frame PSNR of 44.75 dB. That is above `visual/`'s 40 dB deterministic floor and
-   far above this tag's own 25.5 / 26.0 dB, so every threshold calibrated elsewhere in this tree
-   would have stayed green on it. Averaging over the frame is what hides a small break; when the
-   comparison admits an exact answer, take it.
+   pixels, a whole-frame PSNR of 44.75 dB, far above this tag's own 25.5 / 26.0 dB thresholds —
+   and above the 40 dB floor `visual/` used to be judged on before its 532.3 switch to the pixel
+   ruler (§4.11 row ①), which is not a dB figure this comparison could even be run against today.
+   Averaging over the frame is what hides a small break; when the comparison admits an exact
+   answer, take it.
 3. **A parity comparison inherits every divergence between the two paths, not only the one under
    test.** The CLI export-parity fixture's scene design is dictated by three that were measured
    rather than assumed — the CLI bakes a projection's solid-angle Jacobian into its pixels while the

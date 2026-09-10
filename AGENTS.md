@@ -251,8 +251,10 @@ before downloading into it).
   `visual/`'s cross-machine 1.0 dB floor, which does not apply when both images are made in the
   same run — and where the two paths share a process and one snapshot of inputs, that smallest
   break puts the bar at **byte-exact** rather than at any dB figure at all (skipping the export's
-  label layer, the shape of a real past defect, measures 44.75 dB, i.e. above `visual/`'s 40 dB
-  deterministic floor: every calibrated threshold in this tree would have stayed green on it);
+  label layer, the shape of a real past defect, measures 44.75 dB — far above this tag's own
+  25.5 / 26.0 dB thresholds, and above the 40 dB floor `visual/` used to be judged on before its
+  532.3 switch to the pixel ruler (§4.11 row ①), which is not a dB figure at all today, so the
+  comparison is now historical rather than a live "every threshold" claim);
   and a parity comparison inherits every divergence between the two paths, so its scene
   design is constrained by measured facts (only equal-area projections are comparable across the
   CLI seam, since the CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of
