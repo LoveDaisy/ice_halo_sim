@@ -72,7 +72,9 @@
   ```bash
   source $ENVSH
   export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
-  export LUMICE_LIB=$REPO/build/Release/shared/lib/liblumice.so
+  # liblumice_testapi, not liblumice: the ctypes harness loads the test-only superset
+  # (same objects + LUMICE_TEST_* hooks; see test/e2e/capi_runner.py).
+  export LUMICE_LIB=$REPO/build/Release/shared/lib/liblumice_testapi.so
   export LD_LIBRARY_PATH=$REPO/build/Release/shared/lib:$LD_LIBRARY_PATH
   python -m pytest -v -m slow \
     test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py
