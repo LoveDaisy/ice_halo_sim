@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789062627891,
+  "lastUpdate": 1789062632015,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4776,54 +4776,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "cf4fdfa21a63e5dc8f790812428e526294c91dcb",
-          "message": "Merge pull request #246 from LoveDaisy/investigate/gui-payload-epoch-carryover\n\nfix(gui): 纹理 payload 只在内容确属当前世代时才物化",
-          "timestamp": "2026-08-04T07:30:24+08:00",
-          "tree_id": "309471c18a2233f37de0d05fd81efcbb05275e73",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/cf4fdfa21a63e5dc8f790812428e526294c91dcb"
-        },
-        "date": 1785800449306,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 896330.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1167613,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 771230.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 649976.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "84faab640e80563e1772399f83d2cc8c5da23afa",
           "message": "Merge pull request #247 from LoveDaisy/fix/gui-display-time-stale-payload-publish\n\nfix(gui-test): 序列化被唤醒的全局 poller，消除 display-time 编辑后的撕裂快照",
           "timestamp": "2026-08-04T10:06:23+08:00",
@@ -9518,6 +9470,54 @@ window.BENCHMARK_DATA = {
             "value": 674721.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc76b64939e2b7e7bb319dee15905da1c73ee7fa",
+          "message": "Merge pull request #344 from LoveDaisy/feat/image-comparison-metric-by-layer\n\ntest: give each image comparison a ruler that matches its layer (pixel ruler, lines-only parity, block-mean PSNR)",
+          "timestamp": "2026-09-11T01:37:19+08:00",
+          "tree_id": "41b16f85c1532f746a24d73f00d8388af7f2060a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dc76b64939e2b7e7bb319dee15905da1c73ee7fa"
+        },
+        "date": 1789062631306,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 814269.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1213530.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 817358.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 692646.5,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
           }
         ]
       }
