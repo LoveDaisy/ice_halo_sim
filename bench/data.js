@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789038032224,
+  "lastUpdate": 1789038034864,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7b8ca898ed0048b18607fdeb7c2c54890cdba249",
-          "message": "Merge pull request #244 from LoveDaisy/fix/server-poller-state-reset-ownership\n\nfix(gui): ServerPoller 状态复位收敛为单一 owner + 修重启后状态栏上屏陈旧统计",
-          "timestamp": "2026-08-03T11:30:30+08:00",
-          "tree_id": "f9d0de83308607c4a960a1b83fe8e645030f244d",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7b8ca898ed0048b18607fdeb7c2c54890cdba249"
-        },
-        "date": 1785728390590,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 86.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c3b0c1508ca8975d18284ddfb9089722b087de4b",
           "message": "Merge pull request #245 from LoveDaisy/chore/crash-sentinel-diagnostics\n\nchore: 崩溃哨兵设施补两处诊断缺口（挂起检出 + 两臂 build 日志留痕）",
           "timestamp": "2026-08-04T07:12:15+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37b141504a40cc0be937f0d5bf071fef24759171",
+          "message": "Merge pull request #341 from LoveDaisy/test/defaults-panel-refs-reshoot\n\ntest(gui): pin the wedge add row in every preset scene, and re-shoot the two that were not",
+          "timestamp": "2026-09-10T18:49:54+08:00",
+          "tree_id": "42fe951d730ad0cd31b0d30b5c6fc14fa0ec2dc1",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/37b141504a40cc0be937f0d5bf071fef24759171"
+        },
+        "date": 1789038034008,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 75.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.1,
             "unit": "%"
           }
         ]
