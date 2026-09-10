@@ -253,8 +253,8 @@ before downloading into it).
   break puts the bar at **byte-exact** rather than at any dB figure at all (skipping the export's
   label layer, the shape of a real past defect, measures 44.75 dB — far above this tag's own
   25.5 / 26.0 dB thresholds, and above the 40 dB floor `visual/` used to be judged on before its
-  532.3 switch to the pixel ruler (§4.11 row ①), which is not a dB figure at all today, so the
-  comparison is now historical rather than a live "every threshold" claim);
+  532.3 switch to the pixel ruler (§4.11 row ①); that floor is not a dB figure at all today, so
+  the comparison is now historical rather than a live "every threshold" claim);
   and a parity comparison inherits every divergence between the two paths, so its scene
   design is constrained by measured facts (only equal-area projections are comparable across the
   CLI seam, since the CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of
