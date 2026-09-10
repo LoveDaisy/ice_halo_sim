@@ -145,7 +145,9 @@ def main() -> int:
     if tool_name not in GUARDED_TOOLS:
         return 0
 
-    tool_input = payload.get("tool_input") or {}
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return _warn(f"{tool_name} call carries no tool_input object")
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or not file_path:
         return _warn(f"{tool_name} call carries no tool_input.file_path")
@@ -177,11 +179,12 @@ def main() -> int:
     # re-attach the not-yet-existing tail after resolving it.
     tail = os.path.relpath(target, anchor)
     target_real = os.path.normpath(os.path.join(os.path.realpath(anchor), tail))
+    # Segment-exact on the first component, both for "outside the toplevel" and
+    # for the guarded set: a prefix test would let a directory literally named
+    # `..something` under the toplevel read as outside it and slip past.
     rel = os.path.relpath(target_real, toplevel_real)
-    if rel.startswith(os.pardir):
-        return 0
     first = rel.split(os.sep, 1)[0]
-    if first not in GUARDED_TOP_DIRS:
+    if first == os.pardir or first not in GUARDED_TOP_DIRS:
         return 0
 
     print(
