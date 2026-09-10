@@ -44,7 +44,8 @@
 #include <string>
 #include <vector>
 
-#include "gui/app.hpp"  // g_state / g_server / g_preview_vp / DoRun — the exposure-mode case
+#include "IconsFontAwesome6.h"  // the sky eyedropper's label is an icon glyph, and its "##" id folds it in
+#include "gui/app.hpp"          // g_state / g_server / g_preview_vp / DoRun — the exposure-mode case
 #include "gui/defaults_diff.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
@@ -62,7 +63,7 @@ namespace {
 // therefore NOT assertable here — that is a property of ImGui's item registry, not an omission.
 constexpr const char* kClampWarning = "**/Screen too small for this aspect";
 
-// Open the Display group's exposure Mode combo and pick an entry.
+// Open the Display group's EV Anchor combo and pick an entry.
 //
 // Hand-rolled rather than ctx->ComboClick() for the same two reasons the colour window's picker
 // is: ImGui::BeginCombo() never calls IMGUI_TEST_ENGINE_ITEM_INFO(), so the combo has no debug
@@ -70,10 +71,68 @@ constexpr const char* kClampWarning = "**/Screen too small for this aspect";
 // opens is a separate window, which only SetRef("//$FOCUSED") can point at — ImHashDecoratedPath
 // does not understand the $FOCUSED variable inside a longer path.
 void PickExposureMode(ImGuiTestContext* ctx, const char* entry) {
-  ctx->ItemClick("//##RightPanel/Mode##display");
+  ctx->ItemClick("//##RightPanel/EV Anchor##display");
   ctx->SetRef("//$FOCUSED");
   ctx->ItemClick((std::string("**/") + entry).c_str());
   ctx->SetRef("");
+}
+
+// The same hand-rolled shape for the Display group's other combo, the tone. Not folded into one
+// helper taking the combo path: the two pick from different entry sets, and a shared helper would
+// only be a path parameter away from being the ItemClick pair it wraps.
+void PickTone(ImGuiTestContext* ctx, const char* entry) {
+  ctx->ItemClick("//##RightPanel/Mode##display_tone");
+  ctx->SetRef("//$FOCUSED");
+  ctx->ItemClick((std::string("**/") + entry).c_str());
+  ctx->SetRef("");
+}
+
+// The two faces of the ground swatch, and the eyedropper that belongs to one of them.
+constexpr const char* kSkySwatchLabel = "Sky Color##display_sky_color";
+constexpr const char* kPaperSwatchLabel = "Paper Color##display_paper_color";
+constexpr const char* kSkyPick = "**/" ICON_FA_EYE_DROPPER "##display_sky_pick";
+
+// A ground swatch's addressable item: the panel window's id (taken from a sibling item that is
+// always on screen, not derived), the label ColorEdit3 pushes for itself, and ImGui's own
+// "##ColorButton" under that — the last step via test_gui_shared.hpp's ColorEditSwatchId, which
+// says why a "//##RightPanel/<label>" lookup would find nothing.
+//
+// Returns the id unconditionally — GetIDWithSeed hashes whether or not anything was submitted — so
+// existence is a question for ItemInfo's ID, which is 0 when the frame did not draw it. That is the
+// whole point here: this suite needs to assert one swatch's ABSENCE, and an id that reported it
+// would be reporting the hash, not the frame.
+ImGuiID GroundSwatchId(ImGuiTestContext* ctx, const char* label) {
+  const ImGuiTestItemInfo ev = ctx->ItemInfo("//##RightPanel/##EV##display_input");
+  if (ev.Window == nullptr) {
+    return 0;
+  }
+  return ColorEditSwatchId(ImGui::GetIDWithSeed(label, nullptr, ev.Window->ID));
+}
+
+bool SwatchOnScreen(ImGuiTestContext* ctx, const char* label) {
+  const ImGuiID id = GroundSwatchId(ctx, label);
+  return id != 0 && ctx->ItemInfo(id, ImGuiTestOpFlags_NoError).ID != 0;
+}
+
+// Both ground fields, component by component, against the values the case installed. A helper
+// rather than a loop of IM_CHECK_EQ in the case body: a fatal check inside a `for` returns out
+// of the whole case on its first miss and silently skips every channel after it
+// (scripts/check_loop_fatal_asserts.py), whereas this reports the first miss with its field,
+// channel and both values and lets the caller's single IM_CHECK decide fatality.
+bool GroundValuesHeld(const float* sky, const float* paper, const char* stage) {
+  const float* fields[2] = { gui::g_state.renderer.background, gui::g_state.renderer.paper };
+  const float* wants[2] = { sky, paper };
+  const char* names[2] = { "renderer.background", "renderer.paper" };
+  for (int f = 0; f < 2; f++) {
+    for (int j = 0; j < 3; j++) {
+      if (fields[f][j] != wants[f][j]) {
+        IM_ERRORF("%s: %s[%d] is %.4f, expected %.4f — the hidden field did not survive the switch", stage, names[f], j,
+                  fields[f][j], wants[f][j]);
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 // Install a clamp signal without going through ApplyAspectRatio.
@@ -909,7 +968,12 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       std::vector<LabelColumnRow> display;
       display.push_back(MeasureComboRow(ctx, "Resolution", "Resolution##display"));
-      display.push_back(MeasureComboRow(ctx, "Mode", "Mode##display"));
+      display.push_back(MeasureComboRow(ctx, "EV Anchor", "EV Anchor##display"));
+      // The tone combo joins the measured rows here because this change renamed it: it has
+      // always sat inside the same PushLabelColumnItemWidth block and read CalcItemWidth like
+      // the three above, so it was always in the alignment family — it was simply never
+      // measured. Renaming a row whose alignment nothing asserts is how a label column drifts.
+      display.push_back(MeasureComboRow(ctx, "Mode", "Mode##display_tone"));
       display.push_back(MeasureWidgetRow(ctx, "EV", "##EV##display_input", "##EV##display_label"));
       display.push_back(MeasureComboRow(ctx, "Preset", "Preset##display_aspect"));
       display.push_back(MeasureWidgetRow(ctx, "Alpha", "##Alpha##display_input", "##Alpha##display_label"));
@@ -1043,6 +1107,65 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The ground swatch: one row, two faces.
+  //
+  // Screen reads `background` and Print reads `paper` — render.cpp's `if (!print_mode)` at the
+  // background term and the kPrint colour branch are the two halves of that — so at any instant one
+  // of the two fields is not read at all. The panel shows the swatch for the live one only, and the
+  // row's identity changes with the Mode combo above it.
+  //
+  // This replaced an arrangement in which both swatches were always drawn. The claim that matters
+  // is the third: hiding a control is defensible only while the value behind it survives untouched.
+  // The first two are the visible behaviour and would be caught by the fullframe reference anyway;
+  // the third is the promise that made the change safe to make, and nothing else in the suite is
+  // looking at it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls",
+                                    "the_ground_swatch_alternates_with_the_mode_and_keeps_both_values");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      // Both grounds carry a value no default holds, so "the value survived" cannot be satisfied by
+      // a field that was reset to what it already was. Both are well clear of the headroom
+      // predicate's two ends (a near-white sky, a near-black paper), because the notice row appears
+      // between the swatch and the rest of the panel and this case is not about it.
+      const float sky[3] = { 0.13f, 0.24f, 0.35f };
+      const float paper[3] = { 0.86f, 0.82f, 0.71f };
+      gui::g_state.renderer.tone = LUMICE_TONE_SCREEN;
+      for (int j = 0; j < 3; j++) {
+        gui::g_state.renderer.background[j] = sky[j];
+        gui::g_state.renderer.paper[j] = paper[j];
+      }
+      ctx->Yield(3);
+
+      // (1) Under Screen: the sky swatch and its eyedropper, and no paper swatch. The eyedropper is
+      //     part of the claim rather than a neighbour that happens to be there — it samples the
+      //     background photo, which Print disables outright, so it belongs to this arm and would
+      //     otherwise sit under Print as a button that can only ever render greyed.
+      IM_CHECK(SwatchOnScreen(ctx, kSkySwatchLabel));
+      IM_CHECK(ctx->ItemExists(kSkyPick));
+      IM_CHECK(!SwatchOnScreen(ctx, kPaperSwatchLabel));
+
+      // (2) One combo pick and the row changes face. Through the combo rather than by writing the
+      //     field, because what is under test is the panel reading the live tone every frame.
+      PickTone(ctx, "Print");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.tone, LUMICE_TONE_PRINT);
+      IM_CHECK(SwatchOnScreen(ctx, kPaperSwatchLabel));
+      IM_CHECK(!SwatchOnScreen(ctx, kSkySwatchLabel));
+      IM_CHECK(!ctx->ItemExists(kSkyPick));
+
+      // (3) Neither value moved — not while its swatch was off screen, and not on the way back.
+      //     Asserted on both fields at both ends: a swap that clobbered the hidden field with the
+      //     visible one would satisfy any one-sided version of this.
+      IM_CHECK(GroundValuesHeld(sky, paper, "under Print"));
+      PickTone(ctx, "Screen");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.tone, LUMICE_TONE_SCREEN);
+      IM_CHECK(SwatchOnScreen(ctx, kSkySwatchLabel));
+      IM_CHECK(!SwatchOnScreen(ctx, kPaperSwatchLabel));
+      IM_CHECK(GroundValuesHeld(sky, paper, "back under Screen"));
+    };
+  }
   // The permanent EV readout under the slider.
   //
   // It is the answer to a mismatch this GUI structurally cannot detect: exposure_offset is saved

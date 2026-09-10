@@ -284,7 +284,7 @@ ImGuiID MarkerSwatchId(const ImGuiTestItemInfo& row_item, const char* serial_nam
   const ImGuiID table_id = ImGui::GetIDWithSeed("##MarkersTable", nullptr, row_item.Window->ID);
   const ImGuiID swatch_group =
       ImGui::GetIDWithSeed((std::string("##marker_color_") + serial_name).c_str(), nullptr, table_id);
-  return ImGui::GetIDWithSeed("##ColorButton", nullptr, swatch_group);
+  return ColorEditSwatchId(swatch_group);
 }
 
 }  // namespace

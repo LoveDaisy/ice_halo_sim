@@ -1908,7 +1908,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // comment for why this has to be computed rather than found by a label search.
       const ImGuiID group_id = SettingsCellID(ctx, "##value_overlay_grid_color");
       IM_CHECK(group_id != 0);
-      const ImGuiID swatch_id = ImGui::GetIDWithSeed("##ColorButton", nullptr, group_id);
+      const ImGuiID swatch_id = ColorEditSwatchId(group_id);
       ctx->ItemClick(swatch_id);
       ctx->Yield(2);
 

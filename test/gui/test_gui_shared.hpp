@@ -208,6 +208,19 @@ inline unsigned long long ExpectedSimRayNum(float ray_num_millions) {
 // (still "<tmp_prefix><key>.png", so the GROUPS table's meaning is unchanged).
 std::filesystem::path GuiTestTempPath(const std::string& filename);
 
+// The addressable item of a ColorEdit3/ColorEdit4 swatch, given the id the widget pushed for
+// itself. ColorEdit PushID()s its own label and submits ImGui's "##ColorButton" underneath, so
+// the label is a SEED rather than a path segment: a "//<window>/<label>" lookup finds nothing,
+// and the button has to be reached by reproducing that one hash step. Callers still own the seed
+// chain above it — a window id, a table's override id, a group id — because that part differs
+// per host; what is shared is only the "##ColorButton" layer, which is ImGui's and not ours.
+//
+// GetIDWithSeed hashes whether or not anything was submitted this frame, so a non-zero return
+// says nothing about presence. Existence is a question for ItemInfo(id, NoError).ID.
+inline ImGuiID ColorEditSwatchId(ImGuiID edit_id) {
+  return ImGui::GetIDWithSeed("##ColorButton", nullptr, edit_id);
+}
+
 // ========== Shared functions (defined in test_gui_main.cpp) ==========
 
 void ResetTestState();
