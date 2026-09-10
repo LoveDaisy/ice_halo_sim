@@ -509,27 +509,26 @@ struct ParityScene {
 // (14-16 dB and 25.4 dB) stand more than 10 dB under every threshold this file has held, and a
 // block mean cannot lift a coherent break by more than it lifted the honest pair.
 //
-//   whole-frame / bm4 (dB)      | single_lens_angled | full_sky_dual_fisheye | single_lens_rectilinear |
-//   full_sky_dual_fisheye_print
+// clang-format off
+//   whole-frame / bm4 (dB)      | single_lens_angled | full_sky_dual_fisheye | single_lens_rectilinear | full_sky_dual_fisheye_print
 //   ----------------------------|--------------------|-----------------------|-------------------------|----------------------------
-//   honest mean (sigma), N=12   | 27.536 / 36.420    | 31.342 / 39.313       | 34.599 / 40.383         | 33.169
-//   / 43.436
-//                               |   (0.028 / 0.071)  |   (0.020 / 0.054)     |   (0.018 / 0.017)       |   (0.092 /
-//                               0.132)
+//   honest mean (sigma), N=12   | 27.536 / 36.420    | 31.342 / 39.313       | 34.599 / 40.383         | 33.169 / 43.436
+//                               |   (0.028 / 0.071)  |   (0.020 / 0.054)     |   (0.018 / 0.017)       |   (0.092 / 0.132)
 //   honest range, bm4           | 36.29 - 36.51      | 39.21 - 39.39         | 40.36 - 40.42           | 43.23 - 43.64
-//   THRESHOLD (bm4)             | 35.4  (floor)      | 38.3  (floor)         | 39.3  (floor)           | 42.1  (10
-//   sigma) CLI arm -0.25 stop          | 27.68 / 33.85      | 31.25 / 37.08         | 34.46 / 39.13           | 32.80
-//   / 37.88 CLI arm +0.25 stop          | 26.58 / 34.67      | 30.53 / 37.43         | 33.85 / 39.11           | 31.00
-//   / 35.68 CLI arm -0.10 stop          | 27.69 / 35.67      | 31.41 / 38.86         | 34.63 / 40.10           | 33.40
-//   / 42.05 CLI arm +0.10 stop          | 27.33 / 36.42      | 31.16 / 39.19         | 34.41 / 40.22           | 32.67
-//   / 40.97 background +0.02            | 27.79 / 35.87      | 30.92 / 36.41         | 33.37 / 36.48           | n/a
-//   (print has no sky) first of two circles only   | 26.41 / 32.45      | 29.79 / 35.14         | 31.12 / 34.45 | n/a
-//   (lines off) drops the last meridian     | 26.96 / 33.96      | 25.47 / 29.51         | 30.40 / 33.56           |
-//   n/a drops the last parallel     | 24.93 / 29.68      | 31.28 / 39.31         | 34.31 / 39.73           | n/a drops
-//   the horizon           | 27.19 / 35.54      | 29.76 / 36.29         | 33.13 / 38.37           | n/a drops one marker
-//   | 27.58 / 36.45      | 31.39 / 39.36         | 34.63 / 40.43           | n/a paper * 0.95                | n/a |
-//   n/a                   | n/a                     | 26.20 / 26.98 tone -> screen              | n/a                |
-//   n/a                   | n/a                     |  3.28 /  3.30
+//   THRESHOLD (bm4)             | 35.4  (floor)      | 38.3  (floor)         | 39.3  (floor)           | 42.1  (10 sigma)
+//   CLI arm -0.25 stop          | 27.68 / 33.85      | 31.25 / 37.08         | 34.46 / 39.13           | 32.80 / 37.88
+//   CLI arm +0.25 stop          | 26.58 / 34.67      | 30.53 / 37.43         | 33.85 / 39.11           | 31.00 / 35.68
+//   CLI arm -0.10 stop          | 27.69 / 35.67      | 31.41 / 38.86         | 34.63 / 40.10           | 33.40 / 42.05
+//   CLI arm +0.10 stop          | 27.33 / 36.42      | 31.16 / 39.19         | 34.41 / 40.22           | 32.67 / 40.97
+//   background +0.02            | 27.79 / 35.87      | 30.92 / 36.41         | 33.37 / 36.48           | n/a (print has no sky)
+//   first of two circles only   | 26.41 / 32.45      | 29.79 / 35.14         | 31.12 / 34.45           | n/a (lines off)
+//   drops the last meridian     | 26.96 / 33.96      | 25.47 / 29.51         | 30.40 / 33.56           | n/a
+//   drops the last parallel     | 24.93 / 29.68      | 31.28 / 39.31         | 34.31 / 39.73           | n/a
+//   drops the horizon           | 27.19 / 35.54      | 29.76 / 36.29         | 33.13 / 38.37           | n/a
+//   drops one marker            | 27.58 / 36.45      | 31.39 / 39.36         | 34.63 / 40.43           | n/a
+//   paper * 0.95                | n/a                | n/a                   | n/a                     | 26.20 / 26.98
+//   tone -> screen              | n/a                | n/a                   | n/a                     |  3.28 /  3.30
+// clang-format on
 //
 // What each threshold catches and does not, read off that table:
 //   * single_lens_angled, 35.4 = mean - 1.02 dB = 14 sigma, 0.89 dB under the worst honest run.
