@@ -419,13 +419,22 @@ std input and the warning column beside it) and one over the wedge-shortcut regi
 (`wedge_presets`, scrolled to the bottom of the same child). Every scene installs an explicit, freshly
 emptied user-config directory **before** `ResetTestState()` — installed after, the capture is built
 from whatever personal defaults the running machine has saved, which is worth 20.7 dB on a scene that
-looks isolated. The three preset scenes additionally pin two pieces of ImGui **window storage** that
-no reset in the suite clears — every axis preset's fold flag, and the triple typed into the wedge add
-row — because a sibling functional case leaves both behind. The add row sits under the fold of the two
-axis-preset scenes, yet its height still reaches the capture through the child's scrollbar thumb:
-unpinned, their references measured `inf` under the full pool and 53.45 dB under `--filter`, 90 thumb
-pixels apart and never red. So a reference that only agrees with itself under one test order is
-the symptom to look for, and `--filter <group>` against a fresh full-pool shoot is the check. Regen trigger: any layout change to the panel's section headers, the settings
+looks isolated. The other inheritance a scene here is exposed to is ImGui's own per-window state —
+every window's `ImGuiStorage` (TreeNode fold flags, and what production code parks there through
+`GetStateStorage()`, such as the triple typed into the wedge add row) and its scroll offset — which
+outlives the window being submitted, so a sibling case that unfolds a node, types into a
+storage-backed box or scrolls a list hands that state to the next case drawing the same window.
+`ResetTestState()` (`test/gui/test_gui_main.cpp`) clears both for **every** window, not for an
+enumerated few: the writes happen inside production code a case only reaches by typing, so the
+harness cannot know which windows a case touched, and the last per-scene enumeration pinned one of
+the three preset scenes and missed the other two. Those two had been shot with a functional case's
+rejected triple sitting under their fold, invisible in the capture yet counted in the child's
+content height — their references measured `inf` under the full pool and 53.45 dB under
+`--filter`, 90 scrollbar-thumb pixels apart and never red. The diagnostic that survives the fix: a
+reference that only agrees with itself under one test order is the symptom to look for, and for
+every deterministic group `--filter <group>` in isolation must read `inf` exactly as the full pool
+does — measured so for `capture_harness`, `modal_layout` and this group after the reset took over,
+with the leaking functional case run first as the positive control. Regen trigger: any layout change to the panel's section headers, the settings
 table's columns, the preset table's columns, or the pinned action row. Command:
 `python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. Threshold backfill: the
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_defaults_panel.cpp`.
