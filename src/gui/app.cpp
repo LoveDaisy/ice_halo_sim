@@ -604,7 +604,7 @@ void CancelPendingConfigJsonExport() {
 }
 
 bool BgPhotoOnScreen(const GuiState& state) {
-  return g_preview.HasBackground() && state.bg_show;
+  return g_preview.HasBackground() && state.bg_show && !IsPrintTone(state.renderer);
 }
 
 // The background photo lives in two places that must agree: the GL texture the shader samples and

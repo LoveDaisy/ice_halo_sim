@@ -75,7 +75,7 @@ ImGuiID SkySwatchID(ImGuiTestContext* ctx) {
     return 0;
   }
   const ImGuiID edit_id = ImGui::GetIDWithSeed("Sky Color##display_sky_color", nullptr, ev.Window->ID);
-  return ImGui::GetIDWithSeed("##ColorButton", nullptr, edit_id);
+  return ColorEditSwatchId(edit_id);
 }
 
 // Open the picker and drag across its saturation/value square, corner to corner. Two corners rather

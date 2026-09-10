@@ -131,7 +131,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
           const ImGuiID table_id = ImGui::GetIDWithSeed("##OverlaysTable", nullptr, line.Window->ID);
           const ImGuiID swatch_group =
               ImGui::GetIDWithSeed(("##" + std::string(row) + "_color").c_str(), nullptr, table_id);
-          color_id = ImGui::GetIDWithSeed("##ColorButton", nullptr, swatch_group);
+          color_id = ColorEditSwatchId(swatch_group);
         }
         const ImGuiTestItemInfo color = ctx->ItemInfo(color_id, ImGuiTestOpFlags_NoError);
         if (line.ID == 0 || color.ID == 0) {
@@ -184,7 +184,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
           // Same three-seed reconstruction as above, against the SECOND table's id.
           const ImGuiID table_id = ImGui::GetIDWithSeed("##MarkersTable", nullptr, line.Window->ID);
           const ImGuiID swatch_group = ImGui::GetIDWithSeed(("##marker_color_" + row).c_str(), nullptr, table_id);
-          color_id = ImGui::GetIDWithSeed("##ColorButton", nullptr, swatch_group);
+          color_id = ColorEditSwatchId(swatch_group);
         }
         const ImGuiTestItemInfo color = ctx->ItemInfo(color_id, ImGuiTestOpFlags_NoError);
         if (line.ID == 0 || color.ID == 0) {

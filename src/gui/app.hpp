@@ -90,22 +90,24 @@ extern ServerPoller g_server_poller;
 extern PreviewViewport g_preview_vp;
 extern BgColorPickState g_bg_pick;
 
-// "There is a background photo on screen to act on" — a photo is loaded AND it is being shown.
-// The single owner of that judgement, asked by two different features: the eyedropper (button
-// disabled state, the preview panel's pick branch, the mid-mode bail-out) and the photo's own
-// drag/wheel gestures. Sharing is deliberate — both ask the same question — but note what that
-// makes this function: NOT "the eyedropper is available", which is why it is not named that.
+// "There is a background photo on screen to act on" — a photo is loaded AND it is being shown AND
+// the mode is one that composites it (Screen; Print keeps the photograph out of the frame,
+// doc/print-mode-subtractive-ink.md §7 instance 1). The single owner of that judgement, asked by
+// three features: the frame itself (`PreviewParams::bg.enabled` is this predicate, not a second
+// copy of it), the eyedropper (button disabled state, the preview panel's pick branch, the
+// mid-mode bail-out) and the photo's own drag/wheel gestures. Sharing is deliberate — all ask the
+// same question — but note what that makes this function: NOT "the eyedropper is available", which
+// is why it is not named that.
 //
-// ⚠️ The distinction is load-bearing for the next condition anyone adds here. A subtractive/print
-// rendering mode, in which the halo is laid on paper rather than composited over a photograph,
-// would make the background overlay mutually exclusive with the eyedropper. It is tempting to put
-// that condition in this predicate — do not do it without deciding, explicitly, whether it should
-// also stop the user dragging and scaling the photo, because writing it here decides both at once
-// and silently. If it gates only the eyedropper, it belongs at the eyedropper's own call sites.
-// One thing is settled either way: the paper colour is emphatically NOT a second thing this picker
-// may sample, because the whole reason sampling works is that `background` and the photo meet in
-// the same lerp. No condition is written today because the mode does not exist in this tree yet,
-// and a gate on a field nobody has defined is a gate that will be wrong by the time it matters.
+// The Print term was added here, and not at the eyedropper's call sites only, on a decided answer
+// to the question this comment used to leave open: yes, it also stops the user dragging and
+// scaling the photo. Under Print the photo is not in the frame at all, so a drag would pan an
+// image nobody can see and a pick would sample one the preview is not showing — the very thing
+// the "photo alone while picking" override exists to rule out. Making the frame read the same
+// predicate is what keeps that true by construction: whatever takes the photo off screen also
+// takes the gestures and the pick with it, through the existing mid-mode bail-out. One thing is
+// settled either way: the paper colour is emphatically NOT a second thing this picker may sample,
+// because the whole reason sampling works is that `background` and the photo meet in the same lerp.
 bool BgPhotoOnScreen(const GuiState& state);
 // The construction-time properties the live g_server was actually built with (see app.cpp):
 // whether it is a GPU backend (Metal/CUDA) vs CPU, and how many CPU workers it holds. Together
