@@ -580,7 +580,8 @@ script prints the path for whichever group it ran.
   `test/`. The canonical settings content is a constant in the script (`print-settings` writes
   it; the reasoning the JSON file cannot carry is in the module docstring), and because a
   git-ignored file is invisible to every diff, `check-settings` compares a checkout's copy
-  against it byte-for-byte — `./scripts/install-hooks.sh` runs that last, so the one install
+  against it field for field (structural equality on the parsed JSON, so a narrowed matcher
+  reads as stale and reformatting does not) — `./scripts/install-hooks.sh` runs that last, so the one install
   step after a clone or a merge also reports whether the Claude side is current, absent, or
   stale. The main-worktree predicate lives in that script and nowhere else. Criterion 1 (the task directory) is not machine-enforced; it is the criterion the commit
   gate makes cheap to honour, because by the time a worktree exists the task directory is the

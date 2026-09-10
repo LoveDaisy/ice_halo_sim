@@ -95,7 +95,9 @@ The settings file is git-ignored, so no diff can show whether a machine's
 copy still matches this script — and a stale copy is exactly how the first
 enablement failed (it named a path that did not exist). `check-settings`
 closes that gap mechanically: it reads the checkout's settings file, finds
-the PreToolUse command, and compares it byte-for-byte with the snippet.
+the PreToolUse entry naming this script, and compares it with the snippet's
+entry field for field (structural equality on the parsed JSON — whitespace
+and key order do not count, a narrowed matcher or a changed timeout does).
 `scripts/install-hooks.sh` runs it last, so the one-time install step after
 a clone or a merge also says whether the Claude side is current, absent, or
 stale; the exit code is what the caller reads (0 current or absent-in-a-
@@ -120,8 +122,6 @@ GUARDED_TOOLS = frozenset({"Edit", "Write"})
 RULE_LOCATION = 'AGENTS.md, "Collaboration Constraints"'
 
 SETTINGS_RELPATH = os.path.join(".claude", "settings.local.json")
-# The command is a plain string, not the JSON file's decoded form, so the
-# comparison in `check-settings` is byte-for-byte and needs no normalisation.
 SETTINGS_COMMAND = (
     'f="$CLAUDE_PROJECT_DIR/scripts/hooks/worktree-guard.py"; '
     'if [ -f "$f" ]; then python3 "$f" claude-pretooluse; '
@@ -359,20 +359,33 @@ def run_print_settings() -> int:
 
 
 def _installed_entries(settings_path: str) -> list[object] | None:
-    """Every PreToolUse entry whose commands name this script; None if unreadable.
+    """Every PreToolUse entry whose commands name this script; None if unusable.
 
     The whole entry is returned, not just the command string, so that a
     narrowed `matcher` or a changed `timeout` reads as stale too — the
     comparison is against the entry in SETTINGS_SNIPPET, field for field.
+    "Unusable" covers unreadable, non-JSON, and valid JSON of the wrong shape
+    (`hooks` not an object, `PreToolUse` not a list, ...): all three are the
+    caller's one "not readable" message, never a traceback.
     """
     try:
         with open(settings_path, encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        return None
+    entries = hooks.get("PreToolUse", [])
+    if not isinstance(entries, list):
+        return None
     found: list[object] = []
-    for entry in (data.get("hooks") or {}).get("PreToolUse") or []:
-        cmds = [(h or {}).get("command") for h in (entry or {}).get("hooks") or []]
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks", []), list):
+            return None
+        cmds = [h.get("command") for h in entry.get("hooks", []) if isinstance(h, dict)]
         if any(isinstance(c, str) and "worktree-guard" in c for c in cmds):
             found.append(entry)
     return found
@@ -406,11 +419,16 @@ def run_check_settings() -> int:
         return 0
     entries = _installed_entries(path)
     if entries is None:
-        print(f"worktree-guard: {path} is not readable JSON", file=sys.stderr)
+        print(f"worktree-guard: {path} is not a usable settings file (unreadable, not JSON, or wrong shape)", file=sys.stderr)
         return 1
     expected = SETTINGS_SNIPPET["hooks"]["PreToolUse"]
     if entries == expected:
         print(f"worktree-guard: {SETTINGS_RELPATH} is current ({where}).")
+        return 0
+    if not in_main:
+        # Nothing here participates in any decision; say so rather than send
+        # someone off to "fix" a file that changes no behaviour.
+        print(f"worktree-guard: {SETTINGS_RELPATH} in this {where} differs from the snippet; it is not consulted here.")
         return 0
     if not entries:
         print(
