@@ -50,27 +50,35 @@ struct ModalLayoutScene {
   // instead of snapping to kEditModalMinWidthVertical, and the reference would silently be
   // shot in the wrong layout.
   float expect_width;
-  double psnr_threshold;
 };
 
 // Every scene here is deterministic — no simulation, no RNG, and the modal's crystal preview
 // pins its sample seed to kPreviewFixedSampleSeed whenever the shape carries no randomization
-// (edit_modals.cpp: AdvancePreviewAnimSeed), which is the case for all four. So they compare
-// pixel-identical (PSNR=inf) and there is no finite mean − 4σ to calibrate: Phase A measured
-// zero pixel variance over 10 full-suite runs, and Phase B found 60/60 runs bit-identical for
-// every scene, recording the driver's deterministic floor. 40 dB is therefore not a sampled
-// statistic but the repo-wide floor for deterministic GL comparisons (visual/left_panel,
-// visual/crystal_preview_prism, capture_harness/fullframe) — bit-exactness cannot be demanded of a
-// committed reference compared on another machine's GL stack.
-// See groups.modal_layout in test/gui/references/_thresholds.json.
+// (edit_modals.cpp: AdvancePreviewAnimSeed), which is the case for all four. On the reference
+// machine they therefore compare pixel-identical (PSNR=inf, n_diff=0; Phase A measured zero pixel
+// variance over 10 full-suite runs and Phase B found 60/60 runs bit-identical), so the ruler is
+// the differing-pixel one from support/pixel_diff_metrics.hpp rather than a PSNR statistic — a
+// PSNR floor let two real drifts in this suite through at 45 and 53 dB.
+//
+// The values are set by where this group also runs: the CI llvmpipe leg, whose Mesa
+// rasterisation differs from the Metal-shot references in two non-semantic ways — flat fills one
+// quantisation level apart (|delta| <= 2 over whole header bars: 8288–9380-px blobs at tau = 0)
+// and anti-aliasing coverage of the crystal preview's edges (|delta| up to 98 in small specks).
+// tau = 16 is the smallest tau at which the largest surviving blob (35 px, one AA line segment
+// of the preview, identical across the three prism scenes) is at least 2x below K while the
+// smallest real drift on record for this group (95 px at this tau) stays at least 1.3x above it:
+// K = 70 gives 70/35 = 2.0x and 95/70 = 1.36x. Measurements, provenance and the jitter check:
+// doc/testing-architecture.md §4.6.
+static constexpr lumice::test::MaxCcRuler kRuler{ /*tau=*/16, /*max_cc_threshold=*/70 };
+// The PSNR floor the old ruler applied; printed on the diagnostic line, not enforced.
 static constexpr double kDeterministicThresholdDb = 40.0;
 
 // clang-format off
 static const ModalLayoutScene kScenes[] = {
-  {"crystal_prism",   gui::EditTarget::kCrystal, gui::CrystalType::kPrism,   FilterKind::kNone,      false, false, 820.0f, kDeterministicThresholdDb},
-  {"crystal_pyramid", gui::EditTarget::kCrystal, gui::CrystalType::kPyramid, FilterKind::kNone,      true,  true,  420.0f, kDeterministicThresholdDb},
-  {"filter_raypath",  gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kRaypath,   false, false, 820.0f, kDeterministicThresholdDb},
-  {"filter_ee",       gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kEntryExit, false, false, 820.0f, kDeterministicThresholdDb},
+  {"crystal_prism",   gui::EditTarget::kCrystal, gui::CrystalType::kPrism,   FilterKind::kNone,      false, false, 820.0f},
+  {"crystal_pyramid", gui::EditTarget::kCrystal, gui::CrystalType::kPyramid, FilterKind::kNone,      true,  true,  420.0f},
+  {"filter_raypath",  gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kRaypath,   false, false, 820.0f},
+  {"filter_ee",       gui::EditTarget::kFilter,  gui::CrystalType::kPrism,   FilterKind::kEntryExit, false, false, 820.0f},
 };
 // clang-format on
 static constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -255,8 +263,8 @@ void RegisterModalLayoutTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
 
-      IM_CHECK(lumice::test::CheckAgainstReference("modal_layout", scene.name, tmp_path, ref_path, scene.psnr_threshold,
-                                                   g_keep_export_png));
+      IM_CHECK(lumice::test::CheckAgainstReference("modal_layout", scene.name, tmp_path, ref_path,
+                                                   kDeterministicThresholdDb, g_keep_export_png, &kRuler));
     };
   }
 }
