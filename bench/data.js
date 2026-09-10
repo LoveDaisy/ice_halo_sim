@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789045699285,
+  "lastUpdate": 1789062627891,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "cf4fdfa21a63e5dc8f790812428e526294c91dcb",
-          "message": "Merge pull request #246 from LoveDaisy/investigate/gui-payload-epoch-carryover\n\nfix(gui): 纹理 payload 只在内容确属当前世代时才物化",
-          "timestamp": "2026-08-04T07:30:24+08:00",
-          "tree_id": "309471c18a2233f37de0d05fd81efcbb05275e73",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/cf4fdfa21a63e5dc8f790812428e526294c91dcb"
-        },
-        "date": 1785800444485,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 362741.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 577964.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 397184.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 346816.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4758,6 +4710,54 @@ window.BENCHMARK_DATA = {
             "value": 380774.8,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc76b64939e2b7e7bb319dee15905da1c73ee7fa",
+          "message": "Merge pull request #344 from LoveDaisy/feat/image-comparison-metric-by-layer\n\ntest: give each image comparison a ruler that matches its layer (pixel ruler, lines-only parity, block-mean PSNR)",
+          "timestamp": "2026-09-11T01:37:19+08:00",
+          "tree_id": "41b16f85c1532f746a24d73f00d8388af7f2060a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dc76b64939e2b7e7bb319dee15905da1c73ee7fa"
+        },
+        "date": 1789062625915,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 346766.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 608036.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 437509.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 401895.2,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
           }
         ]
       }
