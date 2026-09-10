@@ -641,6 +641,7 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     "tone",              // always screen on the commit arm vs. the user's mode on the export arm
     "paper",             // the zeroed struct's black vs. the user's paper, same split as background
     "resolution",        // 2:1 texture vs. the user's canvas shape
+    "overlap",           // the texture's seam-blend band vs. the band-less disc the screen shows
     // "grid" is deliberately NOT here: only some of its sub-fields diverge, and they are exempted
     // below at the sub-key level so the rest keep being compared. Erasing the whole "grid" object
     // would stop checking those too. Which sub-fields, and why each:

@@ -116,7 +116,7 @@ before downloading into it).
   `src/util/` is deliberately outside that prohibition, and the exemption has a shape:
   what may live there and be included from both sides is a **pure, stateless helper that
   carries no simulation or configuration semantics** — `bit_utils.hpp`, `color_space.hpp`,
-  `label_viewport_clamp.hpp`. The gate exists so the GUI cannot reach into the engine's
+  `label_viewport_clamp.hpp`, `annotation_line_width.hpp`. The gate exists so the GUI cannot reach into the engine's
   data model and pin its layout by including it; a geometry function with no state does
   not offer that reach, and forcing one through the C API would only mean the rule gets
   written twice, once per side, which is the divergence the boundary is there to prevent.

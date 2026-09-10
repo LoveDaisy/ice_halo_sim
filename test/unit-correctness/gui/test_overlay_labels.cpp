@@ -8,7 +8,7 @@
 //
 // WHERE THESE LABELS COME FROM NOW. They used to be walked by ComputeOverlayLabels in this
 // process; they are walked by core's annotation layer instead, reach the GUI as anchors through
-// AnnotationOverlayCache, and become OverlayLabels via BuildGridLabelSet / BuildHorizonLabelSet +
+// AnnotationAnchors, and become OverlayLabels via BuildGridLabelSet / BuildHorizonLabelSet +
 // AppendCurveLabels. The grid moved first; the HORIZON has now followed it, which is what let the
 // GUI-side walk be deleted outright — so Compute() below drives that chain rather than one
 // function, for both families. The propositions are unchanged: every one of them is about which
@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -96,10 +96,9 @@ std::vector<gui::OverlayLabel> Compute(const ViewDesc& in, float vp_w, float vp_
     vin.elevation_deg = gui::ComputeGridElevationAngles(in.grid_step);
     vin.longitude_deg = gui::ComputeGridLongitudeAngles(in.grid_step);
   }
-  // Refresh, not Update: one shot, so there is no run of frames to debounce over. A fresh cache
-  // per call so no case can inherit another's settled result.
-  gui::AnnotationOverlayCache cache;
-  cache.Refresh(gui::MakeAnnotationViewKey(vin, static_cast<int>(vp_w), static_cast<int>(vp_h)));
+  // A fresh instance per call so no case can inherit another's result.
+  gui::AnnotationAnchors cache;
+  cache.Compute(gui::MakeAnnotationViewKey(vin, static_cast<int>(vp_w), static_cast<int>(vp_h)));
   // Each family's appearance rides on its set, so a default-constructed GuiState is the whole of it
   // here — no case in this file asserts a colour.
   gui::GuiState state;
@@ -202,7 +201,7 @@ TEST(OverlayLabels, SingleOrthographicReachesTheSameLabellingPathAsFisheye) {
 //
 // The sun-circle half of this rule used to be asserted here, on a circle drawn around a sun placed
 // behind the camera. It moved out of this file with the walk that placed those labels: the GUI no
-// longer decides where a circle's label goes, it reads core's anchors (AnnotationOverlayCache), and
+// longer decides where a circle's label goes, it reads core's anchors (AnnotationAnchors), and
 // core applies the front clip itself from ViewSnapshot::front. The proposition is core's now, and
 // core's own front-clip cases carry it.
 //
@@ -551,9 +550,9 @@ TEST(OverlayToggle, EitherHorizonSwitchPutsItInTheAnnotationRequest) {
 
 // ---- Which family a request carries follows the switches, not the frame ----
 //
-// The two lists AnnotationViewInputFor fills are not free: each angle is a level the mask sweep
-// tests per pixel and a curve the label walk walks. A view input that always carried the grid would
-// make a user who turned the grid off pay for it on every settle, invisibly.
+// The two lists AnnotationViewInputFor fills are not free: each angle is a level the shader tests
+// per fragment and a curve the label walk walks. A view input that always carried the grid would
+// make a user who turned the grid off pay for it on every frame, invisibly.
 TEST(OverlayToggle, TheAnnotationRequestCarriesOnlyTheFamiliesWhoseSwitchesAreOn) {
   gui::GuiState s;
   s.renderer.fov = 90.0f;  // step 20 deg, so the lists are small but non-empty
@@ -565,19 +564,42 @@ TEST(OverlayToggle, TheAnnotationRequestCarriesOnlyTheFamiliesWhoseSwitchesAreOn
   EXPECT_TRUE(off.longitude_deg.empty());
   EXPECT_TRUE(off.angular_dist_deg.empty());
 
-  // The LINE switch alone is enough: a user drawing curves and no numbers still needs the mask.
+  // The LINE switch alone is enough: a user drawing curves and no numbers still needs the
+  // definition the shader draws from.
   s.show_grid_line = true;
   auto lines_only = gui::AnnotationViewInputFor(s, s.renderer);
   EXPECT_FALSE(lines_only.elevation_deg.empty());
   EXPECT_FALSE(lines_only.longitude_deg.empty());
   EXPECT_TRUE(lines_only.angular_dist_deg.empty()) << "the circles' switches are still off";
+  // ...but not for the ANCHOR request: with no label to place, core must not be asked to walk the
+  // grid's curves — at the narrowest field of view that walk is a thousand curves per frame.
+  auto lines_only_anchors = gui::AnnotationAnchorRequestFor(s, s.renderer);
+  EXPECT_TRUE(lines_only_anchors.elevation_deg.empty());
+  EXPECT_TRUE(lines_only_anchors.longitude_deg.empty());
 
-  // ...and so is the LABEL switch alone, for the mirror-image reason.
+  // ...and so is the LABEL switch alone, for the mirror-image reason — on both requests.
   s.show_grid_line = false;
   s.show_grid_label = true;
   auto labels_only = gui::AnnotationViewInputFor(s, s.renderer);
   EXPECT_FALSE(labels_only.elevation_deg.empty());
   EXPECT_FALSE(labels_only.longitude_deg.empty());
+  auto labels_only_anchors = gui::AnnotationAnchorRequestFor(s, s.renderer);
+  EXPECT_FALSE(labels_only_anchors.elevation_deg.empty());
+  EXPECT_FALSE(labels_only_anchors.longitude_deg.empty());
+  EXPECT_EQ(labels_only_anchors.elevation_deg, labels_only.elevation_deg)
+      << "the anchors are walked on the same curves the shader draws";
+
+  // The horizon and the markers follow the same split: the horizon's anchor request needs the
+  // label switch, a marker joins either request on either of its switches (its ring is placed
+  // from the anchor, so a ring-only marker is still walked).
+  s.show_horizon_line = true;
+  s.show_horizon_label = false;
+  s.markers[LUMICE_ANNOTATION_MARKER_SUN].show = true;
+  s.markers[LUMICE_ANNOTATION_MARKER_SUN].label = false;
+  auto horizon_line_only = gui::AnnotationAnchorRequestFor(s, s.renderer);
+  EXPECT_TRUE(gui::AnnotationViewInputFor(s, s.renderer).horizon);
+  EXPECT_FALSE(horizon_line_only.horizon);
+  EXPECT_EQ(horizon_line_only.marker_ids, std::vector<int>{ LUMICE_ANNOTATION_MARKER_SUN });
 }
 
 // ---- The horizon owns the zero, and the grid must not print a second one ----
@@ -697,8 +719,8 @@ TEST(OverlayLabels, AMarkerNameKeepsItsClearanceFromItsRingWhenTheTargetIsNotThe
   for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
     vin.marker_ids.push_back(i);
   }
-  gui::AnnotationOverlayCache cache;
-  cache.Refresh(gui::MakeAnnotationViewKey(vin, kCanvasW, kCanvasH));
+  gui::AnnotationAnchors cache;
+  cache.Compute(gui::MakeAnnotationViewKey(vin, kCanvasW, kCanvasH));
   ASSERT_TRUE(cache.HasResult());
 
   gui::GuiState state;
@@ -711,7 +733,7 @@ TEST(OverlayLabels, AMarkerNameKeepsItsClearanceFromItsRingWhenTheTargetIsNotThe
 
   // The canvas points the two arms are measured against, in the same order the builder emits sets:
   // ascending id, skipping the ones this view does not image.
-  std::vector<gui::AnnotationOverlayCache::Point> points;
+  std::vector<gui::AnnotationAnchors::Point> points;
   for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
     if (cache.MarkerPoint(i).valid) {
       points.push_back(cache.MarkerPoint(i));

@@ -632,6 +632,8 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine);
 void RegisterMarkerPanelTests(ImGuiTestEngine* engine);
 void RegisterLensBorderTests(ImGuiTestEngine* engine);
 void RegisterAngularDistCircleTests(ImGuiTestEngine* engine);
+void RegisterAnnotationLineTrackingTests(ImGuiTestEngine* engine);
+void RegisterAnnotationLineSeamTests(ImGuiTestEngine* engine);
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);

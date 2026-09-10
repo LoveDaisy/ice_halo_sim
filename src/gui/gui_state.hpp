@@ -1350,7 +1350,7 @@ struct GuiState {
   // Each overlay has independent toggles for line and label visibility, allowing
   // line-only / label-only / both / none combinations. The line flags drive the
   // shader uniform path (see app_panels.cpp pp.overlay assignment), the label flags gate the
-  // label anchors core computes (AnnotationViewInputFor -> AnnotationOverlayCache -> the
+  // label anchors core computes (AnnotationViewInputFor -> AnnotationAnchors -> the
   // Build*LabelSet family) and, on the export side, the three grid.*_label keys the CLI reads.
   //
   // Tech-debt note: the flat fields below are 16 (4×color + 4×alpha + 7×bool +

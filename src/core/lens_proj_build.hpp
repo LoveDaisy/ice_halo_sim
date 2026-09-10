@@ -13,6 +13,7 @@
 #include "core/parallel_rows.hpp"
 #include "core/projection.hpp"
 #include "core/shared/projection_shared.h"
+#include "util/annotation_line_width.hpp"
 
 namespace lumice {
 
@@ -512,16 +513,22 @@ inline float WrapAngleDiffDeg(float diff) {
 // the gradient across `drawable` instead is a defect with a very specific shape: the horizon IS
 // the edge of the visible hemisphere, so under `visible: upper` every pixel on the line has its
 // vertical neighbour excluded, the vertical difference reads as zero, the width collapses to the
-// 1e-4 clamp and the line vanishes exactly where it was asked for. The GPU has no such trap —
+// kAnnotationLineFwidthMinDeg clamp and the line vanishes exactly where it was asked for. The GPU has no such trap —
 // fwidth reads the quad's fragments, which the `pixel_visible` branch does not remove.
 //
-// The rule is the preview shader's, transposed one primitive at a time
-// (preview_renderer.cpp overlayAuxLines, horizon section):
-//   fw_alt = clamp(fwidth(altitude_deg), 1e-4, 2.0);  t = 1 - smoothstep(0, fw_alt*1.5, |alt|)
-// `t > 0` — the pixels the shader tints at all — is exactly `|alt| < fw_alt * 1.5`, which is what
-// this returns. `fwidth` is |dFdx| + |dFdy|, which off the GPU is a forward difference against the
-// right and lower neighbours (the last row/column differences backwards instead, the only place
-// this can differ from a rasterizer's derivatives and only by which side of the pixel is sampled).
+// The rule is the one src/util/annotation_line_width.hpp states, and the preview shader evaluates
+// the same rule per fragment (preview_renderer.cpp overlayAuxLines):
+//   half_width = clamp(fwidth(field), kAnnotationLineFwidthMinDeg, kAnnotationLineFwidthMaxDeg)
+//                * kAnnotationLineHalfWidthPx;   on the line <=> |field - level| < half_width
+// The shader's `lineCoverage` applies that same `<` threshold directly (a hard set, not an
+// antialiased falloff — measured against a smoothstep profile and found to under-cover by half
+// the ink, see doc/testing-architecture.md §4.10). `fwidth` here is |dFdx| + |dFdy|, computed the
+// same way on both sides: a forward difference against the right and lower neighbours (the last
+// row/column differences backwards instead). The shader does this by re-projecting the
+// right/bottom neighbour pixels through `inverseWorldDir` rather than reading the hardware
+// `fwidth()` intrinsic — the hardware derivative's 2x2-quad granularity was measured to miscount
+// on rectilinear scenes (see overlayAuxLines). The three constants are read from that header
+// rather than written here, so the two evaluators cannot drift apart on the numbers.
 //
 // A FIXED angular half-width is not an option here, which is why this takes the trouble:
 // degrees-per-pixel spans orders of magnitude across the lens/FOV space this renderer supports, so
@@ -571,7 +578,8 @@ inline std::vector<uint8_t> LevelSetMaskFromField(const std::vector<float>& fiel
         if (!any) {
           continue;
         }
-        const float half_width = std::clamp(fw, 1e-4f, 2.0f) * 1.5f;
+        const float half_width =
+            std::clamp(fw, kAnnotationLineFwidthMinDeg, kAnnotationLineFwidthMaxDeg) * kAnnotationLineHalfWidthPx;
         for (float level : levels) {
           const float d = field[i] - level;
           if (std::fabs(circular ? WrapAngleDiffDeg(d) : d) < half_width) {

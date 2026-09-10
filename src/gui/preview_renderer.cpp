@@ -9,6 +9,7 @@
 
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
+#include "util/annotation_line_width.hpp"
 
 namespace lumice::gui {
 
@@ -48,28 +49,50 @@ uniform float u_overlay_alpha;
 uniform vec2 u_bg_uv_scale;
 uniform vec2 u_bg_uv_offset;
 
-// Auxiliary line overlay uniforms
+// Auxiliary line overlay uniforms.
+//
+// The four curve families — the celestial horizon, the parallels and meridians of the coordinate
+// grid, the circles of constant angular distance from a reference direction — are evaluated HERE,
+// per fragment, from this fragment's own world direction. Each is a level set of a world-space
+// angle field, and the field, the levels and the line-width rule are the same definition the CLI
+// renderer evaluates on the CPU (src/core/annotation_overlay.cpp over
+// mask_detail::LevelSetMaskFromField); the two are one curve computed by two evaluators, and
+// test/gui/parity/test_gui_cli_export_parity.cpp is the gate that keeps their pixels on top of
+// each other. What this buys over having core rasterize the curve and uploading a mask is the
+// thing the picture itself already has: it is re-projected every frame, so the lines drawn from
+// the same per-fragment direction move with it, on the same frame, at no CPU cost and with no
+// debounce.
 uniform int u_show_horizon;
 uniform int u_show_grid;
 uniform int u_show_sun_circles;
-// 1 where an angular-distance circle passes, computed by core (annotation_overlay.cpp) once per
-// settled view and uploaded as an R8 texture. The shader used to derive this per fragment from
-// acos(dot(world_dir, sun_dir)); it no longer does, so that the CLI renderer and this preview draw
-// the SAME curve rather than two implementations of it. Sampled NEAREST, one texel per fragment.
-uniform sampler2D u_angular_dist_mask;
-uniform int u_has_angular_dist_mask;
-// 1 where a parallel or a meridian passes, from the same core computation and on the same terms as
-// the circle mask above. The shader used to derive this per fragment from mod(altitude, step) and
-// mod(azimuth, step); it no longer does, for the same reason — one curve, drawn by both the CLI
-// renderer and this preview, instead of two implementations of it.
-uniform sampler2D u_grid_mask;
-uniform int u_has_grid_mask;
-// 1 where the celestial horizon passes, from the same core computation and on the same terms as
-// the two masks above. The shader used to derive this per fragment from fwidth(altitude_deg) — the
-// last annotation either renderer still computed for itself, and the one whose two answers were
-// measurably different curves rather than one curve read twice.
-uniform sampler2D u_horizon_mask;
-uniform int u_has_horizon_mask;
+// The level lists, PACKED FOUR TO A vec4. Not `float u_x[N]`: default-block uniform packing is
+// implementation-defined and a float array commonly costs one whole vec4 register per element,
+// which at these lengths would exceed GL_MAX_FRAGMENT_UNIFORM_COMPONENTS on drivers that report
+// the common 4096. Packed, the lists take 516 registers (2064 components) and fit with room.
+// Element i of a list is list[i >> 2][i & 3] (levelAt below).
+//
+// The two grid families share ONE array: the parallels occupy [0, u_elevation_count), the
+// meridians [u_elevation_count, u_elevation_count + u_longitude_count), each range sorted
+// ascending by the uploader. One array rather than two so that the nearest-level search reads
+// the uniform in place through an index range — a uniform array handed to a GLSL function as a
+// parameter is passed BY VALUE, and this driver honours that with a copy of all 256 vec4 per
+// call per fragment (measured: 3 ms -> 950 ms a frame). The literal sizes are
+// 2 * kMaxOverlayLevels / 4 and kMaxSunCircles / 4 (preview_renderer.hpp / gui_constants.hpp);
+// static_asserts after this string pin the two spellings together.
+uniform vec4 u_grid_levels_deg[512];
+uniform int u_elevation_count;
+uniform int u_longitude_count;
+uniform vec4 u_angular_dist_deg[4];
+uniform int u_angular_dist_count;
+// The direction the angular-distance circles are centred on (the sun), a unit vector in the world
+// frame this shader's world_dir lives in — the direction light TRAVELS, altitude = asin(-z).
+uniform vec3 u_reference_dir;
+// The line-width rule's three constants, uploaded from src/util/annotation_line_width.hpp rather
+// than written here: GLSL cannot include the header, and the alternative — the same three digits
+// spelled a second time in this string — is exactly the drift the header exists to prevent.
+uniform float u_line_fwidth_min_deg;
+uniform float u_line_fwidth_max_deg;
+uniform float u_line_half_width_px;
 uniform vec3 u_horizon_color;
 uniform vec3 u_grid_color;
 uniform vec3 u_sun_circles_color;
@@ -493,71 +516,253 @@ vec4 globeInverse(vec2 pos, float half_fov, out float ri) {
   return vec4(normalize(hit_world), 1.0);
 }
 
+// THE inverse: the fragment-space position `pos` (centre-origin, y-up pixels) to the world
+// direction the active lens images there, with w = 1 when the lens images it at all and 0 when
+// it does not. Every branch below writes `ri`, the target lens's relative illumination at that
+// pixel; an unknown u_lens_type leaves it at the identity, alongside the black w = 0 it already
+// produces. `pos_ovl` receives the position in the overlay's own space: the core-pixel-inverse
+// family (dual fisheye 4-6/9, rectangular 7) inverts Core's y-DOWN pixel layout
+// (DualFisheyeToPixel / RectangularForward) while `pos` is y-UP (GL NDC), so for exactly that
+// family the y is flipped — feeding y-up straight in would flip the display vertically against
+// the CLI render. The view-matrix family (linear/fisheye/ortho/globe) is self-consistent and keeps
+// raw pos. The same flip is mirrored in overlay_labels.cpp (PixelToWorldDir / WorldDirToPixel) so
+// grid labels, markers and mouse interaction follow the flipped content. See scrum
+// gui-lens-math-cli-alignment (owner: dual-fisheye/rectangular follow CLI).
+//
+// ONE function because it has TWO callers: main(), for the picture, and overlayAuxLines, which
+// evaluates it at a fragment's right and lower neighbours to take the forward differences the
+// annotation line rule is defined on. The direction a line is drawn from and the direction the
+// picture is sampled at must be the same inverse, or the line lands beside the picture.
+vec4 inverseWorldDir(vec2 pos, float half_fov, out float ri, out vec2 pos_ovl) {
+  pos_ovl = pos;
+  ri = 1.0;
+  vec4 result = vec4(0.0, 0.0, 0.0, 0.0);
+  bool needs_view_transform = true;
+  if (u_lens_type == 0) {
+    result = linearInverse(pos, half_fov, ri);
+  } else if (u_lens_type >= 1 && u_lens_type <= 3) {
+    result = fisheyeInverse(pos, half_fov, u_lens_type - 1, ri);
+  } else if (u_lens_type >= 4 && u_lens_type <= 6) {
+    pos_ovl = vec2(pos.x, -pos.y);
+    result = dualFisheyeInverse(pos_ovl, u_lens_type - 4, ri);
+    needs_view_transform = false;  // Core dual fisheye works in world space
+  } else if (u_lens_type == 7) {
+    pos_ovl = vec2(pos.x, -pos.y);
+    result = rectangularInverse(pos_ovl, ri);
+    needs_view_transform = false;  // Core rectangular works in world space
+  } else if (u_lens_type == 8) {   // kLensTypeFisheyeOrthographic
+    result = fisheyeInverse(pos, half_fov, 3, ri);
+  } else if (u_lens_type == 9) {   // kLensTypeDualFisheyeOrthographic
+    pos_ovl = vec2(pos.x, -pos.y);
+    result = dualFisheyeInverse(pos_ovl, 3, ri);
+    needs_view_transform = false;  // Core dual fisheye works in world space
+  } else if (u_lens_type == 10) {  // kLensTypeGlobe
+    result = globeInverse(pos, half_fov, ri);
+    needs_view_transform = false;  // globeInverse already returned world-space dir
+  }
+  // else: unknown u_lens_type → result.w = 0 (black). static_assert in gui_state.hpp
+  // pins kLensTypeCount so any out-of-range value is a compile-time catchable mismatch.
+  if (result.w >= 0.5 && needs_view_transform) {
+    result.xyz = u_view_matrix * result.xyz;
+  }
+  return result;
+}
+
+// The local gradient of an angle field, clamped as src/util/annotation_line_width.hpp's rule
+// clamps it — the one number the line's width and its edge are both measured in. `fw` is the
+// caller's forward-difference sum against the right/bottom neighbour pixels (NOT the hardware
+// fwidth() intrinsic — its 2x2-quad granularity was measured to miscount on rectilinear scenes,
+// see overlayAuxLines below); the CIRCULAR field (azimuth) must additionally not take a raw
+// difference across the seam, see wrapAngleDiffDeg below. CPU twin:
+// mask_detail::LevelSetMaskFromField (src/core/lens_proj_build.hpp), the same forward-difference
+// shape.
+float lineGradientDeg(float fw) {
+  return clamp(fw, u_line_fwidth_min_deg, u_line_fwidth_max_deg);
+}
+
+// An angle difference in degrees folded into [-180, 180). For CIRCULAR fields only (azimuth): a
+// naive difference across the +/-180 seam reads the 179 -> -179 step as 358 instead of 2, both
+// when the local gradient is measured (fwidth would report a wall of gradient along the seam and
+// the clamp would turn it into a 3 px band down the anti-meridian) and when the distance to a
+// level is measured. Altitude ([-90, 90]) and angular distance ([0, 180]) have no seam and must
+// NOT go through this. CPU twin: mask_detail::WrapAngleDiffDeg, whose range is (-180, 180]; the
+// two differ only at exactly 180, where both sides take the absolute value and agree.
+float wrapAngleDiffDeg(float d) {
+  return d - 360.0 * floor((d + 180.0) / 360.0);
+}
+
+// Whether a fragment at distance `d_deg` (already wrapped for a circular field) from a level is
+// on the line, given the local gradient `grad` in degrees per pixel: the SET the CPU marks,
+// |d| < grad * kAnnotationLineHalfWidthPx, and nothing more. 1 or 0.
+//
+// HARD-EDGED ON PURPOSE, and the purpose is measured. Two antialiased shapes were tried here and
+// both were rejected by test/gui/parity/test_gui_cli_export_parity.cpp, whose subject is that the
+// preview and the CLI draw ONE line: a smoothstep from the level out to the half-width (the
+// profile this function had before the curves were ever rasterized by core) integrates to half the
+// CLI's ink and read 18 / 15 / 20 dB against thresholds of 27 / 27 / 34 on its three scenes; the
+// pixel-coverage ramp of the same set (50 % contour on the CLI's edge, same ink) recovered the
+// positions to under half a pixel but still read 24 / 15 / 27 — a one-pixel ramp on both edges of
+// every line is a few thousand half-covered pixels per frame against the CLI's hard band. The
+// hard set is what the mask sampled NEAREST used to give, so it is also the look the preview has
+// shipped with; antialiasing it is a decision for both renderers at once (src/server/render.cpp
+// PostSnapshot composites the same set with no ramp), not for this side alone.
+float lineCoverage(float d_deg, float grad) {
+  return abs(d_deg) < grad * u_line_half_width_px ? 1.0 : 0.0;
+}
+
+// Element i of the packed grid level array.
+float gridLevelAt(int i) {
+  return u_grid_levels_deg[i >> 2][i & 3];
+}
+
+// The distance, in degrees, from `field_deg` to the NEAREST level in u_grid_levels_deg[begin, end),
+// a range sorted ascending (the uploader sorts; see UploadGridLevels). Coverage falls off
+// monotonically with distance, so the largest coverage over a list is the coverage of its nearest
+// level, and finding that is a binary search — a dozen steps — where a linear pass over the list
+// is up to a thousand (720 meridians and 360 parallels at the narrowest field of view, per
+// fragment, per frame; measured at 1600x1200 on an M2 Max as +10 ms a frame linearly, most of a
+// 60 fps budget spent on an edge case).
+//
+// `circular` folds the field onto the azimuth circle: the nearest level may then be the range's
+// first or last element reached across the +/-180 seam, so those two are tried through
+// wrapAngleDiffDeg on top of the two neighbours the search finds.
+float nearestGridLevelDistDeg(float field_deg, int begin, int end, bool circular) {
+  if (end <= begin) return 1e9;
+  // First index in [begin, end) whose level is >= field_deg. 12 iterations halve 1024 to one.
+  int lo = begin;
+  int hi = end;
+  for (int it = 0; it < 12; ++it) {
+    if (lo >= hi) break;
+    int mid = (lo + hi) >> 1;
+    if (gridLevelAt(mid) < field_deg) lo = mid + 1; else hi = mid;
+  }
+  float d = 1e9;
+  if (lo < end) d = min(d, abs(field_deg - gridLevelAt(lo)));
+  if (lo > begin) d = min(d, abs(field_deg - gridLevelAt(lo - 1)));
+  if (circular) {
+    d = min(d, abs(wrapAngleDiffDeg(field_deg - gridLevelAt(begin))));
+    d = min(d, abs(wrapAngleDiffDeg(field_deg - gridLevelAt(end - 1))));
+  }
+  return d;
+}
+
+// Sky reference-point ring markers — drawn last so they sit on top of all other overlays. Their
+// positions are NOT derived from the fragment's direction: a marker is a named direction core
+// projects (LUMICE_ComputeAnnotationAnchors), handed over as pixel-space uniforms. CPU passes
+// sentinel (-9999, -9999) for a marker that is switched off, offscreen or behind the camera; the
+// distance test rejects it naturally, which is why there is no per-marker enable to read.
+//
+// A constant-bound loop over the whole id space rather than six unrolled blocks: the bound is a
+// compile-time constant so there is no dynamic branching, and the alternative is the same
+// arithmetic written six times. Order is id order, and the LATER id wins where two rings overlap
+// — the same last-writer rule the three curve families follow.
+//
+// pos_pix: pixel-space position of the current fragment, center-origin (0,0), y-up. Matches the
+// CPU helper ProjectWorldDirToScreen for marker overlays.
+vec3 overlayMarkers(vec3 color, vec2 pos_pix) {
+  const float kRingHalfWidthPx = 1.5;
+  for (int i = 0; i < 6; ++i) {
+    float d = length(pos_pix - u_marker_screen_pos[i]);
+    float t = 1.0 - smoothstep(0.0, kRingHalfWidthPx, abs(d - u_markers_radius_px));
+    color = blendAnnotationColor(color, u_marker_color[i], t, u_markers_alpha, u_tone);
+  }
+  return color;
+}
+
+)glsl"
+R"glsl(
 // Overlay auxiliary lines on top of final_color.
 //
-// It takes no world direction any more, and that absence is the statement: every CURVE this draws
-// now comes from a mask core computed for this exact view, so there is nothing left here to derive
-// from the fragment's own direction. What remains direction-free is the reference-point marker
-// family, whose points arrive as pixel-space uniforms.
-//
-// pos_pix: pixel-space position of the current fragment, center-origin (0,0),
-// y-up. Matches the CPU helper ProjectWorldDirToScreen for marker overlays.
-vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
-  // Coordinate grid — geometry from core's mask, drawn first so the other lines overlay on top.
-  // Same sampling rule as the circles below (see the uv note there); the two blocks differ only in
-  // which mask and which colour they read.
-  if (u_show_grid != 0 && u_has_grid_mask != 0) {
-    vec2 grid_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
-    float t = texture(u_grid_mask, grid_uv).r > 0.0 ? 1.0 : 0.0;
+// world_dir: this fragment's unit world-space direction (the one the picture was sampled at), in
+// the convention every annotation direction uses — altitude = asin(-z), azimuth = atan2(-y, -x).
+// The caller only reaches here for a fragment the lens images AND the hemisphere policy admits,
+// so the clip the CLI applies through its `drawable` mask is applied here by the call site.
+// pos: the fragment's raw position (centre-origin, y-up), from which the neighbours' directions
+// are re-derived; pos_pix: the same in the overlay's space (flipped for the CPI family), which is
+// what the marker positions are stated in.
+vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix, vec2 pos, float half_fov) {
+  const float DEG = 180.0 / PI;
+
+  // The three angle fields. Each formula is the shader-side twin of a core function, named here so
+  // a change on either side has somewhere to look:
+  //   altitude_deg      mask_detail::AltitudeDeg           (src/core/lens_proj_build.hpp)
+  //   azimuth_deg       annotation::AzimuthDegOfDir        (src/core/annotation_overlay.cpp)
+  //   angular_dist_deg  annotation::AngularDistDegOfDir    (src/core/annotation_overlay.cpp)
+  float altitude_deg = asin(clamp(-world_dir.z, -1.0, 1.0)) * DEG;
+  float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;
+  float angular_dist_deg = acos(clamp(dot(world_dir, u_reference_dir), -1.0, 1.0)) * DEG;
+
+  // The local gradient of each field, in degrees per pixel, as the FORWARD DIFFERENCE against the
+  // right and lower neighbours — the same two differences, against the same two pixels, that
+  // mask_detail::LevelSetMaskFromField takes on the CPU (src/core/lens_proj_build.hpp), with the
+  // same three rules: a neighbour the lens does not image contributes nothing; the last column /
+  // row differences backwards instead; a pixel with no imaged neighbour at all gets no line.
+  //
+  // NOT the hardware fwidth(). That derivative is taken across a 2x2 quad, so half the fragments
+  // read a backward difference and the quad's helper invocations reach outside the lens's domain
+  // at its rim; each is a pixel here and there that one renderer lights and the other does not,
+  // and against a hard-edged line a whole-frame comparison of the two arms pays for every such
+  // pixel at full amplitude (measured on the rectilinear parity scene as 213 pixels for 1.8 dB).
+  // Three inverse projections per fragment instead of one is the price of the two evaluators
+  // agreeing on which pixels are the line, and it is a few trig calls.
+  //
+  // "Lower" is the next IMAGE row, which in this y-up fragment space is pos.y - 1; the last
+  // row/column test is the CPU's `px + 1 < width` written in centre-origin coordinates.
+  vec2 half_res = u_resolution * 0.5;
+  vec2 step_x = vec2(pos.x + 0.5 < half_res.x ? 1.0 : -1.0, 0.0);
+  vec2 step_y = vec2(0.0, -(pos.y - 0.5 > -half_res.y ? 1.0 : -1.0));
+  float ri_unused;
+  vec2 ovl_unused;
+  vec4 nx = inverseWorldDir(pos + step_x, half_fov, ri_unused, ovl_unused);
+  vec4 ny = inverseWorldDir(pos + step_y, half_fov, ri_unused, ovl_unused);
+  if (nx.w < 0.5 && ny.w < 0.5) {
+    // No local scale can be measured here, so no curve is drawn — the CPU's rule, and the one
+    // that keeps a horizon out of a corner that images nothing.
+    return overlayMarkers(color, pos_pix);
+  }
+  float fw_alt = 0.0;
+  float fw_az = 0.0;
+  float fw_dist = 0.0;
+  if (nx.w >= 0.5) {
+    fw_alt += abs(asin(clamp(-nx.z, -1.0, 1.0)) * DEG - altitude_deg);
+    fw_az += abs(wrapAngleDiffDeg(atan(-nx.y, -nx.x) * DEG - azimuth_deg));
+    fw_dist += abs(acos(clamp(dot(nx.xyz, u_reference_dir), -1.0, 1.0)) * DEG - angular_dist_deg);
+  }
+  if (ny.w >= 0.5) {
+    fw_alt += abs(asin(clamp(-ny.z, -1.0, 1.0)) * DEG - altitude_deg);
+    fw_az += abs(wrapAngleDiffDeg(atan(-ny.y, -ny.x) * DEG - azimuth_deg));
+    fw_dist += abs(acos(clamp(dot(ny.xyz, u_reference_dir), -1.0, 1.0)) * DEG - angular_dist_deg);
+  }
+  float grad_alt = lineGradientDeg(fw_alt);
+  float grad_az = lineGradientDeg(fw_az);
+  float grad_dist = lineGradientDeg(fw_dist);
+
+  // Coordinate grid — drawn first so the other lines overlay on top. Parallels and meridians share
+  // one colour and one alpha, so their coverages are merged before the blend, exactly as the CLI
+  // composites the two families' masks into one layer.
+  if (u_show_grid != 0) {
+    int ec = u_elevation_count;
+    float t = lineCoverage(nearestGridLevelDistDeg(altitude_deg, 0, ec, false), grad_alt);
+    t = max(t, lineCoverage(nearestGridLevelDistDeg(azimuth_deg, ec, ec + u_longitude_count, true), grad_az));
     color = blendAnnotationColor(color, u_grid_color, t, u_grid_alpha, u_tone);
   }
 
-  // Sun angular distance circles. Geometry from core's mask; colour and alpha still this
-  // consumer's own, which is the whole shape of the split — core says where, the drawer says how.
-  //
-  // uv.y is flipped because the two coordinate systems disagree about which end is the top: the
-  // mask is row-major from the TOP-left (core's convention, shared with the CLI's image buffer)
-  // while v_ndc.y is +1 at the top. The 0.5 in the x term and the flip together put the sample at
-  // the CENTRE of the texel whose pixel centre core inverse-projected, so there is no half-pixel
-  // shift between where the mask says the line is and where it is drawn.
-  if (u_show_sun_circles != 0 && u_has_angular_dist_mask != 0) {
-    vec2 mask_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
-    // The mask stores 1, not 255, for a lit pixel; an R8 texture normalizes that to 1/255, which
-    // as a blend weight is a line you cannot see. It is a BOOLEAN, so read it as one rather than
-    // scaling it — any nonzero texel is on. (Sampled NEAREST, so there are no intermediate values
-    // to lose by thresholding.)
-    float t = texture(u_angular_dist_mask, mask_uv).r > 0.0 ? 1.0 : 0.0;
+  // Circles of constant angular distance from u_reference_dir. A linear pass: the list is at most
+  // kMaxSunCircles long, so there is nothing for a search to save.
+  if (u_show_sun_circles != 0) {
+    float t = 0.0;
+    for (int i = 0; i < u_angular_dist_count; ++i) {
+      t = max(t, lineCoverage(angular_dist_deg - u_angular_dist_deg[i >> 2][i & 3], grad_dist));
+    }
     color = blendAnnotationColor(color, u_sun_circles_color, t, u_sun_circles_alpha, u_tone);
   }
 
-  // Horizon line (altitude = 0) — geometry from core's mask, drawn last so it's most visible.
-  // Same sampling rule as the two blocks above; the uv note there applies here unchanged.
-  if (u_show_horizon != 0 && u_has_horizon_mask != 0) {
-    vec2 horizon_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
-    float t = texture(u_horizon_mask, horizon_uv).r > 0.0 ? 1.0 : 0.0;
-    color = blendAnnotationColor(color, u_horizon_color, t, u_horizon_alpha, u_tone);
+  // Horizon line (altitude = 0) — drawn last of the curves so it's most visible.
+  if (u_show_horizon != 0) {
+    color = blendAnnotationColor(color, u_horizon_color, lineCoverage(altitude_deg, grad_alt), u_horizon_alpha, u_tone);
   }
 
-  // Sky reference-point ring markers — drawn last so they sit on top of all
-  // other overlays. CPU passes sentinel (-9999, -9999) for a marker that is
-  // switched off, offscreen or behind the camera; the distance test rejects it
-  // naturally, which is why there is no per-marker enable to read.
-  //
-  // A constant-bound loop over the whole id space rather than six unrolled
-  // blocks: the bound is a compile-time constant so there is no dynamic
-  // branching, and the alternative is the same arithmetic written six times.
-  // Order is id order, and the LATER id wins where two rings overlap — the same
-  // last-writer rule the three curve families above already follow.
-  {
-    const float kRingHalfWidthPx = 1.5;
-    for (int i = 0; i < 6; ++i) {
-      float d = length(pos_pix - u_marker_screen_pos[i]);
-      float t = 1.0 - smoothstep(0.0, kRingHalfWidthPx, abs(d - u_markers_radius_px));
-      color = blendAnnotationColor(color, u_marker_color[i], t, u_markers_alpha, u_tone);
-    }
-  }
-
-  return color;
+  return overlayMarkers(color, pos_pix);
 }
 
 // Lens border: outline the projection's own valid image region — the locus where
@@ -626,46 +831,11 @@ void main() {
   vec2 pos = v_ndc * u_resolution * 0.5;  // Convert NDC [-1,1] to pixel offset from center (y-up)
   float half_fov = u_fov * 0.5 * PI / 180.0;
 
-  // The core-pixel-inverse family (dual fisheye 4-6/9, rectangular 7) inverts Core's
-  // y-DOWN pixel layout (DualFisheyeToPixel / RectangularForward), but `pos` here is
-  // y-UP (GL NDC). Feeding y-up pos straight in flips the display vertically vs the
-  // CLI render. Flip pos.y for exactly that family so GUI matches CLI. The view-matrix
-  // family (linear/fisheye/ortho/globe) is self-consistent and keeps raw pos. The same
-  // flip is mirrored in overlay_labels.cpp (PixelToWorldDir / WorldDirToPixel) so grid
-  // labels, zenith/nadir markers and mouse interaction follow the flipped content. See
-  // scrum gui-lens-math-cli-alignment (owner: dual-fisheye/rectangular follow CLI).
+  // The inverse, and the overlay-space position (see inverseWorldDir for the y flip it applies
+  // to the core-pixel-inverse family).
   vec2 pos_ovl = pos;  // pixel pos handed to overlayAuxLines (flipped for the CPI family)
-
-  vec4 result = vec4(0.0, 0.0, 0.0, 0.0);
-  bool needs_view_transform = true;
-  // The target lens's relative illumination at this pixel. Every branch below writes it; an
-  // unknown u_lens_type leaves it at the identity, alongside the black result.w = 0 that case
-  // already produces.
   float rel_illum = 1.0;
-  if (u_lens_type == 0) {
-    result = linearInverse(pos, half_fov, rel_illum);
-  } else if (u_lens_type >= 1 && u_lens_type <= 3) {
-    result = fisheyeInverse(pos, half_fov, u_lens_type - 1, rel_illum);
-  } else if (u_lens_type >= 4 && u_lens_type <= 6) {
-    pos_ovl = vec2(pos.x, -pos.y);
-    result = dualFisheyeInverse(pos_ovl, u_lens_type - 4, rel_illum);
-    needs_view_transform = false;  // Core dual fisheye works in world space
-  } else if (u_lens_type == 7) {
-    pos_ovl = vec2(pos.x, -pos.y);
-    result = rectangularInverse(pos_ovl, rel_illum);
-    needs_view_transform = false;  // Core rectangular works in world space
-  } else if (u_lens_type == 8) {   // kLensTypeFisheyeOrthographic
-    result = fisheyeInverse(pos, half_fov, 3, rel_illum);
-  } else if (u_lens_type == 9) {   // kLensTypeDualFisheyeOrthographic
-    pos_ovl = vec2(pos.x, -pos.y);
-    result = dualFisheyeInverse(pos_ovl, 3, rel_illum);
-    needs_view_transform = false;  // Core dual fisheye works in world space
-  } else if (u_lens_type == 10) {  // kLensTypeGlobe
-    result = globeInverse(pos, half_fov, rel_illum);
-    needs_view_transform = false;  // globeInverse already returned world-space dir
-  }
-  // else: unknown u_lens_type → result.w = 0 (black). static_assert in gui_state.hpp
-  // pins kLensTypeCount so any out-of-range value is a compile-time catchable mismatch.
+  vec4 result = inverseWorldDir(pos, half_fov, rel_illum, pos_ovl);
 
   // Eliminated early returns so bg mixing can always execute at the end.
   //
@@ -680,7 +850,7 @@ void main() {
   bool pixel_visible = false;
 
   if (result.w >= 0.5) {
-    world_dir = needs_view_transform ? u_view_matrix * result.xyz : result.xyz;
+    world_dir = result.xyz;
 
     // Visible hemisphere check
     // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
@@ -787,7 +957,7 @@ void main() {
 
   // Auxiliary line overlay (on top of everything, only in visible region)
   if (result.w >= 0.5 && pixel_visible) {
-    final_color = overlayAuxLines(final_color, pos_ovl);
+    final_color = overlayAuxLines(world_dir, final_color, pos_ovl, pos, half_fov);
   }
 
   // Lens border — deliberately OUTSIDE the `result.w >= 0.5 && pixel_visible` gate.
@@ -808,6 +978,15 @@ void main() {
 static_assert(LUMICE_ANNOTATION_MARKER_COUNT == 6,
               "the fragment shader hard-codes 6 marker uniform slots; update kFragmentShader's "
               "u_marker_screen_pos[6] / u_marker_color[6] and its loop bound together with this");
+
+// The `512` and `4` written into u_grid_levels_deg[512] / u_angular_dist_deg[4] above, pinned the
+// same way: four levels per vec4, two grid families in one array, so the length is 2 * capacity / 4.
+static_assert(kMaxOverlayLevels % 4 == 0 && 2 * kMaxOverlayLevels / 4 == 512,
+              "the fragment shader hard-codes vec4 u_grid_levels_deg[512]; update kFragmentShader together "
+              "with kMaxOverlayLevels");
+static_assert(kMaxSunCircles % 4 == 0 && kMaxSunCircles / 4 == 4,
+              "the fragment shader hard-codes vec4 u_angular_dist_deg[4]; update kFragmentShader together "
+              "with kMaxSunCircles");
 
 // clang-format on
 
@@ -949,21 +1128,6 @@ void PreviewRenderer::Destroy() {
   if (bg_texture_) {
     glDeleteTextures(1, &bg_texture_);
     bg_texture_ = 0;
-  }
-  if (angular_dist_tex_) {
-    glDeleteTextures(1, &angular_dist_tex_);
-    angular_dist_tex_ = 0;
-    angular_dist_tex_generation_ = 0;
-  }
-  if (grid_tex_) {
-    glDeleteTextures(1, &grid_tex_);
-    grid_tex_ = 0;
-    grid_tex_generation_ = 0;
-  }
-  if (horizon_tex_) {
-    glDeleteTextures(1, &horizon_tex_);
-    horizon_tex_ = 0;
-    horizon_tex_generation_ = 0;
   }
   if (vbo_) {
     glDeleteBuffers(1, &vbo_);
@@ -1163,125 +1327,6 @@ void PreviewRenderer::UploadBgTexture(const unsigned char* data, int width, int 
 
   bg_aspect_ = static_cast<float>(width) / static_cast<float>(height);
   glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-void PreviewRenderer::UploadAngularDistMask(const unsigned char* data, int width, int height) {
-  if (data == nullptr || width <= 0 || height <= 0) {
-    ClearAngularDistMask();
-    return;
-  }
-  if (angular_dist_tex_ == 0) {
-    glGenTextures(1, &angular_dist_tex_);
-    if (angular_dist_tex_ == 0) {
-      return;
-    }
-  }
-  // UNIT 2, and switching to it is not tidiness. Render() binds the simulation texture on unit 0
-  // and leaves that unit active; uploading here without switching would bind this mask over it and
-  // then unbind on the way out, leaving unit 0 empty for the draw that follows — a frame with no
-  // sky in it, which is exactly what the CLI/GUI parity gate caught. Unit 2 is also where Render()
-  // samples the mask from, so leaving it bound is what that expects.
-  glActiveTexture(GL_TEXTURE2);
-  glBindTexture(GL_TEXTURE_2D, angular_dist_tex_);
-  // NEAREST, and it has to be: the mask is a per-pixel yes/no, and filtering it would smear the
-  // line across neighbours the mask generator deliberately left out. CLAMP_TO_EDGE for the same
-  // reason a wrap would be wrong — a circle must not reappear on the opposite edge.
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  // One byte per texel with no row padding: the default GL_UNPACK_ALIGNMENT of 4 would misread
-  // every row of a width that is not a multiple of 4, which most viewport widths are not.
-  GLint prev_alignment = 4;
-  glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
-  // Back to unit 0, the unit every other binding in this class assumes is current.
-  glActiveTexture(GL_TEXTURE0);
-}
-
-void PreviewRenderer::ClearAngularDistMask() {
-  if (angular_dist_tex_ != 0) {
-    glDeleteTextures(1, &angular_dist_tex_);
-    angular_dist_tex_ = 0;
-    angular_dist_tex_generation_ = 0;
-  }
-}
-
-void PreviewRenderer::UploadGridMask(const unsigned char* data, int width, int height) {
-  if (data == nullptr || width <= 0 || height <= 0) {
-    ClearGridMask();
-    return;
-  }
-  if (grid_tex_ == 0) {
-    glGenTextures(1, &grid_tex_);
-    if (grid_tex_ == 0) {
-      return;
-    }
-  }
-  // UNIT 3 (0 = simulation, 1 = background image, 2 = angular-distance mask), and switching to it
-  // matters for the same reason it does in UploadAngularDistMask above: Render() leaves unit 0
-  // active, and uploading over it would leave the following draw with no sky in it. Same restore
-  // to unit 0 on the way out, same NEAREST / CLAMP_TO_EDGE / alignment-1 rules — see that function
-  // for why each of them is not optional.
-  glActiveTexture(GL_TEXTURE3);
-  glBindTexture(GL_TEXTURE_2D, grid_tex_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  GLint prev_alignment = 4;
-  glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
-  glActiveTexture(GL_TEXTURE0);
-}
-
-void PreviewRenderer::ClearGridMask() {
-  if (grid_tex_ != 0) {
-    glDeleteTextures(1, &grid_tex_);
-    grid_tex_ = 0;
-    grid_tex_generation_ = 0;
-  }
-}
-
-void PreviewRenderer::UploadHorizonMask(const unsigned char* data, int width, int height) {
-  if (data == nullptr || width <= 0 || height <= 0) {
-    ClearHorizonMask();
-    return;
-  }
-  if (horizon_tex_ == 0) {
-    glGenTextures(1, &horizon_tex_);
-    if (horizon_tex_ == 0) {
-      return;
-    }
-  }
-  // UNIT 4 (0 = simulation, 1 = background image, 2 = angular-distance mask, 3 = grid mask), on
-  // exactly the terms UploadAngularDistMask states: switch to this unit so the upload cannot land
-  // over the simulation texture unit 0 leaves bound, restore unit 0 on the way out, and keep the
-  // NEAREST / CLAMP_TO_EDGE / alignment-1 rules — see that function for why none is optional.
-  glActiveTexture(GL_TEXTURE4);
-  glBindTexture(GL_TEXTURE_2D, horizon_tex_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  GLint prev_alignment = 4;
-  glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
-  glActiveTexture(GL_TEXTURE0);
-}
-
-void PreviewRenderer::ClearHorizonMask() {
-  if (horizon_tex_ != 0) {
-    glDeleteTextures(1, &horizon_tex_);
-    horizon_tex_ = 0;
-    horizon_tex_generation_ = 0;
-  }
 }
 
 void PreviewRenderer::ClearBackground() {
@@ -1743,6 +1788,42 @@ float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_
   return rad_per_px * kDragSensitivity * 180.0f / kPi;
 }
 
+// The two grid level lists into their shared packed vec4 uniform array, and the circles into
+// theirs. Each list is clamped to its capacity — the shader reads `count` elements and never past
+// what was uploaded — copied into a zero-padded scratch buffer so the last vec4 is whole, and the
+// two grid ranges are SORTED ascending, which is the precondition the shader's nearest-level
+// search (nearestGridLevelDistDeg) rests on. Sorting here rather than asking callers to is what
+// makes that precondition a fact of the upload instead of a contract every caller has to know
+// about; the order of a level list carries no meaning anywhere else.
+static void UploadGridLevels(unsigned int program, const std::vector<float>& elevation_deg,
+                             const std::vector<float>& longitude_deg) {
+  const int ec = std::min(static_cast<int>(elevation_deg.size()), kMaxOverlayLevels);
+  const int lc = std::min(static_cast<int>(longitude_deg.size()), kMaxOverlayLevels);
+  const int vec4_count = (ec + lc + 3) / 4;
+  std::vector<float> packed(static_cast<size_t>(vec4_count) * 4, 0.0f);
+  std::copy(elevation_deg.begin(), elevation_deg.begin() + ec, packed.begin());
+  std::copy(longitude_deg.begin(), longitude_deg.begin() + lc, packed.begin() + ec);
+  std::sort(packed.begin(), packed.begin() + ec);
+  std::sort(packed.begin() + ec, packed.begin() + ec + lc);
+  // "[0]" rather than the bare array name, for the reason the marker upload below gives.
+  if (vec4_count > 0) {
+    glUniform4fv(glGetUniformLocation(program, "u_grid_levels_deg[0]"), vec4_count, packed.data());
+  }
+  glUniform1i(glGetUniformLocation(program, "u_elevation_count"), ec);
+  glUniform1i(glGetUniformLocation(program, "u_longitude_count"), lc);
+}
+
+static void UploadCircleLevels(unsigned int program, const std::vector<float>& angular_dist_deg) {
+  const int count = std::min(static_cast<int>(angular_dist_deg.size()), kMaxSunCircles);
+  const int vec4_count = (count + 3) / 4;
+  std::vector<float> packed(static_cast<size_t>(vec4_count) * 4, 0.0f);
+  std::copy(angular_dist_deg.begin(), angular_dist_deg.begin() + count, packed.begin());
+  if (vec4_count > 0) {
+    glUniform4fv(glGetUniformLocation(program, "u_angular_dist_deg[0]"), vec4_count, packed.data());
+  }
+  glUniform1i(glGetUniformLocation(program, "u_angular_dist_count"), count);
+}
+
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
   if (!shader_program_ || !texture_ || vp_w <= 0 || vp_h <= 0) {
     return;
@@ -1816,61 +1897,19 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
 
   // Auxiliary line overlay uniforms
   const auto& ov = params.overlay;
-  // Take the caller's mask if it is newer than what the texture holds. Gated on the generation
-  // rather than on the pointer: the cache reuses its buffer, so an unchanged pointer says nothing
-  // about whether the contents moved, and re-uploading a W*H texture every frame would give back
-  // most of what computing the mask off the draw loop was for.
-  if (ov.angular_dist_mask == nullptr) {
-    ClearAngularDistMask();
-    angular_dist_tex_generation_ = 0;
-  } else if (ov.angular_dist_mask_generation != angular_dist_tex_generation_) {
-    UploadAngularDistMask(ov.angular_dist_mask, ov.angular_dist_mask_w, ov.angular_dist_mask_h);
-    angular_dist_tex_generation_ = ov.angular_dist_mask_generation;
-  }
-  if (ov.grid_mask == nullptr) {
-    ClearGridMask();
-    grid_tex_generation_ = 0;
-  } else if (ov.grid_mask_generation != grid_tex_generation_) {
-    UploadGridMask(ov.grid_mask, ov.grid_mask_w, ov.grid_mask_h);
-    grid_tex_generation_ = ov.grid_mask_generation;
-  }
-  if (ov.horizon_mask == nullptr) {
-    ClearHorizonMask();
-    horizon_tex_generation_ = 0;
-  } else if (ov.horizon_mask_generation != horizon_tex_generation_) {
-    UploadHorizonMask(ov.horizon_mask, ov.horizon_mask_w, ov.horizon_mask_h);
-    horizon_tex_generation_ = ov.horizon_mask_generation;
-  }
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), ov.show_horizon ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), ov.show_grid ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), ov.show_sun_circles ? 1 : 0);
-  // Unit 2 (0 is the sim texture, 1 the background image). The mask is uploaded by
-  // UploadAngularDistMask, which the caller drives off its AnnotationOverlayCache; a frame in
-  // which nothing has been uploaded yet draws no circles rather than drawing them somewhere
-  // guessed at.
-  glUniform1i(glGetUniformLocation(shader_program_, "u_has_angular_dist_mask"), angular_dist_tex_ != 0 ? 1 : 0);
-  if (angular_dist_tex_ != 0) {
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, angular_dist_tex_);
-    glUniform1i(glGetUniformLocation(shader_program_, "u_angular_dist_mask"), 2);
-    glActiveTexture(GL_TEXTURE0);
-  }
-  // Unit 3, on exactly the terms unit 2 is described on above.
-  glUniform1i(glGetUniformLocation(shader_program_, "u_has_grid_mask"), grid_tex_ != 0 ? 1 : 0);
-  if (grid_tex_ != 0) {
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, grid_tex_);
-    glUniform1i(glGetUniformLocation(shader_program_, "u_grid_mask"), 3);
-    glActiveTexture(GL_TEXTURE0);
-  }
-  // Unit 4, likewise.
-  glUniform1i(glGetUniformLocation(shader_program_, "u_has_horizon_mask"), horizon_tex_ != 0 ? 1 : 0);
-  if (horizon_tex_ != 0) {
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, horizon_tex_);
-    glUniform1i(glGetUniformLocation(shader_program_, "u_horizon_mask"), 4);
-    glActiveTexture(GL_TEXTURE0);
-  }
+  // The curve definitions: level lists, packed four to a vec4 (see the uniform block in
+  // kFragmentShader for why), the circles' centre, and the line-width rule's constants — the
+  // latter from their single owner in src/util/, never as digits in the GLSL source.
+  UploadGridLevels(shader_program_, ov.elevation_deg, ov.longitude_deg);
+  UploadCircleLevels(shader_program_, ov.angular_dist_deg);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_reference_dir"), ov.reference_dir[0], ov.reference_dir[1],
+              ov.reference_dir[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_line_fwidth_min_deg"), kAnnotationLineFwidthMinDeg);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_line_fwidth_max_deg"), kAnnotationLineFwidthMaxDeg);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_line_half_width_px"), kAnnotationLineHalfWidthPx);
   glUniform3f(glGetUniformLocation(shader_program_, "u_horizon_color"), ov.horizon_color[0], ov.horizon_color[1],
               ov.horizon_color[2]);
   glUniform3f(glGetUniformLocation(shader_program_, "u_grid_color"), ov.grid_color[0], ov.grid_color[1],

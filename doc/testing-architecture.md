@@ -1052,6 +1052,27 @@ own rather than more files under `visual/`:
    preview shader keeps inverting past a single fisheye's image circle where core stops; and
    relative-EV self-anchoring uses a different pixel population on each side. A new parity case
    should expect to spend most of its design effort here, and to state what it found.
+   The annotation curves added three more when the preview went back to evaluating them per
+   fragment (v4.28) instead of sampling a mask core had rasterized — each measured on this fixture,
+   and each settled in the shader rather than in the threshold. (a) **Line profile**: the CLI
+   composites a hard band (`|field − level| < half-width`); an antialiased shader line is not that
+   band. A smoothstep from the level out to the half-width lays down half the CLI's ink and read
+   18 / 15 / 20 dB against thresholds of 27 / 27 / 34; a pixel-coverage ramp of the same set put the
+   positions within half a pixel and still read 24 / 15 / 27, because a one-pixel fringe on every
+   edge of every line is thousands of half-covered pixels against a hard band. The shader draws the
+   hard set. (b) **Derivative estimate**: the hardware `fwidth()` is a quad-based derivative, so
+   half the fragments read a backward difference and the rim's helper invocations reach outside the
+   lens's domain; against the CPU's forward differences that lit ~200 pixels per frame one side
+   only, 1.8 dB on the rectilinear scene. The shader re-runs the inverse at the right and lower
+   neighbours and takes the same forward differences. (c) **The dual-fisheye overlap band**: the
+   preview's target dual-fisheye projection has none — each disc is exactly one hemisphere — while
+   the CLI's carries the export's `overlap` and images a disc 4 % larger. The mask era hid this by
+   asking core for masks and anchors at the CLI's overlap, which registered them to the CLI's disc
+   and a dozen pixels inside the GUI's own horizon; drawn from the fragment's own direction the
+   curves land on the GUI's horizon, and the fixture read 15 dB on `full_sky_dual_fisheye` until the
+   export arm stopped carrying a band the screen never showed (`overlap` is a diverging key now,
+   doc/gui-state-governance.md §9.4). That scene reads 31 dB since — above what it read when both
+   arms drew the misregistered line.
    The same-process member found its own, of a different kind — not a divergence between the paths
    but a **blindness in the scene**: built on the shared 8-bit `InitSynthTexture()` /
    `UploadTexture()` pair, it lands in `PreviewRenderer::TextureMode::kSrgbComposited`, whose
@@ -1162,7 +1183,7 @@ health items that must not be moved/deleted casually.
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `functional/`: `test_background_overlay`, `test_color_window`, `test_defaults_panel`, `test_edit_modal`, `test_entry_management`, `test_export`, `test_file_ops`, `test_filter_editor`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_preview_animation`, `test_gui_sim_smoke`, `test_log_panel`, `test_overlay_controls`, `test_preview_texture`, `test_preview_viewport`, `test_run_lifecycle`, `test_scene_controls`, `test_shell_chrome`, `test_status_bar`, `test_view_display_controls`; `visual/`: `test_gui_capture_smoke`, `test_gui_defaults_panel`, `test_gui_lens_projection`, `test_gui_modal_layout`, `test_preview_pixels`; `responsiveness/`: **`test_gui_perf`**; harness (flat under `test/gui/`): `test_gui_main`, `test_screenshot`, `test_gui_shared` | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. `functional/` no longer includes an `interaction`-named catch-all — its former contents are now split by driven window/panel across the files above, or moved out to `unit-correctness`/`composition-correctness` when the case needed no live frame (§1.7). |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `functional/`: `test_angular_dist_circles`, `test_annotation_line_seam`, `test_annotation_line_tracking` (the per-frame proposition: twelve frames, a different view on each, every annotation where THAT frame's view puts it — the case that reads red on a debounced overlay), `test_background_overlay`, `test_color_window`, `test_defaults_panel`, `test_edit_modal`, `test_entry_management`, `test_export`, `test_file_ops`, `test_filter_editor`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_preview_animation`, `test_gui_sim_smoke`, `test_log_panel`, `test_overlay_controls`, `test_preview_texture`, `test_preview_viewport`, `test_run_lifecycle`, `test_scene_controls`, `test_shell_chrome`, `test_status_bar`, `test_view_display_controls`; `visual/`: `test_gui_capture_smoke`, `test_gui_defaults_panel`, `test_gui_lens_projection`, `test_gui_modal_layout`, `test_preview_pixels`; `responsiveness/`: **`test_gui_perf`**; harness (flat under `test/gui/`): `test_gui_main`, `test_screenshot`, `test_gui_shared` | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. `functional/` no longer includes an `interaction`-named catch-all — its former contents are now split by driven window/panel across the files above, or moved out to `unit-correctness`/`composition-correctness` when the case needed no live frame (§1.7). |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its

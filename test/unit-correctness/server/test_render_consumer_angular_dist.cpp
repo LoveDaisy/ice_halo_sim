@@ -13,7 +13,7 @@
 //     "a ring appeared" is not evidence of correctness and CircleIsCentredOnTheSun asks for the
 //     radius against the sun's own projected pixel instead;
 //   - each line carries its own opacity_/color_, which is why the consumer holds one mask PER LINE
-//     rather than the single per-category union LUMICE_ComputeAnnotationOverlay returns for a
+//     rather than the single per-category union annotation::ComputeOverlay returns for a
 //     batched request. TwoLinesKeepTheirOwnColours is the case a batched implementation fails;
 //   - neither the line list nor the sun takes part in NeedsRebuild, so ResetWith is the only path
 //     by which either can change under a live consumer. Both halves are covered below.

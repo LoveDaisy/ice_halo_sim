@@ -15,22 +15,23 @@ namespace lumice::annotation {
 // Annotation overlay geometry: "what does the current view look like" in, "where do the auxiliary
 // lines and their labels land, in pixels" out.
 //
-// THIS IS NOT A PER-FRAME CALL. The whole result is a function of the VIEW SNAPSHOT (lens, fov,
-// resolution, view angles, visible hemisphere) plus the line definitions, and every mask it
-// returns costs a W*H inverse-projection sweep — measured at 8-96 ms across the lens/resolution
-// space this renderer supports, i.e. above a 60 fps frame budget from 1024x1024 upward even
-// after the row-parallel split below. Compute it once when the view settles and cache the result;
-// a caller that drives an interactive control must debounce (or freeze the annotation during a
-// drag) rather than call this from its draw loop. The contract is stated here and repeated on
-// LUMICE_ComputeAnnotationOverlay because it is a property of the computation, not of any one
-// caller's discipline.
+// TWO ENTRY POINTS, ONE DEFINITION. ComputeOverlay rasterizes the curves into W*H byte masks (in
+// the same row-major layout as BuildVisibleMask) and returns the label anchors and marker points
+// beside them; ComputeAnchors returns the anchors and points ALONE. The masks cost a W*H
+// inverse-projection sweep — measured at 8-96 ms across the lens/resolution space this renderer
+// supports, above a 60 fps frame budget from 1024x1024 upward even with the row-parallel split —
+// and belong to a consumer that composites a finished image once (the CLI renderer). The anchors
+// cost a curve walk of a few hundred forward projections per curve, tens of microseconds, and are
+// what an interactive consumer calls every frame: the GUI preview evaluates the curves themselves
+// per fragment in its shader, from the same field definitions LevelSetMaskFromField evaluates
+// here, and asks core only where the text and the points go. Both entry points build the anchors
+// from one shared half, so the anchor ComputeOverlay carries beside its masks is the anchor
+// ComputeAnchors returns for the same request, by construction.
 //
-// The geometry is expressed as W*H byte masks in the SAME row-major layout as
-// BuildVisibleMask, and label anchors as pixel coordinates in that same image
-// space (x right, y down, origin at the top-left corner). Rendering — colour, line style, glyphs,
-// collision avoidance — belongs to the consumer; two consumers (the GUI preview and the CLI
-// renderer) draw the same geometry their own way, which is the whole point of returning geometry
-// instead of pixels.
+// Label anchors and marker points are pixel coordinates in image space (x right, y down, origin
+// at the top-left corner). Rendering — colour, line style, glyphs, collision avoidance — belongs
+// to the consumer; two consumers (the GUI preview and the CLI renderer) draw the same geometry
+// their own way, which is the whole point of returning geometry instead of pixels.
 //
 // SINGLE SOURCE OF PROJECTION. Every direction here goes through lm_proj::ProjectExitToPixel, the
 // same forward the three trace backends run, and every pixel-to-direction step goes through
@@ -134,8 +135,8 @@ struct Request {
   // exactly this many entries, in this order. Duplicates are allowed and simply reported twice.
   std::vector<MarkerId> markers;
 
-  // Skip the curve walk entirely. The masks alone are ~4x cheaper than masks + anchors, and a
-  // consumer that draws no text has no use for the anchors.
+  // Skip the curve walk entirely. A consumer that draws no text has no use for the anchors, and in
+  // ComputeOverlay the masks alone are ~4x cheaper than masks + anchors.
   bool labels = true;
 };
 
@@ -259,8 +260,20 @@ RenderConfig ToRenderConfig(const ViewSnapshot& view);
 // this layer decides.
 CanvasPoint ProjectWorldDir(const lm_proj::ProjParams& p, float wx, float wy, float wz);
 
-// The whole computation. Returns an Overlay with width/height zero for a degenerate view.
+// The masks, the anchors and the points. Returns an Overlay with width/height zero for a
+// degenerate view.
 Overlay ComputeOverlay(const Request& req);
+
+// The anchors and the points alone — no sweep, no mask, nothing proportional to W*H. This is the
+// per-frame entry point (see the header note). `markers` is parallel to Request::markers, `labels`
+// is empty when Request::labels is false. Request::zenith_nadir is not consulted: that legacy pair
+// is an Overlay field, and a caller here asks for the two poles through `markers`. A degenerate
+// view yields both vectors empty.
+struct Anchors {
+  std::vector<CanvasPoint> markers;
+  std::vector<Label> labels;
+};
+Anchors ComputeAnchors(const Request& req);
 
 }  // namespace lumice::annotation
 

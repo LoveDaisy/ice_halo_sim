@@ -333,6 +333,183 @@ CanvasPoint ProjectWorldDir(const lm_proj::ProjParams& p, float wx, float wy, fl
   return { static_cast<float>(r.hits[0].px), static_cast<float>(r.hits[0].py), true };
 }
 
+namespace {
+
+// What every computation on a request shares: the projection the anchors are forward-projected
+// through (and the inverse sweep runs backwards through), the camera forward, and the normalized
+// reference direction. Built once per request by SetUp, read by both the mask sweep and the anchor
+// walk so the two cannot be handed different projections of one view.
+struct RequestFrame {
+  RenderConfig cfg;
+  Rotation rot;
+  lm_proj::ProjParams params;  // the same params serve as inverse (sweep) and forward (anchors)
+  float forward[3]{ 0.0f, 0.0f, 0.0f };
+  float ref_dir[3]{ 0.0f, 0.0f, -1.0f };
+  WalkContext ctx;
+};
+
+RequestFrame SetUp(const Request& req) {
+  RequestFrame f;
+  const int width = req.view.width;
+  const int height = req.view.height;
+  f.cfg = ToRenderConfig(req.view);
+  f.rot = MakeCameraRotation(f.cfg);
+  const float short_pix = static_cast<float>(std::min(width, height));
+  f.params = BuildProjParams(f.cfg, f.rot, short_pix);
+
+  // Camera forward in world space. ProjectExitToPixel's single-lens branch computes
+  // c = R^T * (-w) and keeps c.z > 0, so the camera looks along -R * (0,0,1).
+  f.forward[0] = 0.0f;
+  f.forward[1] = 0.0f;
+  f.forward[2] = 1.0f;
+  f.rot.Apply(f.forward);
+  f.forward[0] = -f.forward[0];
+  f.forward[1] = -f.forward[1];
+  f.forward[2] = -f.forward[2];
+
+  f.ref_dir[0] = req.reference_dir[0];
+  f.ref_dir[1] = req.reference_dir[1];
+  f.ref_dir[2] = req.reference_dir[2];
+  {
+    const float len =
+        std::sqrt(f.ref_dir[0] * f.ref_dir[0] + f.ref_dir[1] * f.ref_dir[1] + f.ref_dir[2] * f.ref_dir[2]);
+    if (len > 1e-8f) {
+      f.ref_dir[0] /= len;
+      f.ref_dir[1] /= len;
+      f.ref_dir[2] /= len;
+    } else {
+      f.ref_dir[0] = 0.0f;
+      f.ref_dir[1] = 0.0f;
+      f.ref_dir[2] = -1.0f;
+    }
+  }
+
+  // The forward used for anchors asks the lens "do you image this direction", nothing else: the
+  // hemisphere policy is applied uniformly by VisibleForLabel afterwards (see its comment).
+  f.ctx.proj = f.params;
+  f.ctx.visible = f.cfg.visible_;
+  f.ctx.front = req.view.front;
+  f.ctx.forward[0] = f.forward[0];
+  f.ctx.forward[1] = f.forward[1];
+  f.ctx.forward[2] = f.forward[2];
+  f.ctx.width = width;
+  f.ctx.height = height;
+  return f;
+}
+
+// The named directions, sampled as points, in request order.
+void SampleMarkers(const Request& req, const RequestFrame& f, std::vector<CanvasPoint>* out) {
+  out->reserve(req.markers.size());
+  for (const MarkerId id : req.markers) {
+    out->push_back(SampleMarkerPoint(f.ctx, id, f.ref_dir));
+  }
+}
+
+// The curve walk: one label list for every requested family.
+void WalkLabels(const Request& req, const RequestFrame& f, std::vector<Label>* labels) {
+  const WalkContext& ctx = f.ctx;
+  const float* ref_dir = f.ref_dir;
+  if (req.horizon) {
+    EmitCurveLabel(WalkAltitudeCurve(ctx, 0.0f), kLabelHorizon, -1, 0.0f, FormatAngleDeg(0.0f), *labels);
+  }
+  for (size_t k = 0; k < req.elevation_deg.size(); ++k) {
+    const float value = req.elevation_deg[k];
+    EmitCurveLabel(WalkAltitudeCurve(ctx, value), kLabelElevation, static_cast<int>(k), value, FormatAngleDeg(value),
+                   *labels);
+  }
+  for (size_t k = 0; k < req.longitude_deg.size(); ++k) {
+    const float value = req.longitude_deg[k];
+    const std::vector<CurveSample> samples = WalkLongitudeCurve(ctx, value);
+    // Meridians converge at the poles, so the generic boundary/first-visible anchor stacks every
+    // meridian label on top of the pole. Anchor at the intersection with the reference parallel
+    // instead — the equator if it is visible, else the nearest visible sample to it — where
+    // meridians are maximally separated in azimuth and the labels stay distinct.
+    // (Ported from overlay_labels.cpp's process_longitude_curve; owner-chosen placement.)
+    float label_value = value;
+    if (label_value > 180.0f) {
+      label_value -= 360.0f;
+    }
+    if (label_value <= -180.0f) {
+      label_value += 360.0f;
+    }
+    const std::string text = FormatAngleDeg(label_value);
+    const int mid = kCurveAltSteps / 2;
+    for (int off = 0; off <= mid; ++off) {
+      const int lo = mid - off;
+      const int hi = mid + off;
+      if (lo >= 0 && samples[static_cast<size_t>(lo)].vis) {
+        labels->push_back({ samples[static_cast<size_t>(lo)].px, samples[static_cast<size_t>(lo)].py, kLabelLongitude,
+                            static_cast<int>(k), label_value, text });
+        break;
+      }
+      if (hi <= kCurveAltSteps && samples[static_cast<size_t>(hi)].vis) {
+        labels->push_back({ samples[static_cast<size_t>(hi)].px, samples[static_cast<size_t>(hi)].py, kLabelLongitude,
+                            static_cast<int>(k), label_value, text });
+        break;
+      }
+    }
+  }
+  for (size_t k = 0; k < req.angular_dist_deg.size(); ++k) {
+    const float value = req.angular_dist_deg[k];
+    float u[3];
+    float v[3];
+    if (!BuildRingFrame(ref_dir, u, v)) {
+      continue;
+    }
+    const float cos_d = std::cos(value * math::kDegreeToRad);
+    const float sin_d = std::sin(value * math::kDegreeToRad);
+    std::vector<CurveSample> samples;
+    samples.reserve(kCurveAzSteps + 1);
+    for (int i = 0; i <= kCurveAzSteps; ++i) {
+      const float phi = 2.0f * math::kPi * static_cast<float>(i) / static_cast<float>(kCurveAzSteps);
+      float d[3];
+      RingDirAt(ref_dir, u, v, cos_d, sin_d, phi, d);
+      samples.push_back(SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]));
+    }
+    const std::string text = FormatAngleDeg(value);
+
+    int boundary_count = 0;
+    for (size_t i = 1; i < samples.size(); ++i) {
+      if (!samples[i - 1].vis && samples[i].vis) {
+        labels->push_back({ samples[i].px, samples[i].py, kLabelAngularDist, static_cast<int>(k), value, text });
+        ++boundary_count;
+      }
+    }
+    if (boundary_count > 0) {
+      continue;
+    }
+    // Interior mode: the whole ring is in view, so there is no entry point to anchor on. Four
+    // canonical anchors a quarter turn apart around the reference direction, matching the GUI.
+    const bool any_vis = std::any_of(samples.begin(), samples.end(), [](const CurveSample& s) { return s.vis; });
+    if (!any_vis) {
+      continue;
+    }
+    for (int li = 0; li < 4; ++li) {
+      float d[3];
+      RingDirAt(ref_dir, u, v, cos_d, sin_d, static_cast<float>(li) * math::kPi_2, d);
+      const CurveSample s = SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]);
+      if (s.vis) {
+        labels->push_back({ s.px, s.py, kLabelAngularDist, static_cast<int>(k), value, text });
+      }
+    }
+  }
+}
+
+}  // namespace
+
+Anchors ComputeAnchors(const Request& req) {
+  Anchors out;
+  if (req.view.width <= 0 || req.view.height <= 0) {
+    return out;
+  }
+  const RequestFrame f = SetUp(req);
+  SampleMarkers(req, f, &out.markers);
+  if (req.labels) {
+    WalkLabels(req, f, &out.labels);
+  }
+  return out;
+}
+
 Overlay ComputeOverlay(const Request& req) {
   Overlay out;
   const int width = req.view.width;
@@ -344,36 +521,12 @@ Overlay ComputeOverlay(const Request& req) {
   out.height = height;
   const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
 
-  const RenderConfig cfg = ToRenderConfig(req.view);
-  const Rotation rot = MakeCameraRotation(cfg);
-  const float short_pix = static_cast<float>(std::min(width, height));
-  const lm_proj::ProjParams inverse_params = BuildProjParams(cfg, rot, short_pix);
-
-  // The forward used for anchors asks the lens "do you image this direction", nothing else: the
-  // hemisphere policy is applied uniformly by VisibleForLabel afterwards (see its comment).
-  lm_proj::ProjParams forward_params = inverse_params;
-
-  // Camera forward in world space. ProjectExitToPixel's single-lens branch computes
-  // c = R^T * (-w) and keeps c.z > 0, so the camera looks along -R * (0,0,1).
-  float forward[3]{ 0.0f, 0.0f, 1.0f };
-  rot.Apply(forward);
-  forward[0] = -forward[0];
-  forward[1] = -forward[1];
-  forward[2] = -forward[2];
-
-  float ref_dir[3]{ req.reference_dir[0], req.reference_dir[1], req.reference_dir[2] };
-  {
-    const float len = std::sqrt(ref_dir[0] * ref_dir[0] + ref_dir[1] * ref_dir[1] + ref_dir[2] * ref_dir[2]);
-    if (len > 1e-8f) {
-      ref_dir[0] /= len;
-      ref_dir[1] /= len;
-      ref_dir[2] /= len;
-    } else {
-      ref_dir[0] = 0.0f;
-      ref_dir[1] = 0.0f;
-      ref_dir[2] = -1.0f;
-    }
-  }
+  const RequestFrame f = SetUp(req);
+  const RenderConfig& cfg = f.cfg;
+  const Rotation& rot = f.rot;
+  const lm_proj::ProjParams& inverse_params = f.params;
+  const float* forward = f.forward;
+  const float* ref_dir = f.ref_dir;
 
   const bool need_alt = req.horizon || !req.elevation_deg.empty();
   const bool need_az = !req.longitude_deg.empty();
@@ -438,115 +591,18 @@ Overlay ComputeOverlay(const Request& req) {
                                                           req.angular_dist_deg, false);
   }
 
-  WalkContext ctx;
-  ctx.proj = forward_params;
-  ctx.visible = cfg.visible_;
-  ctx.front = req.view.front;
-  ctx.forward[0] = forward[0];
-  ctx.forward[1] = forward[1];
-  ctx.forward[2] = forward[2];
-  ctx.width = width;
-  ctx.height = height;
-
   // Not level sets: named directions, sampled as points. The legacy pair and the general list are
   // independent requests that share one sampler — asking for `zenith_nadir` and asking for
   // {kMarkerZenith, kMarkerNadir} runs literally the same code, so the two answers cannot drift.
   if (req.zenith_nadir) {
-    out.zenith = SampleMarkerPoint(ctx, kMarkerZenith, ref_dir);
-    out.nadir = SampleMarkerPoint(ctx, kMarkerNadir, ref_dir);
+    out.zenith = SampleMarkerPoint(f.ctx, kMarkerZenith, ref_dir);
+    out.nadir = SampleMarkerPoint(f.ctx, kMarkerNadir, ref_dir);
   }
-  out.markers.reserve(req.markers.size());
-  for (const MarkerId id : req.markers) {
-    out.markers.push_back(SampleMarkerPoint(ctx, id, ref_dir));
-  }
-
-  if (!req.labels) {
-    return out;
-  }
-
-  if (req.horizon) {
-    EmitCurveLabel(WalkAltitudeCurve(ctx, 0.0f), kLabelHorizon, -1, 0.0f, FormatAngleDeg(0.0f), out.labels);
-  }
-  for (size_t k = 0; k < req.elevation_deg.size(); ++k) {
-    const float value = req.elevation_deg[k];
-    EmitCurveLabel(WalkAltitudeCurve(ctx, value), kLabelElevation, static_cast<int>(k), value, FormatAngleDeg(value),
-                   out.labels);
-  }
-  for (size_t k = 0; k < req.longitude_deg.size(); ++k) {
-    const float value = req.longitude_deg[k];
-    const std::vector<CurveSample> samples = WalkLongitudeCurve(ctx, value);
-    // Meridians converge at the poles, so the generic boundary/first-visible anchor stacks every
-    // meridian label on top of the pole. Anchor at the intersection with the reference parallel
-    // instead — the equator if it is visible, else the nearest visible sample to it — where
-    // meridians are maximally separated in azimuth and the labels stay distinct.
-    // (Ported from overlay_labels.cpp's process_longitude_curve; owner-chosen placement.)
-    float label_value = value;
-    if (label_value > 180.0f) {
-      label_value -= 360.0f;
-    }
-    if (label_value <= -180.0f) {
-      label_value += 360.0f;
-    }
-    const std::string text = FormatAngleDeg(label_value);
-    const int mid = kCurveAltSteps / 2;
-    for (int off = 0; off <= mid; ++off) {
-      const int lo = mid - off;
-      const int hi = mid + off;
-      if (lo >= 0 && samples[static_cast<size_t>(lo)].vis) {
-        out.labels.push_back({ samples[static_cast<size_t>(lo)].px, samples[static_cast<size_t>(lo)].py,
-                               kLabelLongitude, static_cast<int>(k), label_value, text });
-        break;
-      }
-      if (hi <= kCurveAltSteps && samples[static_cast<size_t>(hi)].vis) {
-        out.labels.push_back({ samples[static_cast<size_t>(hi)].px, samples[static_cast<size_t>(hi)].py,
-                               kLabelLongitude, static_cast<int>(k), label_value, text });
-        break;
-      }
-    }
-  }
-  for (size_t k = 0; k < req.angular_dist_deg.size(); ++k) {
-    const float value = req.angular_dist_deg[k];
-    float u[3];
-    float v[3];
-    if (!BuildRingFrame(ref_dir, u, v)) {
-      continue;
-    }
-    const float cos_d = std::cos(value * math::kDegreeToRad);
-    const float sin_d = std::sin(value * math::kDegreeToRad);
-    std::vector<CurveSample> samples;
-    samples.reserve(kCurveAzSteps + 1);
-    for (int i = 0; i <= kCurveAzSteps; ++i) {
-      const float phi = 2.0f * math::kPi * static_cast<float>(i) / static_cast<float>(kCurveAzSteps);
-      float d[3];
-      RingDirAt(ref_dir, u, v, cos_d, sin_d, phi, d);
-      samples.push_back(SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]));
-    }
-    const std::string text = FormatAngleDeg(value);
-
-    int boundary_count = 0;
-    for (size_t i = 1; i < samples.size(); ++i) {
-      if (!samples[i - 1].vis && samples[i].vis) {
-        out.labels.push_back({ samples[i].px, samples[i].py, kLabelAngularDist, static_cast<int>(k), value, text });
-        ++boundary_count;
-      }
-    }
-    if (boundary_count > 0) {
-      continue;
-    }
-    // Interior mode: the whole ring is in view, so there is no entry point to anchor on. Four
-    // canonical anchors a quarter turn apart around the reference direction, matching the GUI.
-    const bool any_vis = std::any_of(samples.begin(), samples.end(), [](const CurveSample& s) { return s.vis; });
-    if (!any_vis) {
-      continue;
-    }
-    for (int li = 0; li < 4; ++li) {
-      float d[3];
-      RingDirAt(ref_dir, u, v, cos_d, sin_d, static_cast<float>(li) * math::kPi_2, d);
-      const CurveSample s = SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]);
-      if (s.vis) {
-        out.labels.push_back({ s.px, s.py, kLabelAngularDist, static_cast<int>(k), value, text });
-      }
-    }
+  // The same two halves ComputeAnchors is made of, on the same frame: what that entry point
+  // returns for a request is, by construction, what this one carries beside its masks.
+  SampleMarkers(req, f, &out.markers);
+  if (req.labels) {
+    WalkLabels(req, f, &out.labels);
   }
 
   return out;

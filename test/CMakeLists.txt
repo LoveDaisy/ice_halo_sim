@@ -313,7 +313,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_visible_mask_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_horizon_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_cache.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_anchors.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_marker_document_compat.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"

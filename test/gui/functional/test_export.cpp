@@ -246,10 +246,9 @@ void RunExportRequest() {
     gui::g_state.show_horizon_label = true;
     gui::g_state.show_grid_line = true;
     gui::g_state.show_grid_label = true;
-    // Refresh, not Update: this is a one-shot render with no run of frames to settle over, and the
-    // cache is the export's own for the same reason app.cpp's is the preview's.
-    gui::AnnotationOverlayCache& cache = gui::PreviewAnnotationOverlay();
-    cache.Refresh(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer), w, h));
+    // Computed at THIS canvas, the same way the live preview computes at its own each frame.
+    gui::AnnotationAnchors& cache = gui::PreviewAnnotationAnchors();
+    cache.Compute(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer), w, h));
     curve_labels.push_back(gui::BuildHorizonLabelSet(cache, gui::g_state, label_w, label_h));
     curve_labels.push_back(gui::BuildGridLabelSet(cache, gui::g_state, label_w, label_h));
   }

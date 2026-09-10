@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/field_editor_registry.hpp"
@@ -1995,7 +1995,16 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // that arm would leave the composite preview anchored differently from the image the same
     // document exports.
     dst.ev_mode = r.ev_mode == 1 ? LUMICE_EV_MODE_ABSOLUTE : LUMICE_EV_MODE_RELATIVE;
-    dst.overlap = kDualFisheyeOverlap;
+    // overlap SPLITS by intent, and it is the projection block's rule applied to a field that
+    // happens to sit above it. kSimCommit needs the band: the preview shader blends the two
+    // hemispheres of the source TEXTURE across it (sampleDualFisheye reads u_max_abs_dz /
+    // u_r_scale), so the texture has to carry sky past each equator. The PICTURE the user sees
+    // has no band: the shader's own dual-fisheye target projection (dualFisheyeInverse) maps each
+    // disc to exactly one hemisphere and knows nothing of the overlap. An export that carried it
+    // would have the CLI draw each disc 4 % larger than the screen shows — the horizon a dozen
+    // pixels inside the rim instead of on it, every curve and marker scaled with it — which is a
+    // picture the user never looked at. 0 is what the screen shows.
+    dst.overlap = intent == SceneIntent::kJsonExport ? 0.0f : kDualFisheyeOverlap;
     // ===== The projection block: where the two intents describe two different things =====
     //
     // These fields once carried kSimCommit's values on BOTH arms, which made the exported config a
@@ -3759,60 +3768,28 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
     return false;
   }
   PreviewParams params = vp.params;
-  // Rebuild the annotation masks AT THIS CANVAS, rather than reusing the one the live preview
-  // computed. Sampling a mask built for another size is a plain image rescale: harmless when the
-  // two sizes share an aspect ratio, and a distortion of the circles when they do not — and a
-  // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
-  // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
-  // debounce over. Its own cache, for the same reason: a different clock from the preview's.
-  if (params.overlay.show_sun_circles || params.overlay.show_grid || AnyMarkerRequested(g_state) ||
-      params.overlay.show_horizon) {
-    static AnnotationOverlayCache export_overlay;
-    export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
-    // Each family is handed over only if it actually produced a mask. HasResult() is not enough on
-    // its own: one call now serves three families, so a result can hold the grid's mask and not the
-    // circles' (the user turned the circles off, or emptied their angle list). Passing an empty
-    // vector's data() alongside a non-zero width/height would have the renderer upload W*H bytes
-    // from a pointer to nothing.
-    params.overlay.angular_dist_mask = nullptr;
-    params.overlay.grid_mask = nullptr;
-    params.overlay.horizon_mask = nullptr;
-    if (export_overlay.HasResult()) {
-      if (!export_overlay.AngularDistMask().empty()) {
-        params.overlay.angular_dist_mask = export_overlay.AngularDistMask().data();
-        params.overlay.angular_dist_mask_w = export_overlay.Width();
-        params.overlay.angular_dist_mask_h = export_overlay.Height();
-        params.overlay.angular_dist_mask_generation = export_overlay.Generation();
-      }
-      if (!export_overlay.GridMask().empty()) {
-        params.overlay.grid_mask = export_overlay.GridMask().data();
-        params.overlay.grid_mask_w = export_overlay.Width();
-        params.overlay.grid_mask_h = export_overlay.Height();
-        params.overlay.grid_mask_generation = export_overlay.Generation();
-      }
-      if (!export_overlay.HorizonMask().empty()) {
-        params.overlay.horizon_mask = export_overlay.HorizonMask().data();
-        params.overlay.horizon_mask_w = export_overlay.Width();
-        params.overlay.horizon_mask_h = export_overlay.Height();
-        params.overlay.horizon_mask_generation = export_overlay.Generation();
-      }
-      // The marker positions have to be recomputed here for a second reason on top of the mask's:
-      // they are SCREEN COORDINATES, so a position inherited from vp.params was measured against
-      // the live preview's viewport and would put the ring at the wrong place on any export whose
-      // canvas differs — not merely stretch it, as a rescaled mask does.
-      for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
-        const AnnotationOverlayCache::Point p =
-            g_state.markers[i].show ? export_overlay.MarkerPoint(i) : AnnotationOverlayCache::Point{};
-        CanvasPointToShaderScreenPos(p, g_state.renderer.lens_type, vp.vp_w, vp.vp_h,
-                                     params.overlay.marker_screen_pos[i].data());
-      }
-    } else {
-      // No result to place them from, and the inherited positions are the preview's. Sentinel every
-      // slot rather than draw rings at coordinates this canvas never produced. Unconditional, where
-      // this used to be gated on the markers being on: writing the sentinel is what "off" MEANS in
-      // this struct, so the gate would only be an opportunity to leave a stale position behind.
-      params.overlay.marker_screen_pos = MakeAllSentinelMarkerPositions();
+  // The curve definitions the shader evaluates (level lists, reference direction) are inherited
+  // from the live preview's params unchanged: they describe the sky, not a canvas. The marker
+  // positions are NOT — they are SCREEN COORDINATES, so a position inherited from vp.params was
+  // measured against the live preview's viewport and would put the ring at the wrong place on any
+  // export whose canvas differs. Ask core again AT THIS CANVAS. Its own AnnotationAnchors rather
+  // than the preview's, for the same reason: a different canvas is a different answer.
+  if (AnyMarkerRequested(g_state)) {
+    static AnnotationAnchors export_anchors;
+    export_anchors.Compute(
+        MakeAnnotationViewKey(AnnotationAnchorRequestFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
+    for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+      const AnnotationAnchors::Point p =
+          g_state.markers[i].show ? export_anchors.MarkerPoint(i) : AnnotationAnchors::Point{};
+      CanvasPointToShaderScreenPos(p, g_state.renderer.lens_type, vp.vp_w, vp.vp_h,
+                                   params.overlay.marker_screen_pos[i].data());
     }
+  } else {
+    // The inherited positions are the preview's. Sentinel every slot rather than draw rings at
+    // coordinates this canvas never produced. Unconditional, where this used to be gated on the
+    // markers being on: writing the sentinel is what "off" MEANS in this struct, so the gate would
+    // only be an opportunity to leave a stale position behind.
+    params.overlay.marker_screen_pos = MakeAllSentinelMarkerPositions();
   }
   auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h);
   if (rgba.empty()) {

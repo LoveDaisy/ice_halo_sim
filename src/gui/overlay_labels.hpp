@@ -44,7 +44,7 @@ constexpr int kGroupMarkers = 2;
 // needed it.
 //
 // `anchors` are in canvas pixel space with a top-left origin, which is what
-// AnnotationOverlayCache returns and what the viewport rect below is offset by. `px`/`py` and
+// AnnotationAnchors returns and what the viewport rect below is offset by. `px`/`py` and
 // `text` are read; the label's kind is not, because a set carries one family's anchors.
 struct CurveLabelAnchor {
   float px = 0.0f;

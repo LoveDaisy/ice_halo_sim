@@ -33,7 +33,11 @@
 //      not an open question.
 //   3. Dual fisheye with a non-zero overlap ring. core's r_scale changes the mapping; the GUI's
 //      display dual-fisheye is fixed at 180 deg per hemisphere and ignores it. Held at overlap = 0
-//      throughout, for the same reason test_visible_mask_gui_parity.cpp holds it there.
+//      throughout, for the same reason test_visible_mask_gui_parity.cpp holds it there — and,
+//      since v4.28, the same value the production request carries (AnnotationViewInputFor): the
+//      anchors annotate the disc the shader draws, which has no band. Before that the production
+//      request said kDualFisheyeOverlap and every anchor sat on a disc 4 % larger than the one on
+//      screen; this file never saw it because it held the value the projection actually has.
 //
 // PIXEL CONVENTIONS. Core answers a PIXEL INDEX in image space (x right, y down, origin top-left),
 // binning with floor(v) about res/2; the GUI answers a CONTINUOUS offset from the viewport centre,
@@ -63,7 +67,7 @@
 #include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
 #include "core/scatter_accum.hpp"  // MakeCameraRotation
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/preview_renderer.hpp"
@@ -474,7 +478,7 @@ TEST(AnnotationOverlayGuiParity, VisibleRangeIsNotAppliedByTheAnnotationForward)
 // WHERE THE PROPOSITIONS WENT, so this is a move and not a deletion:
 //   - "which numbers appear for this view, and where" — test/unit-correctness/gui/
 //     test_overlay_labels.cpp, whose cases now drive the production chain
-//     (AnnotationOverlayCache -> BuildHorizonLabelSet / BuildGridLabelSet -> AppendCurveLabels).
+//     (AnnotationAnchors -> BuildHorizonLabelSet / BuildGridLabelSet -> AppendCurveLabels).
 //     That includes the four placement-gap regression anchors.
 //   - "an anchor for the N-degree circle really lies N degrees from the sun" —
 //     test/unit-correctness/core/test_annotation_overlay.cpp
@@ -547,8 +551,8 @@ void CoreMarkers(const lumice::gui::ViewProjection& vp, int w, int h, MarkerPos*
   in.front = vp.front;
   in.overlap = 0.0f;  // held at zero for the reason divergence 3 in this file's header gives
   in.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
-  lumice::gui::AnnotationOverlayCache cache;
-  cache.Refresh(lumice::gui::MakeAnnotationViewKey(in, w, h));
+  lumice::gui::AnnotationAnchors cache;
+  cache.Compute(lumice::gui::MakeAnnotationViewKey(in, w, h));
   ASSERT_TRUE(cache.HasResult()) << "core produced no overlay for this view";
   float zp[2];
   float np[2];

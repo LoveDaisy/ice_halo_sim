@@ -25,7 +25,7 @@
 #include <iterator>
 #include <string>
 
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
@@ -260,37 +260,65 @@ struct LensProjScene {
 // compared at did not. ONE threshold moved as a result, overlay_ea 19.0 -> 19.5, and it is the
 // 0.5 dB flooring crossing a boundary on a 0.05 dB move (20.46 - 1.0 = 19.46 floors to 19.0;
 // 20.51 - 1.0 = 19.51 floors to 19.5) — a tightening the driver produced, not one chosen here.
+// ============================================================================================
+//
+// RE-SHOT, ALL NINE, a third time when the annotation curves went back to the preview shader
+// (v4.28): the grid and the horizon are evaluated per fragment from the fragment's own direction
+// again, as the hard set core's LevelSetMaskFromField marks, instead of being sampled from a mask
+// core rasterized. ONE scene's pixels changed, overlay_ea — and its reference, it turned out, had
+// never carried the grid it was said to cover: the committed image showed the halo and nothing
+// else (a grid-on scene at 17.8 dB against it, with every grid pixel in the diff). The eight
+// others are unaffected by the change and moved only by their own noise:
+//
+//   scene                                  mean before → after     sigma before → after
+//   fisheye_equal_area_120                 19.83 → 19.80  (-0.03)   0.0611 → 0.1114
+//   fisheye_equal_area_120_border          19.81 → 19.77  (-0.04)   0.0994 → 0.0967
+//   fisheye_orthographic_180               18.77 → 18.77  ( 0.00)   0.0508 → 0.0964
+//   linear                                 21.56 → 21.53  (-0.03)   0.1044 → 0.1013
+//   dual_fisheye_equal_area_full           27.49 → 27.53  (+0.04)   0.0415 → 0.0722
+//   dual_fisheye_equal_area_full_border    26.89 → 26.87  (-0.02)   0.0409 → 0.0417
+//   overlay_ea                             20.46 → 20.80  (+0.34)   0.0961 → 0.0687
+//   rectangular                            28.41 → 28.44  (+0.03)   0.0684 → 0.0662
+//   sky_colour_ea_180                      28.26 → 28.24  (-0.02)   0.1571 → 0.1289
+//
+// ONE threshold moved, dual_fisheye_equal_area_full 26.0 -> 26.5, and it is the flooring crossing
+// a boundary on a 0.04 dB move (27.49 - 1.0 = 26.49 floors to 26.0; 27.53 - 1.0 = 26.53 floors to
+// 26.5) — the driver's output, as before. overlay_ea's own threshold stays at 19.5: its mean rose
+// 0.34 dB with the grid actually in the reference, and 20.80 - 1.0 = 19.80 floors to the same
+// value.
 // The other eight are the driver's unchanged mechanical output.
 // ============================================================================================
 static const LensProjScene kScenes[] = {
-  // mean 19.83 σ0.0611 (N=10)
+  // mean 19.80 σ0.1114 (N=10)
   {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 18.77 σ0.0508 (N=10)
+  // mean 18.77 σ0.0964 (N=10)
   {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 17.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  // mean 21.56 σ0.1044 (N=10)
+  // mean 21.53 σ0.1013 (N=10)
   // fov=90 matches the Linear entry in kSingleLens[] (test_render_handedness_guard.cpp), so a
   // suspected linearInverse regression can be cross-read against that deterministic sign pin
   // at the same focal length.
   {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeLinear,              90.0f, 20.0f},
-  // mean 27.49 σ0.0415 (N=10)
-  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.0,  5.0f,
+  // mean 27.53 σ0.0722 (N=10)
+  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5.0f,
    LensSetup::kDualFisheyeExport},
-  // mean 28.41 σ0.0684 (N=10)
+  // mean 28.44 σ0.0662 (N=10)
   {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 27.0,  5.0f,
    LensSetup::kEquirectExport},
-  // mean 20.46 σ0.0961 (N=10)
+  // mean 20.80 σ0.0687 (N=10)
   // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the
   // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
   // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had
   // been its sole owner.
-  // RE-SHOT when the grid stopped being a shader expression and became a sampled core mask. The
-  // curves moved: the analytic version derived its own half-width per fragment from fwidth() of
-  // the altitude and azimuth fields, core derives one from the local gradient of the same fields on
-  // the CPU, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so the
-  // scene is no noisier than it was; only its operating point moved.
+  // RE-SHOT when the grid stopped being a shader expression and became a sampled core mask, and
+  // RE-SHOT AGAIN when it became a shader expression once more — this time of the same definition
+  // core evaluates (level lists + the shared line-width rule), evaluated per fragment so the curves
+  // follow a drag. The curves moved both times for the same reason in opposite directions: the
+  // shader's half-width comes from the hardware fwidth() of the fields, core's from a CPU forward
+  // difference, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so
+  // the scene is no noisier than it was; only its operating point moved.
   {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
@@ -303,12 +331,12 @@ static const LensProjScene kScenes[] = {
   // Ray budgets are inherited from the reused scenes for the reason those budgets exist: the border
   // is a thin bright curve, so its contribution to PSNR is small, and lowering the budget here would
   // raise the Monte-Carlo floor the border has to stand out from.
-  // mean 19.81 σ0.0994 (N=10)
+  // mean 19.77 σ0.0967 (N=10)
   {"fisheye_equal_area_120_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f,
    /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
    /*enable_lens_border=*/true},
-  // mean 26.89 σ0.0409 (N=10) — 0.6 dB under its borderless twin, which is the border's own contribution
+  // mean 26.87 σ0.0417 (N=10) — 0.7 dB under its borderless twin, which is the border's own contribution
   // to the frame: the two circles are a thin bright curve over an otherwise identical capture.
   {"dual_fisheye_equal_area_full_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5, 5.0f,
    LensSetup::kDualFisheyeExport,
@@ -335,7 +363,7 @@ static const LensProjScene kScenes[] = {
   //
   // The colour is the one the rest of this scrum probes with, so a byte read off this reference is
   // directly comparable with the numbers those suites assert.
-  // mean 28.26 σ0.1571 (N=10)
+  // mean 28.24 σ0.1289 (N=10)
   {"sky_colour_ea_180",            LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 192, 27.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 0.0f,
    /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
@@ -501,17 +529,17 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       }
 
       // 7b. Overlay scenes only (overlay_ea): place the zenith/nadir markers and turn the grid on.
-      // Mirrors the runtime path in app_panels.cpp — both families now take their geometry from
-      // core's LUMICE_ComputeAnnotationOverlay and the shader only rasterizes it, so this block is
-      // part of what the reference covers, not test scaffolding. Must run after the switch above:
-      // it reads the view_proj the scene just installed.
+      // Mirrors the runtime path in app_panels.cpp — the markers take their positions from core's
+      // LUMICE_ComputeAnnotationAnchors, the grid is a level-list definition the shader evaluates
+      // per fragment — so this block is part of what the reference covers, not test scaffolding.
+      // Must run after the switch above: it reads the view_proj the scene just installed.
       if (scene.enable_overlay) {
         if (scene.overlay_zenith_nadir) {
           // Computed AT THIS CANVAS and converted through the one owner of the canvas -> shader
           // transform, for the same reasons the grid block below gives. The markers used to be
           // placed by ProjectWorldDirToScreen, a GUI-only second copy of the forward projection;
           // that copy is no longer on this path.
-          static gui::AnnotationOverlayCache marker_overlay;
+          static gui::AnnotationAnchors marker_overlay;
           gui::AnnotationViewInput in;
           in.lens_type = vp.params.view_proj.lens_type;
           in.fov = vp.params.view_proj.fov;
@@ -522,7 +550,7 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           in.front = vp.params.view_proj.front;
           in.overlap = gui::kDualFisheyeOverlap;
           in.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
-          marker_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
+          marker_overlay.Compute(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
           IM_CHECK(marker_overlay.HasResult());
           // The scene exists to cover the ring, and a ring is small enough that its ABSENCE would
           // cost less PSNR than this group's noise — so a marker that stopped being placed would
@@ -546,30 +574,16 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
         }
         if (scene.overlay_grid) {
           vp.params.overlay.show_grid = true;
-          // The grid's geometry comes from core's annotation overlay now, not from a shader
-          // uniform, so the reference covers the mask path the live preview and the CLI both use.
-          // Computed AT THIS CANVAS for the reason ExportPreviewPng gives for doing the same: a
-          // mask built for another size is an image rescale of the curves.
-          static gui::AnnotationOverlayCache grid_overlay;
-          gui::AnnotationViewInput in;
-          in.lens_type = vp.params.view_proj.lens_type;
-          in.fov = vp.params.view_proj.fov;
-          in.azimuth = vp.params.view_proj.azimuth;
-          in.elevation = vp.params.view_proj.elevation;
-          in.roll = vp.params.view_proj.roll;
-          in.visible = vp.params.view_proj.visible;
-          in.front = vp.params.view_proj.front;
-          in.overlap = gui::kDualFisheyeOverlap;
+          // The grid is DEFINED here — the level lists the shader evaluates per fragment, from the
+          // same expansion the live preview and the exported config use — and rasterized by the
+          // shader from each fragment's own direction. Nothing about the canvas enters: the
+          // definition is the same at any size, which is what lets the reference cover the
+          // shader's evaluation rather than a resampled image of a mask.
           const float step = gui::ComputeGridStep(vp.params.view_proj.fov);
-          in.elevation_deg = gui::ComputeGridElevationAngles(step);
-          in.longitude_deg = gui::ComputeGridLongitudeAngles(step);
-          grid_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
-          IM_CHECK(grid_overlay.HasResult());
-          IM_CHECK(!grid_overlay.GridMask().empty());
-          vp.params.overlay.grid_mask = grid_overlay.GridMask().data();
-          vp.params.overlay.grid_mask_w = grid_overlay.Width();
-          vp.params.overlay.grid_mask_h = grid_overlay.Height();
-          vp.params.overlay.grid_mask_generation = grid_overlay.Generation();
+          vp.params.overlay.elevation_deg = gui::ComputeGridElevationAngles(step);
+          vp.params.overlay.longitude_deg = gui::ComputeGridLongitudeAngles(step);
+          IM_CHECK(!vp.params.overlay.elevation_deg.empty());
+          IM_CHECK(!vp.params.overlay.longitude_deg.empty());
         }
       }
 

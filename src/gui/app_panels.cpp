@@ -9,7 +9,7 @@
 #include <string>
 
 #include "IconsFontAwesome6.h"
-#include "gui/annotation_overlay_cache.hpp"
+#include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/aspect_ratio_rules.hpp"
 #include "gui/color_window.hpp"
@@ -111,14 +111,15 @@
 
 namespace lumice::gui {
 
-// The GUI's one AnnotationOverlayCache, filled once per frame in RenderPreviewPanel and read by
-// both consumers in the same frame — the preview's mask texture and the on-screen labels. File
-// scope rather than a member because RenderPreviewPanel is a free function and is the only place
-// a live preview view exists; the off-screen export path builds its own request at its own size.
-AnnotationOverlayCache g_annotation_overlay;
+// The GUI's one AnnotationAnchors, computed once per frame in RenderPreviewPanel and read by both
+// consumers in the same frame — the preview's marker ring positions and the on-screen labels.
+// File scope rather than a member because RenderPreviewPanel is a free function and is the only
+// place a live preview view exists; the off-screen export path builds its own request at its own
+// size.
+AnnotationAnchors g_annotation_anchors;
 
-AnnotationOverlayCache& PreviewAnnotationOverlay() {
-  return g_annotation_overlay;
+AnnotationAnchors& PreviewAnnotationAnchors() {
+  return g_annotation_anchors;
 }
 
 AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc) {
@@ -129,15 +130,23 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
   in.elevation = rc.elevation;
   in.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
   in.visible = rc.visible;
-  // The same constant the export writes into the config the CLI renders (file_io.cpp BuildScene),
-  // so both sides annotate the same projection rather than two that differ by an overlap band.
-  in.overlap = kDualFisheyeOverlap;
+  // ZERO, not kDualFisheyeOverlap. The anchors annotate the picture ON SCREEN, and that picture's
+  // dual-fisheye projection is the shader's dualFisheyeInverse, which maps each disc to exactly one
+  // hemisphere and has no overlap band; the band belongs to the source TEXTURE the preview
+  // resamples (kSimCommit's overlap), not to any lens the preview shows. A request that carried
+  // it would have core place every anchor on a disc 4 % larger than the one drawn — the horizon's
+  // label a dozen pixels inside the rim the picture puts it on — and the shader-drawn curves,
+  // which come from the picture's own inverse, would not meet their labels. The exported config
+  // says 0 for the same reason (file_io.cpp BuildScene, kJsonExport), so the CLI render of that
+  // config and this screen agree on the disc too.
+  in.overlap = 0.0f;
   in.front = rc.front;
   in.sun_altitude_deg = state.sun.altitude;
   // Each family's angle list is filled only when that family's line OR label switch is on. The
   // switches gate here rather than only at the drawing site because an unwanted list is not free:
-  // every angle in it is a level the mask sweep tests per pixel and a curve the label walk walks.
-  // A family whose list is empty is simply not computed (AnnotationOverlayCache::Recompute).
+  // every angle in it is a level the shader tests per fragment and a curve the label walk walks.
+  // A family whose list is empty is simply not computed (AnnotationAnchors::Compute), and not
+  // drawn.
   if (state.show_sun_circles_line || state.show_sun_circles_label) {
     in.angular_dist_deg = state.sun_circle_angles;
   }
@@ -155,10 +164,22 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
       in.marker_ids.push_back(i);
     }
   }
-  // The horizon, gated on EITHER of its switches, exactly like the three families above. It used
-  // to be the label switch alone, because the preview derived the line itself in its fragment
-  // shader and the mask that came back was a cost with no reader. It has one now.
+  // The horizon, gated on EITHER of its switches, exactly like the three families above: the one
+  // builder serves both the shader's curve request and core's anchor request, and it has one rule.
   in.horizon = state.show_horizon_line || state.show_horizon_label;
+  return in;
+}
+
+AnnotationViewInput AnnotationAnchorRequestFor(const GuiState& state, const RenderConfig& rc) {
+  AnnotationViewInput in = AnnotationViewInputFor(state, rc);
+  if (!state.show_sun_circles_label) {
+    in.angular_dist_deg.clear();
+  }
+  if (!state.show_grid_label) {
+    in.elevation_deg.clear();
+    in.longitude_deg.clear();
+  }
+  in.horizon = state.show_horizon_label;
   return in;
 }
 
@@ -185,8 +206,8 @@ float CanvasToTargetScale(int canvas_extent, float target_extent) {
   return canvas_extent > 0 ? target_extent / static_cast<float>(canvas_extent) : 1.0f;
 }
 
-void FillCurveLabelSet(const AnnotationOverlayCache& cache, const std::vector<AnnotationOverlayCache::Label>& labels,
-                       float vp_w, float vp_h, CurveLabelSet* set) {
+void FillCurveLabelSet(const AnnotationAnchors& cache, const std::vector<AnnotationAnchors::Label>& labels, float vp_w,
+                       float vp_h, CurveLabelSet* set) {
   if (!cache.HasResult()) {
     return;
   }
@@ -200,8 +221,7 @@ void FillCurveLabelSet(const AnnotationOverlayCache& cache, const std::vector<An
 
 }  // namespace
 
-CurveLabelSet BuildSunCirclesLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
-                                      float vp_h) {
+CurveLabelSet BuildSunCirclesLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h) {
   CurveLabelSet set;
   std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color), std::begin(set.color));
   set.alpha = state.sun_circles_alpha;
@@ -210,7 +230,7 @@ CurveLabelSet BuildSunCirclesLabelSet(const AnnotationOverlayCache& cache, const
   return set;
 }
 
-CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h) {
+CurveLabelSet BuildHorizonLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h) {
   CurveLabelSet set;
   std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(set.color));
   set.alpha = state.horizon_alpha;
@@ -222,7 +242,7 @@ CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const Gu
   return set;
 }
 
-std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationAnchors& cache, const GuiState& state, float vp_w,
                                                 float vp_h) {
   std::vector<CurveLabelSet> out;
   for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
@@ -233,7 +253,7 @@ std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& ca
     // directions, so on any lens short of full-sky at least one of the six is normally off-canvas,
     // and the label pass's viewport clamp (AppendOverlayToDrawList) would otherwise pin its name to
     // an edge it has no business marking.
-    const AnnotationOverlayCache::Point& p = cache.MarkerPoint(i);
+    const AnnotationAnchors::Point& p = cache.MarkerPoint(i);
     if (!p.valid) {
       continue;
     }
@@ -247,7 +267,7 @@ std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& ca
     std::copy(std::begin(state.markers[i].color), std::end(state.markers[i].color), std::begin(set.color));
     set.alpha = state.markers_alpha;
     set.group = kGroupMarkers;
-    FillCurveLabelSet(cache, { AnnotationOverlayCache::Label{ p.px, p.py, 0.0f, kMarkerDisplayNames[i] } }, vp_w, vp_h,
+    FillCurveLabelSet(cache, { AnnotationAnchors::Label{ p.px, p.py, 0.0f, kMarkerDisplayNames[i] } }, vp_w, vp_h,
                       &set);
     // Below the ring rather than on it: the anchor core reports is the marker's CENTRE, and a name
     // drawn there would sit inside the very ring it names.
@@ -266,7 +286,7 @@ std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& ca
   return out;
 }
 
-CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h) {
+CurveLabelSet BuildGridLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h) {
   CurveLabelSet set;
   std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(set.color));
   set.alpha = state.grid_alpha;
@@ -1094,7 +1114,7 @@ void RenderMarkersSection() {
     // settled every point reads invalid, and greying all six for the few frames after a toggle would
     // report a clipping that is not happening.
     const bool clipped =
-        m.show && PreviewAnnotationOverlay().HasResult() && !PreviewAnnotationOverlay().MarkerPoint(i).valid;
+        m.show && PreviewAnnotationAnchors().HasResult() && !PreviewAnnotationAnchors().MarkerPoint(i).valid;
     if (clipped) {
       ImGui::TextDisabled("%s", kMarkerDisplayNames[i]);
       if (ImGui::IsItemHovered()) {
@@ -1965,45 +1985,32 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.overlay.horizon_alpha = g_state.horizon_alpha;
     pp.overlay.grid_alpha = g_state.grid_alpha;
     pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
-    // Angular-distance circles and the coordinate grid: ask core where they are, once the view has
-    // settled. ONE request covers every family, so the mask the shader samples and the label
-    // anchors drawn below cannot end up describing different curves.
+    // WHERE the curves are, as the definition the shader evaluates per fragment, and WHERE their
+    // text and the markers go, as core's answer for this frame — both from the ONE builder
+    // (AnnotationViewInputFor), so the line and the label on it, or the ring and its name, cannot
+    // describe different curves or different views.
     //
     // Lines and labels have separate switches per family, and the request is made when ANY of them
     // is on: a user drawing only the labels still needs the anchors, and one drawing only the lines
-    // still needs the mask. Which families the request actually carries is decided inside
-    // AnnotationViewInputFor, off the same switches; each switch then gates its own half below.
-    if (g_state.show_sun_circles_line || g_state.show_sun_circles_label || g_state.show_grid_line ||
-        g_state.show_grid_label || AnyMarkerRequested(g_state) || g_state.show_horizon_line ||
-        g_state.show_horizon_label) {
-      g_annotation_overlay.Update(
-          MakeAnnotationViewKey(AnnotationViewInputFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
-    } else {
-      g_annotation_overlay.Update(AnnotationOverlayCache::ViewKey{});
-    }
-    // The non-empty check is not belt-and-braces: one call serves every family, so a result can
-    // hold the grid's mask and not the circles' — the user emptied the circle list, say. An empty
-    // vector's data() with a non-zero width/height would have Render() upload W*H bytes from a
-    // pointer to nothing.
-    if (g_state.show_sun_circles_line && g_annotation_overlay.HasResult() &&
-        !g_annotation_overlay.AngularDistMask().empty()) {
-      // Borrowed for this frame only; PreviewRenderer::Render uploads it during the GL phase.
-      pp.overlay.angular_dist_mask = g_annotation_overlay.AngularDistMask().data();
-      pp.overlay.angular_dist_mask_w = g_annotation_overlay.Width();
-      pp.overlay.angular_dist_mask_h = g_annotation_overlay.Height();
-      pp.overlay.angular_dist_mask_generation = g_annotation_overlay.Generation();
-    }
-    if (g_state.show_grid_line && g_annotation_overlay.HasResult() && !g_annotation_overlay.GridMask().empty()) {
-      pp.overlay.grid_mask = g_annotation_overlay.GridMask().data();
-      pp.overlay.grid_mask_w = g_annotation_overlay.Width();
-      pp.overlay.grid_mask_h = g_annotation_overlay.Height();
-      pp.overlay.grid_mask_generation = g_annotation_overlay.Generation();
-    }
-    if (g_state.show_horizon_line && g_annotation_overlay.HasResult() && !g_annotation_overlay.HorizonMask().empty()) {
-      pp.overlay.horizon_mask = g_annotation_overlay.HorizonMask().data();
-      pp.overlay.horizon_mask_w = g_annotation_overlay.Width();
-      pp.overlay.horizon_mask_h = g_annotation_overlay.Height();
-      pp.overlay.horizon_mask_generation = g_annotation_overlay.Generation();
+    // still needs the curve definition. Which families the request actually carries is decided
+    // inside AnnotationViewInputFor, off the same switches; each switch then gates its own half.
+    //
+    // EVERY FRAME, unconditionally. The anchors are a curve walk — ~0.1 ms for an ordinary grid,
+    // 2.4 ms at the narrowest field of view with every family LABELLED (a thousand curves) — and
+    // asking on every frame is what makes the text and the rings move with a drag on the frame it
+    // happens, exactly as the shader-drawn lines do. There is deliberately no "has the view
+    // changed" check in front of this: the check would cost about what the call does, and a stale
+    // answer surviving a missed field in the comparison is the defect the per-frame call exists to
+    // rule out. What IS trimmed is the request: a family whose label switch is off is drawn by the
+    // shader and not walked by core (AnnotationAnchorRequestFor).
+    {
+      const AnnotationViewInput curves = AnnotationViewInputFor(g_state, rc);
+      pp.overlay.elevation_deg = curves.elevation_deg;
+      pp.overlay.longitude_deg = curves.longitude_deg;
+      pp.overlay.angular_dist_deg = curves.angular_dist_deg;
+      GuiSunWorldDir(curves.sun_altitude_deg, pp.overlay.reference_dir);
+      g_annotation_anchors.Compute(
+          MakeAnnotationViewKey(AnnotationAnchorRequestFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
     }
 
     // The reference-point markers. The APPEARANCE below is the GUI's own state; the POSITIONS come
@@ -2018,12 +2025,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(g_state.lens_border_color), std::end(g_state.lens_border_color),
               std::begin(pp.overlay.lens_border_color));
     pp.overlay.lens_border_alpha = g_state.lens_border_alpha;
-    // WHERE the two rings go: core's answer, from the same LUMICE_ComputeAnnotationOverlay call
-    // the circles and the grid already read, converted from its canvas space (top-left origin,
-    // y down) into the shader's (centre origin, y up). This used to be a second, GUI-only forward
-    // projection of the two world directions through ProjectWorldDirToScreen — the same duplicate
-    // implementation the label walk had, and the one this task removes. The ring is still
-    // rasterized by the shader; only the position's source moved.
+    // WHERE the rings go: core's answer for this frame, from the same LUMICE_ComputeAnnotationAnchors
+    // call the labels below read, converted from its canvas space (top-left origin, y down) into
+    // the shader's (centre origin, y up). Not a GUI-side forward projection of the six world
+    // directions — that would be a second implementation of the placement the labels use. The ring
+    // is rasterized by the shader; only the position comes from core.
     for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
       // A marker whose LINE switch is off is handed the default-constructed (invalid) point, which
       // CanvasPointToShaderScreenPos already turns into the sentinel — the same path an unimaged
@@ -2031,15 +2037,15 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // canvas" are the same instruction to the shader, and writing them the same way means the
       // two cannot disagree. Note the switch read here is `show` alone: a marker with only its
       // LABEL on is in the request (its name needs an anchor) but must draw no ring.
-      const AnnotationOverlayCache::Point p =
-          g_state.markers[i].show ? g_annotation_overlay.MarkerPoint(i) : AnnotationOverlayCache::Point{};
+      const AnnotationAnchors::Point p =
+          g_state.markers[i].show ? g_annotation_anchors.MarkerPoint(i) : AnnotationAnchors::Point{};
       CanvasPointToShaderScreenPos(p, rc.lens_type, g_preview_vp.vp_w, g_preview_vp.vp_h,
                                    pp.overlay.marker_screen_pos[i].data());
     }
 
     // Overlay labels at viewport edges. Every family's anchors come from core, through the one
-    // AnnotationOverlayCache result the masks above already read — the GUI walks no curve of its
-    // own any more, so the preview and the CLI cannot place the same number differently.
+    // AnnotationAnchors result this frame computed above — the GUI walks no curve of its own, so
+    // the preview and the CLI cannot place the same number differently.
     //
     // PUBLISHED, NOT DRAWN. The labels are rasterized into the preview's own FBO in the deferred
     // pass (RenderPreviewFrameAndBlit, called from the frame loop after ImGui::Render()), which is
@@ -2066,17 +2072,17 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // Every set goes into ONE vector so they take part in one collision pass, which is where
       // the per-set group is read.
       if (g_state.show_horizon_label) {
-        g_preview_vp.curve_labels.push_back(BuildHorizonLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
+        g_preview_vp.curve_labels.push_back(BuildHorizonLabelSet(g_annotation_anchors, g_state, vp_sw, vp_sh));
       }
       if (g_state.show_sun_circles_label) {
-        g_preview_vp.curve_labels.push_back(BuildSunCirclesLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
+        g_preview_vp.curve_labels.push_back(BuildSunCirclesLabelSet(g_annotation_anchors, g_state, vp_sw, vp_sh));
       }
       if (g_state.show_grid_label) {
-        g_preview_vp.curve_labels.push_back(BuildGridLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
+        g_preview_vp.curve_labels.push_back(BuildGridLabelSet(g_annotation_anchors, g_state, vp_sw, vp_sh));
       }
       // No outer switch of its own, unlike the three above: each marker carries its own label
       // switch, so the builder returns an empty vector when none of the six is on.
-      for (CurveLabelSet& set : BuildMarkerLabelSets(g_annotation_overlay, g_state, vp_sw, vp_sh)) {
+      for (CurveLabelSet& set : BuildMarkerLabelSets(g_annotation_anchors, g_state, vp_sw, vp_sh)) {
         g_preview_vp.curve_labels.push_back(std::move(set));
       }
     }

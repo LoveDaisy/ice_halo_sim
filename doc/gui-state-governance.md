@@ -262,6 +262,7 @@
 | `visible` | 半球裁剪：恒 `full` vs 用户的 |
 | `background` | 显示期合成 vs CLI 烤进图里 |
 | `resolution` | 2:1 纹理 vs 用户的画幅 |
+| `overlap` | 双鱼眼重叠带：commit 臂写 `kDualFisheyeOverlap`（预览 shader 靠它在源**纹理**的两半球拼缝上混合）vs export 臂写 `0`（屏幕上那张画的双鱼眼目标投影 `dualFisheyeInverse` 每盘恰好一个半球，根本没有重叠带；带着它导出会让 CLI 把每个盘画大 4%，地平线缩进盘沿十几像素——用户从没看过那张画）。加入理由见 §9.4 |
 | `front` | 第二道裁剪：恒关 vs 用户的开关（与 `visible` 正交，见 §9.3） |
 | `grid.horizon` | 恒开 vs 用户的开关 |
 | `grid.angular_dist` / `grid.elevation` / `grid.longitude` | 角度表：commit 臂留空 vs export 臂写用户的表（理由见 §9.4） |
@@ -316,9 +317,11 @@
   `grid.elevation` / `grid.longitude`）、三个文字标注开关，以及后来补上的三个 `*_line` 开关，
   在 `kDivergingKeys` 处一律按子键豁免。
   上一版这里写的是「`grid.angular_dist` 已分叉、`grid.elevation` 仍不分叉」，后半句已经过期。
-  裁定结果是上面两个候选里的**第一个**：core 算注解几何（`LUMICE_ComputeAnnotationOverlay`），
-  但 GUI 仍然自己画 overlay，因为标注属于**成品图**而不是那张全天纹理——往纹理里烤线会被重投影
-  一起重采样，线宽与位置都变形。所以 export 臂填数据、commit 臂留空。
+  裁定结果是上面两个候选里的**第一个**：core 算注解几何（当时是 `LUMICE_ComputeAnnotationOverlay`
+  产掩码；v4.28 起 GUI 的线由预览 shader 按同一水平集定义逐 fragment 求值、只向 core 要文字锚点与
+  marker 点——`LUMICE_ComputeAnnotationAnchors`），但 GUI 仍然自己画 overlay，因为标注属于**成品图**
+  而不是那张全天纹理——往纹理里烤线会被重投影一起重采样，线宽与位置都变形。所以 export 臂填数据、
+  commit 臂留空。
   `grid.elevation` / `grid.longitude` 后来按同一条理由并入分叉面，但它们比角距圈多一步：
   角距圈本来就是一份显式角度表，等高线/经度线在 GUI 那边只有**一个 FOV 自适应步长 + 共用外观**。
   对齐方案是**「模型按 core、步长自适应算显示层便利」**——export 臂把当前步长展开成显式列表
@@ -330,6 +333,15 @@
   （附带一条仍然成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
   `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它；
   `angular_dist` 在 commit 臂留空是同一个理由的另一面。）
+- **`overlap` 的加入理由**（辅助线改回 shader 逐 fragment 求值时暴露）：以前 GUI 的辅助线掩码与锚点都是
+  向 core 按 `overlap = kDualFisheyeOverlap` 请求的，与 export 臂写的值一致，于是跨进程 parity 在双鱼眼
+  场景上很高——但那些线和 marker 在 **GUI 自己的画面**上是错位的：预览 shader 的双鱼眼目标投影每盘
+  恰好一个半球（没有重叠带），而 core 按重叠带算出来的地平线在盘沿内侧 4%（512 像素的盘上十几像素）。
+  线改成从 fragment 自己的方向求值后，它们自然落在画面自己的地平线上，锚点请求也随之改为 `overlap = 0`
+  （`AnnotationViewInputFor`），parity 闸立刻暴露出被掩盖的那条真实分歧：CLI 的盘比屏幕上的大 4%。
+  裁决按本节的通则——export 臂描述的是**屏幕上那张画**，屏幕上没有重叠带 ⇒ export 臂写 `0`；commit 臂
+  仍写 `kDualFisheyeOverlap`，因为源纹理的两半球拼缝混合要用它。⚠️ 这是一条**会改变导出 config 内容**的
+  裁决（双鱼眼导出的 `overlap` 从 0.0872 变为 0），由实施者按本节通则推出而非 owner 逐字裁定，可质疑。
 - **`grid.elevation_line` / `grid.longitude_line` / `grid.angular_dist_line` 三个子键的加入理由**
   （按本节纪律，先在这里说明再改清单）：在它们存在之前，这三族「画不画线」等价于「角度表空不空」，
   于是 export 臂遇到「用户开着 label、关着 line」这个合法 GUI 状态时只有两条路——填表（画出用户

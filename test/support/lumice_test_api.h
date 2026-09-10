@@ -32,27 +32,28 @@ extern "C" {
 
 // The render-domain mask of one view: row-major width*height, indexed py * width + px, 1 where the
 // lens images a piece of sky the view is allowed to draw — imaged, inside `visible`, and inside
-// the front hemisphere when `front` is set. Byte-identical to LUMICE_AnnotationOverlay::drawable
-// for the same LUMICE_AnnotationView: both come from one lumice::annotation::ComputeOverlay sweep
-// and the same mask_detail::PixelToWorld + VisibleByRange + FrontVisible predicate the renderer
-// bakes with. `imaged` is NULL only for a degenerate view (width or height <= 0).
+// the front hemisphere when `front` is set. Byte-identical to lumice::annotation::Overlay::drawable
+// for the same view — the mask the CLI renderer composites against — since both come from one
+// lumice::annotation::ComputeOverlay sweep and the same mask_detail::PixelToWorld + VisibleByRange
+// + FrontVisible predicate the renderer bakes with. The product API exports no mask at all (see the
+// v4.28 note at LUMICE_API_VERSION); this hook is the only door onto it from outside the process. `imaged` is NULL only
+// for a degenerate view (width or height <= 0).
 typedef struct LUMICE_TEST_RenderDomainMask_ {
   int width;
   int height;
   const unsigned char* imaged;
   // Opaque handle to the storage `imaged` points into. Do not read, write, copy or free it; pass
   // this struct to LUMICE_TEST_ReleaseRenderDomainMask exactly once instead — the same
-  // acquire/release discipline LUMICE_Scene / LUMICE_ResultFrame / LUMICE_AnnotationOverlay use.
+  // acquire/release discipline LUMICE_Scene / LUMICE_ResultFrame / LUMICE_AnnotationAnchors use.
   // Copying the struct copies the handle, so only ONE copy may be released.
   void* storage;
 } LUMICE_TEST_RenderDomainMask;
 
 // Compute ONLY the render-domain mask of one view — no curve masks, no label anchors, no markers.
-// Exists so a test fixture that needs the mask never has to reach for the product annotation API,
-// which lumice.h carries for the GUI and the CLI renderer, not for tests. Pure, deterministic and
-// thread-safe like LUMICE_ComputeAnnotationOverlay. `*out` is fully overwritten on success and
-// left untouched on failure. A degenerate view (width or height <= 0) is not an error: it yields
-// width = height = 0 and imaged = NULL, and still must be Released.
+// Exists so a test fixture that needs the mask can have it without the product ABI exporting one
+// for a test's sake. Pure, deterministic and thread-safe like LUMICE_ComputeAnnotationAnchors. `*out` is fully
+// overwritten on success and left untouched on failure. A degenerate view (width or height <= 0) is not an error: it
+// yields width = height = 0 and imaged = NULL, and still must be Released.
 //
 // Returns LUMICE_ERR_NULL_ARG if `view` or `out` is NULL; LUMICE_ERR_INVALID_VALUE for an unknown
 // lens_type / visible; LUMICE_ERR_UNKNOWN on allocation failure.
