@@ -107,8 +107,8 @@ help() {
   echo "               (keep dependency cache). -k cleans static, -ks cleans shared."
   echo "               NOTE: this removes build/cmake_build/<flavor> and"
   echo "               build/cmake_install/<flavor>, but NOT the compiler output tree"
-  echo "               build/<BUILD_TYPE>/<flavor>/. A liblumice there survives -k, and"
-  echo "               it is the first thing the e2e C API loader looks for — so after"
+  echo "               build/<BUILD_TYPE>/<flavor>/. A liblumice_testapi there survives -k,"
+  echo "               and it is the first thing the e2e C API loader looks for — so after"
   echo "               -k it can still load a pre-clean library. Use -x to wipe build/."
   echo "  -x:          Wipe build/ entirely — both flavors, plus the compiler output"
   echo "               tree that -k leaves behind. It does NOT clear the CPM"
@@ -116,7 +116,11 @@ help() {
   echo "               directory outside build/ (\$HOME/.cache/lumice-cpm) shared with"
   echo "               every other clone and worktree; delete that directory by hand if"
   echo "               you really want the sources re-downloaded."
-  echo "  -s:          Build shared library (default: static)."
+  echo "  -s:          Build shared library (default: static). Produces TWO"
+  echo "               libraries: liblumice (the product C API, lumice.h) and"
+  echo "               liblumice_testapi (the same objects plus the LUMICE_TEST_*"
+  echo "               hooks of test/support/lumice_test_api.h). The pytest ctypes"
+  echo "               harness loads the latter; see test/e2e/capi_runner.py."
   echo "  -h:          Show this message."
 }
 

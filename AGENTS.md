@@ -302,6 +302,19 @@ before downloading into it).
     `-g`/`-t` alone never produce it, see "Build trees..." above) and are excluded from CI's fast
     leg. Run them locally with `pytest -v -m slow` before opening a PR that touches the simulator
     core, query filter, or C API surface.
+    That build produces **two** shared libraries, and pytest loads the second one. `liblumice` is
+    the product export surface: `src/include/lumice.h`, `LUMICE_*` only, and nothing that exists
+    for a test's sake. `liblumice_testapi` (root `CMakeLists.txt`, target `lumice_testapi`; header
+    `test/support/lumice_test_api.h`) is built from the **same `lumice_obj` objects** — so every
+    product call behaves identically in it — and additionally exports the `LUMICE_TEST_*` hooks
+    a pytest fixture needs and `lumice.h` must never carry (today: the lens imaging-domain mask).
+    It is a superset stand-in, not a companion library: `-fvisibility=hidden` leaves a side library
+    nothing to link against, so the hooks ship with their own copy of the engine, and a test
+    process loads exactly one of the two. `test/e2e/capi_runner.py::lib_candidates` is the single
+    authority on which file that is; `scripts/check_policies.py`'s `no-test-symbol-in-src` rule
+    keeps the `LUMICE_TEST_` prefix out of `src/` so the two surfaces cannot grow back together.
+    Existing pytest calls to product symbols are deliberately **not** migrated to the test header:
+    their subject is the product C API contract itself, and wrapping them would test the wrapper.
     - `test/regression-sentinel/test_capi_sentinel_overflow.py` — sentinel-overflow regression: 3-config × 12 rounds = 36 server lifecycles via `LUMICE_AcquireResultFrame` + `LUMICE_FrameGetRawXyz(max_count=1)`; guards against reintroduction of the c_api.cpp off-by-one sentinel write (fix: 5287efe)
     - `test/regression-sentinel/test_ms_filter_leak.py` — Design A filter-fail termination regression: confirms filter-fail rays do not propagate across MS layers
   - **Test-scope table** — which command fits a given situation:

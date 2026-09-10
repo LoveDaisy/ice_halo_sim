@@ -1520,9 +1520,17 @@ right. The increment costs 11s — about 6% on top of
 `pyproject.toml`'s `addopts = ["-m", "not slow"]` — the cross-backend parity batteries, the
 throughput gates, and the issue-repro sentinels (§6's "do not touch" list) are all in there. *(b)*
 More importantly, `pr` is the **only** local scope in which the library is loaded as a library:
-those tests drive `liblumice` through `ctypes` (`test/e2e/capi_runner.py`), so the export surface,
+those tests drive the library through `ctypes` (`test/e2e/capi_runner.py`), so the export surface,
 the dynamic-symbol resolution, the rpath and the C API's cross-boundary object lifetimes are
-exercised here and nowhere else. `quick` and `full` link the same sources into a test binary, which
+exercised here and nowhere else. The file loaded is `liblumice_testapi`, not `liblumice`: the shared
+build produces both, from the same `lumice_obj` objects, and the test library is the product one
+plus the `LUMICE_TEST_*` hooks of `test/support/lumice_test_api.h` — test-only entry points (the
+lens imaging-domain mask, today) that `lumice.h` carries no product reason to export. Because
+`-fvisibility=hidden` gives a side library nothing to link to, the hooks ship with their own copy
+of the engine, and a test process loads exactly one of the two; every product `LUMICE_*` call
+behaves identically in either, which is what makes the stand-in honest. `lib_candidates()` is the
+one authority on which file that is, and `scripts/check_policies.py`'s `no-test-symbol-in-src`
+rule keeps the prefix out of `src/`. `quick` and `full` link the same sources into a test binary, which
 cannot see a defect in how the code is *packaged*. The scope carries a freshness layer for exactly
 this reason: a stale `.dylib` silently tests old code and reports green, so `pr` refuses to trust a
 library it cannot prove is newer than its sources.

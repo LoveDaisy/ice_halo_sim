@@ -3677,6 +3677,28 @@ bool ReadMarkerIdList(const int* data, int count, std::vector<lumice::annotation
 }  // namespace
 
 
+// Single owner of the LUMICE_AnnotationView -> lumice::annotation::ViewSnapshot field mapping
+// (a56). Declared in c_api_internal.hpp so test/support/lumice_test_api.cpp's
+// LUMICE_TEST_ComputeRenderDomainMask can call it too instead of carrying a second hand-copied
+// translation.
+lumice::annotation::ViewSnapshot ToAnnotationViewSnapshot(const LUMICE_AnnotationView& v) {
+  ns::annotation::ViewSnapshot view;
+  view.width = v.width;
+  view.height = v.height;
+  view.lens_type = static_cast<ns::LensParam::LensType>(v.lens_type);
+  view.fov_deg = v.lens_fov;
+  view.lens_shift[0] = v.lens_shift[0];
+  view.lens_shift[1] = v.lens_shift[1];
+  view.overlap = v.overlap;
+  view.az_deg = v.view_azimuth;
+  view.el_deg = v.view_elevation;
+  view.roll_deg = v.view_roll;
+  view.visible = static_cast<ns::RenderConfig::VisibleRange>(v.visible);
+  view.front = v.front != 0;
+  return view;
+}
+
+
 LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
                                                  LUMICE_AnnotationOverlay* out) {
   if (!request || !out) {
@@ -3691,18 +3713,7 @@ LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest*
   }
 
   lumice::annotation::Request req;
-  req.view.width = v.width;
-  req.view.height = v.height;
-  req.view.lens_type = static_cast<ns::LensParam::LensType>(v.lens_type);
-  req.view.fov_deg = v.lens_fov;
-  req.view.lens_shift[0] = v.lens_shift[0];
-  req.view.lens_shift[1] = v.lens_shift[1];
-  req.view.overlap = v.overlap;
-  req.view.az_deg = v.view_azimuth;
-  req.view.el_deg = v.view_elevation;
-  req.view.roll_deg = v.view_roll;
-  req.view.visible = static_cast<ns::RenderConfig::VisibleRange>(v.visible);
-  req.view.front = v.front != 0;
+  req.view = ToAnnotationViewSnapshot(v);
   req.horizon = request->horizon != 0;
   req.zenith_nadir = request->zenith_nadir != 0;
   req.labels = request->want_labels != 0;

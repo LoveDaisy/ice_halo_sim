@@ -131,6 +131,13 @@ Checks:
      test because putting the defect back was *measured* to move CPU wall time
      by 1.01x and Metal by 0.88x — no wall-clock oracle in this repo can see it,
      while "did the pass acquire a frame at all" is answerable without a run.
+  17. no-test-symbol-in-src — the LUMICE_TEST_ prefix must not appear in any
+     source under src/, src/include/lumice.h included. It names the test-only
+     export surface (test/support/lumice_test_api.h, built into the
+     liblumice_testapi shared library for the pytest ctypes harness), which is
+     kept apart from the product C API on purpose: a test-only entry point in
+     the product ABI is the shape the owner rejected. Comments are blanked
+     first, so prose that names the prefix to explain this rule is not a hit.
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS, and add a numbered entry above. Keep each check deterministic and
@@ -1834,6 +1841,49 @@ def check_no_render_in_benchmark_poll() -> list[Violation]:
     return out
 
 
+# --- no-test-symbol-in-src ----------------------------------------------------
+#
+# The test-only export surface is spelled LUMICE_TEST_* and lives under test/
+# (test/support/lumice_test_api.h). Its whole reason to exist is that the product
+# ABI (src/include/lumice.h, liblumice) carries no test-only entry point; the
+# prefix showing up anywhere under src/ means a hook is migrating into the
+# product surface, which is exactly the merge this split was made to prevent.
+# A bare prefix match rather than a symbol pattern: a declaration, a call, a
+# forward reference and a macro all count, and a test-only name has no
+# legitimate spelling under src/ at all.
+TEST_SYMBOL_PREFIX = re.compile(r"\bLUMICE_TEST_")
+
+
+def check_no_test_symbol_in_src() -> list[Violation]:
+    """No LUMICE_TEST_ identifier under src/ — the test surface stays in test/.
+
+    Reads code_lines(), so a comment naming the prefix (this file's own rule
+    text, or a note in lumice.h pointing at the test header) is not a hit; a
+    string literal containing it would be, which fails toward a false positive
+    someone investigates rather than toward green.
+
+    Known limitation, stated rather than papered over: a hook that reaches src/
+    under a different prefix is invisible here. The rule pins the one spelling
+    the test surface is committed to, not "anything test-shaped".
+    """
+    out: list[Violation] = []
+    for path in cxx_sources(SRC):
+        for lineno, _orig, code in code_lines(path):
+            if TEST_SYMBOL_PREFIX.search(code):
+                out.append(
+                    Violation(
+                        path,
+                        lineno,
+                        "no-test-symbol-in-src",
+                        "LUMICE_TEST_* is the test-only export surface "
+                        "(test/support/lumice_test_api.h, liblumice_testapi) and must not "
+                        "appear under src/. A hook a test needs goes in that header; the "
+                        "product C API carries no test-only entry point.",
+                    )
+                )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -1851,6 +1901,7 @@ CHECKS = [
     check_user_defaults_single_write_path,
     check_pytest_invocation_marker,
     check_no_render_in_benchmark_poll,
+    check_no_test_symbol_in_src,
 ]
 
 
@@ -1876,7 +1927,7 @@ def main() -> int:
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
         "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print, "
         "msvc-string-literal-limit, user-defaults-single-write-path, "
-        "pytest-invocation-marker, no-render-in-benchmark-poll)."
+        "pytest-invocation-marker, no-render-in-benchmark-poll, no-test-symbol-in-src)."
     )
     return 0
 

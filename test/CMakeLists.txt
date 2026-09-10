@@ -79,6 +79,15 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/config/test_color_class_table.cpp"
   # server/
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api.cpp"
+  # The test-only export surface (LUMICE_TEST_* hooks), compiled here a second time so the parity
+  # test below can call it: its other home is the `lumice_testapi` shared library (root
+  # CMakeLists.txt, BUILD_SHARED_LIBS only), which this static-flavor binary never links. Two
+  # binaries, two compilations of one source, no shared object between them — the same pattern
+  # every other .cpp listed in more than one target here follows. If a THIRD consumer of these
+  # symbols appears, split the source into an OBJECT library instead of listing it again.
+  "${PROJ_TEST_DIR}/support/lumice_test_api.cpp"
+  # Holds LUMICE_TEST_ComputeRenderDomainMask byte-for-byte to the product API's drawable mask.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_domain_mask_parity.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_scene.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_json_parser_parity.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
