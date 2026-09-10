@@ -529,6 +529,37 @@ script prints the path for whichever group it ran.
   be right for the workflow to behave, and it carries the details this summary leaves out (what the
   duplication cost, and why tag pushes no longer run this workflow). Change the triggers and that
   comment is what you edit; this paragraph is a summary that has to be re-checked against it.
+- **Where a change lives, and from where it is made** — two criteria, not advice. Both attach to
+  an *action* rather than to a judgement, because the incidents that produced them were committed
+  by an agent that knew the rule and never asked itself whether it applied:
+  1. **Before the first edit to `src/` or `test/`, a `scratchpad/` task directory for that change
+     must already exist.** No directory → create one first (`scratchpad/tasks.md` is the ledger);
+     do not write code first. The trigger is the edit itself, not "does this feel like a task" —
+     the moment the rule hangs on that judgement, one wrong judgement switches the whole rule off.
+     This is also the reason the retrieval discipline under "Knowledge Base & Working Discipline"
+     below works at all: a change with no task directory leaves no notes for the next session to
+     retrieve.
+  2. **A task is worked on a branch in its own linked git worktree; the main worktree stays clean.
+     N=1 is not an exception.** A single task gets a worktree too, because the main worktree is
+     shared by every task on the machine and "nothing else is running right now" is exactly the
+     judgement (1) refuses to rely on — when this rule was written, three tasks were live in
+     three worktrees at once. Shape: `git worktree add ../ice-halo-wt-<n> -b feat/<name> main`,
+     then `ln -s "<main-repo-abs-path>/scratchpad" ../ice-halo-wt-<n>/scratchpad` (that symlink
+     is already covered by `info/exclude`, which lives in the common dir and so applies to every
+     worktree; do not add it again). Worktrees are cheap here on purpose — dependency sources are
+     cached per machine, see "Build trees..." above. One consequence worth knowing:
+     `.git/hooks/pre-commit` is shared across worktrees (hooks live in the common dir) but does
+     `cd "$(git rev-parse --show-toplevel)"`, which inside a worktree resolves to the worktree
+     root — so a commit there runs the worktree's own copy of the four checkers, and a branch that
+     edits a hook script does not see its own edit take effect until it is merged.
+  Criterion 2 is machine-enforced for Claude Code sessions by
+  `scripts/hooks/claude-pretooluse-worktree-guard.py`, a `PreToolUse` hook on `Edit|Write` that
+  refuses to touch `src/` or `test/` when the target's worktree is the *main* one (git's own
+  structural test: `rev-parse --git-common-dir` resolves to `<toplevel>/.git` only there). The
+  script is tracked so its logic is reviewable; enabling it is per machine, via a
+  `.claude/settings.local.json` that is git-ignored and does nothing but name the script. It has
+  no override switch — no env var, no sentinel file — by design: if the owner wants a one-off edit
+  in the main worktree, they say so and the friction stays visible.
 
 ## Documentation Index (`doc/`)
 
@@ -613,6 +644,9 @@ This project carries a deliberate accumulated memory. Its value depends on it be
 **retrieved**, not just stored (信息价值 = 内在价值 × 被检索到的概率). The recurring
 failure mode is starting each session like a newcomer and re-deriving decisions the
 owner already settled. Avoid it:
+(The other half of this discipline — every change to `src/` or `test/` has a task directory
+before the first edit, and is made in a linked worktree, not the main one — is a criterion, not
+a habit, and lives under "Collaboration Constraints" above.)
 
 - **Retrieve before re-deriving.** Before starting work on a continuing/recurring topic
   (GPU/Metal perf, GUI perf, parity, batch/throughput, architecture decisions), FIRST:
