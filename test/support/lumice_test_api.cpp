@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "core/annotation_overlay.hpp"
+#include "server/c_api_internal.hpp"  // ToAnnotationViewSnapshot (a56: single translation owner)
 
 namespace {
 
@@ -33,24 +34,14 @@ LUMICE_ErrorCode LUMICE_TEST_ComputeRenderDomainMask(const LUMICE_AnnotationView
     return LUMICE_ERR_INVALID_VALUE;
   }
 
-  // The same view translation LUMICE_ComputeAnnotationOverlay performs, feeding the same core
-  // sweep. No line list, no markers, and no label walk: every other Request field keeps its
-  // default (empty lists, zenith_nadir = false), and `labels` is switched off explicitly because
-  // its default is on. The drawable sweep is independent of all of them — the parity test in
+  // Same view translation LUMICE_ComputeAnnotationOverlay performs (ToAnnotationViewSnapshot,
+  // server/c_api_internal.hpp — a56: single owner), feeding the same core sweep. No line list, no
+  // markers, and no label walk: every other Request field keeps its default (empty lists,
+  // zenith_nadir = false), and `labels` is switched off explicitly because its default is on. The
+  // drawable sweep is independent of all of them — the parity test in
   // test/unit-correctness/server/ is what holds that claim to the product API's output.
   lumice::annotation::Request req;
-  req.view.width = view->width;
-  req.view.height = view->height;
-  req.view.lens_type = static_cast<lumice::LensParam::LensType>(view->lens_type);
-  req.view.fov_deg = view->lens_fov;
-  req.view.lens_shift[0] = view->lens_shift[0];
-  req.view.lens_shift[1] = view->lens_shift[1];
-  req.view.overlap = view->overlap;
-  req.view.az_deg = view->view_azimuth;
-  req.view.el_deg = view->view_elevation;
-  req.view.roll_deg = view->view_roll;
-  req.view.visible = static_cast<lumice::RenderConfig::VisibleRange>(view->visible);
-  req.view.front = view->front != 0;
+  req.view = ToAnnotationViewSnapshot(*view);
   req.labels = false;
 
   std::unique_ptr<RenderDomainMaskStorage> storage;
