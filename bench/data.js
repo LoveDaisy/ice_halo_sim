@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789032512328,
+  "lastUpdate": 1789032514305,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9524,50 +9524,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "a0fd8622615b2e6f6a5ad0546e09159238614d28",
-          "message": "Merge pull request #240 from LoveDaisy/fix/gui-completed-preview-quality-gate\n\nfix(gui): COMPLETED 代终帧绕过质量闸强制上屏（修有限低光线仿真预览永不出图）",
-          "timestamp": "2026-08-01T12:52:25+08:00",
-          "tree_id": "1c5c8c2e72f475e8aeff98efcea620a5f726d0dd",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a0fd8622615b2e6f6a5ad0546e09159238614d28"
-        },
-        "date": 1785560482990,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 83,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "f88bf70a41a987c64f3e36ce9f8ff19d102eedac",
           "message": "Merge pull request #243 from LoveDaisy/feat/gui-test-layer-cleanup\n\ntest(gui): gui_test 分层清理 —— 263 个用例迁入无窗口 gui_unit_test，首次获得 CI 覆盖",
           "timestamp": "2026-08-03T07:42:49+08:00",
@@ -13867,6 +13823,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "724fa7cff5ff0cc832f33d45b08e1bf3d4536f40",
+          "message": "Merge pull request #342 from LoveDaisy/feat/annotation-lines-shader-anchors-api\n\ngui: auxiliary lines track the camera every frame again; anchors-only annotation API (v4.28)",
+          "timestamp": "2026-09-10T17:18:09+08:00",
+          "tree_id": "7f9537581734b6e612b1d500271e44df92102186",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/724fa7cff5ff0cc832f33d45b08e1bf3d4536f40"
+        },
+        "date": 1789032513828,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.4,
             "unit": "%"
           }
         ]
