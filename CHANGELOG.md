@@ -16,6 +16,14 @@ as a transcription of the commit or PR title. The conventional-commit prefix is 
 never the criterion: a `refactor:` that fixes a crash earns an entry, a `feat:` that only adds
 an internal helper does not.
 
+**When entries are written**: at release time, in one batch, for the whole span since the
+previous tag. This file records changes between tags only — there is no accumulator section for
+work merged since the last release, and a PR does not add its own entry when it lands. The
+release chore enumerates every PR in the span mechanically (the Sourcing rule below), decides
+per PR whether it earns an entry, and writes the version's section in one pass; a section that
+grew one PR at a time was measured to end up half-full, which reads as complete and is worse
+than empty. The steps are in `CONTRIBUTING.md`, "Release Process".
+
 <details>
 <summary>The full rule (what earns an entry, granularity, breaking changes, sourcing)</summary>
 
@@ -100,13 +108,18 @@ against git:
 ```bash
 git log <prev_tag>..<tag> --oneline --grep='^Merge pull request #'   # PRs merged via merge commit
 git log <prev_tag>..<tag> --first-parent --no-merges                 # squashed PRs and direct commits
+git diff <prev_tag>..<tag> -- src/include/lumice.h | grep LUMICE_API_VERSION   # C API moved → Breaking candidates
 ```
 
 The second command is not redundant: dependabot bumps and admin-merged single-commit PRs land
 with no merge commit to grep for, and direct-to-main commits appear in no PR list at all.
+The third is the mechanical trigger for the `Breaking Changes` subsection: if the version
+constant moved, at least one PR in the span changed the C API and its entry has to say what
+a compiled consumer sees. (Before the release is cut, `<tag>` does not exist yet — use the
+branch, e.g. `v4.5.0..main`.)
 
 A PR's own description is not authoritative on whether it breaks the C API. Diff the header
-across each version boundary instead:
+across each version boundary instead, to see *what* moved rather than only that it did:
 
 ```bash
 git diff <prev_tag> <tag> -- src/include/lumice.h
@@ -120,7 +133,7 @@ it was thinking of and false of the C struct beside it.
 
 </details>
 
-## [Unreleased]
+## [4.5.1] - 2026-09-10
 
 ### Added
 - **A config can now ask for a grid family's numbers without its lines.** The parallels, the
@@ -1989,7 +2002,6 @@ it was thinking of and false of the C struct beside it.
 - Basic ice crystal halo simulation
 - Support for common crystal types (hexagonal prism, plate, column)
 
-[Unreleased]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.5.0...HEAD
 [4.5.0]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.3...v4.5.0
 [4.4.3]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.2...v4.4.3
 [4.4.2]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.1...v4.4.2
