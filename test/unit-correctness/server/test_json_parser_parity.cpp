@@ -332,7 +332,7 @@ void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vecto
 //
 // One sentinel per type, not one for the whole reachable field set: sizeof(RenderConfig) is blind
 // to anything held through a std::vector, whose size is the same whatever its element type holds.
-// A field added to GridLineParam or MarkerStyleParam would leave the 224 untouched and go silently
+// A field added to GridLineParam or MarkerStyleParam would leave the 240 untouched and go silently
 // unreported by AddGridLines / AddMarkers below — which is exactly the class of blind spot this
 // whole diff exists to close — so each nested element type carries its own assert.
 //
@@ -346,7 +346,7 @@ void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vecto
 // already being wasted between ZenithNadirParam and markers_. So the assert below is a tripwire
 // for MOST additions, not for all of them, and adding a field is not licensed by it staying quiet.
 std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
-  static_assert(sizeof(lumice::RenderConfig) == 224, "Update FieldDiff when RenderConfig fields change");
+  static_assert(sizeof(lumice::RenderConfig) == 240, "Update FieldDiff when RenderConfig fields change");
   static_assert(sizeof(lumice::GridLineParam) == 24, "Update AddGridLines when GridLineParam fields change");
   static_assert(sizeof(lumice::MarkerStyleParam) == 20, "Update AddMarkers when MarkerStyleParam fields change");
   std::string out;
@@ -363,10 +363,12 @@ std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig&
   AddScalar("visible", static_cast<int>(a.visible_), static_cast<int>(b.visible_), &out);
   AddScalar("front", static_cast<int>(a.front_), static_cast<int>(b.front_), &out);
   AddFloatArray("background(linear)", a.background_, b.background_, 3, &out);
+  AddFloatArray("paper(linear)", a.paper_, b.paper_, 3, &out);
   AddFloatArray("ray_color", a.ray_color_, b.ray_color_, 3, &out);
   AddFloat("intensity_factor", a.intensity_factor_, b.intensity_factor_, &out);
   AddFloat("overlap", a.overlap_, b.overlap_, &out);
   AddScalar("ev_mode", static_cast<int>(a.ev_mode_), static_cast<int>(b.ev_mode_), &out);
+  AddScalar("tone", static_cast<int>(a.tone_), static_cast<int>(b.tone_), &out);
   AddGridLines("grid.angular_dist", a.angular_dist_grid_, b.angular_dist_grid_, &out);
   AddGridLines("grid.elevation", a.elevation_grid_, b.elevation_grid_, &out);
   AddGridLines("grid.longitude", a.longitude_grid_, b.longitude_grid_, &out);
@@ -1425,6 +1427,60 @@ TEST(JsonParserParity, BackgroundColorDeadKeyWarnsViaCapiParser) {
   EXPECT_NE(log.find("background_color"), std::string::npos) << "C API parser log: " << log;
   EXPECT_NE(log.find("\"background\""), std::string::npos)
       << "the warning must name the key that actually works; C API parser log: " << log;
+}
+
+// --- render.tone / render.paper: the print display mode (v4.27) ---
+//
+// Structurally blind in the corpus for the same reason grid.longitude is — no shipped config
+// carries either key, so a decoder that never reads them round-trips every corpus document
+// perfectly. What these pin is the pair of defaults, which are NOT both zero-shaped (`paper`
+// defaults to WHITE), and the sRGB->linear conversion `paper` shares with `background`.
+//
+// LEGAL VALUES ONLY, and deliberately so: the two parsers diverge on an UNKNOWN tone by design —
+// core's ParseRenderConfig warns and falls back to "screen" (render_config.cpp's hand-written
+// RenderConfig::Tone::from_json), while this API's JsonToRenderers rejects with
+// LUMICE_ERR_INVALID_VALUE (c_api.cpp's IsKnownToneString, whose comment carries the argument).
+// Each follows its own file's existing convention rather than the other's, so "the two decoders
+// must agree" is a claim about well-formed documents here. The reject half is pinned in
+// test_c_api_scene.cpp instead; this absence is a decision, not a missing case.
+
+std::string WrapRenderWithKeys(const std::string& extra_keys) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], )" + extra_keys + " } ] }";
+}
+
+TEST(JsonParserParity, ToneAndPaperSurviveBothParsers) {
+  const std::string text = WrapRenderWithKeys(R"("tone": "print", "paper": [0.9, 0.85, 0.8])");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_EQ(renderer.tone_, lumice::RenderConfig::kPrint);
+  // Linear in the struct, sRGB in the document — a parser that stored the triple as written would
+  // still round-trip, and would still fail here.
+  EXPECT_NEAR(renderer.paper_[0], lumice::SrgbToLinear(0.9f), 1e-5f);
+  EXPECT_NEAR(renderer.paper_[1], lumice::SrgbToLinear(0.85f), 1e-5f);
+  EXPECT_NEAR(renderer.paper_[2], lumice::SrgbToLinear(0.8f), 1e-5f);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+// `paper`'s default is the one in this pair that a zeroed C struct does NOT already hold: core
+// initializes it to white. A C API decoder that left it at zero would hand back black paper for
+// every legacy document, which under the subtractive operator is an all-black page.
+TEST(JsonParserParity, ToneAndPaperOmittedAgreeOnScreenAndWhite) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  for (const auto* m : { &p.core, &p.via_capi }) {
+    const auto& r = m->renderers_.begin()->second;
+    EXPECT_EQ(r.tone_, lumice::RenderConfig::kScreen);
+    EXPECT_FLOAT_EQ(r.paper_[0], 1.0f);
+    EXPECT_FLOAT_EQ(r.paper_[1], 1.0f);
+    EXPECT_FLOAT_EQ(r.paper_[2], 1.0f);
+  }
 }
 
 TEST(JsonParserParity, PyramidWedgeAngleOmittedDefaultsTo28) {

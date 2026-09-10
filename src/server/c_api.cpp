@@ -551,6 +551,22 @@ static ns::RenderConfig::EvMode MapEvModeFromCApi(int ev_mode) {
   }
 }
 
+// Fail-loud on an out-of-range value, like the three mappers above and unlike core's
+// RenderConfig::Tone::from_json, which warns and falls back. Not an inconsistency: that one reads a
+// STRING out of a document a human may have hand-written, where "screen" is a meaningful recovery;
+// this one reads an INT a caller passed in code, where an out-of-range value is a programming error
+// with no sensible recovery to guess at.
+static ns::RenderConfig::Tone MapToneFromCApi(int tone) {
+  switch (tone) {
+    case LUMICE_TONE_SCREEN:
+      return ns::RenderConfig::kScreen;
+    case LUMICE_TONE_PRINT:
+      return ns::RenderConfig::kPrint;
+    default:
+      throw std::invalid_argument("LUMICE_RenderParam.tone is invalid: " + std::to_string(tone));
+  }
+}
+
 // Copy `count` C grid lines into the core vector form so nlohmann's to_json(GridLineParam) owns
 // the wire shape (single source for the per-field optional/default logic).
 static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lines, int count) {
@@ -658,10 +674,15 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   // Back to sRGB on the way out — the struct field is linear, the JSON key is not.
   jr["background"] = { ns::LinearToSrgb(r.background[0]), ns::LinearToSrgb(r.background[1]),
                        ns::LinearToSrgb(r.background[2]) };
+  // Same linear-struct / sRGB-key split as `background` above, and the same conversion.
+  jr["paper"] = { ns::LinearToSrgb(r.paper[0]), ns::LinearToSrgb(r.paper[1]), ns::LinearToSrgb(r.paper[2]) };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
   jr["ev_mode"] = MapEvModeFromCApi(r.ev_mode);
+  // Assigned as a core Tone, not as a string literal: core's own to_json then owns the two
+  // spellings, exactly as MapEvModeFromCApi's result does for "relative" / "absolute".
+  jr["tone"] = MapToneFromCApi(r.tone);
   jr["grid"]["angular_dist"] = GridLinesToCore(r.angular_dist, r.angular_dist_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["longitude"] = GridLinesToCore(r.longitude_grid, r.longitude_grid_count);
@@ -2292,6 +2313,17 @@ static int MapEvModeToCApi(ns::RenderConfig::EvMode ev_mode) {
   throw std::invalid_argument("unmapped core EvMode: " + std::to_string(static_cast<int>(ev_mode)));
 }
 
+// Inverse of MapToneFromCApi, same fail-loud contract as the three above.
+static int MapToneToCApi(ns::RenderConfig::Tone tone) {
+  switch (tone) {
+    case ns::RenderConfig::kScreen:
+      return LUMICE_TONE_SCREEN;
+    case ns::RenderConfig::kPrint:
+      return LUMICE_TONE_PRINT;
+  }
+  throw std::invalid_argument("unmapped core Tone: " + std::to_string(static_cast<int>(tone)));
+}
+
 // The two enum-valued renderer fields need a string pre-check: NLOHMANN_JSON_SERIALIZE_ENUM maps
 // an unrecognized value to the FIRST table entry ("linear" / "upper"), so a typo'd projection
 // would be silently misread rather than reported. Same deliberate exception to "align with core"
@@ -2311,6 +2343,19 @@ static bool IsKnownVisibleString(const std::string& s) {
 // default instead of reported.
 static bool IsKnownEvModeString(const std::string& s) {
   return s == "relative" || s == "absolute";
+}
+
+// The pre-check that makes this decoder REJECT an unknown tone, where core's ParseRenderConfig
+// warns and falls back to "screen". The two are deliberately not aligned, and each follows its own
+// file's rule rather than the other's: this function serves LUMICE_SceneFromJson /
+// LUMICE_SceneFromJsonFile, whose every other enum-valued renderer field (lens type, visible,
+// ev_mode) already rejects, and a C API that reported OK while quietly substituting a value would
+// leave its caller with no way to learn that anything happened. core's parser has a logger to say
+// so, and refusing to load a whole document over one appearance string would cost more there than
+// it protects. test_json_parser_parity.cpp compares the two decoders on LEGAL values only, for
+// exactly this reason.
+static bool IsKnownToneString(const std::string& s) {
+  return s == "screen" || s == "print";
 }
 
 // Decode one field with core's own from_json (single source for the f->fov trigonometry, the
@@ -2441,6 +2486,21 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       }
       r.ev_mode = MapEvModeToCApi(ev_mode);
     }
+    // Mirrors core RenderConfig::tone_'s member initializer (kScreen); like ev_mode above the
+    // zeroed struct already holds it, and stating it keeps this decoder's defaults readable in one
+    // place.
+    r.tone = LUMICE_TONE_SCREEN;
+    if (rj.contains("tone")) {
+      if (!rj.at("tone").is_string() || !IsKnownToneString(rj.at("tone").get<std::string>())) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      auto tone = ns::RenderConfig::kScreen;
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("tone"), tone);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.tone = MapToneToCApi(tone);
+    }
 
     // ---- Fields the struct gained in v4.11 (previously parsed and thrown away) ----
     // Every default below mirrors the corresponding core RenderConfig member initializer
@@ -2529,6 +2589,22 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
         return err;
       }
       for (float& c : r.background) {
+        c = ns::SrgbToLinear(c);
+      }
+    }
+
+    // WHITE, not zero, and the only default in this block that the zeroed struct does not already
+    // hold: core's RenderConfig::paper_ initializes to {1,1,1}. Zeroing it here would make this
+    // decoder hand back black paper for every document that omits the key — a divergence from
+    // ParseRenderConfig, which the parity gate compares whole RenderConfigs to catch, and under the
+    // subtractive operator an all-black page. Same linear-struct / sRGB-key split as `background`.
+    r.paper[0] = r.paper[1] = r.paper[2] = 1.0f;
+    if (rj.contains("paper")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("paper"), r.paper);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      for (float& c : r.paper) {
         c = ns::SrgbToLinear(c);
       }
     }

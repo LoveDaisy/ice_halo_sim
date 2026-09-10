@@ -113,15 +113,16 @@ inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
   // field landing in an alignment hole — this assert can, and has been (see that comment). What
   // it catches instead is a change WITHIN a field, which moves the size without moving the
   // count. Both fire on the same duty: decide whether the comparison below must cover it.
-  static_assert(sizeof(RenderConfig) == 224, "RenderConfig layout changed — re-check what operator== compares");
+  static_assert(sizeof(RenderConfig) == 240, "RenderConfig layout changed — re-check what operator== compares");
   return a.id_ == b.id_ && a.lens_ == b.lens_ &&
          std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) &&
          std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) &&
          a.view_ == b.view_ && a.visible_ == b.visible_ && a.front_ == b.front_ &&
          std::equal(std::begin(a.background_), std::end(a.background_), std::begin(b.background_)) &&
+         std::equal(std::begin(a.paper_), std::end(a.paper_), std::begin(b.paper_)) &&
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
          a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.ev_mode_ == b.ev_mode_ &&
-         a.angular_dist_grid_ == b.angular_dist_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
+         a.tone_ == b.tone_ && a.angular_dist_grid_ == b.angular_dist_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
          a.longitude_grid_ == b.longitude_grid_ && a.horizon_ == b.horizon_ &&
          a.elevation_grid_line_ == b.elevation_grid_line_ && a.longitude_grid_line_ == b.longitude_grid_line_ &&
          a.angular_dist_grid_line_ == b.angular_dist_grid_line_ && a.zenith_nadir_ == b.zenith_nadir_ &&

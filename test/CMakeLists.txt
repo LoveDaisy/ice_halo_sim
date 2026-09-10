@@ -90,6 +90,16 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_print_mode.cpp"
+  # The other half of the print operator: the fields it takes over the colour channel FROM.
+  # test_render_consumer_print_mode.cpp asserts the pixels the operator writes; this one asserts
+  # the composite it declines to produce and the notices it emits for the fields it drops.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_print_mode_colour_exclusions.cpp"
+  # And the cross-cutting one: not "the operator computes the right thing" but "the mode resolves a
+  # scene the additive operator structurally cannot", which is the claim the whole mode was
+  # commissioned against and only measurable once every piece of it exists.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_print_mode_dynamic_range_gate.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_contrast_headroom_warning.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_grid.cpp"
@@ -113,6 +123,8 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_illuminant.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_label_viewport_clamp.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_ink_transfer.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_contrast_headroom.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
@@ -128,6 +140,10 @@ add_executable(unit_correctness_test
   # preview shader's relative-illumination factor, and the oracle it is held to is a numerical
   # Jacobian rather than the GLSL twin, so the case needs no GL context of any kind.
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_preview_jacobian.cpp"
+  # Contrast-headroom warning, GUI half: gui_state.hpp's wrappers over util/contrast_headroom.hpp
+  # plus the one-click fix. All three are header-only inline functions over a plain struct, so this
+  # is the target that does not link lumice_gui_obj — the same reason as the three lines above.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_contrast_headroom_warning.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the
@@ -301,6 +317,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_lens_border_geometry.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
+    # The GUI half of doc/print-mode-subtractive-ink.md §7's exclusion rule: which controls report
+    # themselves inapplicable under the print tone, and the import notice standing in for the one
+    # instance that has no control at all.
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_print_mode_colour_exclusions.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_identity_formatting.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_semantic_colors.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_edit_modal_delete_binding.cpp"

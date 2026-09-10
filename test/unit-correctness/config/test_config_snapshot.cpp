@@ -76,6 +76,14 @@ GuiState MakeModifiedState() {
   s.renderer.background[0] = 0.1f;
   s.renderer.background[1] = 0.2f;
   s.renderer.background[2] = 0.3f;
+  // The print mode, one field per disposition. `paper` joins background's group (own slot, still
+  // Revert-tracked); `tone` joins the T-view group (no slot at all, kept by whatever state
+  // ApplyTo writes into). Both are pushed off their defaults — paper's default is WHITE, so
+  // leaving a channel at 1 would make its assertion below pass against a missing slot.
+  s.renderer.paper[0] = 0.4f;
+  s.renderer.paper[1] = 0.5f;
+  s.renderer.paper[2] = 0.6f;
+  s.renderer.tone = 1;  // Print — display-mode switch, deliberately NOT snapshot-tracked
 
   // task-349.2 Step 2: raypath_color is a configuration field (structural
   // edits go through MarkStructHardDirty); ConfigSnapshot must round-trip it so
@@ -138,6 +146,9 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   // into "background is not tracked".
   EXPECT_FLOAT_EQ(snap.renderer_background[0], 0.1f);
   EXPECT_FLOAT_EQ(snap.renderer_background[2], 0.3f);
+  // paper is the same third case, through its own slot beside background's.
+  EXPECT_FLOAT_EQ(snap.renderer_paper[0], 0.4f);
+  EXPECT_FLOAT_EQ(snap.renderer_paper[2], 0.6f);
 
   // task-349.2 Step 2: raypath_color mirror.
   ASSERT_EQ(snap.raypath_color.size(), s.raypath_color.size());
@@ -183,6 +194,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   target.renderer.elevation = -8.0f;
   target.renderer.exposure_offset = -1.5f;
   target.renderer.ray_color[2] = 0.9f;
+  target.renderer.tone = 1;  // Print, while the source sits at the default Screen
   target.dirty = true;
   target.sim_state = GuiState::SimState::kSimulating;
   target.stats_ray_seg_num = 123456;
@@ -214,6 +226,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   // Restored through ConfigSnapshot::renderer_background, not through renderer_resim — the
   // assertion reads the same as the ones around it, but the path behind it is the separate slot.
   EXPECT_FLOAT_EQ(target.renderer.background[1], source.renderer.background[1]);
+  EXPECT_FLOAT_EQ(target.renderer.paper[1], source.renderer.paper[1]);
   // task-349.2 Step 2: raypath_color is CONFIG, ApplyTo replaces it (junk
   // classes seeded above are gone, source content restored 1:1).
   ASSERT_EQ(target.raypath_color.size(), source.raypath_color.size());
@@ -230,6 +243,10 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_FLOAT_EQ(target.renderer.elevation, -8.0f);
   EXPECT_FLOAT_EQ(target.renderer.exposure_offset, -1.5f);
   EXPECT_FLOAT_EQ(target.renderer.ray_color[2], 0.9f);
+  // tone joins this group rather than paper's: a display-mode switch has no snapshot slot, so
+  // Revert leaves whatever the target was showing. The target was seeded to Print above and the
+  // source is at the default Screen, so an ApplyTo that reached this field would show up here.
+  EXPECT_EQ(target.renderer.tone, 1);
   EXPECT_TRUE(target.dirty);
   EXPECT_EQ(target.sim_state, GuiState::SimState::kSimulating);
   EXPECT_EQ(target.stats_ray_seg_num, 123456u);
@@ -297,6 +314,10 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   // the From/ApplyTo pair for renderer_background is missing.
   EXPECT_FLOAT_EQ(restored.renderer.background[0], original.renderer.background[0]);
   EXPECT_FLOAT_EQ(restored.renderer.background[2], original.renderer.background[2]);
+  // paper likewise, and `restored` starts from InitDefaultState's WHITE — so a missing half of the
+  // From/ApplyTo pair leaves 1.0 here against original's 0.4.
+  EXPECT_FLOAT_EQ(restored.renderer.paper[0], original.renderer.paper[0]);
+  EXPECT_FLOAT_EQ(restored.renderer.paper[2], original.renderer.paper[2]);
   // T-view fields do not make the round trip: `restored` keeps the ones it started with.
   // Compared against a second pristine state rather than literals so this stays true if the
   // RenderConfig defaults ever move. ray_color joins this group: it has no editor left, so it is
@@ -356,7 +377,7 @@ TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 168,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 

@@ -59,6 +59,16 @@
 //   longitude      | on, 10 deg step         |  26.59 | on, 30 deg step           |  24.07
 //   markers        | all six, zenith imaged  |    n/a | all six, all imaged       |    n/a
 //
+//   tone           | screen (the default)    |    n/a | screen (the default)      |   n/a
+//   paper          | unused under screen     |    n/a | unused under screen       |   n/a
+//
+// The last two rows are "n/a" in both columns because both of these scenes are SCREEN-toned, which is
+// the pre-print behaviour and the value a zero-initialized export carries. Those two fields are
+// covered by a FOURTH scene, `full_sky_dual_fisheye_print`, which is the only row here that is not a
+// variation of framing: it varies the operator. Its own entry below carries the calibration, the two
+// measured breaks, and — stated there rather than left to be discovered — the one break it cannot
+// see and where that one is gated instead.
+//
 // The markers row's two "n/a"s are MEASURED, and they are a statement about the metric rather
 // than about the field. A ring of the default 8 px radius covers roughly 150 pixels; deleting the
 // CLI's nadir ring outright moved the full-sky scene by 0.02 dB, and UPWARD — the ring's presence
@@ -226,7 +236,9 @@
 // executes this fixture. The two pytest legs build with -DBUILD_GUI=OFF and do not have the binary
 // at all. Where it does run is a developer machine with a working GL context: scripts/build.sh's
 // correctness pool selects tests by a NEGATIVE filter, so this category is included by default,
-// and ./scripts/test.sh {quick,full,pr} therefore executes it.
+// and ./scripts/test.sh {quick,full,pr} therefore executes it. doc/testing-architecture.md 7.5 has
+// the mechanism, the measured cost of putting this tag in CI, and why the llvmpipe leg is not
+// currently the right home for it. This is a RECORDED STATE, not a defect awaiting a fix.
 //
 // This is also the first place in the repo where a test binary starts the CLI binary as a child
 // process. See RunCliRender below for the mechanics and for what that costs in portability.
@@ -258,6 +270,13 @@ struct ParityScene {
   float roll;
   int visible;
   float background_srgb[3];
+  // Which tone-reproduction operator turns radiance into pixels, and the ground it lays it on.
+  // `tone` mirrors config::RenderConfig::Tone and GuiState::RenderConfig::tone (0 screen, 1 print);
+  // `paper_srgb` is read only under print, and `background_srgb` only under screen. Both are filled
+  // on every scene regardless, so a row's diff against its neighbours is the tone fields and
+  // nothing else.
+  int tone;
+  float paper_srgb[3];
   // Display-group framing.
   gui::AspectPreset aspect_preset;
   bool aspect_portrait;
@@ -462,6 +481,7 @@ const ParityScene kScenes[] = {
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
+   /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/512, /*expect_h=*/683},
@@ -515,6 +535,7 @@ const ParityScene kScenes[] = {
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
+   /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.1, /*expect_w=*/1024, /*expect_h=*/512},
@@ -611,9 +632,76 @@ const ParityScene kScenes[] = {
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
+   /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.0, /*expect_w=*/512, /*expect_h=*/683},
+  // The TONE scene. Every field except `tone`, `paper_srgb` and the four annotation switches is
+  // copied verbatim from full_sky_dual_fisheye above, so a drop here reads as the tone operator and
+  // not as some other part of the framing.
+  //
+  // Why this geometry and not a new one: the subtractive operator is only comparable across the CLI
+  // seam where the additive one is, and that constraint is the projection's, not the tone's — the
+  // CLI bakes the lens's solid-angle Jacobian and the GUI resamples an equal-area texture, so an
+  // equal-area lens is the precondition for either operator (see the PROJECTION FAMILY note above).
+  // Reusing the already-validated full-sky equal-area framing means this row does not have to
+  // re-argue that.
+  //
+  // ALL FOUR ANNOTATION SWITCHES ARE OFF, and deliberately so — the one place this row diverges from
+  // its neighbour. Under print an annotation is a plain coverage multiply (BlendAnnotation in
+  // server/render.cpp, blendAnnotationColor in preview_renderer.cpp), and whether those two agree is
+  // already asserted pixel-for-pixel and colour-by-colour by
+  // test/unit-correctness/server/test_render_consumer_print_mode.cpp and
+  // test/gui/functional/test_preview_print_mode.cpp, at a precision a whole-frame PSNR does not
+  // have. Switching them on here would fold the colour-space residual the GRID OPACITY note above
+  // measures at 2.9 dB into a fresh calibration, for a field this row is not the gate for. What this
+  // row narrows to is the ink curve itself plus the tone/paper plumbing.
+  //
+  // PAPER IS NON-TRIVIAL AND THREE-COMPONENT, {0.96, 0.92, 0.84} sRGB. A {1,1,1} sheet would let an
+  // arm that dropped the per-channel paper multiply and wrote the bare transmittance pass, and a
+  // grey one would let an arm that averaged the three channels pass.
+  //
+  // NO CI JOB RUNS THIS ROW, as none runs any row of this category — see the "Platform reach" note at
+  // the top of this file and doc/testing-architecture.md 7.5. It is evaluated by
+  // ./scripts/test.sh {quick,full,pr} on a machine with a GL context and nowhere else, so a green
+  // pipeline is not evidence that the print-mode seam was checked.
+  //
+  // THRESHOLD. mean 23.978 sigma 0.0167 (N=6 category runs on an otherwise idle machine, range
+  // 23.96-24.01). 23.5 = mean - 0.478 dB = 28.6 sigma, 0.46 dB below the worst honest run, and
+  // 4.87 dB above the smallest break this row is asked to catch. Two breaks were measured, each
+  // applied single-sided so that only the CLI arm saw it:
+  //
+  //   break                                                         | PSNR   | caught by
+  //   --------------------------------------------------------------|--------|------------------
+  //   the CLI ignores the document's `tone` (renders screen)         |  3.31  | threshold, 20 dB clear
+  //   the CLI ignores the document's `paper` (keeps default white)   | 18.63  | threshold, 4.9 dB clear
+  //   the GLSL kInkGamma drifts 11 -> 10 (a 9% transcription error)  | 24.00  | NOT this row
+  //
+  // That third row is the honest part and is why this block says what this scene does NOT gate. A
+  // 9% error in the shader's copy of kInkGamma moves this figure by 0.03 dB — INSIDE the noise, and
+  // upward at that. The mechanism is the scene's own geometry: a full-sky frame of a 22 deg halo is
+  // mostly unexposed paper, where e == 0 makes the density zero whatever gamma is, so the pixels
+  // that can see the constant at all are a small minority of the frame. Pushed far enough the metric
+  // does see it (kInkGamma = 1.0 reads 19.53 dB), so this row would catch a transcription that was
+  // abandoned rather than one that drifted.
+  //
+  // Do not respond by tightening the threshold — at 23.95 it would sit 1.7 sigma below the mean and
+  // still be 0.05 dB away from the break it was aimed at, i.e. a flake bought for nothing. The drift
+  // IS gated, exactly and per pixel, by test/gui/functional/test_preview_print_mode.cpp, which
+  // renders through the real shader and predicts each probe by calling lumice::InkOpticalDensity
+  // (its own notes put kInkGamma's signal there at 40+ LSB). Same disposition, same reason, as the
+  // `front` clip and the fisheye domain in the "Deliberately not covered" list: where a cheap exact
+  // comparison of the two implementations exists, this fixture does not re-ask the question through
+  // a noisier instrument. What it adds that nothing else can is the END-TO-END half — that a print
+  // document leaves the GUI as print, with the paper the user picked, and comes back out of a child
+  // CLI process as the same page. That half is what the two caught breaks above are.
+  {"full_sky_dual_fisheye_print",
+   lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
+   /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
+   /*tone=*/1, /*paper_srgb=*/{ 0.96f, 0.92f, 0.84f },
+   gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false, /*show_sun_circles=*/false,
+   /*show_grid=*/false, /*show_markers=*/false,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/23.5, /*expect_w=*/1024, /*expect_h=*/512},
 };
 // clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the
@@ -669,6 +757,18 @@ struct ExportedRenderInfo {
   // test_scene_commit_chain.cpp, where it is a question about a field and needs no rendered frame;
   // this is the ON half, asked of the document the child process below actually reads.
   bool horizon = false;
+  // The tone operator the exported document names, and the ground it names for it. Read as the
+  // STRING the schema actually carries ("screen" / "print", render_config.cpp's to_json), not as an
+  // int: an export that wrote the enum's ordinal would parse back to the right tone in this fixture
+  // while being unreadable to the CLI, which is the asymmetry a string check catches and a numeric
+  // one would not.
+  std::string tone;
+  // `paper_read` is the ONLY answer to "did the export state a paper". The array carries no
+  // sentinel of its own on purpose: two representations of one fact drift the moment a later
+  // reader updates one of them, and this one would drift silently, since nothing reads the array
+  // before the flag is checked.
+  float paper[3]{};
+  bool paper_read = false;
   bool ok = false;
 };
 
@@ -695,6 +795,13 @@ ExportedRenderInfo ParseExportedRenderInfo(const std::string& json_str) {
   }
   if (jr.contains("grid")) {
     info.horizon = jr["grid"].value("horizon", false);
+  }
+  info.tone = jr.value("tone", std::string());
+  if (jr.contains("paper") && jr["paper"].is_array() && jr["paper"].size() == 3) {
+    for (int i = 0; i < 3; i++) {
+      info.paper[i] = jr["paper"][i].get<float>();
+    }
+    info.paper_read = true;
   }
   info.ok = info.width > 0 && info.height > 0;
   return info;
@@ -760,6 +867,11 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
         rc.ev_mode = 0;  // relative; see the exposure note above kScenes[]
         rc.exposure_offset = 0.0f;
         std::copy(std::begin(scene.background_srgb), std::end(scene.background_srgb), std::begin(rc.background));
+        // The tone operator and its ground. Written as plain GuiState fields like everything else in
+        // this block: `tone` reaches the preview shader through app_panels.cpp's per-frame assembly
+        // and the CLI through BuildScene's export arm, and whether those two agree is the subject.
+        rc.tone = scene.tone;
+        std::copy(std::begin(scene.paper_srgb), std::end(scene.paper_srgb), std::begin(rc.paper));
         rc.sim_resolution_index = kSimResolutionIndex;
       }
       gui::g_state.aspect_preset = scene.aspect_preset;
@@ -850,6 +962,19 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(info.markers_listed, LUMICE_ANNOTATION_MARKER_COUNT);
       IM_CHECK_EQ(info.markers_enabled, scene.show_markers ? LUMICE_ANNOTATION_MARKER_COUNT : 0);
       IM_CHECK_EQ(info.horizon, scene.show_horizon);
+      // The tone fields, asserted on the DOCUMENT rather than on GuiState for the reason the marker
+      // and horizon checks above give: this is the text the child process reads. A scene whose paper
+      // never reached the export would otherwise compare two frames that agreed because both were
+      // screen-toned, and the PSNR would look healthy.
+      IM_CHECK_STR_EQ(info.tone.c_str(), scene.tone == 1 ? "print" : "screen");
+      IM_CHECK(info.paper_read);
+      // Three separate assertions rather than one iterated over the channels: a fatal check inside a
+      // repeating scope hides every channel after the first to disagree, and here that would read as
+      // a green channel rather than as an unreached one (scripts/check_loop_fatal_asserts.py states
+      // the rule). Written out, each channel reports itself.
+      IM_CHECK_EQ(info.paper[0], scene.paper_srgb[0]);
+      IM_CHECK_EQ(info.paper[1], scene.paper_srgb[1]);
+      IM_CHECK_EQ(info.paper[2], scene.paper_srgb[2]);
 
       const std::filesystem::path scratch_dir =
           GuiTestTempPath(std::string("export_parity_") + scene.name).parent_path() /

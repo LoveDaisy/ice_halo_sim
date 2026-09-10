@@ -571,6 +571,82 @@ TEST(JsonImportContractChain, AJsonRenderEvModeIsImportedAndAbsenceMeansRelative
   }
 }
 
+// The same three states for the print mode's two fields, imported from a CORE config document
+// (not a .lmc). `paper` is the one worth the extra rows: its default is WHITE, so an importer that
+// never read the key would satisfy any assertion that left a channel at 1.
+TEST(JsonImportContractChain, AJsonRenderToneAndPaperAreImportedAndAbsenceMeansScreenAndWhite) {
+  struct Row {
+    const char* render_json;
+    int expected_tone;
+    float expected_paper0;
+    const char* label;
+  };
+  const Row kRows[] = {
+    { R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64],
+           "tone": "print", "paper": [0.9, 0.85, 0.8]}])",
+      1, 0.9f, "print" },
+    { R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64],
+           "tone": "screen", "paper": [0.7, 0.7, 0.7]}])",
+      0, 0.7f, "screen" },
+    { R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64]}])", 0, 1.0f, "<absent>" },
+  };
+  for (const Row& row : kRows) {
+    const std::string doc = DocWithParts(kWellFormedLightSource, row.render_json, "");
+    GuiState scratch;
+    // Both seeded off what the row expects, so an unread field is visibly wrong rather than
+    // accidentally right: tone to Print for the two rows expecting Screen, paper to a value no
+    // row expects.
+    scratch.renderer.tone = 1;
+    scratch.renderer.paper[0] = 0.123f;
+    if (!DeserializeFromJson(doc, scratch)) {
+      // Non-fatal per row, for the reason its ev_mode twin above states: the absent case is last
+      // and matters most.
+      ADD_FAILURE() << row.label << ": the import rejected the document outright";
+      continue;
+    }
+    EXPECT_EQ(scratch.renderer.tone, row.expected_tone) << row.label;
+    EXPECT_NEAR(scratch.renderer.paper[0], row.expected_paper0, 1e-5f) << row.label;
+  }
+}
+
+// The other half of AC2's "warn and fall back", on the one path where core's own warning cannot
+// fire: DeserializeFromJson decodes the document itself and never calls core's parser, so a silent
+// GUI here would mean the same malformed config reports differently depending on which side opened
+// it. Both halves asserted — the value AND the notice — because either alone passes with the other
+// missing.
+TEST(JsonImportContractChain, AJsonRenderToneOfAnUnknownValueWarnsAndLoadsAsScreen) {
+  const std::string doc = DocWithParts(
+      kWellFormedLightSource,
+      R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64], "tone": "glossy"}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  scratch.renderer.tone = 1;  // seed non-default so a reader that never wrote the field is visible
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch)) << "a malformed appearance value must not sink the document";
+
+  EXPECT_EQ(scratch.renderer.tone, 0) << "an unrecognised tone must land on screen";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "a display mode was chosen for the user and never mentioned";
+  EXPECT_NE(warning.find("tone"), std::string::npos) << "must name the field, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// The control arm: a RECOGNISED tone must be silent. Without it, a decoder that warned on every
+// import would satisfy the case above while making a correct config noisy.
+TEST(JsonImportContractChain, AJsonRenderToneOfAKnownValueIsSilent) {
+  const std::string doc = DocWithParts(
+      kWellFormedLightSource,
+      R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64], "tone": "print"}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+  EXPECT_EQ(scratch.renderer.tone, 1);
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty()) << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
 TEST(JsonImportContractChain, AJsonColorClassMissingColorIsDroppedNotDefaultColored) {
   const std::string doc = DocWithParts(kWellFormedLightSource, kWellFormedRender, R"(,
     "raypath_color": {"mode": "painter", "classes": [

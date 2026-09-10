@@ -33,6 +33,8 @@
 #include "server/scene_batch_publish.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
+#include "util/color_space.hpp"
+#include "util/contrast_headroom.hpp"
 #include "util/cpu_info.hpp"
 #include "util/env_knobs.hpp"
 #include "util/logger.hpp"
@@ -620,6 +622,149 @@ ServerImpl::~ServerImpl() {
 
 // Lifecycle reset sequence: see doc/capi-lifecycle-architecture.md §7.
 // NOLINTNEXTLINE(readability-function-size)
+namespace {
+
+// ------------------------------------------------------------------------------------------------
+// "print takes over the colour channel" — the one rule of doc/print-mode-subtractive-ink.md §7,
+// stated once, on the CLI/server side.
+//
+// The print operator deposits a single neutral ink whose only degree of freedom is DENSITY, so
+// every field whose job is to carry information in a HUE stops being readable the moment the tone
+// is print. Three such fields exist in a RenderConfig today, and the point of putting all three in
+// one function is that they are three instances of ONE rule rather than three special cases: a
+// reader who has to decide what a fourth field should do reads this block, not four scattered ifs.
+//
+// NEW INSTANCES GO HERE, in the same shape — one `if` naming the field and one ILOG_WARN saying
+// (a) what the config asked for, (b) what print does instead, (c) that the value is kept. Do NOT
+// open a parallel judgement point elsewhere in the commit path; a second owner is how the CLI and
+// the GUI came to disagree about other fields before.
+//
+// One warning per instance rather than one merged line, because the three have different reach:
+// the composite is scene-level (one class table shared by every renderer), while ray_color and the
+// annotation colours are each read off the renderer's own entry. A merged line would make the
+// instances that did NOT fire read as if they had.
+// ------------------------------------------------------------------------------------------------
+
+// True when `c` differs from `ref` in any component. Colour comparison here is an EXACT float
+// compare on purpose: the question is "did anybody write a value into this field", not "is this
+// visually distinguishable from the default", and a tolerance would answer the second.
+bool ColorDiffers(const float (&c)[3], const float (&ref)[3]) {
+  return c[0] != ref[0] || c[1] != ref[1] || c[2] != ref[2];
+}
+
+// Whether any annotation in this renderer carries a non-default colour.
+//
+// The judgement is deliberately "is the colour non-default", NOT "would this annotation actually
+// be drawn". Folding in opacity_ and the three per-family line switches would narrow the warning
+// to configs that really do lose something visible, but it costs a cross-read of three independent
+// flags to buy a lower false-positive rate on a NON-BLOCKING notice. One extra log line for a
+// fully transparent line is a better failure than a missing line for a config the user is staring
+// at and cannot explain.
+bool HasNonDefaultAnnotationColour(const RenderConfig& rc) {
+  const GridLineParam kGridDefault{};
+  for (const auto* family : { &rc.angular_dist_grid_, &rc.elevation_grid_, &rc.longitude_grid_ }) {
+    for (const auto& line : *family) {
+      if (ColorDiffers(line.color_, kGridDefault.color_)) {
+        return true;
+      }
+    }
+  }
+  const ZenithNadirParam kZenithNadirDefault{};
+  if (rc.zenith_nadir_.enabled_ && ColorDiffers(rc.zenith_nadir_.color_, kZenithNadirDefault.color_)) {
+    return true;
+  }
+  const MarkerStyleParam kMarkerDefault{};
+  for (const auto& m : rc.markers_) {
+    if (m.enabled_ && ColorDiffers(m.color_, kMarkerDefault.color_)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// `class_table` is the SCENE's table, the same object every RenderConsumer is constructed with and
+// the same one RenderConsumer::ColoredMask() reads back — so `referenced_mask_ != 0` here and
+// `rc->ColoredMask() != 0` in DoSnapshot's composite loop are two readings of one field, not two
+// computations that have to be kept in step. That is what makes "warned" and "actually excluded"
+// the same set rather than two sets that happen to agree today.
+void WarnPrintModeIgnoresColourFields(Logger& logger, const std::map<IdType, RenderConfig>& renderers,
+                                      const ColorClassTable& class_table) {
+  const RenderConfig kDefaults{};
+  for (const auto& [id, rc] : renderers) {
+    if (rc.tone_ != RenderConfig::kPrint) {
+      continue;
+    }
+    if (class_table.referenced_mask_ != 0) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] is tone=print, so the raypath-colour composite is not "
+                "produced — print lays one neutral ink and carries no hue to tell the classes apart. "
+                "The colour classes are kept and take effect again under tone=screen.",
+                id);
+    }
+    if (ColorDiffers(rc.ray_color_, kDefaults.ray_color_)) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] sets ray_color, which tone=print does not read — the ink is "
+                "neutral by construction. The value is kept and takes effect again under tone=screen.",
+                id);
+    }
+    if (HasNonDefaultAnnotationColour(rc)) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] sets an annotation colour, which tone=print does not read — "
+                "overlay lines are drawn by density on paper, not by hue. The values are kept and take "
+                "effect again under tone=screen.",
+                id);
+    }
+  }
+}
+
+// The other half of doc/print-mode-subtractive-ink.md §8, on the side that has no panel to put a
+// notice in: a config whose zero-energy colour has run out of headroom renders a picture that is
+// not there, and `Lumice -f that.json` would otherwise write the file and exit 0 with nothing said.
+//
+// The judgement itself is NOT made here — `ContrastHeadroomIsLow` is the single predicate the GUI
+// also calls (util/contrast_headroom.hpp), so there is one threshold in the tree and not two. What
+// is local to this side is the conversion: core holds both grounds as LINEAR RGB while the predicate
+// is defined on the sRGB encoding the output actually lands in, so each component is encoded first.
+//
+// Which ground is read follows `tone_`, because only one of the two is the ground under either law:
+// under screen a pitch-black paper is irrelevant, under print a blinding sky is. Reading both would
+// warn about a field the live operator never touches.
+void WarnLowContrastHeadroom(Logger& logger, const std::map<IdType, RenderConfig>& renderers) {
+  for (const auto& [id, rc] : renderers) {
+    const bool print = rc.tone_ == RenderConfig::kPrint;
+    const float* ground_linear = print ? rc.paper_ : rc.background_;
+    float ground_srgb[3]{};
+    for (int j = 0; j < 3; j++) {
+      ground_srgb[j] = LinearToSrgb(ground_linear[j]);
+    }
+    const ToneLawLimit limit = print ? ToneLawLimit::kBlack : ToneLawLimit::kWhite;
+    if (!ContrastHeadroomIsLow(ground_srgb, limit)) {
+      continue;
+    }
+    // Two wordings rather than one parameterised line: each has to say WHY the image looks broken,
+    // and the two reasons are not the same sentence with a word swapped. Both name the fix, because
+    // the user's starting position is "I changed nothing and the halo is gone".
+    if (print) {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] is tone=print and its paper is within {} 8-bit levels of "
+                "black. Ink can only ever darken the paper and never reaches black, so every feature "
+                "comes out within those few levels of the page and the image will look blank. Lighten "
+                "the paper, or switch tone back to screen.",
+                id, kContrastHeadroomWarnLevels);
+    } else {
+      ILOG_WARN(logger,
+                "CommitConfig: render[{}] is tone=screen and its background is within {} 8-bit levels "
+                "of white. Light is ADDED to that background and clamps at white, so a halo has "
+                "almost nowhere left to go and will be invisible — while grid and overlay lines, "
+                "which are blended rather than added, stay perfectly visible and make it look as "
+                "though the simulation failed. Darken the background, or switch tone to print.",
+                id, kContrastHeadroomWarnLevels);
+    }
+  }
+}
+
+}  // namespace
+
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
@@ -691,6 +836,18 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     }
     return Error::InvalidConfig("Unknown configuration error");
   }
+
+  // The one rule of doc/print-mode-subtractive-ink.md §7, applied to the config that is about to
+  // become live. Placed after the parse (so class_table exists) and before Stop() (so the notice
+  // reaches the log alongside the commit that caused it, not one restart later). Diagnostic only —
+  // it never changes `new_config` and never fails the commit: none of the three is a configuration
+  // ERROR, they are configurations whose colour half print has no way to show.
+  WarnPrintModeIgnoresColourFields(logger_, new_config.renderers_, class_table);
+
+  // §8's predicate, applied at the same point and with the same standing: diagnostic only, never a
+  // reason to fail the commit. A ground with no headroom left is a legal configuration that renders
+  // an image nobody can read, which is precisely why it has to be said out loud rather than refused.
+  WarnLowContrastHeadroom(logger_, new_config.renderers_);
 
   // Stop → rebuild consumers → Start
   auto stop_start = std::chrono::steady_clock::now();
@@ -956,9 +1113,20 @@ bool ServerImpl::DoSnapshot() {
     // task-336.3: only colored consumers (ColoredMask()!=0) produce a composite.
     // Zero-config consumers (mask 0) are skipped → no composite, mono path
     // untouched (plan §0 / risk-5 rollback).
+    //
+    // The print operator is the second skip reason, and it is a DIFFERENT statement from the
+    // first: mask 0 means "nothing was configured", print means "it was configured and cannot be
+    // shown". Raypath colour puts the whole payload in the HUE — which path a ray took is read off
+    // the colour and nothing else — while print deposits one neutral ink whose only degree of
+    // freedom is density (doc/print-mode-subtractive-ink.md §7). Compositing under print would
+    // collapse every class onto the same grey, i.e. produce a picture that answers no question.
+    // The CONFIG is left completely alone (raypath_color_ and the class table are untouched, and
+    // the consumers still accumulate their per-class lanes), so switching tone back to screen
+    // restores the composite on the very next snapshot — that is the mechanism behind "the
+    // configuration is not lost", not a promise.
     for (const auto& c : snapshot_consumers) {
       auto* rc = dynamic_cast<RenderConsumer*>(c.get());
-      if (rc == nullptr || rc->ColoredMask() == 0) {
+      if (rc == nullptr || rc->ColoredMask() == 0 || rc->Tone() == RenderConfig::kPrint) {
         continue;
       }
       // task-345.3: display-time EV multiplier + participating-P99 anchor

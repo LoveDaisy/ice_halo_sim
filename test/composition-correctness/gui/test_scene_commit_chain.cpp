@@ -125,6 +125,13 @@ void SeedNonDefaultView() {
   g_state.renderer.background[0] = 0.20f;
   g_state.renderer.background[1] = 0.35f;
   g_state.renderer.background[2] = 0.60f;
+  // The print mode, both fields off their defaults for the same reason every other field here is:
+  // `tone` at its default 0 would make the commit arm's constant and the document's value agree by
+  // accident, and `paper` at its default white would do the same on three channels at once.
+  g_state.renderer.tone = 1;  // Print
+  g_state.renderer.paper[0] = 0.95f;
+  g_state.renderer.paper[1] = 0.90f;
+  g_state.renderer.paper[2] = 0.80f;
   g_state.aspect_preset = AspectPreset::k16x9;
   g_state.aspect_portrait = false;
   g_state.show_horizon_line = false;
@@ -203,6 +210,17 @@ TEST(SceneCommitChain, TheRunIntentIgnoresEveryViewSetting) {
   // its own background at display time.
   for (int c = 0; c < 3; ++c) {
     EXPECT_FLOAT_EQ(r["background"][c].get<float>(), 0.0f) << "channel " << c;
+  }
+  // The print mode, the same constant-vs-document split and the same reason: this arm asks core for
+  // a texture the preview then converts itself, so it describes no tone of the user's. `screen`
+  // despite the document's `print`.
+  EXPECT_EQ(r["tone"].get<std::string>(), "screen") << "the run intent baked the document's display mode";
+  // Black paper, not white, and this is the one place in the tree where that is the right answer:
+  // the zeroed LUMICE_RenderParam is what this arm deliberately leaves `paper` at, exactly as it
+  // leaves `background`, and under `tone: screen` nothing reads it. An arm that wrote the
+  // document's paper here would be describing a picture, which is the other arm's job.
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_FLOAT_EQ(r["paper"][c].get<float>(), 0.0f) << "paper channel " << c;
   }
 }
 
@@ -291,6 +309,12 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   EXPECT_NEAR(r["background"][0].get<float>(), 0.20f, 1e-4f);
   EXPECT_NEAR(r["background"][1].get<float>(), 0.35f, 1e-4f);
   EXPECT_NEAR(r["background"][2].get<float>(), 0.60f, 1e-4f);
+  // The print mode reaches the exported config, both halves. `paper` makes the same sRGB round trip
+  // `background` just did, through the same pair of inverse conversions.
+  EXPECT_EQ(r["tone"].get<std::string>(), "print") << "the exported config would render in the wrong tone";
+  EXPECT_NEAR(r["paper"][0].get<float>(), 0.95f, 1e-4f);
+  EXPECT_NEAR(r["paper"][1].get<float>(), 0.90f, 1e-4f);
+  EXPECT_NEAR(r["paper"][2].get<float>(), 0.80f, 1e-4f);
 }
 
 // The off state of the same switch, asserted separately rather than trusted to be the absence of
@@ -614,6 +638,8 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     "visible",           // hemisphere crop: always full vs. the user's
     "front",             // the second crop: always off vs. the user's switch, same reason
     "background",        // composited at display time vs. baked by the CLI
+    "tone",              // always screen on the commit arm vs. the user's mode on the export arm
+    "paper",             // the zeroed struct's black vs. the user's paper, same split as background
     "resolution",        // 2:1 texture vs. the user's canvas shape
     // "grid" is deliberately NOT here: only some of its sub-fields diverge, and they are exempted
     // below at the sub-key level so the rest keep being compared. Erasing the whole "grid" object

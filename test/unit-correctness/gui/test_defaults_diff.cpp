@@ -708,6 +708,10 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "renderer.visible", true, Kind::kCombo },
     { "renderer.front", true, Kind::kCheckbox },
     { "renderer.background", true, Kind::kColor },
+    // v4.27, beside the sky colour it is the print-mode counterpart of. Registered for the same
+    // reason renderer.background is: it has a main-UI control, so the defaults panel offers the
+    // same inline editor rather than a read-only row.
+    { "renderer.paper", true, Kind::kColor },
     // No editor: the GUI has no tint control anywhere (owner-decided; see
     // GuiState::RenderConfig::ray_color's own comment). Still serialized, so it still shows up as
     // a read-only row rather than disappearing.
@@ -717,6 +721,9 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     // in the main UI, so the defaults panel offers the same inline editor rather than a read-only
     // row. Two values only (Relative / Absolute), so it is a combo like renderer.visible.
     { "renderer.ev_mode", true, Kind::kCombo },
+    // v4.27. Two values only (Screen / Print), a control in the Display group, and the same
+    // disposition ev_mode has above — a combo with an inline editor.
+    { "renderer.tone", true, Kind::kCombo },
     { "aspect_ratio", true, Kind::kCombo },
     { "aspect_portrait", true, Kind::kCheckbox },
     { "bg_path", false, Kind::kCheckbox },

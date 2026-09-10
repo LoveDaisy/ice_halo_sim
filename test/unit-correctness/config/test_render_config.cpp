@@ -1,14 +1,41 @@
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "config/config_compare.hpp"
 #include "config/render_config.hpp"
+#include "util/color_space.hpp"
+#include "util/logger.hpp"
 
 namespace {
+
+// Captures everything the global logger emits for the lifetime of the object. RAII rather than a
+// manual remove_sink at the end of each test, because GetSharedSink() is a process-wide singleton:
+// an ASSERT_* returning early with the sink still attached would leave later tests in this binary
+// writing into a destroyed ostringstream. Same shape as the copy in test_crystal_sync_group.cpp.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) {
+    lumice::GetSharedSink()->add_sink(sink_);
+  }
+
+  ~LogCapture() { lumice::GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
 
 // Construct a baseline RenderConfig with non-default values to avoid false negatives
 // from comparing two default-constructed (all-zero) configs.
@@ -142,6 +169,20 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     auto mod = base;
     mod.background_[0] = 1.0f;
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "background";
+  }
+
+  // paper
+  {
+    auto mod = base;
+    mod.paper_[0] = 0.5f;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "paper";
+  }
+
+  // tone
+  {
+    auto mod = base;
+    mod.tone_ = lumice::RenderConfig::kPrint;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "tone";
   }
 
   // ray_color
@@ -289,6 +330,113 @@ TEST(RenderConfigEvModeTest, OperatorEq_ComparesEvMode) {
   EXPECT_TRUE(a == b);
   b.ev_mode_ = lumice::RenderConfig::kAbsolute;
   EXPECT_FALSE(a == b);
+}
+
+// ===== tone / paper: defaults, JSON round trip, warn-and-fall-back, appearance classification =====
+//
+// The two fields of the print display mode (doc/print-mode-subtractive-ink.md). No operator reads
+// either of them yet — the field chain lands ahead of the operator on purpose — so what is pinned
+// here is the chain itself: the values survive JSON both ways, an unknown tone SAYS SO instead of
+// silently becoming `screen`, and neither field is mistaken for a layout field.
+
+TEST(RenderConfigToneTest, DefaultIsScreen) {
+  lumice::RenderConfig cfg;
+  EXPECT_EQ(cfg.tone_, lumice::RenderConfig::kScreen);
+}
+
+// White, the opposite of background_'s black, and the whole reason `paper` is a second field
+// rather than a reuse of `background`: under the subtractive operator a black ground gives
+// out = 0 * 10^(-D) == 0 for every pixel, an all-black page reachable by merely ticking the mode
+// on. See doc/print-mode-subtractive-ink.md decision D5.
+TEST(RenderConfigPaperTest, DefaultIsWhite) {
+  lumice::RenderConfig cfg;
+  EXPECT_FLOAT_EQ(cfg.paper_[0], 1.0f);
+  EXPECT_FLOAT_EQ(cfg.paper_[1], 1.0f);
+  EXPECT_FLOAT_EQ(cfg.paper_[2], 1.0f);
+}
+
+TEST(RenderConfigToneTest, ToJson_EmitsModeString) {
+  auto cfg = MakeBaseline();
+  cfg.tone_ = lumice::RenderConfig::kPrint;
+  nlohmann::json j = cfg;
+  EXPECT_EQ(j.at("tone").get<std::string>(), "print");
+
+  cfg.tone_ = lumice::RenderConfig::kScreen;
+  nlohmann::json j2 = cfg;
+  EXPECT_EQ(j2.at("tone").get<std::string>(), "screen");
+}
+
+TEST(RenderConfigToneTest, FromJson_BothValuesRoundTrip) {
+  for (const auto& [text, expected] : std::vector<std::pair<std::string, lumice::RenderConfig::Tone>>{
+           { "screen", lumice::RenderConfig::kScreen }, { "print", lumice::RenderConfig::kPrint } }) {
+    auto tone = lumice::RenderConfig::kPrint;  // seed with the non-default so "screen" is a real read
+    nlohmann::json(text).get_to(tone);
+    EXPECT_EQ(tone, expected) << text;
+  }
+}
+
+// The one place tone departs from ev_mode beside it, and the reason it gets a hand-written codec
+// instead of NLOHMANN_JSON_SERIALIZE_ENUM: the fall back to `screen` must be ANNOUNCED. `screen`
+// and `print` name two structurally different operators, so a typo silently landing on `screen`
+// hands back exactly the picture the author was trying to leave. Both halves are asserted — the
+// value AND the warning — because either alone would pass with the other missing.
+TEST(RenderConfigToneTest, FromJson_UnknownStringWarnsAndFallsBackToScreen) {
+  auto tone = lumice::RenderConfig::kPrint;
+  std::string logged;
+  {
+    LogCapture capture;
+    nlohmann::json("no_such_tone").get_to(tone);
+    logged = capture.Text();
+  }
+  EXPECT_EQ(tone, lumice::RenderConfig::kScreen);
+  EXPECT_NE(logged.find("no_such_tone"), std::string::npos) << logged;
+}
+
+// The control arm for the test above: a RECOGNIZED value must not warn. Without it, a codec that
+// warned on every parse would pass the assertion above while spamming a correct config's load.
+TEST(RenderConfigToneTest, FromJson_KnownStringIsSilent) {
+  auto tone = lumice::RenderConfig::kScreen;
+  std::string logged;
+  {
+    LogCapture capture;
+    nlohmann::json("print").get_to(tone);
+    logged = capture.Text();
+  }
+  EXPECT_EQ(tone, lumice::RenderConfig::kPrint);
+  EXPECT_TRUE(logged.empty()) << logged;
+}
+
+// paper_ is linear in the struct and sRGB in the document, exactly as background_ is. Asserting
+// the CONVERSION rather than the value round-tripping is what separates "the key is written" from
+// "the key is written in the right space" — a pass-through would satisfy a round trip too.
+TEST(RenderConfigPaperTest, ToJson_EmitsSrgb) {
+  auto cfg = MakeBaseline();
+  cfg.paper_[0] = 0.25f;
+  cfg.paper_[1] = 0.5f;
+  cfg.paper_[2] = 1.0f;
+  nlohmann::json j = cfg;
+  ASSERT_EQ(j.at("paper").size(), 3u);
+  EXPECT_NEAR(j.at("paper")[0].get<float>(), lumice::LinearToSrgb(0.25f), 1e-5f);
+  EXPECT_NEAR(j.at("paper")[1].get<float>(), lumice::LinearToSrgb(0.5f), 1e-5f);
+  EXPECT_NEAR(j.at("paper")[2].get<float>(), lumice::LinearToSrgb(1.0f), 1e-5f);
+}
+
+// operator== is a full equality predicate (unlike NeedsRebuild, which asks a narrower question),
+// so it MUST see both fields. Each is flipped on its own: comparing them together would pass with
+// only one of the two comparisons wired up.
+TEST(RenderConfigToneTest, OperatorEq_ComparesToneAndPaper) {
+  auto a = MakeBaseline();
+  {
+    auto b = MakeBaseline();
+    EXPECT_TRUE(a == b);
+    b.tone_ = lumice::RenderConfig::kPrint;
+    EXPECT_FALSE(a == b) << "tone";
+  }
+  {
+    auto b = MakeBaseline();
+    b.paper_[1] = 0.5f;
+    EXPECT_FALSE(a == b) << "paper";
+  }
 }
 
 // The meridian list added in v4.18, held to the same three properties the parallels already have:

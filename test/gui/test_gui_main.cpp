@@ -583,6 +583,8 @@ int main(int argc, char** argv) {
   RegisterPreviewPixelTests(engine);
   RegisterPreviewTextureTests(engine);
   RegisterPreviewBackgroundTests(engine);
+  RegisterPreviewPrintModeTests(engine);
+  RegisterContrastHeadroomNoticeTests(engine);
   RegisterPreviewDualFisheyeGatherTests(engine);
   RegisterBackgroundMainUiControlTests(engine);
   RegisterEntryManagementTests(engine);

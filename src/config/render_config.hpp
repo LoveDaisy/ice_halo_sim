@@ -154,6 +154,18 @@ struct RenderConfig {
     kAbsolute,
   };
 
+  // The tone-reproduction mode: which operator turns accumulated radiance into pixels.
+  //   kScreen — the additive operator this project has always used: out = clamp(L * c + background).
+  //             Monotonically non-decreasing in radiance, so a light background can only stay light.
+  //   kPrint  — the subtractive (density) operator of doc/print-mode-subtractive-ink.md: ink is
+  //             deposited ON the paper, out = paper * 10^(-D), so a white paper CAN go dark.
+  // Structurally non-overlapping, not two parameter ranges of one formula, which is why this is an
+  // enum and not a knob — see that document's second law.
+  enum Tone {
+    kScreen,
+    kPrint,
+  };
+
   IdType id_{};
   LensParam lens_{ LensParam::kLinear, 90.0f };
   int lens_shift_[2]{};  // dx, dy
@@ -169,6 +181,16 @@ struct RenderConfig {
 
   // Linear RGB. The JSON "background" key is sRGB; to_json / ParseRenderConfig convert.
   float background_[3]{};
+  // The PAPER colour under kPrint — the ground the ink is laid on, and a separate field from
+  // background_ on purpose (doc/print-mode-subtractive-ink.md, decision D5): background_ defaults
+  // to BLACK, so a print mode that reused it would make out = 0 * 10^(-D) == 0, an all-black page,
+  // the state a user reaches by merely ticking the mode on. A second field with the opposite
+  // default makes that degenerate state structurally unreachable.
+  // Linear RGB, same as background_ beside it: the JSON "paper" key is sRGB and the two
+  // conversions live in the same two places (to_json / ParseRenderConfig).
+  // APPEARANCE, like background_: it changes what the finished image is composited onto, never the
+  // buffer that is accumulated into, so it takes no consumer rebuild.
+  float paper_[3]{ 1.0f, 1.0f, 1.0f };
   float ray_color_[3]{ -1.0f, -1.0f, -1.0f };  // r, g, b
   // Brightness scaling for CLI output (PostSnapshot). GUI uses exposure_offset (EV stops) in
   // gui_state.hpp directly; the two are related by intensity_factor = 2^exposure_offset but serve
@@ -178,6 +200,11 @@ struct RenderConfig {
   // Appearance field (like intensity_factor_): it selects WHICH exposure formula PostSnapshot()
   // and the compositor use, never the accumulation layout, so a change needs no consumer rebuild.
   EvMode ev_mode_ = kRelative;
+  // Appearance field, for the same reason ev_mode_ above is: it selects WHICH operator turns the
+  // accumulated radiance into pixels, never the accumulation layout, so a change needs no consumer
+  // rebuild. Read by RenderConsumer::PostSnapshot (src/server/render.cpp) and, on the GUI side, by
+  // the preview fragment shader through LUMICE_RenderParam::tone.
+  Tone tone_ = kScreen;
 
   std::vector<GridLineParam> angular_dist_grid_;
   std::vector<GridLineParam> elevation_grid_;
@@ -294,11 +321,11 @@ struct RenderConfig {
 // gaining a member, a type widening — keeps the count unchanged and is invisible here. The sizeof
 // pins do see that class, so the two are complements and neither replaces the other.
 inline void RenderConfigFieldSetGuard(const RenderConfig& c) {
-  [[maybe_unused]] const auto& [id, lens, lens_shift, resolution, view, visible, front, background, ray_color,
-                                intensity_factor, overlap, ev_mode, angular_dist_grid, elevation_grid, longitude_grid,
-                                horizon, elevation_grid_line, longitude_grid_line, angular_dist_grid_line,
-                                horizon_label, grid_label, angular_dist_label, zenith_nadir, markers, markers_opacity,
-                                markers_radius_px] = c;
+  [[maybe_unused]] const auto& [id, lens, lens_shift, resolution, view, visible, front, background, paper, ray_color,
+                                intensity_factor, overlap, ev_mode, tone, angular_dist_grid, elevation_grid,
+                                longitude_grid, horizon, elevation_grid_line, longitude_grid_line,
+                                angular_dist_grid_line, horizon_label, grid_label, angular_dist_label, zenith_nadir,
+                                markers, markers_opacity, markers_radius_px] = c;
 }
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
@@ -317,6 +344,15 @@ NLOHMANN_JSON_SERIALIZE_ENUM(  // declare
         { RenderConfig::kRelative, "relative" },
         { RenderConfig::kAbsolute, "absolute" },
     })
+
+// Tone gets a HAND-WRITTEN codec rather than the NLOHMANN_JSON_SERIALIZE_ENUM the two enums above
+// use, and the difference is the warning: that macro's generated from_json maps an unrecognized
+// string to the first table entry SILENTLY, and this field has to say so. `screen` and `print`
+// name two structurally different operators, so a typo that quietly lands on `screen` gives back
+// exactly the picture the user was trying to leave. Falling back is still the behaviour — a
+// malformed value must not make a whole config unloadable — but it is announced.
+void to_json(nlohmann::json& j, const RenderConfig::Tone& t);
+void from_json(const nlohmann::json& j, RenderConfig::Tone& t);
 
 void to_json(nlohmann::json& j, const RenderConfig& r);
 

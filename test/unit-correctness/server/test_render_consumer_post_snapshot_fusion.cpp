@@ -29,6 +29,12 @@
 //   2. the gray + ray_color tint fallback (no gamut clip) with a zero background;
 //   3. use_real_color with a non-zero background, which lifts every empty pixel
 //      off zero and drives the post-blend clamp on the lit pixel.
+//   4. the subtractive (kPrint) operator, which replaces the whole colour branch
+//      and the background blend with paper * 10^(-density). It is here rather
+//      than only in test_render_consumer_print_mode.cpp because the property
+//      this file exists for — the fused loop reorders no arithmetic — has to
+//      hold for the third branch too, and it is the byte-level, no-tolerance
+//      comparison that says so.
 // Each case asserts its own coverage rather than assuming it: a non-black image
 // (so the byte comparison is not vacuous) and, for case 3, that the post-blend
 // clamp actually fired.
@@ -52,6 +58,7 @@
 #include "server/render.hpp"
 #include "util/color_data.hpp"
 #include "util/color_space.hpp"
+#include "util/ink_transfer.hpp"
 
 namespace lumice {
 namespace {
@@ -165,12 +172,24 @@ void ScaledXyzToLinearRgb(const RenderConfig& cfg, const float* xyz_raw, int i, 
 // of the formula rather than a second call into the code under test.
 std::vector<uint8_t> ExpectedImage(const RenderConfig& cfg, const float* xyz_raw, int total_pix, float scale) {
   std::vector<uint8_t> out(static_cast<size_t>(total_pix) * 3);
+  const bool print_mode = cfg.tone_ == RenderConfig::kPrint;
   for (int i = 0; i < total_pix; i++) {
     float rgb[3];
-    ScaledXyzToLinearRgb(cfg, xyz_raw, i, scale, rgb);
     const bool paint_bg = PixelImagesSky(cfg, i);
+    if (print_mode) {
+      // The subtractive branch replaces BOTH the colour transform and the background blend, so it
+      // is written out here whole rather than folded into ScaledXyzToLinearRgb: under kPrint there
+      // is no "linear RGB before the background" stage for that helper to return.
+      const float e = paint_bg ? xyz_raw[i * 3 + 1] * scale : 0.0f;
+      const float transmittance = InkTransmittance(InkOpticalDensity(e));
+      for (int j = 0; j < 3; j++) {
+        rgb[j] = cfg.paper_[j] * transmittance;
+      }
+    } else {
+      ScaledXyzToLinearRgb(cfg, xyz_raw, i, scale, rgb);
+    }
     for (int j = 0; j < 3; j++) {
-      if (paint_bg) {
+      if (paint_bg && !print_mode) {
         rgb[j] += cfg.background_[j];
       }
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
@@ -292,6 +311,34 @@ TEST(RenderConsumerPostSnapshotFusion, RealColorNonzeroBackground) {
   // 16x16 under a 180 deg equal-area fisheye leaves 48 corner pixels outside the image circle.
   EXPECT_EQ(cov.unimaged_pixels, 48u) << "no pixel fell outside the lens's domain — this case is what pins that the "
                                          "background is withheld there, and it just stopped covering it";
+}
+
+// -----------------------------------------------------------------------------
+// 4. The subtractive (kPrint) operator on a non-white paper.
+//
+// Non-white on purpose: with paper = {1,1,1} the three channels carry the same
+// number, so a bug that dropped the per-channel paper multiply (writing the bare
+// transmittance) would produce identical bytes and pass. The paper here has three
+// distinct components, so the multiply is load-bearing for the comparison.
+// -----------------------------------------------------------------------------
+TEST(RenderConsumerPostSnapshotFusion, PrintToneSubtractive) {
+  RenderConfig cfg = MakeSnapshotRenderConfig();
+  cfg.tone_ = RenderConfig::kPrint;
+  cfg.paper_[0] = 0.94f;
+  cfg.paper_[1] = 0.90f;
+  cfg.paper_[2] = 0.82f;
+  // Non-zero, and deliberately NOT the paper colour: the print branch must ignore the sky
+  // background entirely, so leaving it at zero here would make "ignored" and "added" agree.
+  cfg.background_[0] = 0.9f;
+  cfg.background_[1] = 0.25f;
+  cfg.background_[2] = 0.4f;
+  Coverage cov;
+  RunAndCompare(cfg, { 0.5f, 0.7f, 0.3f, 0.9f }, "PrintToneSubtractive", &cov);
+  EXPECT_GT(cov.nonzero_bytes, 0u) << "an all-black image would make the byte comparison vacuous";
+  // Same 48 corner pixels as case 3, and under kPrint they are the paper's own colour rather than
+  // black — that is what makes them a real assertion here instead of a repeat of the case above.
+  EXPECT_EQ(cov.unimaged_pixels, 48u) << "no pixel fell outside the lens's domain — this case is what pins that an "
+                                         "unimaged pixel prints as bare paper, and it just stopped covering it";
 }
 
 }  // namespace

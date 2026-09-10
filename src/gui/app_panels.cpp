@@ -543,7 +543,11 @@ void RenderTopBar(float window_width) {
       // "legible on this app's surfaces"; a literal white is only the answer for a dark one.
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     }
-    ImGui::BeginDisabled(composite_empty);
+    // doc/print-mode-subtractive-ink.md §7 instance 2 — the top-bar half. Its twin is the Colors
+    // window's "Enable colors" checkbox (color_window.cpp), and the two read the same predicate and
+    // the same two tooltip constants in the same priority order so they cannot drift.
+    const bool print_disabled = IsPrintTone(g_state.renderer);
+    ImGui::BeginDisabled(composite_empty || print_disabled);
     if (Checkbox(checkbox_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
@@ -556,7 +560,9 @@ void RenderTopBar(float window_width) {
     // "no matches" reason (a12: shared string with the Colors-window mirror);
     // when enabled, show the existing "Currently: Colored / Full Spectrum" hint.
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (composite_empty) {
+      if (print_disabled) {
+        ImGui::SetTooltip("%s", kColorsDisabledPrintModeTooltip);
+      } else if (composite_empty) {
         ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
       } else {
         ImGui::SetTooltip(
@@ -928,6 +934,11 @@ struct OverlayRowSpec {
   const char* name;
   const char* color_id;
   float* color;
+  // The registry key this row's swatch is gated by, or null for a row whose colour has no gate.
+  // `color_id` above cannot serve: that is an ImGui item id, and the registry is keyed by the
+  // serialization field name. Deliberately given NO default member initialiser, so a row added
+  // later cannot silently inherit "ungated" — the compiler demands the answer.
+  const char* color_field;
   const char* line_id;
   bool* line;
   const char* label_id;  // null ⇒ no text label for this overlay; the cell stays empty.
@@ -1059,8 +1070,17 @@ void RenderMarkersSection() {
     ImGui::TableNextRow();
 
     ImGui::TableSetColumnIndex(0);
+    // Through ConstraintFor for the same reason the Show checkbox above is: this swatch and the
+    // defaults panel's row for the very same key must not answer "can I edit this" differently.
+    // doc/print-mode-subtractive-ink.md §7 instance 4 is what makes them able to disagree.
+    const FieldEditorConstraint marker_color_c = ConstraintFor(MarkerFieldKey(i, MarkerKeyPart::kColor), g_state);
+    ImGui::BeginDisabled(!marker_color_c.enabled);
     ImGui::ColorEdit3((std::string("##marker_color_") + kMarkerSerialNames[i]).c_str(), m.color,
                       ImGuiColorEditFlags_NoInputs);
+    ImGui::EndDisabled();
+    if (marker_color_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", marker_color_c.disabled_reason);
+    }
 
     ImGui::TableSetColumnIndex(1);
     ImGui::AlignTextToFramePadding();
@@ -1108,22 +1128,27 @@ void RenderMarkersSection() {
 // adding a name longer than "Angular Distance" silently overlapped the Line column.
 void RenderOverlaysTab() {
   const OverlayRowSpec rows[] = {
-    { "Horizon", "##horizon_color", g_state.horizon_color, "##horizon_line", &g_state.show_horizon_line,
-      "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha", "overlay_horizon_alpha",
-      &g_state.horizon_alpha, nullptr, OverlayFold::kNone },
-    { "Grid", "##grid_color", g_state.grid_color, "##grid_line", &g_state.show_grid_line, "##grid_label",
-      &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
+    { "Horizon", "##horizon_color", g_state.horizon_color, "overlay_horizon_color", "##horizon_line",
+      &g_state.show_horizon_line, "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha",
+      "overlay_horizon_alpha", &g_state.horizon_alpha, nullptr, OverlayFold::kNone },
+    { "Grid", "##grid_color", g_state.grid_color, "overlay_grid_color", "##grid_line", &g_state.show_grid_line,
+      "##grid_label", &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
       OverlayFold::kNone },
     // "Angular Dist." rather than the field's full name "Angular Distance": the name column is what
     // every other column's declared width leaves over, and on this 300 px panel the full spelling is
     // what the width budget cannot afford. Display string only — no id, no serialization key.
-    { "Angular Dist.", "##sun_circles_color", g_state.sun_circles_color, "##sun_circles_line",
-      &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
-      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", OverlayFold::kSunCircleAngles },
+    { "Angular Dist.", "##sun_circles_color", g_state.sun_circles_color, "overlay_sun_circles_color",
+      "##sun_circles_line", &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label,
+      "##sun_circles_alpha", "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold",
+      OverlayFold::kSunCircleAngles },
     // The lens image circle. No text label (null label id, empty cell) and no fold: unlike the
     // angular-distance circles above it owns no field of its own — the shader derives the circle
     // from the lens type, the FOV and the viewport, so there is nothing here for a user to set.
-    { "Lens Border", "##lens_border_color", g_state.lens_border_color, "##lens_border_line",
+    // Null color_field: the lens border is not one of the four instances doc/print-mode-subtractive-
+    // ink.md §7 enumerates, so its swatch takes no gate — see the matching note in
+    // field_editor_registry.cpp for why the boundary comes from the document rather than from
+    // consistency with its three neighbours.
+    { "Lens Border", "##lens_border_color", g_state.lens_border_color, nullptr, "##lens_border_line",
       &g_state.show_lens_border_line, nullptr, nullptr, "##lens_border_alpha", "overlay_lens_border_alpha",
       &g_state.lens_border_alpha, nullptr, OverlayFold::kNone },
   };
@@ -1153,7 +1178,14 @@ void RenderOverlaysTab() {
     ImGui::TableNextRow();
 
     ImGui::TableSetColumnIndex(0);
+    const FieldEditorConstraint color_c =
+        row.color_field != nullptr ? ConstraintFor(row.color_field, g_state) : FieldEditorConstraint{};
+    ImGui::BeginDisabled(!color_c.enabled);
     ImGui::ColorEdit3(row.color_id, row.color, ImGuiColorEditFlags_NoInputs);
+    ImGui::EndDisabled();
+    if (color_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", color_c.disabled_reason);
+    }
 
     ImGui::TableSetColumnIndex(1);
     ImGui::AlignTextToFramePadding();
@@ -1515,6 +1547,81 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         false, ImGuiSelectableFlags_Disabled);
     ImGui::PopStyleColor();
 
+    // The print mode, at the END of the display block rather than directly under the sky colour it
+    // is the counterpart of: the EV readout above belongs to the exposure trio (Mode / EV / Sky
+    // Color) and reads as a footer to it, so inserting between them would split a group. Two controls
+    // rather than one because a black ground under the subtractive operator renders an all-black
+    // page, so the tone switch alone would have no ground worth laying ink on
+    // (doc/print-mode-subtractive-ink.md decision D5).
+    //
+    // The paper swatch is NOT greyed out under Screen, and that is a decision rather than an
+    // omission: both fields are authored state that survives a tone switch, so greying the one the
+    // live operator is not reading would hide a value the user is about to need. The mutual
+    // exclusions the operator does impose are the colour-carrying fields of
+    // doc/print-mode-subtractive-ink.md §7, which are greyed where they live.
+    ImGui::Combo("Tone##display_tone", &r.tone, kToneNames, kToneCount);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Which operator turns the simulated light into pixels.\n\n"
+          "Screen: light is ADDED to the sky colour. This is the default and what the preview "
+          "has always done. A light sky can only stay light, which is why a white sky shows no "
+          "halo.\n\n"
+          "Print: light is laid down as INK on the paper below, so the picture darkens where the "
+          "halo is — the way it would come off a printer.");
+    }
+    ImGui::ColorEdit3("Paper##display_paper_color", r.paper, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Colour of the paper the ink is laid on under Print tone.\n\n"
+          "Separate from Sky Color, and white rather than black by default: ink only\n"
+          "ever darkens what is beneath it, so black paper would render a black page.");
+    }
+
+    // doc/print-mode-subtractive-ink.md §8 (owner decision D6), GUI half. Each operator has one
+    // degenerate ground — a near-white sky under Screen, a near-black paper under Print — and the
+    // shared predicate (gui_state.hpp's ContrastHeadroomIsLowFor over util/contrast_headroom.hpp,
+    // the same one src/server/server.cpp's CommitConfig notice calls) decides which, if either, the
+    // live tone is in.
+    //
+    // Non-blocking, like panels.cpp's LayerProducesNoRays notice and for the same reason: this is a
+    // legitimate state to pass through while picking a colour, and nothing downstream is endangered
+    // by it. It opens no popup and disables nothing; when the predicate is quiet it renders nothing
+    // at all, so the block costs no layout in the common case (unlike the top bar's Revert row,
+    // which holds its space because it sits mid-row in a horizontal toolbar).
+    //
+    // The text says WHY the picture is gone, not just that a colour is extreme. The screen half is
+    // the state the user feedback behind this work came from, and its signature is specific: the
+    // overlay lines stay perfectly crisp while the halo alone disappears, because lines are blended
+    // and light is added. Told only "background too bright", a user looking at visible grid lines has
+    // no reason to believe that is the explanation.
+    if (ContrastHeadroomIsLowFor(r)) {
+      const bool print_tone = IsPrintTone(r);
+      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION "%s",
+                         print_tone ? " Paper is nearly black — ink has nowhere to darken" :
+                                      " Sky is nearly white — the halo has nowhere to brighten");
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", print_tone ?
+                                    "Ink only ever darkens the paper, and never reaches black. With the paper "
+                                    "this dark\nevery feature lands within a few 8-bit levels of the page, so "
+                                    "the image reads as blank.\n\nLighten the paper, or switch Tone back to "
+                                    "Screen." :
+                                    "Light is ADDED to the sky colour and clamps at white, so with the sky this "
+                                    "bright a halo\nhas almost nowhere left to go. Grid and overlay lines are "
+                                    "blended rather than added, so\nthey stay perfectly visible — which is why "
+                                    "this looks like a failed simulation rather than\na colour choice.\n\nDarken "
+                                    "the sky, or switch Tone to Print, which lays ink ON a pale ground instead.");
+      }
+      ImGui::SameLine();
+      // The repair itself lives in gui_state.hpp (ApplyHeadroomFix) rather than here, so that what
+      // it changes is asserted without a window — see its unit tests. The two labels name the field
+      // each arm moves, because "Fix" alone would not say which of the two controls above is about
+      // to change under the user's hand.
+      if (ImGui::SmallButton(print_tone ? "Reset paper to white##display_headroom_fix" :
+                                          "Switch to Print##display_headroom_fix")) {
+        ApplyHeadroomFix(r);
+      }
+    }
+
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
     const char* preview_label = kAspectPresetNames[preset_idx];
@@ -1572,8 +1679,23 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
+    // The outer scope this opens runs to the EndDisabled after the pan/zoom hint below, covering
+    // Show, Alpha and the three transform sliders.
     ImGui::BeginDisabled(no_bg);
+    // Show's own gate, nested inside it and read through ConstraintFor rather than from the local
+    // `no_bg`, so this control and the defaults panel's row for the same field answer with ONE
+    // predicate. They used to be two — `no_bg` here, WhenBackgroundLoaded there — which agreed for
+    // as long as "is an image loaded" was the only reason to disable, and stopped agreeing the
+    // moment Print became a second one. A doubly-pushed disabled state is idempotent, so the nesting
+    // costs nothing; what it buys is the tooltip, which the outer scope cannot carry because it
+    // spans five controls with five different reasons.
+    const FieldEditorConstraint bg_show_c = ConstraintFor("bg_show", g_state);
+    ImGui::BeginDisabled(!bg_show_c.enabled);
     Checkbox("Show##display_bg", &g_state.bg_show);
+    ImGui::EndDisabled();
+    if (bg_show_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", bg_show_c.disabled_reason);
+    }
     // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
     // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
     // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
@@ -1781,8 +1903,18 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // before the transfer curve. This one assignment also feeds all three PNG export entry
     // points: BuildExportParams copies this struct and overrides only the exposure fields.
     lumice::SrgbToLinearRgb(rc.background, pp.background_color_linear);
+    // The paper and the operator that reads it, converted and carried the same way and for the
+    // same reason: the shader multiplies the paper by a transmittance in linear, before the
+    // transfer curve.
+    lumice::SrgbToLinearRgb(rc.paper, pp.paper_color_linear);
+    pp.tone = rc.tone;
 
-    pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
+    // The third term is doc/print-mode-subtractive-ink.md §7 instance 1, and it is what makes the
+    // exclusion real rather than advisory: `bg_show` is left exactly as the user set it, so
+    // switching Tone back to Screen brings the photograph straight back. See the matching
+    // WhenBackgroundLoaded gate in field_editor_registry.cpp for why additive-over-subtractive is
+    // wrong in kind and not merely in taste.
+    pp.bg.enabled = g_state.bg_show && g_preview.HasBackground() && !IsPrintTone(rc);
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
     pp.bg.pan_x = g_state.bg_offset_x;

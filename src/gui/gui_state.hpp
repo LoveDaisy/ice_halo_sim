@@ -14,6 +14,7 @@
 
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"  // LUMICE_RayCount (64-bit ray-count type)
+#include "util/contrast_headroom.hpp"
 
 namespace lumice::gui {
 
@@ -389,6 +390,13 @@ constexpr int kEvModeCount = 2;
 static_assert(sizeof(kEvModeNames) / sizeof(*kEvModeNames) == kEvModeCount,
               "kEvModeNames length must match kEvModeCount");
 
+// Display labels for the tone (tone-reproduction operator) combo, mirroring core
+// RenderConfig::Tone. Same split as kEvModeNames above: these are what the user reads, the
+// serialized spelling is the lowercase pair in file_io.cpp's kToneJsonNames.
+inline const char* const kToneNames[] = { "Screen", "Print" };
+constexpr int kToneCount = 2;
+static_assert(sizeof(kToneNames) / sizeof(*kToneNames) == kToneCount, "kToneNames length must match kToneCount");
+
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
 // The same four values as the combo shows them. Written once here rather than at each control:
@@ -408,6 +416,14 @@ struct RenderConfig {
   int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
   bool front = false;            // Independent front-hemisphere clip flag (AND with base)
   float background[3] = { 0.0f, 0.0f, 0.0f };
+  // The paper colour under `tone == 1` (print). sRGB here, like `background` beside it and unlike
+  // core's linear RenderConfig::paper_ — file_io.cpp's export arm converts.
+  //
+  // WHITE by default, the opposite of `background`, and that opposition is the whole reason it is a
+  // second field rather than a reuse of `background`: under the subtractive operator a black ground
+  // renders an all-black page, so reusing `background` would put that state one tick-box away. See
+  // doc/print-mode-subtractive-ink.md decision D5.
+  float paper[3] = { 1.0f, 1.0f, 1.0f };
   // Serialized only (file_io.cpp) — no editor registers it (field_editor_registry.cpp), so
   // nothing in the running GUI can change it. See the RenderConfigResimFields comment below.
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
@@ -423,16 +439,90 @@ struct RenderConfig {
   // only changes which anchor the client-side conversion divides by, never the simulation output
   // — see the static_assert note further down for the full argument.
   int ev_mode = 0;
+  // Which tone-reproduction operator turns the accumulated radiance into pixels, mirroring core
+  // RenderConfig::Tone (0 = screen / additive, 1 = print / subtractive). 0 matches core's default,
+  // so a document that never mentions it renders the way the preview always has.
+  //
+  // Held as a plain int and registered as "renderer.tone", exactly like `ev_mode` above, and
+  // excluded from RenderConfigResimFields for the same reason — see the static_assert note further
+  // down. Read through IsPrintTone() below rather than compared inline; the operator itself now
+  // lives in the preview shader and in the CLI's PostSnapshot, and the fields it takes the colour
+  // channel over from are listed at doc/print-mode-subtractive-ink.md §7.
+  int tone = 0;
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            front == o.front && std::equal(background, background + 3, o.background) &&
-           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset &&
-           ev_mode == o.ev_mode;
+           std::equal(paper, paper + 3, o.paper) && std::equal(ray_color, ray_color + 3, o.ray_color) &&
+           exposure_offset == o.exposure_offset && ev_mode == o.ev_mode && tone == o.tone;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
+
+// Is this renderer under the subtractive (print) operator?
+//
+// The ONE place the GUI spells this comparison. doc/print-mode-subtractive-ink.md §7's rule — print
+// takes over the colour channel, so every field that carries information in a hue is mutually
+// exclusive with it — has four instances and therefore at least six call sites; six hand-written
+// `tone == 1` are six chances to write `!=` and one place for a future third tone to be missed.
+//
+// It compares against LUMICE_TONE_PRINT rather than core's RenderConfig::kPrint enumerator, and
+// that is not a preference: src/gui/ reaches core only through the C API (AGENTS.md's public-API
+// boundary, enforced by scripts/check_policies.py), so the enumerator is not visible here and
+// LUMICE_TONE_PRINT is its published spelling. `tone` is held as a plain int for the same reason.
+inline bool IsPrintTone(const RenderConfig& renderer) {
+  return renderer.tone == LUMICE_TONE_PRINT;
+}
+
+// Has this renderer's ground run out of room for the picture to show against?
+//
+// doc/print-mode-subtractive-ink.md §8 (owner decision D6): the two tone operators have one
+// degenerate direction each — a white sky under screen, a black paper under print — and they are ONE
+// idea, so they are ONE predicate. That predicate is util/contrast_headroom.hpp's, which the CLI
+// calls too (src/server/server.cpp's WarnLowContrastHeadroom); these two functions exist only to
+// hand it the right field and the right direction.
+//
+// They forward and do nothing else — no extra condition, no GUI-only exception, no second
+// comparison against the threshold. That restriction is the point of having them: a branch added
+// here would make the GUI a second authority on when the warning fires, and then "the threshold is
+// defined in one place" would be true of the constant while being false of the judgement.
+//
+// No conversion, unlike the CLI's caller: RenderConfig::background / ::paper here are sRGB already
+// (see their declarations above), which is the domain the predicate is defined on.
+inline float ContrastHeadroomMarginFor(const RenderConfig& renderer) {
+  const bool print = IsPrintTone(renderer);
+  return ContrastHeadroomMargin(print ? renderer.paper : renderer.background,
+                                print ? ToneLawLimit::kBlack : ToneLawLimit::kWhite);
+}
+
+inline bool ContrastHeadroomIsLowFor(const RenderConfig& renderer) {
+  const bool print = IsPrintTone(renderer);
+  return ContrastHeadroomIsLow(print ? renderer.paper : renderer.background,
+                               print ? ToneLawLimit::kBlack : ToneLawLimit::kWhite);
+}
+
+// The one-click fix offered beside that warning, as a function rather than as a lambda inside the
+// button: what it changes is the part worth asserting, and asserting it through a real click would
+// need a window and an ImGuiTestContext for a two-line mutation.
+//
+// The two arms are deliberately NOT symmetric, and each one is the smallest move that restores a
+// visible picture:
+//   screen, near-white sky  -> switch to print. The sky the user picked is kept, because a pale sky
+//                              is a perfectly good PAPER; it is the additive law that cannot use it.
+//   print, near-black paper -> reset the paper to its default white, and STAY in print. The user is
+//                              fixing print's ground, not asking to leave print, and switching tone
+//                              back would undo the choice they just made.
+// The default is read off a default-constructed RenderConfig rather than written as {1,1,1}, the same
+// way server.cpp's notices read theirs, so a change to the field's default needs no edit here.
+inline void ApplyHeadroomFix(RenderConfig& renderer) {
+  if (IsPrintTone(renderer)) {
+    const RenderConfig kDefaults{};
+    std::copy(kDefaults.paper, kDefaults.paper + 3, renderer.paper);
+  } else {
+    renderer.tone = LUMICE_TONE_PRINT;
+  }
+}
 
 // The resim-eligible projection of RenderConfig: ONLY the fields whose change genuinely requires
 // re-running / rebuilding the simulation. Everything else is client-side display state.
@@ -532,7 +622,7 @@ struct RenderConfigResimFields {
 namespace {
 [[maybe_unused]] void RenderConfigFieldSetGuard(const RenderConfig& c) {
   [[maybe_unused]] const auto& [lens_type, fov, elevation, azimuth, roll, sim_resolution_index, visible, front,
-                                background, ray_color, exposure_offset, ev_mode] = c;
+                                background, paper, ray_color, exposure_offset, ev_mode, tone] = c;
 }
 [[maybe_unused]] void RenderConfigResimFieldsGuard(const RenderConfigResimFields& r) {
   [[maybe_unused]] const auto& [sim_resolution_index] = r;
@@ -574,7 +664,16 @@ namespace {
 // its anchor from config_.ev_mode_ at CommitConfig time), and there it deliberately takes effect
 // on the next Run rather than the next frame — see the note at component_compositor.cpp's
 // CompositeAnchorScale. That is a slower path to the same value, not a resim dependency.
-static_assert(sizeof(RenderConfig) == 64, "RenderConfig layout changed — see RenderConfigFieldSetGuard above");
+//
+// tone and paper (v4.27) take the two dispositions ev_mode and background already hold, one each,
+// and the split is not arbitrary: `tone` is a display-mode SWITCH and `paper` is a COLOUR, which
+// is exactly the line those two precedents already fall on. `tone` is excluded outright, like
+// ev_mode — picking an operator is a display-time reading of already-simulated data, so it must
+// not flip a finished run into kModified and Revert must not put the old mode back as if it were a
+// config edit awaiting a re-run. `paper` is excluded from resim but Revert-tracked through its own
+// ConfigSnapshot slot, like background — editing a colour must not re-run anything, but Revert
+// must still put the previous one back.
+static_assert(sizeof(RenderConfig) == 80, "RenderConfig layout changed — see RenderConfigFieldSetGuard above");
 // RenderConfigResimFields: naming the field list once does NOT by itself keep the three
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
@@ -1576,6 +1675,16 @@ struct GuiState {
     // single colour. If a second RenderConfig field ever needs the same treatment, that is the
     // point to reconsider extracting a named RenderConfigDisplayFields — not before.
     float renderer_background[3];
+    // `paper` needs the identical treatment for the identical reason (v4.27): outside the resim
+    // projection, inside the Revert baseline.
+    //
+    // THE SECOND FIELD HAS NOW ARRIVED — the condition the paragraph above names as the point to
+    // reconsider extracting a named RenderConfigDisplayFields. Reconsidered, and deliberately not
+    // done: the two are still two bare colour triples with nothing to say to each other, so a
+    // wrapper would add a type and a From/ApplyTo indirection while removing no duplication worth
+    // the name. What would change the answer is a member of this set that is NOT a colour, or a
+    // rule the set has to enforce as a whole — either gives the type something to own.
+    float renderer_paper[3];
     std::vector<ColorClassConfig> raypath_color;
 
     // Build a snapshot from the configuration fields of `state`. Implementation is
@@ -1734,7 +1843,11 @@ inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
 // Size then shrank 176 → 168 when `ray_color` left RenderConfigResimFields with the field itself:
 // it lost its only editor (field_editor_registry.cpp no longer registers it), so nothing can ever
 // change it again and it stopped being a resim-eligible field to track. Read off the compiler.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 168,
+// Size then grew 168 -> 176 by the `renderer_paper` slot (v4.27), and the number is worth reading:
+// the slot is 12 bytes and the struct grew by 8, so 4 of the 12 came out of padding that was
+// already there. Read off the compiler, not hand-computed — the arithmetic does not predict it,
+// which is the same lesson the two shrinks above record.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -1750,6 +1863,7 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   s.sim = state.sim;
   s.renderer_resim = RenderConfigResimFields::From(state.renderer);
   std::copy(std::begin(state.renderer.background), std::end(state.renderer.background), s.renderer_background);
+  std::copy(std::begin(state.renderer.paper), std::end(state.renderer.paper), s.renderer_paper);
   s.raypath_color = state.raypath_color;
   return s;
 }
@@ -1762,6 +1876,7 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.sim = sim;
   renderer_resim.ApplyTo(state.renderer);
   std::copy(std::begin(renderer_background), std::end(renderer_background), state.renderer.background);
+  std::copy(std::begin(renderer_paper), std::end(renderer_paper), state.renderer.paper);
   state.raypath_color = raypath_color;
 }
 

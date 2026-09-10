@@ -150,6 +150,20 @@ bool NoVisibleMatchedColorClass(const GuiState& state, const std::vector<int>& s
 // covers both empty-composite roots: (a) no rays match any class; (b) matches
 // exist but every matching class is currently hidden (visible=false, or solo'd
 // out by another class).
+// doc/print-mode-subtractive-ink.md §7 instance 2, and the sibling of kColorsDisabledNoMatchTooltip
+// below in every respect: one string read by BOTH the top-bar Colored toggle and the Colors-window
+// Enable checkbox, so the two cannot come to disagree about why the control is off.
+//
+// Raypath colour puts its whole payload in the HUE — which path a ray took is read off the colour
+// and nothing else — while print lays one neutral ink whose only degree of freedom is density. The
+// composite is therefore not produced at all under print (server.cpp's DoSnapshot skips it), which
+// is why this is a disabled control and not merely a differently-looking picture. The classes
+// themselves are untouched and come back with Screen.
+inline constexpr const char* kColorsDisabledPrintModeTooltip =
+    "Print mode lays one neutral ink, so there is no hue left to tell the color classes apart.\n"
+    "The colored composite is not produced while Tone is Print. Your color classes are kept --\n"
+    "switch Tone back to Screen to see them again.";
+
 inline constexpr const char* kColorsDisabledNoMatchTooltip =
     "No visible color class currently matches any rays -- the composite would be empty.\n"
     "Either no rays match any configured class (a physical filter may be blocking them,\n"

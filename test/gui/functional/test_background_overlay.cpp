@@ -31,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "gui/field_editor_registry.hpp"
 #include "gui/gui_state.hpp"
 #include "test_gui_shared.hpp"
 
@@ -325,6 +326,74 @@ void RegisterBackgroundOverlayTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Show##display_bg");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, false);
+    };
+  }
+
+  // doc/print-mode-subtractive-ink.md §7 instance 1. A background photograph is a picture of the sky
+  // the halo is drawn ON TOP of, which only means anything under an operator that ADDS light; print
+  // multiplies the paper down by a transmittance, so blending the two would darken the photograph
+  // exactly where the halo is brightest — wrong in kind, not in taste.
+  //
+  // Asserted in EXPORTED PIXELS against a frame with the image never shown, not on `bg.enabled`
+  // alone: the uniform reaching the shader and the shader honouring it are different claims, and
+  // this exclusion has to hold in the picture the user saves. BYTE-EXACT rather than at a PSNR
+  // threshold, because both frames are made in the same run from the same texture and the same
+  // parameters — the only difference is a boolean the shader either read or did not, so any
+  // tolerance at all would be a tolerance for the bug.
+  //
+  // The three-step order (show under Screen, switch to Print, switch back) is what makes the middle
+  // frame attributable: a case that only ever rendered under Print could not tell "the exclusion
+  // worked" from "the background never loaded".
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "background_overlay", "print_tone_keeps_the_photograph_out_of_the_frame");
+    t->GuiFunc = BackgroundGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      LoadRenderAndBackground(ctx, kLandscape);
+      ctx->Yield(2);
+
+      // A print frame with the photograph never switched on: the reference this case compares to.
+      gui::g_state.renderer.tone = LUMICE_TONE_PRINT;
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, false);
+      const std::string path_ref = GuiTestTempPath("lumice_print_bg_off.png").string();
+      IM_CHECK(RequestAndWaitPreviewExport(ctx, gui::g_preview_vp, path_ref));
+
+      // Switch the photograph on under Screen and confirm it reaches the frame at all — without
+      // this arm the comparison below would pass on a broken uploader.
+      gui::g_state.renderer.tone = LUMICE_TONE_SCREEN;
+      ctx->ItemClick("**/Show##display_bg");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, true);
+
+      // Now Print, with bg_show still on. The user's setting must be KEPT (the exclusion is not a
+      // reset) and the pixels must be the ones from the reference frame.
+      gui::g_state.renderer.tone = LUMICE_TONE_PRINT;
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.bg_show, true);
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, false);
+      const std::string path_print = GuiTestTempPath("lumice_print_bg_on.png").string();
+      IM_CHECK(RequestAndWaitPreviewExport(ctx, gui::g_preview_vp, path_print));
+
+      std::vector<unsigned char> img_ref;
+      std::vector<unsigned char> img_print;
+      int w0 = 0, h0 = 0, ch0 = 0;
+      int w1 = 0, h1 = 0, ch1 = 0;
+      IM_CHECK(lumice::test::LoadPng(path_ref.c_str(), img_ref, w0, h0, ch0));
+      IM_CHECK(lumice::test::LoadPng(path_print.c_str(), img_print, w1, h1, ch1));
+      IM_CHECK_EQ(w0, w1);
+      IM_CHECK_EQ(h0, h1);
+      IM_CHECK_EQ(ch0, ch1);
+      IM_CHECK_EQ(img_ref.size(), img_print.size());
+      IM_CHECK(img_ref == img_print);
+
+      // And the Show control says so, rather than leaving the user to wonder why nothing happened.
+      const gui::FieldEditorConstraint c = gui::ConstraintFor("bg_show", gui::g_state);
+      IM_CHECK_EQ(c.enabled, false);
+      IM_CHECK(c.disabled_reason != nullptr);
+
+      std::remove(path_ref.c_str());
+      std::remove(path_print.c_str());
     };
   }
 

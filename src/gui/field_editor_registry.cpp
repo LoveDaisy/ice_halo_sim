@@ -192,10 +192,17 @@ struct ColorFieldDragState {
 // A colour triple. No numeric domain on purpose: ColorEdit3 has no min/max to restate, which is
 // also why the three fields with no main-UI colour control at all (see the registry below) carry no
 // risk of inventing a constraint that disagrees with one.
-FieldEditorEntry ColorField(SlotFn<float> access) {
+//
+// It takes an applicability for the same reason the four factories above do, and gained one for a
+// concrete case: doc/print-mode-subtractive-ink.md §7 instance 4, where the annotation colours stop
+// being read under the print operator. Defaulted, so every caller that has no gate reads as it did.
+FieldEditorEntry ColorField(SlotFn<float> access, ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kColor;
-  entry.Constraint = [](const GuiState&) { return FieldEditorConstraint{}; };
+  entry.Constraint = [applicable](const GuiState& state) {
+    const Applicability a = applicable(state);
+    return FieldEditorConstraint{ a.enabled, a.disabled_reason, false, 0.0, 0.0 };
+  };
   entry.Render = [access](GuiState& state, const char* id_base) {
     float* slot = access(state);
     // NoInputs — the swatch only, exactly the form the main UI's overlay rows use, and the only one
@@ -290,9 +297,44 @@ Applicability NotUnderFullSkyOrGlobe(const GuiState& state) {
   return {};
 }
 
-Applicability WhenBackgroundLoaded(const GuiState&) {
+// doc/print-mode-subtractive-ink.md §7 instance 1. Ordered BEFORE the "is an image loaded" check on
+// purpose: when both reasons hold, print is the one the user has to act on — loading an image would
+// not enable the control, and a reason that stops being true when you satisfy it is the wrong
+// reason to show.
+//
+// The exclusion is physical, not merely a greyed control: a background photograph is a picture of
+// the sky the halo is drawn ON TOP of, which only means anything under an operator that ADDS light.
+// Print multiplies the paper down by a transmittance, so compositing the two would darken the
+// photograph everywhere the halo is bright — the wrong direction, not merely an odd look. The other
+// half of this instance is app_panels.cpp's `pp.bg.enabled`, which is what actually keeps the
+// texture out of the frame.
+Applicability WhenBackgroundLoaded(const GuiState& state) {
+  if (IsPrintTone(state.renderer)) {
+    return { false,
+             "A background photo is additive — the halo is drawn on top of the sky in it. Print lays "
+             "subtractive ink on paper, which can only darken it. Disabled while Tone is Print." };
+  }
   if (!g_preview.HasBackground()) {
     return { false, "No background image is loaded." };
+  }
+  return {};
+}
+
+// doc/print-mode-subtractive-ink.md §7 instance 4. Named in the same verb form as NotUnderFullSky
+// above, and gating the same kind of thing: a field that still HAS a value and still round-trips,
+// but that the current configuration gives no way to observe.
+//
+// Unlike instance 1 (the background photo) there is nothing to switch off here — the CLI's print
+// operator already draws every overlay line by density and never reads these colours
+// (test_render_consumer_print_mode.cpp's AnnotationColourDoesNotReachThePaper is that claim), and
+// the preview shader's own overlay branch does the same. So this gate is purely the user-visible
+// half: without it the swatch invites an edit that changes nothing on screen, which is precisely
+// the "quietly not the picture you asked for" failure the notices elsewhere exist to prevent.
+Applicability NotUnderPrintMode(const GuiState& state) {
+  if (IsPrintTone(state.renderer)) {
+    return { false,
+             "Print mode draws overlay lines by ink density, not by hue, so this colour has no "
+             "effect. It is kept and applies again when Tone is Screen." };
   }
   return {};
 }
@@ -504,6 +546,10 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     // second editor — the one the defaults panel needs in order to edit a personal default without
     // a document open.
     map.emplace("renderer.background", ColorField([](GuiState& s) { return s.renderer.background; }));
+    // The print mode's ground colour, registered beside `background` because it is the same kind of
+    // field on both counts: a colour, and one whose editor the defaults panel needs in order to set
+    // a personal default with no document open.
+    map.emplace("renderer.paper", ColorField([](GuiState& s) { return s.renderer.paper; }));
     // No `renderer.ray_color` row: the GUI has no tint control anywhere (owner-decided — see
     // GuiState::RenderConfig::ray_color's own comment), so there is nothing here to register an
     // editor for.
@@ -524,6 +570,7 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.renderer.exposure_offset; }, FixedDomain(-8.0f, 16.0f), "%.1f"));
     map.emplace("renderer.ev_mode",
                 ComboField([](GuiState& s) { return &s.renderer.ev_mode; }, kEvModeNames, kEvModeCount));
+    map.emplace("renderer.tone", ComboField([](GuiState& s) { return &s.renderer.tone; }, kToneNames, kToneCount));
 
     // ---- aspect ratio ----
     map.emplace("aspect_ratio", AspectPresetField());
@@ -562,9 +609,10 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace("overlay_grid_label", BoolField([](GuiState& s) { return &s.show_grid_label; }));
     map.emplace("overlay_sun_circles_line", BoolField([](GuiState& s) { return &s.show_sun_circles_line; }));
     map.emplace("overlay_sun_circles_label", BoolField([](GuiState& s) { return &s.show_sun_circles_label; }));
-    map.emplace("overlay_horizon_color", ColorField([](GuiState& s) { return s.horizon_color; }));
-    map.emplace("overlay_grid_color", ColorField([](GuiState& s) { return s.grid_color; }));
-    map.emplace("overlay_sun_circles_color", ColorField([](GuiState& s) { return s.sun_circles_color; }));
+    map.emplace("overlay_horizon_color", ColorField([](GuiState& s) { return s.horizon_color; }, NotUnderPrintMode));
+    map.emplace("overlay_grid_color", ColorField([](GuiState& s) { return s.grid_color; }, NotUnderPrintMode));
+    map.emplace("overlay_sun_circles_color",
+                ColorField([](GuiState& s) { return s.sun_circles_color; }, NotUnderPrintMode));
     map.emplace("overlay_horizon_alpha",
                 FloatField([](GuiState& s) { return &s.horizon_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
     map.emplace("overlay_grid_alpha",
@@ -584,7 +632,7 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
       map.emplace(MarkerFieldKey(i, MarkerKeyPart::kLabel),
                   BoolField([i](GuiState& s) { return &s.markers[i].label; }));
       map.emplace(MarkerFieldKey(i, MarkerKeyPart::kColor),
-                  ColorField([i](GuiState& s) { return s.markers[i].color; }));
+                  ColorField([i](GuiState& s) { return s.markers[i].color; }, NotUnderPrintMode));
     }
     // Family-wide, so outside the loop — one alpha and one radius for all six, mirroring both
     // GuiState and LUMICE_RenderParam. Domains unchanged from the pair these generalize.
@@ -594,6 +642,13 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.markers_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
     map.emplace(kMarkersSectionOpenKey, BoolField([](GuiState& s) { return &s.markers_section_open; }));
     map.emplace("overlay_lens_border_line", BoolField([](GuiState& s) { return &s.show_lens_border_line; }));
+    // NO NotUnderPrintMode here, unlike the three line families and the markers above, and it is a
+    // scope decision rather than an omission: the four instances of the print rule are enumerated in
+    // doc/print-mode-subtractive-ink.md §7 and the lens border is not one of them. Widening the rule
+    // to "every field print happens not to read" is the same judgement the import notices already
+    // declined to make (see WarnUnsupportedByDesign in file_io.cpp, which covers three named fields
+    // and not every core key the GUI drops) — the boundary has to come from the document, not from a
+    // reviewer's sense of consistency with the three neighbours above.
     map.emplace("overlay_lens_border_color", ColorField([](GuiState& s) { return s.lens_border_color; }));
     map.emplace("overlay_lens_border_alpha",
                 FloatField([](GuiState& s) { return &s.lens_border_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));

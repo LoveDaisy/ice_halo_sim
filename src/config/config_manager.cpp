@@ -89,6 +89,16 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
       c = SrgbToLinear(c);
     }
   }
+  // The twin of the "background" block above, key for key: the JSON value is sRGB (what a colour
+  // picker shows), RenderConfig::paper_ is linear, and the conversion happens here at the parser
+  // boundary. A missing key keeps the member's own default — white — which is what makes an
+  // existing config render exactly as it did.
+  if (j_render.contains("paper")) {
+    j_render.at("paper").get_to(render.paper_);
+    for (float& c : render.paper_) {
+      c = SrgbToLinear(c);
+    }
+  }
   if (j_render.contains("ray_color")) {
     j_render.at("ray_color").get_to(render.ray_color_);
   }
@@ -100,6 +110,12 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   }
   if (j_render.contains("ev_mode")) {
     j_render.at("ev_mode").get_to(render.ev_mode_);
+  }
+  // No unknown-value branch here on purpose: get_to reaches RenderConfig::Tone's hand-written
+  // from_json (render_config.cpp), which owns both halves of that decision — the warning and the
+  // fall back to "screen". Repeating either here would give the rule two owners.
+  if (j_render.contains("tone")) {
+    j_render.at("tone").get_to(render.tone_);
   }
 
   if (j_render.contains("grid")) {

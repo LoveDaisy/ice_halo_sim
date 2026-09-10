@@ -864,17 +864,25 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       ImGui::SetCursorPosX(right_edge - w);
     }
     bool checked = state.last_uploaded_as_composite;
-    if (composite_empty) {
+    // doc/print-mode-subtractive-ink.md §7 instance 2. Ordered BEFORE composite_empty in the
+    // tooltip below because it is the more fundamental reason AND the immediately decidable one:
+    // composite_empty comes from a 500 ms throttled signal poll, print comes from a field the user
+    // just set. The top-bar mirror in app_panels.cpp does the same two things in the same order —
+    // both read IsPrintTone(), so a third tone can never reach one of them and not the other.
+    const bool print_disabled = IsPrintTone(state.renderer);
+    if (composite_empty || print_disabled) {
       ImGui::BeginDisabled();
     }
     if (Checkbox(label, &checked)) {
       ToggleCompositePreview(state);
     }
-    if (composite_empty) {
+    if (composite_empty || print_disabled) {
       ImGui::EndDisabled();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (composite_empty) {
+      if (print_disabled) {
+        ImGui::SetTooltip("%s", kColorsDisabledPrintModeTooltip);
+      } else if (composite_empty) {
         ImGui::SetTooltip("%s", kColorsDisabledNoMatchTooltip);
       } else {
         ImGui::SetTooltip(
