@@ -119,9 +119,11 @@ import sys
 
 GUARDED_TOP_DIRS = frozenset({"src", "test"})
 GUARDED_TOOLS = frozenset({"Edit", "Write"})
-RULE_LOCATION = (
-    'AGENTS.md → "Collaboration Constraints" → "Where a change lives, and from where it is made"'
-)
+# Section-level pointer on purpose: a top-level heading is a stabler anchor than
+# the bullet's own title, and the bullet is the only one in that section about
+# worktrees, so the reader lands on it either way.
+RULE_LOCATION = 'AGENTS.md, "Collaboration Constraints"'
+
 
 
 class GitUnavailable(Exception):
@@ -182,7 +184,7 @@ def commit_refusal(paths: list[str], toplevel: str) -> str:
         "main worktree — it is shared by every task on this machine, and N=1 is not an exception.\n"
         "  1. Make sure this change has a task directory (the task ledger is the authority).\n"
         "  2. Create a linked worktree for the task and move the change there, e.g.\n"
-        "       git diff --cached > /tmp/change.patch   # then `git apply` it in the worktree\n"
+        "       git diff --cached | git -C ../<worktree> apply --index\n"
         f"     The worktree recipe is written once, in {RULE_LOCATION}.\n"
         "  3. Commit from inside that worktree.\n"
         "\n"
@@ -198,15 +200,15 @@ def run_pre_commit() -> int:
         if toplevel is None:
             print("worktree-guard: not inside a git repository; nothing to check", file=sys.stderr)
             return 0
-        main = is_main_worktree(cwd, toplevel)
+        in_main = is_main_worktree(cwd, toplevel)
         staged = _git(cwd, "diff", "--cached", "--name-only", "--diff-filter=ACMRD")
     except GitUnavailable as exc:
         print(f"worktree-guard: cannot run git ({exc}); refusing to guess", file=sys.stderr)
         return 1
-    if main is None or staged is None:
+    if in_main is None or staged is None:
         print("worktree-guard: git rev-parse/diff failed; refusing to guess", file=sys.stderr)
         return 1
-    if not main:
+    if not in_main:
         return 0
     # `git diff --name-only` prints paths relative to the toplevel with `/`
     # separators regardless of platform; normalise so the first-component
@@ -289,12 +291,12 @@ def run_claude_pretooluse() -> int:
         if toplevel is None:
             # git ran and found no repository above the target: nothing to guard.
             return 0
-        main = is_main_worktree(anchor, toplevel)
+        in_main = is_main_worktree(anchor, toplevel)
     except GitUnavailable as exc:
         return _warn(f"cannot run git ({exc})")
-    if main is None:
+    if in_main is None:
         return _warn("git rev-parse --git-common-dir failed")
-    if not main:
+    if not in_main:
         return 0
 
     # realpath both sides so a symlinked path to the file compares against the

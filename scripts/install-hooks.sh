@@ -29,7 +29,12 @@ mkdir -p "$HOOK_DIR"
 
 GLOBAL_HOOKS_PATH=$(git config --global --get core.hooksPath || true)
 LOCAL_HOOKS_PATH=$(git -C "$REPO_ROOT" config --local --get core.hooksPath || true)
-if [ -n "$GLOBAL_HOOKS_PATH" ] && [ -z "$LOCAL_HOOKS_PATH" ]; then
+if [ -n "$LOCAL_HOOKS_PATH" ]; then
+  if [ "$(cd "$REPO_ROOT" && cd "$LOCAL_HOOKS_PATH" 2>/dev/null && pwd -P)" != "$(cd "$HOOK_DIR" && pwd -P)" ]; then
+    echo "note: this repo sets core.hooksPath=$LOCAL_HOOKS_PATH, which is not $HOOK_DIR;" >&2
+    echo "      git will not run the hook installed below unless that directory chains back to it." >&2
+  fi
+elif [ -n "$GLOBAL_HOOKS_PATH" ]; then
   echo "note: a global core.hooksPath is set ($GLOBAL_HOOKS_PATH); git will run the hook installed" >&2
   echo "      below only if that directory chains back to $HOOK_DIR, or if you point this" >&2
   echo "      repo at its own hooks:  git config core.hooksPath \"$HOOK_DIR\"" >&2
