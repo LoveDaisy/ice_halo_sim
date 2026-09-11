@@ -80,17 +80,36 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 跨平台结论——那条结论被写下来、被当作待办流传了一段时间，才查出成因。
 
 **机制。** `LUMICE_ISA_LEVEL`（`CMakeLists.txt:50`）是唯一一个说明「Release 构建编译到哪一档
-ISA」的变量，取三个值：
+ISA」的变量，取四个值：
 
-| `LUMICE_ISA_LEVEL` | GCC/Clang Release 下的 flag | 谁在用 |
+| `LUMICE_ISA_LEVEL` | GCC/Clang/clang-cl Release 下的 flag | 谁在用 |
 |---|---|---|
 | `native` | `-march=native` | **本地默认**——`scripts/build.sh` 什么都不传，所以每次本地构建吃的都是它；开发机就该为自己编译 |
-| `baseline` | 无（x86-64-v1，任何 x86_64 CPU 都能跑的地板） | `.github/workflows/ci.yml` 里每一处 configure，以及除下面那个 Linux x64 v4 变体之外的每一个 release 包 |
+| `baseline` | 无（x86-64-v1，任何 x86_64 CPU 都能跑的地板） | `.github/workflows/ci.yml` 里每一处 configure，以及除下面两个第二变体之外的每一个 release 包 |
+| `x86-64-v3` | `-march=x86-64-v3`（AVX2+FMA） | Windows x64 release 的第二个变体，由 **clang-cl** 编译：`release.yml` 把那一行构建两遍（baseline 用 MSVC cl.exe、v3 用 clang-cl）、两份都打进包 |
 | `x86-64-v4` | `-march=x86-64-v4`（AVX-512） | Linux x64 release 的第二个变体：`release.yml` 把那一行构建两遍、两份都打进包 |
 
-flag 挂在 `lumice_obj` 上（`CMakeLists.txt:783`），所以 CLI 和 GUI 永远同一档。MSVC 完全不读
-这个变量——它只在 `if(NOT MSVC)` 分支里被消费，所以 Windows/MSVC 构建**结构上**没有等价物可开，
-永远是基线。
+flag 经同一个共享 CMake 函数 `lumice_apply_isa_march()` 挂在 `lumice_obj` 上，所以 CLI 和 GUI
+永远同一档。真正的 MSVC cl.exe 完全不读这个变量——该函数只在 GCC/Clang 分支与 clang-cl 分支被
+调用——所以用 cl.exe 做的 Windows 构建（本地 `win_build.cmd` 默认、CI 的每一个 Windows job）
+**结构上**没有等价物可开，永远是基线。**clang-cl 是例外**，也是 Windows release 有第二个变体的
+全部原因：CMake 对它报告 `MSVC=TRUE`（它驱动 MSVC ABI 与 `/` 风格 flag），但它是一个认 `-march`
+的 Clang 前端；`CMakeLists.txt` 把这一点一次性判成 `LUMICE_CLANG_CL`，走同一个函数。Windows
+参照机实测（Zen 5、clang-cl 20.1.0、CUDA-off 臂）：clang-cl 在 `x86-64-v3` 上是真 MSVC release
+构建的 **2.26×（W=1）/ 2.28×（W=4）**，`x86-64-v4` 与 `-mprefer-vector-width=512` 再加不上去
+（2.25×/2.29×），不带 `-march` 的 clang-cl 是 1.01×——收益来自 flag 而非换编译器，且 LLVM 在 AVX2
+就全部拿到，而 GCC（见下）在 AVX-512 之前一分不拿。这就是两个平台的第二变体档位不同的原因。
+
+**Windows release 拿它做什么。** `windows-x64` 的 zip 与下面的 Linux tarball 同形：
+`Lumice.baseline.exe` / `Lumice.x86-64-v3.exe`、`LumiceGUI.baseline.exe` /
+`LumiceGUI.x86-64-v3.exe`，再把 launcher（`src/launcher/isa_launcher_win.c`）装成 `Lumice.exe` /
+`LumiceGUI.exe`。它读 CPUID 判整个 x86-64-v3 特性级别外加 XGETBV（OS 必须保存 YMM 状态——launcher
+先确认 OSXSAVE 再执行 XGETBV，否则那条指令是 `#UD`），用 `CreateProcess` 起对应 sidecar、等待、
+把它的退出码当自己的返回（Windows 没有 `exec`；CRT 的 `_execv` 既不保留子进程退出码也不给参数
+加引号，所以这两件事 launcher 自己做）。`--isa=baseline` / `--isa=x86-64-v3` 可强制其一，与 Linux
+同语法。在与 release 等价的 CUDA-on 构建上，v3 变体在 ms1 W=1 下量到基线的
+<TODO: AC4 measured ratio, filled by Step 10.5>（Windows 参照机，Zen 5）——上面那个 CUDA-off
+探针数字是另一条臂，不得拿来代替它。
 
 **Linux release 拿它做什么。** `linux-x64` 的 tarball 里每个入口都有两份——
 `Lumice.baseline` / `Lumice.x86-64-v4`、`LumiceGUI.baseline` / `LumiceGUI.x86-64-v4`——
@@ -110,14 +129,16 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 
 1. **任何要离开你这台机器的数字**——跨平台对照、写进 issue / 文档 / 评审里的数字——
    **必须用 `-DLUMICE_ISA_LEVEL=baseline` 取**。那才是 CI 用的配置，也是唯一跨平台可比的那一档。
-   在 `x86-64-v4` 上取的数字是关于 Linux v4 变体的合法数字，但必须写明。
+   在 `x86-64-v4` 上取的数字是关于 Linux v4 变体的合法数字，但必须写明；`x86-64-v3` 与 Windows
+   clang-cl 变体同理，且还要写明是 clang-cl（cl.exe 构建产不出这一档，所以键值本身已经隐含了
+   编译器）。
 2. **日常本机迭代可以继续吃 `native` 默认值。** 这不是在禁止 `-march=native`，而是在划清「这个数字
    能走多远」这条线。自己改动的前后 A/B，只要两臂在同一台机器、同一档设置上取，不受影响。
 3. **读 `isa` 键，别指望记得住。** 每一行 `[BENCHMARK]` 都带 `"isa": "native"`、
-   `"isa": "baseline"` 或 `"isa": "x86-64-v4"`（`src/main.cpp` 的 `RunBenchmarkPass`，取自
-   `LUMICE_ISA_LEVEL_STR` 宏；`CMakeLists.txt` 用与 `-march` flag 本身相同的
-   `LUMICE_ISA_LEVEL_ACTIVE_COND` 条件解析该宏，所以只要没有真正应用 flag——包括 Debug 构建——
-   这个键就读 `baseline`）。于是一份旧 log 自己就能回答「这是哪个构建取的」，
+   `"isa": "baseline"`、`"isa": "x86-64-v3"` 或 `"isa": "x86-64-v4"`（`src/main.cpp` 的
+   `RunBenchmarkPass`，取自 `LUMICE_ISA_LEVEL_STR` 宏；`lumice_apply_isa_march()` 用与 `-march`
+   flag 本身相同的条件解析该宏，所以只要没有真正应用 flag——包括 Debug 构建，以及每一个 cl.exe
+   构建——这个键就读 `baseline`）。于是一份旧 log 自己就能回答「这是哪个构建取的」，
    不需要还留着当时的 configure 输出。`baseline` 是可比的那一档；两行数字只有在 `isa` 相同时
    才允许互相比较。
 4. **留意 configure 那一行。** 每次 `cmake` configure 都会打印一行 `-- LUMICE_ISA_LEVEL=...`

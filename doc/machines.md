@@ -65,6 +65,7 @@
 |---|---|
 | 仓库 | `C:\Users\15093\Codes\lumice` |
 | 工具链 | VS Build Tools 2022 17.14.37 / MSVC 14.44.35207 |
+| clang-cl | **LLVM 20.1.0，独立安装于 `C:\Program Files\LLVM`**（不是 VS 的 LLVM 组件——本机 Build Tools 没装那个）；Windows release 的 `x86-64-v3` 变体用它编译，与 `release.yml` 钉的版本一致 |
 | cmake / ninja | **VS Build Tools 自带**，位于 `Common7\IDE\CommonExtensions\Microsoft\CMake\` 下 |
 | CUDA | **12.9**，标准路径 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9` |
 | 构建脚本 | `C:\Users\15093\win_build.cmd`（产物-only 版 `win_build_product.cmd`） |
@@ -73,6 +74,16 @@
 - ssh 默认 shell 是 **PowerShell 5.1**：`&&` 不是有效的语句分隔符。多条命令请分开发，
   或用 `-EncodedCommand` 传整段脚本（本地 shell 容易吃掉 `$`）。
 - ssh 会话**自带管理员令牌**，需要提权的安装可以直接远程执行。
+- **Smart App Control 开着**，对未签名的**新哈希**做 ISG 云裁决，判「拦」时 exe 启动即失败
+  （`ERRORLEVEL 4551`，「was blocked by your organization's Device Guard policy」）。实测两条规律：
+  同一哈希的裁决稳定（拦的一直拦、放的一直放）；重新链接换个哈希通常就放行。⛔ 不关 SAC（不可逆）。
+  取证脚本里每个新构建的 exe 先 `-h` 探一次，`4551` 就删掉产物重链再探；且**把每次 exe 启动包在
+  `cmd /c "…"` 里**——被拦的启动会让承载它的 `.cmd` 批处理直接终止，不包一层整个脚本就在那一行静默
+  收尾。
+- **`bcdedit /set xsavedisable 1`**（关闭 OS 的 XSAVE/AVX 状态保存，重启生效）是本机做「无 AVX2
+  环境」负对照的办法——launcher 的 OSXSAVE 检查会真实读到 0。⚠️ 它是系统级、影响整台机器（两个环境）；
+  用完必须 `bcdedit /deletevalue xsavedisable` 再重启复原。任何 session 接手本机前先看
+  `bcdedit /enum | findstr /i xsave` 是否留有条目。
 - ⚠️ `scripts/bench_throughput.py` 的默认二进制探测**不带 `.exe`** 后缀
   ⇒ 在 Windows 上必须显式设 `LUMICE_BENCH_BIN`。
 
