@@ -805,7 +805,7 @@ route ahead of both `LUMICE_SetPreferredBackend` and `LUMICE_TRACE_BACKEND`, as 
 for the whole analysis session — as opposed to what was asked for.
 
 **Chain text**: `LUMICE_RaypathHistogramEntry::display` is a byte copy of core's one chain
-formatter (`raypath-analysis-panel.md` §7.1): root layer first, each layer
+formatter (`raypath-analysis-panel.md` §7): root layer first, each layer
 `crystal<id>(<face>-<face>-...)`, layers joined by `-`. Print this field rather than re-assembling
 it from `chain[]`.
 

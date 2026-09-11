@@ -4,8 +4,10 @@
 > core 链 id 携带 / 子任务 3 server 直方图 consumer / 子任务 4 C API v4.29 / 子任务 5 GUI 面板，
 > C API 追加到 v4.30）。改动尚未合并 `main`——本文按当前工作分支的代码状态回写，行号如与 `main`
 > 上的最终合入版本有出入以后者为准。
-> 本文档结构与 §1/§2 的裁决叙事保持设计阶段原文，§3 起的机制描述、§6 诚实边界、§7 开放设计点
-> 已回写为实现后的状态；被下游子任务证伪的 assistant 推断保留原文并标注「已证伪：实际 …」。
+> 本文档结构与 §1/§2 的裁决叙事保持设计阶段原文，§3 起的机制描述、§6 诚实边界、§8 开放设计点
+> 已回写为实现后的状态（章节相对设计阶段草稿有重排：新增 §7「结果条目的可打印字符串」为独立
+> 顶层小节，原「开放设计点清单」相应后移为 §8）；被下游子任务证伪的 assistant 推断保留原文并
+> 标注「已证伪：实际 …」。
 > 改「光路分析面板」（raypath-analysis-panel）相关的任何一层前先读本文。
 
 ## 1. 问题与形态
@@ -130,9 +132,10 @@ InternRayChainId(*chain_ctx, init_data[1], j))`（`:1562`）与真出射的
 设计阶段的建议方向——「把 `components_` 与链 id 收进同一个 per-ray side-car 结构，让『漏搬一个
 传播点』在结构上不可能发生」——**未采纳**：实施期两条 side-car 仍是各自独立的列
 （`components_` / `chain_ids_`），靠上面枚举的显式搬运点 + 26 例红态探针覆盖，而不是合并结构。
-code-review Minor：`all_data` 对应的 `chain_ids_` 列的 `Reset()` 调用点未启用（`init_data[0]/[1]`
-与 `buffer_data[0]/[1]` 已覆盖，`all_data` 未覆盖）——目前无害，因为唯一的分析出口是
-`outgoing_chain_id_` / `chain_id_table_delta_`，没有消费者读 `all_data.ChainIdAt()`。
+**已知实现缺陷（登记为项目缺陷追踪的一条独立记账，非本节裁决/推断分类）**：`all_data` 对应的
+`chain_ids_` 列的 `Reset()` 调用点未启用（`init_data[0]/[1]` 与 `buffer_data[0]/[1]` 已覆盖，
+`all_data` 未覆盖）——目前无害，因为唯一的分析出口是 `outgoing_chain_id_` /
+`chain_id_table_delta_`，没有消费者读 `all_data.ChainIdAt()`。
 
 ### 3.2 interning 表与逐段对称约化
 
@@ -151,10 +154,10 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 沿父指针回溯打印，`Segments(uint32_t id)`（`:85`/`:70`）与 `PathToRoot(uint32_t id)`
 （`:89`/`:62`）共享同一个私有 walk（贯彻单一权威，子任务 3 落地时把两者的重复实现合并）。
 
-`sigma_a`/`d_applicable` 的推导逻辑在 `MakeChainIdLayerContext`
+**已知实现缺陷**：`sigma_a`/`d_applicable` 的推导逻辑在 `MakeChainIdLayerContext`
 （定义于 `src/core/simulator.cpp:859-869`，声明于 `src/core/trace_ops.hpp:94`）与
-`FilterSpec::Create`（`filter_spec.cpp:382-383`）两处字面重复——code-review Minor，仅靠测试断言
-两者数值相等保证同步，未抽出共享函数（a56 的一个已知但未消解的小实例）。
+`FilterSpec::Create`（`filter_spec.cpp:382-383`）两处字面重复，仅靠测试断言两者数值相等保证同步，
+未抽出共享函数（a56 的一个已知但未消解的小实例）。已登记为项目缺陷追踪的一条独立记账。
 
 链 id 只在光线穿过一层晶体、生成本层 raypath 之后，用该层约化后的 segment 去查/建表，
 而不是缓存未约化的原始面序列——这样同一等价类的光路天然映射到同一条链，链数不会因为
@@ -189,7 +192,7 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 （`src/server/server.hpp:251`），是纯加法扩展（全仓非穷尽 `std::visit` 无需补分支）。
 两阶段快照协议（`PrepareSnapshot` / `GetResult`）与 `StatsConsumer` 同形。
 
-已知问题（code-review Minor，不阻塞，未在本次收尾修复）：`Consume()` 早退只判
+**已知实现缺陷（已登记为项目缺陷追踪的一条独立记账，未在本次收尾修复）**：`Consume()` 早退只判
 `outgoing_chain_id_.empty()`，未联动判断 `chain_id_table_delta_` 是否非空；若某批
 `outgoing_chain_id_` 为空但 delta 非空（例如该批只产生尚未对外暴露的中间链表项），会在
 `Absorb()` 之前提前 return，后续批次引用其 parent_id 会被判为 orphaned（`Resolve()` 静默丢弃为
@@ -355,8 +358,9 @@ A，改动范围仅限 `ChainIdLayerContext` 的 symmetry 取值来源一处（`
 
 ## 8. 开放设计点清单（as-built 后的状态）
 
-设计阶段 §7 的开放设计点均已在子任务 plan 阶段裁定并落地（symmetry 来源见 §7 末尾，
-锥形分环参数见 §3.4，反投影落点见 §6）。以下是**明确未做、留作后续升级**的项，各附触发条件：
+设计阶段留下的开放设计点均已在子任务 plan 阶段裁定并落地：**symmetry 来源**（候选 A vs 候选
+B——落地了候选 B，owner 尚未显式签字，完整记录见 §7 末尾）、锥形分环参数（见 §3.4）、反投影落点
+（见 §6）。以下是**明确未做、留作后续升级**的项，各附触发条件：
 
 - **GPU 直方图 kernel**（对应 §2 第 1 条的「GPU 不覆盖」）：触发条件——用户反馈 CPU-only 的
   分析等待时间在大 `ray_num` / 多晶体场景下不可接受，且 Metal/CUDA 补上 per-ray 记录回传
