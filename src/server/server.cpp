@@ -1112,9 +1112,16 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
     return Error::InvalidConfig("no scene committed; commit a config before starting analysis");
   }
 
-  const uint8_t symmetry = request.chain_id_symmetry_ == kChainIdSymmetrySessionDefault ?
-                               Simulator::kDefaultChainIdSymmetry :
-                               request.chain_id_symmetry_;
+  // The scene facts the read-time reduction needs, captured from the scene this run will
+  // trace: the same active_scene_ GenerateScene reads, under the same lock. Taken before
+  // Stop() only so the lock order here matches every other reader's (scene_mutex_ alone).
+  RaypathReduceContext reduce_ctx;
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    if (active_scene_) {
+      reduce_ctx = BuildRaypathReduceContext(*active_scene_);
+    }
+  }
 
   Stop();
   mode_.store(SessionMode::kAnalysis, std::memory_order_release);
@@ -1135,7 +1142,7 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     consumers_.clear();
-    consumers_.emplace_back(std::make_shared<RaypathHistogramConsumer>(request.roi_));
+    consumers_.emplace_back(std::make_shared<RaypathHistogramConsumer>(request.roi_, std::move(reduce_ctx)));
     // StatsConsumer for the live ray count (GetLiveSimRayCount reads it by dynamic_cast)
     // — the run's only progress signal, since there is no image to watch grow. No
     // AnchorConsumer: it measures an exposure anchor, and nothing here is exposed.
@@ -1144,7 +1151,8 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
   {
     std::lock_guard<std::mutex> lock(prod_mutex_);
     for (auto& s : simulators_) {
-      s.SetAnalysisChainId(true, symmetry);
+      // Finest, always: the reader reduces (RaypathAnalysisRequest says why).
+      s.SetAnalysisChainId(true, FilterConfig::kSymNone);
       s.SetAnalysisForceCpu(true);
     }
   }
@@ -1153,9 +1161,9 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
   // and the preference itself is untouched (GetActiveBackend is the readable form).
   ILOG_INFO(logger_,
             "StartRaypathAnalysis: forcing CPU route (analysis run session property; overrides "
-            "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified); roi_mode={} symmetry=0x{:x}",
-            static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), static_cast<int>(request.roi_.mode_),
-            symmetry);
+            "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified); roi_mode={} (chains recorded "
+            "unreduced; symmetry is applied when the result is read)",
+            static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), static_cast<int>(request.roi_.mode_));
   // The scene is unchanged, so scene_generation_ / committed_epoch_ / active_scene_ stay as
   // the last commit left them: GenerateScene will trace the same scene, and the batches it
   // queues carry the current generation. NOT bumping the epoch is deliberate — the epoch
@@ -1307,6 +1315,7 @@ bool ServerImpl::DoSnapshot() {
         // no cache between snapshots, so a render session's frame (whose consumer set
         // has no histogram) keeps the nullopt default rather than a previous analysis.
         frame->raypath_histogram_result_ = *h;
+        frame->raypath_reduce_cache_ = std::make_shared<ResultFrame::RaypathReduceCache>();
       }
     }
     // Raw XYZ views + their storage anchors, same treatment as the mono images above.

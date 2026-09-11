@@ -9,14 +9,22 @@
 //   AC2  Y authority: the full-sky Σ energy over a batch equals the Σ Y of a
 //        RenderConsumer's raw image of the same batch, within the float
 //        summation bound stated at the assertion.
-//   AC3  End to end: the 22° halo scene's top chain, under Simulator::Run(),
-//        is the reduced form of face path 3->5 computed by
-//        Crystal::ReduceRaypath — no platform-dependent literal.
+//   AC3  End to end: the 22° halo scene's top chain, under Simulator::Run()
+//        recording at its finest and ReduceRaypathHistogram under P|B|D, is
+//        the reduced form of face path 3->5 computed by Crystal::ReduceRaypath
+//        — no platform-dependent literal.
 //   AC4  Cone stop target: the live hit count and RoiTargetReached().
 //   AC5  Ties on energy order by display string.
 // Also: an id space per producer (two workers' local ids collide, chains do
 // not), batches without chain ids are ignored, a never-delivered id is dropped
 // not crashed on, and Reset() forgets producers as well as buckets.
+//
+// The read-time reduction (the ReadTimeReduction / ChainDisplayFormat /
+// ReduceContext suites at the bottom): Σ energy and Σ count are conserved and
+// the row count is monotone over none / P / P|B / P|B|D on a hand-built finest
+// result; the display format's four owner-specified shapes are pinned to the
+// character; the per-layer multi-crystal flag is a property of the layer and
+// survives one crystal id being alone on one layer and shared on another.
 
 #include <gtest/gtest.h>
 
@@ -692,7 +700,8 @@ std::vector<SimData> RunSceneToBatches(const SceneConfig& scene, size_t ray_num,
   auto config_queue = std::make_shared<Queue<SimBatch>>();
   auto data_queue = std::make_shared<Queue<SimData>>();
   Simulator sim(config_queue, data_queue, seed);
-  sim.SetAnalysisChainId(true, kSymAll);
+  // As the server records: at the finest, the reduction being the reader's.
+  sim.SetAnalysisChainId(true, FilterConfig::kSymNone);
   auto shared_scene = std::make_shared<const SceneConfig>(scene);
   for (size_t b = 0; b < batches; ++b) {
     SimBatch batch;
@@ -785,7 +794,10 @@ std::vector<SimData>* Halo22::batches_ = nullptr;
 
 // Full sky: the 22° path is the strongest chain, ahead of the undeviated pass
 // through opposite prism faces (3->6) — the sun's own image, which is #2 with
-// ~80% of the halo's energy and the reason an ROI exists at all.
+// ~80% of the halo's energy and the reason an ROI exists at all. The chains
+// are recorded at their finest and reduced under P|B|D when read, and the
+// result is what the old record-time P|B|D reduction produced: the same top
+// two segments by the same Crystal::ReduceRaypath authority.
 TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
   const auto& batches = *batches_;
   ASSERT_EQ(batches.size(), 8u);
@@ -794,7 +806,7 @@ TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
   const Seg through = ExpectedSegment(batches[0], Seg{ 3, 6 });
   ASSERT_NE(halo, through);
 
-  RaypathHistogramConsumer c(FullSky());
+  RaypathHistogramConsumer c(FullSky(), BuildRaypathReduceContext(*scene_));
   size_t delivered = 0;
   for (const auto& sd : batches) {
     EXPECT_EQ(sd.outgoing_chain_id_.size(), sd.outgoing_w_.size());
@@ -803,7 +815,15 @@ TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
   }
   ASSERT_GT(delivered, 10000u);
   EXPECT_EQ(c.LiveRoiHitCount(), delivered);
-  auto r = Snapshot(c);
+  const auto finest = Snapshot(c);
+  // Positive control on the reduction: recorded at the finest, the 22° path
+  // is spread over its orbit (six prism-face rotations at least), so the
+  // finest result has strictly more rows than the reduced one, and the raw
+  // record carries the ONE unreduced sequence {3, 5} as well as its images.
+  ASSERT_NE(Find(finest, "crystal1(3-5)"), nullptr) << "the finest record keeps the raw face sequence";
+  ASSERT_NE(Find(finest, "crystal1(4-6)"), nullptr) << "and its P-image";
+  auto r = ReduceRaypathHistogram(finest, kSymAll);
+  EXPECT_LT(r.entries_.size(), finest.entries_.size()) << "P|B|D merges the orbit";
   ASSERT_GE(r.entries_.size(), 2u);
   for (const auto& e : r.entries_) {
     if (e.chain_.size() != 1u) {
@@ -818,15 +838,82 @@ TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
       << "top chain is " << r.entries_[0].display_ << ", expected the 22° path";
   EXPECT_EQ(r.entries_[1].chain_[0].segment, through)
       << "#2 is " << r.entries_[1].display_ << ", expected the undeviated pass";
+  // The display text is the read-time authority's, in the single-crystal
+  // single-layer shape: the bare face sequence.
+  EXPECT_EQ(r.entries_[0].display_, "3-5");
+  EXPECT_EQ(r.entries_[1].display_, "3-6");
   // Measured 1.24× at this seed over 160k rays, where the counts' own noise is
   // well under 1%: a 1.1× floor is far from the noise and still catches a
   // reordering.
   EXPECT_GT(r.entries_[0].energy_, 1.1 * r.entries_[1].energy_) << "the 22° path's lead over the undeviated pass";
   size_t counted = 0;
+  double energy = 0.0;
   for (const auto& e : r.entries_) {
     counted += e.count_;
+    energy += e.energy_;
   }
   EXPECT_EQ(counted, delivered);
+  // Conservation across the four symmetries a reader can ask for, on real
+  // data: the sums are the finest sums, the row count never grows, and the
+  // 22° path's ORBIT — the rows that fold into "3-5" under P|B|D — carries
+  // the same energy at every one of them. Not "the top row is the 22° path
+  // at every symmetry": that is false, and for a physical reason. The 22°
+  // path's orbit has 12 finest members (six rotations, two mirror images)
+  // where the undeviated pass's has 6 (rotations only — 3-6 is its own
+  // mirror image), so at the finest each undeviated row carries ~2x a halo
+  // row's energy and "4-7" leads; under P the halo is still split in two
+  // (3-5 / 3-7) against one 3-6 row, and 3-6 leads; only D folds the mirror
+  // and lets 3-5 lead. Recorded so the next reader does not "fix" it.
+  size_t finest_count = 0;
+  double finest_energy = 0.0;
+  for (const auto& e : finest.entries_) {
+    finest_count += e.count_;
+    finest_energy += e.energy_;
+  }
+  EXPECT_EQ(counted, finest_count);
+  EXPECT_NEAR(energy, finest_energy, 1e-12 * finest_energy);
+  size_t prev_rows = finest.entries_.size() + 1;
+  for (const uint8_t sym : { FilterConfig::kSymNone, FilterConfig::kSymP,
+                             static_cast<uint8_t>(FilterConfig::kSymP | FilterConfig::kSymB), kSymAll }) {
+    const auto rr = ReduceRaypathHistogram(finest, sym);
+    size_t cnt = 0;
+    double en = 0.0;
+    for (const auto& e : rr.entries_) {
+      cnt += e.count_;
+      en += e.energy_;
+    }
+    EXPECT_EQ(cnt, finest_count) << "symmetry " << int(sym);
+    EXPECT_NEAR(en, finest_energy, 1e-12 * finest_energy) << "symmetry " << int(sym);
+    EXPECT_LE(rr.entries_.size(), prev_rows) << "symmetry " << int(sym) << ": rows never grow as bits are added";
+    prev_rows = rr.entries_.size();
+    if (rr.entries_.empty()) {
+      ADD_FAILURE() << "symmetry " << int(sym) << ": no rows";
+      continue;
+    }
+    // The orbit's rows, classified by the authority itself (each row's segment
+    // reduced the rest of the way under P|B|D), sum to the one P|B|D row.
+    double orbit_energy = 0.0;
+    size_t orbit_count = 0;
+    size_t orbit_rows = 0;
+    for (const auto& e : rr.entries_) {
+      if (ExpectedSegment(batches[0], e.chain_[0].segment) == halo) {
+        orbit_energy += e.energy_;
+        orbit_count += e.count_;
+        orbit_rows++;
+      }
+    }
+    EXPECT_EQ(orbit_count, r.entries_[0].count_) << "symmetry " << int(sym);
+    EXPECT_NEAR(orbit_energy, r.entries_[0].energy_, 1e-12 * r.entries_[0].energy_) << "symmetry " << int(sym);
+    // 12 finest members (six rotations x two mirror images), 2 under P and
+    // P|B (the mirror pair), 1 under P|B|D.
+    const size_t expected_rows = sym == FilterConfig::kSymNone ? 12u : sym == kSymAll ? 1u : 2u;
+    EXPECT_EQ(orbit_rows, expected_rows) << "symmetry " << int(sym);
+    // And the top row belongs to one of the two known orbits: the halo's or
+    // the undeviated pass's.
+    const Seg top_class = ExpectedSegment(batches[0], rr.entries_[0].chain_[0].segment);
+    EXPECT_TRUE(top_class == halo || top_class == through)
+        << "symmetry " << int(sym) << ": top chain is " << rr.entries_[0].display_;
+  }
 }
 
 // Cone on the 22° ring: the top chain is the 22° path, by a wide lead, and
@@ -879,7 +966,7 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
   roi.cone_radius_rad_ = 2.5f * math::kDegreeToRad;
   roi.cone_ring_count_ = 5;
   roi.cone_stop_target_ = 200;
-  RaypathHistogramConsumer c(roi);
+  RaypathHistogramConsumer c(roi, BuildRaypathReduceContext(*scene_));
   size_t batches_until_target = 0;
   for (const auto& sd : batches) {
     if (!c.RoiTargetReached()) {
@@ -891,7 +978,7 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
   EXPECT_GE(c.LiveRoiHitCount(), 200u);
   EXPECT_LT(batches_until_target, batches.size()) << "the target must be reached before the last batch";
 
-  auto r = Snapshot(c);
+  auto r = ReduceRaypathHistogram(Snapshot(c), kSymAll);
   ASSERT_GE(r.entries_.size(), 1u);
   const auto& top = r.entries_[0];
   ASSERT_EQ(top.chain_.size(), 1u);
@@ -912,6 +999,269 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
     }
     EXPECT_NEAR(s, e.energy_, 1e-12 * e.energy_);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Read-time reduction on a hand-built finest result. Crystal 1 has D
+// applicable with sigma_a = 0 (the σ-mirror keeps prism face 3 and maps
+// pri k -> -k), crystal 2 has no D. Five finest rows on crystal 1:
+//   {3,5}  {4,6}   the same path one prism face apart      -> P merges them
+//   {3,7}          the σ-mirror image of {3,5}             -> D merges it
+//   {1,3,5} {2,3,5} the same path through opposite basals  -> B merges them
+// so the row count walks 5 -> 4 (P) -> 3 (P|B) -> 2 (P|B|D) while the sums
+// stay put. Each expected representative is Crystal::ReduceRaypath's word,
+// re-derived here through ReduceRaypathByPeriod rather than typed.
+// ---------------------------------------------------------------------------
+RaypathHistogramResult FinestFixture() {
+  RaypathHistogramResult r;
+  r.roi_mode_ = RaypathRoiMode::kFullSky;
+  r.reduce_ctx_.crystal_params_[1] = RaypathCrystalReduceParams{ 0, true };
+  r.reduce_ctx_.crystal_params_[2] = RaypathCrystalReduceParams{ 0, false };
+  r.reduce_ctx_.layer_multi_crystal_ = { false };
+  auto add = [&r](Seg seg, double energy, size_t count) {
+    RaypathHistogramEntry e;
+    e.chain_.push_back(RaypathChainSegment{ 1, std::move(seg) });
+    e.display_ = "finest";
+    e.energy_ = energy;
+    e.count_ = count;
+    r.entries_.push_back(std::move(e));
+  };
+  add({ 3, 5 }, 5.0, 50);
+  add({ 4, 6 }, 4.0, 40);
+  add({ 3, 7 }, 3.0, 30);
+  add({ 1, 3, 5 }, 2.0, 20);
+  add({ 2, 3, 5 }, 1.0, 10);
+  return r;
+}
+
+void ExpectSums(const RaypathHistogramResult& r, double energy, size_t count, const char* what) {
+  double e = 0.0;
+  size_t c = 0;
+  for (const auto& entry : r.entries_) {
+    e += entry.energy_;
+    c += entry.count_;
+  }
+  EXPECT_DOUBLE_EQ(e, energy) << what;
+  EXPECT_EQ(c, count) << what;
+}
+
+TEST(ReadTimeReduction, RowCountIsMonotoneAndSumsAreConservedOverTheFourSymmetries) {
+  const auto finest = FinestFixture();
+  const auto none = ReduceRaypathHistogram(finest, FilterConfig::kSymNone);
+  const auto p = ReduceRaypathHistogram(finest, FilterConfig::kSymP);
+  const auto pb = ReduceRaypathHistogram(finest, FilterConfig::kSymP | FilterConfig::kSymB);
+  const auto pbd = ReduceRaypathHistogram(finest, kSymAll);
+  EXPECT_EQ(none.entries_.size(), 5u);
+  EXPECT_EQ(p.entries_.size(), 4u);
+  EXPECT_EQ(pb.entries_.size(), 3u);
+  EXPECT_EQ(pbd.entries_.size(), 2u);
+  for (const auto* r : { &none, &p, &pb, &pbd }) {
+    ExpectSums(*r, 15.0, 150, "every symmetry keeps the finest sums");
+    EXPECT_EQ(r->roi_mode_, RaypathRoiMode::kFullSky);
+    EXPECT_EQ(r->reduce_ctx_.layer_multi_crystal_, finest.reduce_ctx_.layer_multi_crystal_);
+    for (size_t i = 1; i < r->entries_.size(); i++) {
+      EXPECT_GE(r->entries_[i - 1].energy_, r->entries_[i].energy_) << "energy descending";
+    }
+  }
+  // Under P, {3,5} and {4,6} became one row carrying both; {3,7} stayed apart.
+  const auto* p35 = Find(p, "3-5");
+  ASSERT_NE(p35, nullptr);
+  EXPECT_DOUBLE_EQ(p35->energy_, 9.0);
+  EXPECT_EQ(p35->count_, 90u);
+  EXPECT_NE(Find(p, "3-7"), nullptr);
+  // P|B|D: two rows, whose segments are what the reduction authority says.
+  EXPECT_EQ(pbd.entries_[0].chain_[0].segment, ReduceRaypathByPeriod({ 4, 6 }, kSymAll, 0, true, 6));
+  EXPECT_EQ(pbd.entries_[0].chain_[0].segment, ReduceRaypathByPeriod({ 3, 7 }, kSymAll, 0, true, 6));
+  EXPECT_DOUBLE_EQ(pbd.entries_[0].energy_, 12.0);
+  EXPECT_EQ(pbd.entries_[0].count_, 120u);
+  EXPECT_EQ(pbd.entries_[1].chain_[0].segment, ReduceRaypathByPeriod({ 2, 3, 5 }, kSymAll, 0, true, 6));
+  EXPECT_DOUBLE_EQ(pbd.entries_[1].energy_, 3.0);
+  EXPECT_EQ(pbd.entries_[1].count_, 30u);
+  EXPECT_EQ(pbd.entries_[0].display_, "3-5");
+  EXPECT_EQ(pbd.entries_[1].display_, "1-3-5");
+  // Symmetry 0 is not a bypass: the display text is the read-time format even then.
+  EXPECT_NE(Find(none, "3-5"), nullptr);
+  EXPECT_EQ(Find(none, "finest"), nullptr);
+}
+
+TEST(ReadTimeReduction, DIsAppliedPerLayerWithThatLayersCrystalParameters) {
+  // A two-layer chain: crystal 1 (D on) then crystal 2 (D off). {3,7} on
+  // crystal 1 is {3,5}'s D-image; on crystal 2 it is not, so the two chains
+  // {3,7}->{3,7} and {3,5}->{3,5} merge on layer 0 only, and stay two rows.
+  RaypathHistogramResult finest;
+  finest.reduce_ctx_.crystal_params_[1] = RaypathCrystalReduceParams{ 0, true };
+  finest.reduce_ctx_.crystal_params_[2] = RaypathCrystalReduceParams{ 0, false };
+  finest.reduce_ctx_.layer_multi_crystal_ = { false, false };
+  auto add = [&finest](Seg a, Seg b, double energy) {
+    RaypathHistogramEntry e;
+    e.chain_.push_back(RaypathChainSegment{ 1, std::move(a) });
+    e.chain_.push_back(RaypathChainSegment{ 2, std::move(b) });
+    e.energy_ = energy;
+    e.count_ = 1;
+    finest.entries_.push_back(std::move(e));
+  };
+  add({ 3, 5 }, { 3, 5 }, 3.0);
+  add({ 3, 7 }, { 3, 7 }, 2.0);
+  add({ 3, 7 }, { 3, 5 }, 1.0);
+  const auto r = ReduceRaypathHistogram(finest, kSymAll);
+  ASSERT_EQ(r.entries_.size(), 2u);
+  EXPECT_EQ(r.entries_[0].display_, "(3-5) -> (3-5)");
+  EXPECT_DOUBLE_EQ(r.entries_[0].energy_, 4.0);
+  EXPECT_EQ(r.entries_[0].count_, 2u);
+  EXPECT_EQ(r.entries_[1].display_, "(3-5) -> (3-7)");
+  EXPECT_DOUBLE_EQ(r.entries_[1].energy_, 2.0);
+  ASSERT_EQ(r.entries_[1].chain_.size(), 2u);
+  EXPECT_EQ(r.entries_[1].chain_[0].crystal_id, 1u);
+  EXPECT_EQ(r.entries_[1].chain_[1].crystal_id, 2u);
+}
+
+TEST(ReadTimeReduction, RingEnergiesAreSummedElementwiseAndTheConeEchoIsKept) {
+  RaypathHistogramResult finest;
+  finest.roi_mode_ = RaypathRoiMode::kCone;
+  finest.cone_ring_count_ = 3;
+  finest.cone_radius_rad_ = 0.25f;
+  finest.reduce_ctx_.crystal_params_[1] = RaypathCrystalReduceParams{ 0, false };
+  finest.reduce_ctx_.layer_multi_crystal_ = { false };
+  auto add = [&finest](Seg seg, std::vector<double> rings) {
+    RaypathHistogramEntry e;
+    e.chain_.push_back(RaypathChainSegment{ 1, std::move(seg) });
+    e.count_ = 1;
+    for (double v : rings) {
+      e.energy_ += v;
+    }
+    e.ring_energy_ = std::move(rings);
+    finest.entries_.push_back(std::move(e));
+  };
+  add({ 3, 5 }, { 1.0, 2.0, 3.0 });
+  add({ 5, 7 }, { 0.5, 0.0, 1.5 });
+  const auto r = ReduceRaypathHistogram(finest, FilterConfig::kSymP);
+  EXPECT_EQ(r.roi_mode_, RaypathRoiMode::kCone);
+  EXPECT_EQ(r.cone_ring_count_, 3);
+  EXPECT_FLOAT_EQ(r.cone_radius_rad_, 0.25f);
+  ASSERT_EQ(r.entries_.size(), 1u);
+  EXPECT_EQ(r.entries_[0].ring_energy_, (std::vector<double>{ 1.5, 2.0, 4.5 }));
+  EXPECT_DOUBLE_EQ(r.entries_[0].energy_, 8.0);
+  EXPECT_EQ(r.entries_[0].count_, 2u);
+}
+
+TEST(ReadTimeReduction, UnknownCrystalIdReducesWithDOffRatherThanFailing) {
+  RaypathHistogramResult finest;  // empty context: nothing is described
+  finest.reduce_ctx_.layer_multi_crystal_ = { false };
+  for (const Seg& seg : { Seg{ 3, 5 }, Seg{ 3, 7 } }) {
+    RaypathHistogramEntry e;
+    e.chain_.push_back(RaypathChainSegment{ 9, seg });
+    e.energy_ = 1.0;
+    e.count_ = 1;
+    finest.entries_.push_back(std::move(e));
+  }
+  // With D off (unknown crystal), {3,7} is not {3,5}'s image: two rows under P|B|D.
+  const auto r = ReduceRaypathHistogram(finest, kSymAll);
+  EXPECT_EQ(r.entries_.size(), 2u);
+  ExpectSums(r, 2.0, 2, "unknown crystal");
+}
+
+// ---------------------------------------------------------------------------
+// The display format, to the character (issue AC4): the four owner-specified
+// shapes, plus the defensive branch for a chain deeper than the context.
+// ---------------------------------------------------------------------------
+TEST(ChainDisplayFormat, FourOwnerSpecifiedShapes) {
+  const std::vector<RaypathChainSegment> one{ { 1, { 3, 5 } } };
+  EXPECT_EQ(FormatRaypathChainDisplay(one, { false }), "3-5");
+  EXPECT_EQ(FormatRaypathChainDisplay(one, { true }), "C1(3-5)");
+  const std::vector<RaypathChainSegment> two{ { 1, { 3, 5 } }, { 1, { 1, 3 } } };
+  EXPECT_EQ(FormatRaypathChainDisplay(two, { false, false }), "(3-5) -> (1-3)");
+  const std::vector<RaypathChainSegment> two_ids{ { 1, { 1, 3 } }, { 4, { 3, 5 } } };
+  EXPECT_EQ(FormatRaypathChainDisplay(two_ids, { true, true }), "C1(1-3) -> C4(3-5)");
+}
+
+TEST(ChainDisplayFormat, MultiCrystalIsDecidedPerLayerNotPerCrystal) {
+  // The same crystal id on both layers, alone on the first and shared on the
+  // second: only the second layer names it.
+  const std::vector<RaypathChainSegment> chain{ { 2, { 3, 5 } }, { 2, { 1, 3 } } };
+  EXPECT_EQ(FormatRaypathChainDisplay(chain, { false, true }), "(3-5) -> C2(1-3)");
+  EXPECT_EQ(FormatRaypathChainDisplay(chain, { true, false }), "C2(3-5) -> (1-3)");
+}
+
+TEST(ChainDisplayFormat, LayerPastTheContextIsLabelledSingleCrystal) {
+  const std::vector<RaypathChainSegment> chain{ { 1, { 3, 5 } }, { 1, { 1, 3 } }, { 1, { 4 } } };
+  EXPECT_EQ(FormatRaypathChainDisplay(chain, { true }), "C1(3-5) -> (1-3) -> (4)");
+  EXPECT_EQ(FormatRaypathChainDisplay(chain, {}), "(3-5) -> (1-3) -> (4)");
+  EXPECT_EQ(FormatRaypathChainDisplay({}, {}), "");
+}
+
+// ---------------------------------------------------------------------------
+// The context the server builds from a scene, and its round trip through a
+// snapshot.
+// ---------------------------------------------------------------------------
+CrystalConfig PrismWithAxis(IdType id, bool d_applicable_axis) {
+  nlohmann::json j = {
+    { "id", id },
+    { "type", "prism" },
+    { "shape", { { "height", 1.2 } } },
+    { "axis",
+      { { "zenith", { { "type", "uniform" }, { "mean", 90 }, { "std", 360 } } },
+        { "azimuth", { { "type", "uniform" }, { "mean", 0 }, { "std", d_applicable_axis ? 360 : 90 } } } } },
+  };
+  return j.get<CrystalConfig>();
+}
+
+ScatteringSetting Setting(const CrystalConfig& crystal) {
+  ScatteringSetting s{};
+  s.filter_.id_ = 0;
+  s.filter_.symmetry_ = FilterConfig::kSymNone;
+  s.filter_.action_ = FilterConfig::kFilterIn;
+  s.filter_.param_ = SimpleFilterParam{ NoneFilterParam{} };
+  s.crystal_ = crystal;
+  s.crystal_proportion_ = 1.0f;
+  return s;
+}
+
+TEST(ReduceContext, LayerFlagIsPerLayerWhenOneCrystalIsAloneOnOneLayerAndSharedOnAnother) {
+  // Crystal 1 alone on layer 0; crystals 1 and 2 together on layer 1. A map
+  // keyed by crystal id could only hold one answer for crystal 1; the layer
+  // vector holds both, in the order the hit loop walks them.
+  SceneConfig scene = Halo22Scene();
+  scene.ms_.clear();
+  const CrystalConfig c1 = PrismWithAxis(1, true);
+  const CrystalConfig c2 = PrismWithAxis(2, false);
+  MsInfo l0;
+  l0.prob_ = 0.5f;
+  l0.setting_.push_back(Setting(c1));
+  MsInfo l1;
+  l1.prob_ = 0.0f;
+  l1.setting_.push_back(Setting(c1));
+  l1.setting_.push_back(Setting(c2));
+  scene.ms_.push_back(std::move(l0));
+  scene.ms_.push_back(std::move(l1));
+
+  const RaypathReduceContext ctx = BuildRaypathReduceContext(scene);
+  EXPECT_EQ(ctx.layer_multi_crystal_, (std::vector<bool>{ false, true }));
+  ASSERT_EQ(ctx.crystal_params_.size(), 2u);
+  // The same derivation the simulator's layer context makes, from the axis.
+  EXPECT_EQ(ctx.crystal_params_.at(1).d_applicable, detail::IsDApplicable(c1.axis_));
+  EXPECT_TRUE(ctx.crystal_params_.at(1).d_applicable);
+  EXPECT_EQ(ctx.crystal_params_.at(1).sigma_a, detail::ComputeSigmaA(c1.axis_.roll_dist.center));
+  EXPECT_FALSE(ctx.crystal_params_.at(2).d_applicable);
+  EXPECT_EQ(ctx.crystal_params_.at(2).sigma_a, 0);
+
+  // Round trip: what the consumer was built with is what its snapshot carries.
+  RaypathHistogramConsumer c(FullSky(), ctx);
+  const auto r = Snapshot(c);
+  EXPECT_EQ(r.reduce_ctx_.layer_multi_crystal_, ctx.layer_multi_crystal_);
+  EXPECT_EQ(r.reduce_ctx_.crystal_params_.size(), 2u);
+  EXPECT_EQ(r.reduce_ctx_.crystal_params_.at(1).d_applicable, true);
+  EXPECT_EQ(r.reduce_ctx_.crystal_params_.at(2).d_applicable, false);
+  // And the same layer facts drive the display of a chain through both layers.
+  RaypathHistogramResult finest = r;
+  RaypathHistogramEntry e;
+  e.chain_.push_back(RaypathChainSegment{ 1, { 3, 5 } });
+  e.chain_.push_back(RaypathChainSegment{ 1, { 1, 3 } });
+  e.energy_ = 1.0;
+  e.count_ = 1;
+  finest.entries_.push_back(e);
+  const auto reduced = ReduceRaypathHistogram(finest, kSymAll);
+  ASSERT_EQ(reduced.entries_.size(), 1u);
+  EXPECT_EQ(reduced.entries_[0].display_, "(3-5) -> C1(1-3)");
 }
 
 }  // namespace

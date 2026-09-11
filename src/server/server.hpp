@@ -3,9 +3,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -206,17 +208,14 @@ struct RaypathRoiSpec {
   size_t cone_stop_target_ = 0;
 };
 
-// What Server::StartRaypathAnalysis takes: the ROI, plus the symmetry the
-// per-layer face sequences are reduced under before chains are compared.
-// `chain_id_symmetry_` is a FilterConfig::kSym* bit set (P=1, B=2, D=4; the
-// legal combinations are 0..7, and 0 is a legal request for NO reduction), so
-// "use the session default" needs a value outside that range: 0xFF, which no
-// combination of the three bits can produce. The session default is
-// Simulator::kDefaultChainIdSymmetry (P|B|D).
-constexpr uint8_t kChainIdSymmetrySessionDefault = 0xFF;
+// What Server::StartRaypathAnalysis takes: the ROI and the ray budget. There is
+// deliberately NO symmetry in it: the run records every chain at its finest
+// (FilterConfig::kSymNone — each face sequence its own chain), and the P/B/D
+// reduction is applied when a result is READ (ReduceRaypathHistogram,
+// raypath_histogram_consumer.hpp), so a reader can change the reduction on a
+// finished result without re-running.
 struct RaypathAnalysisRequest {
   RaypathRoiSpec roi_;
-  uint8_t chain_id_symmetry_ = kChainIdSymmetrySessionDefault;
   // The run's own ray budget, in the scene's representation (total across every
   // wavelength; kInfSize = unlimited). nullopt = trace the committed scene's own
   // ray_num_, which is what every analysis run did before the request carried one.
@@ -225,19 +224,51 @@ struct RaypathAnalysisRequest {
   std::optional<size_t> ray_num_;
 };
 
-// One MS layer of a chain: which crystal, and the face sequence through it
-// after symmetry reduction (Crystal::ReduceRaypath) — the same triple the
-// interning table keys on (core/chain_id_table.hpp), minus the ids.
+// One MS layer of a chain: which crystal, and the face sequence through it —
+// the same triple the interning table keys on (core/chain_id_table.hpp), minus
+// the ids. As recorded the sequence is the finest (unreduced) one; after
+// ReduceRaypathHistogram it is the canonical form under the reader's symmetry.
 struct RaypathChainSegment {
   IdType crystal_id = kInvalidId;
   std::vector<IdType> segment;
 };
 
+// What the read-time reduction needs to know about the scene the run traced,
+// captured by Server::StartRaypathAnalysis from the committed scene and
+// published with every snapshot of the result, so a reader reduces against
+// the scene the chains were recorded on even after the next commit.
+//
+// Two kinds of fact, keyed two different ways on purpose:
+//  - crystal_params_: the axis-derived D parameters of each crystal DESIGN,
+//    keyed by CrystalConfig::id_. A property of the crystal alone (the same
+//    config object wherever the scene reuses it), so one entry per id is
+//    exact.
+//  - layer_multi_crystal_: whether scattering layer i holds more than one
+//    crystal, indexed by the LAYER (ms_[i]). A property of the layer, not of
+//    the crystal: one crystal id can be the only crystal of layer 0 and share
+//    layer 1 with another, so keying this by crystal id would let the layer
+//    walked last overwrite the answer for the layer walked first. A chain's
+//    segment i was recorded on layer i (simulator.cpp's hit loop walks ms_ in
+//    order and interns one segment per layer), so the display formatter
+//    indexes this by the segment's position in the chain.
+struct RaypathCrystalReduceParams {
+  int sigma_a = 0;
+  bool d_applicable = false;
+};
+struct RaypathReduceContext {
+  std::unordered_map<IdType, RaypathCrystalReduceParams> crystal_params_;
+  std::vector<bool> layer_multi_crystal_;
+};
+
 struct RaypathHistogramEntry {
   std::vector<RaypathChainSegment> chain_;  ///< root -> leaf, one per MS layer traversed
-  std::string display_;                     ///< ChainIdInterningTable::Format() of the same chain
-  double energy_ = 0.0;                     ///< Σ over counted rays of Y(wavelength) · weight
-  size_t count_ = 0;                        ///< number of counted rays
+  // The chain as text. In the recorded (finest) result this is
+  // ChainIdInterningTable::Format()'s diagnostic form and reaches no consumer;
+  // ReduceRaypathHistogram rewrites it through FormatRaypathChainDisplay, the
+  // one authority for the text a user sees (lumice.h `display`).
+  std::string display_;
+  double energy_ = 0.0;  ///< Σ over counted rays of Y(wavelength) · weight
+  size_t count_ = 0;     ///< number of counted rays
   // kCone only: energy_ split by angular-distance ring, ring_energy_.size() ==
   // cone_ring_count_ and Σ ring_energy_ == energy_ (up to summation order).
   // Empty in the other two modes.
@@ -252,6 +283,8 @@ struct RaypathHistogramResult {
   RaypathRoiMode roi_mode_ = RaypathRoiMode::kFullSky;
   int cone_ring_count_ = 0;
   float cone_radius_rad_ = 0.0f;
+  // The scene facts the read-time reduction and the display text need (above).
+  RaypathReduceContext reduce_ctx_;
 };
 
 using Result = std::variant<NoneResult, RenderResult, StatsResult, RaypathHistogramResult>;
@@ -325,6 +358,21 @@ struct ResultFrame {
   // such consumer and leaves it nullopt — there is no cross-snapshot cache that a
   // stale value could survive in.
   std::optional<RaypathHistogramResult> raypath_histogram_result_;
+  // The read-time reduction of raypath_histogram_result_ last asked for, kept so the two
+  // C API reads a consumer makes per (frame, symmetry) — the row count, then the rows — cost
+  // one reduction rather than two (ReduceRaypathHistogram is O(rows), and an unreduced
+  // multi-scatter record has hundreds of thousands). ONE slot, not one per symmetry: a
+  // reduced multi-scatter result is itself tens of MB, and the consumer's own dedup already
+  // keeps it from asking twice for the same pair. Behind a shared_ptr so the shallow copies
+  // AcquireResultFrame makes share it; guarded by its own mutex since frames are read from
+  // any thread. Allocated by DoSnapshot alongside the result; null on a render frame.
+  struct RaypathReduceCache {
+    std::mutex mutex_;
+    bool filled_ = false;
+    uint8_t symmetry_ = 0;
+    std::shared_ptr<const RaypathHistogramResult> reduced_;
+  };
+  std::shared_ptr<RaypathReduceCache> raypath_reduce_cache_;
 
   // Lifetime anchors, parallel to render_results_ / xyz_results_.
   std::vector<std::shared_ptr<const uint8_t[]>> render_storage_;

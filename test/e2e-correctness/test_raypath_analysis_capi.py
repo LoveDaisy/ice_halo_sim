@@ -7,13 +7,16 @@ through the full stack: JSON commit, the forced-CPU session, the frame getters, 
 mirrors.
 
 AC3, three assertions on one scene:
-  * full sky: the top chain is the 22° raypath, ``crystal1(3-5)``;
+  * full sky: the top chain is the 22° raypath, ``3-5``;
   * a 2° cone centred on the 22° ring (straight above the sun): the same top chain;
   * the same cone pointed at halo-free sky (altitude 85°, above both the 22° and the 46°
     rings): the top chain's energy is far below the on-ring cone's — the measured ratio and
     the threshold derived from it are at the assertion.
 AC1 through ctypes: a render in progress refuses the analysis with LUMICE_ERR_SERVER.
 AC2 through ctypes: under a Metal preference the run reports the CPU and logs the forcing.
+The read-time symmetry (v4.33): the same run read under none / P / P|B / P|B|D conserves the
+sums, never gains rows as bits are added, and the 22° path's ORBIT — the whole of it at the
+finest, one row under P|B|D — carries the same energy at every one of them.
 
 Requires the shared-lib build (``./scripts/build.sh -sj release``); run with
 ``pytest -v -m slow``.
@@ -41,7 +44,7 @@ _ON_RING_ALTITUDE_DEG = _SUN_ALTITUDE_DEG + 23.0
 # prism: nothing but scattered residue lands here.
 _OFF_RING_ALTITUDE_DEG = 85.0
 
-_HALO_22 = "crystal1(3-5)"
+_HALO_22 = "3-5"
 
 # A fixed seed makes every run below a single-worker deterministic run (the seed contract),
 # so the three energies are comparable and the ratio is a number, not a distribution.
@@ -57,7 +60,6 @@ def _sunlight_dir(altitude_deg: float, azimuth_deg: float = 0.0):
 def _full_sky_request() -> cr.LUMICE_RaypathAnalysisRequest:
     req = cr.LUMICE_RaypathAnalysisRequest()
     req.roi_mode = cr.LUMICE_RAYPATH_ROI_FULL_SKY
-    req.chain_id_symmetry = cr.LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT
     # The scene's own ray budget, as every request here asked for before v4.32 gave the request
     # one of its own: a zero-initialized `infinite` would be a budget of zero rays.
     req.infinite = cr.LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT
@@ -96,8 +98,87 @@ def test_full_sky_top_chain_is_the_22_degree_path():
     # measured 1.25x / 1.27x / 1.24x over the same three seeds (the C++ white-box test reads
     # 1.24x on its own run). A 1.1x floor is far from the ~52k-ray count's noise and still
     # catches a reordering.
-    assert r.entries[1].display == "crystal1(3-6)"
+    assert r.entries[1].display == "3-6"
     assert top.energy > 1.1 * r.entries[1].energy
+
+
+def _is_22_degree_path(chain) -> bool:
+    """A single-layer chain through two prism faces two apart (60° prism angle): the 22° halo.
+
+    A physical statement about the hexagonal prism (faces 3..8 around it), NOT a re-derivation of
+    core's reduction rule: every member of the orbit core folds into "3-5" under P/B/D is such a
+    pair, and so is the mirror-image family "3-7" that only D folds in.
+    """
+    if len(chain) != 1:
+        return False
+    _crystal, faces = chain[0]
+    if len(faces) != 2 or not all(3 <= f <= 8 for f in faces):
+        return False
+    return (faces[0] - faces[1]) % 6 in (2, 4)
+
+
+def _is_undeviated_pass(chain) -> bool:
+    """A single-layer chain through two OPPOSITE prism faces: the sun's own image, undeviated."""
+    if len(chain) != 1:
+        return False
+    _crystal, faces = chain[0]
+    if len(faces) != 2 or not all(3 <= f <= 8 for f in faces):
+        return False
+    return (faces[0] - faces[1]) % 6 == 3
+
+
+@pytest.mark.slow
+def test_read_time_symmetry_conserves_sums_and_the_22_degree_orbit_leads():
+    """One run per symmetry (the seed makes them the same run), read under that symmetry.
+
+    Expected row counts of the 22° orbit, from the prism's geometry: at the finest the orbit
+    is 6 rotations x 2 mirror images = 12 rows; P folds the rotations (2 rows: "3-5" and its
+    mirror "3-7"); B touches no prism-only path (still 2); D folds the mirror (1 row).
+
+    The claim is about the orbit's UNION, not about the top row: the undeviated pass "3-6" is
+    its own mirror image, so its orbit has 6 finest members to the halo's 12, and at the finest
+    (and under P, where the halo is still split in two) a single undeviated row outweighs a
+    single halo row. Only under D does "3-5" lead on its own — the C++ white-box test says the
+    same. What holds at every symmetry is that the halo's rows together carry more than the
+    undeviated pass's rows together, which is what the P|B|D order says.
+    """
+    by_sym = {}
+    for sym in (0, cr.LUMICE_RAYPATH_SYMMETRY_P,
+                cr.LUMICE_RAYPATH_SYMMETRY_P | cr.LUMICE_RAYPATH_SYMMETRY_B, cr.LUMICE_RAYPATH_SYMMETRY_ALL):
+        # Every row: the unreduced read of this run has thousands, past the runner's default cap.
+        by_sym[sym] = cr.run_raypath_analysis_capi(_CONFIG, _full_sky_request(), sim_seed=_SEED,
+                                                   chain_id_symmetry=sym, max_entries=None)
+    pbd = by_sym[cr.LUMICE_RAYPATH_SYMMETRY_ALL]
+    total_count = sum(e.count for e in pbd.entries)
+    total_energy = sum(e.energy for e in pbd.entries)
+    prev_rows = None
+    for sym, r in by_sym.items():
+        assert r.sim_ray_num == pbd.sim_ray_num, sym
+        assert sum(e.count for e in r.entries) == total_count, sym
+        assert math.isclose(sum(e.energy for e in r.entries), total_energy, rel_tol=1e-9), sym
+        if prev_rows is not None:
+            assert len(r.entries) <= prev_rows, f"symmetry {sym}: rows grew as bits were added"
+        prev_rows = len(r.entries)
+        # The orbit's rows, at this symmetry: the union carries what the one P|B|D row carries,
+        # and it is the leading orbit — ahead of the undeviated pass's rows together.
+        orbit = [e for e in r.entries if _is_22_degree_path(e.chain)]
+        assert sum(e.count for e in orbit) == pbd.entries[0].count, (sym, [e.display for e in orbit])
+        assert math.isclose(sum(e.energy for e in orbit), pbd.entries[0].energy, rel_tol=1e-9), sym
+        undeviated = [e for e in r.entries if _is_undeviated_pass(e.chain)]
+        assert sum(e.energy for e in orbit) > 1.1 * sum(e.energy for e in undeviated), sym
+        # And the top row is a member of one of those two orbits at every symmetry.
+        assert _is_22_degree_path(r.entries[0].chain) or _is_undeviated_pass(r.entries[0].chain), (
+            sym, r.entries[0].display)
+        expected_orbit_rows = {0: 12, cr.LUMICE_RAYPATH_SYMMETRY_P: 2,
+                               cr.LUMICE_RAYPATH_SYMMETRY_P | cr.LUMICE_RAYPATH_SYMMETRY_B: 2,
+                               cr.LUMICE_RAYPATH_SYMMETRY_ALL: 1}[sym]
+        assert len(orbit) == expected_orbit_rows, (sym, [e.display for e in orbit])
+    # The display text follows the read: the single-crystal single-layer shape, no crystal prefix.
+    assert pbd.entries[0].display == _HALO_22
+    finest = by_sym[0]
+    assert {e.display for e in finest.entries if _is_22_degree_path(e.chain)} >= {"3-5", "4-6", "3-7"}
+    assert {e.display for e in by_sym[cr.LUMICE_RAYPATH_SYMMETRY_P].entries if _is_22_degree_path(e.chain)} == {
+        "3-5", "3-7"}
 
 
 @pytest.mark.slow
@@ -109,14 +190,14 @@ def test_cone_on_and_off_the_22_degree_ring():
     assert top.display == _HALO_22, [e.display for e in on_ring.entries[:5]]
     assert len(top.ring_energy) == 4
     assert math.isclose(sum(top.ring_energy), top.energy, rel_tol=1e-9)
-    assert all(e.display != "crystal1(3-6)" for e in on_ring.entries), "the sun's image cannot land 23° from the sun"
+    assert all(e.display != "3-6" for e in on_ring.entries), "the sun's image cannot land 23° from the sun"
 
     off_ring = cr.run_raypath_analysis_capi(_CONFIG, _cone_request(_OFF_RING_ALTITUDE_DEG), sim_seed=_SEED)
     off_top_energy = off_ring.entries[0].energy if off_ring.entries else 0.0
     off_display = off_ring.entries[0].display if off_ring.entries else "(nothing)"
     # Measured at this budget over three seeds (20260911 / 1 / 7): the on-ring cone's top
     # chain carries 67x / 41x / 44x the energy of whatever leads the halo-free cone (a
-    # scattered crystal1(1-3-2) residue, 11-16 rays) — the same solid angle on both sides, so
+    # scattered 1-3-2 residue, 11-16 rays) — the same solid angle on both sides, so
     # this is a per-steradian comparison too. 10x sits 4x under the weakest of those, far
     # from the 11-ray count's own noise, and a wrong centre convention or a broken membership
     # test would miss it by more than an order of magnitude in the other direction.

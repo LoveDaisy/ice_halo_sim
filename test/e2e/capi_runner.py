@@ -221,7 +221,11 @@ assert ctypes.sizeof(LUMICE_ServerConfig) == 12, (
 LUMICE_RAYPATH_ROI_FULL_SKY = 0
 LUMICE_RAYPATH_ROI_IN_FRAME = 1
 LUMICE_RAYPATH_ROI_CONE = 2
-LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT = 0xFF
+# The symmetry a READ of the result reduces under (v4.33): a bit set of these, 0..7.
+LUMICE_RAYPATH_SYMMETRY_P = 1
+LUMICE_RAYPATH_SYMMETRY_B = 2
+LUMICE_RAYPATH_SYMMETRY_D = 4
+LUMICE_RAYPATH_SYMMETRY_ALL = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D
 LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT = -1  # `infinite` sentinel: the scene's own budget (v4.32)
 LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 8
 LUMICE_MAX_RAYPATH_SEGMENT_LEN = 64
@@ -259,17 +263,19 @@ class LUMICE_RaypathAnalysisRequest(ctypes.Structure):
         ("cone_radius_rad",   ctypes.c_float),
         ("cone_ring_count",   ctypes.c_int),
         ("cone_stop_target",  ctypes.c_ulonglong),
-        ("chain_id_symmetry", ctypes.c_int),
-        ("infinite",          ctypes.c_int),        # v4.32
+        # No symmetry field (v4.33): it is a parameter of the read, below.
+        ("infinite",          ctypes.c_int),        # v4.32; at 80 since v4.33
         ("ray_num",           ctypes.c_ulonglong),  # v4.32
     ]
 
 
+# Still 96: the int `chain_id_symmetry` removed in v4.33 sat where `infinite` now does, and the
+# 4 bytes `infinite` vacated are padding before the 8-aligned `ray_num`.
 assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 96, (
     "LUMICE_RaypathAnalysisRequest size mismatch — verify lumice.h field layout"
 )
-for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("cone_stop_target", 72), ("chain_id_symmetry", 80),
-                       ("infinite", 84), ("ray_num", 88)):
+for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("cone_stop_target", 72), ("infinite", 80),
+                       ("ray_num", 88)):
     assert getattr(LUMICE_RaypathAnalysisRequest, _name).offset == _offset, (
         f"LUMICE_RaypathAnalysisRequest.{_name} offset drift — the mirror and lumice.h disagree"
     )
@@ -603,12 +609,18 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_StartRaypathAnalysis.restype = ctypes.c_int
     lib.LUMICE_StartRaypathAnalysis.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RaypathAnalysisRequest)]
 
+    # v4.33: both reads take the symmetry the entries are reduced under.
     lib.LUMICE_FrameGetRaypathAnalysisInfo.restype = ctypes.c_int
-    lib.LUMICE_FrameGetRaypathAnalysisInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RaypathAnalysisInfo)]
+    lib.LUMICE_FrameGetRaypathAnalysisInfo.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.POINTER(LUMICE_RaypathAnalysisInfo),
+    ]
 
     lib.LUMICE_FrameGetRaypathAnalysis.restype = ctypes.c_int
     lib.LUMICE_FrameGetRaypathAnalysis.argtypes = [
         ctypes.c_void_p,
+        ctypes.c_int,
         ctypes.POINTER(LUMICE_RaypathHistogramEntry),
         ctypes.c_int,
     ]
@@ -979,7 +991,8 @@ def run_raypath_analysis_capi(
     num_workers: int = 0,
     preferred_backend: int = LUMICE_BACKEND_CPU,
     timeout_sec: int = 180,
-    max_entries: int = 1024,
+    max_entries: Optional[int] = 1024,
+    chain_id_symmetry: int = LUMICE_RAYPATH_SYMMETRY_ALL,
 ) -> RaypathAnalysisResult:
     """Run one ANALYSIS run via the C API on a fresh server and copy the histogram out.
 
@@ -987,6 +1000,13 @@ def run_raypath_analysis_capi(
     the render run every commit starts) → LUMICE_StopServer → LUMICE_StartRaypathAnalysis →
     wait for the drain signal → read one frame → destroy. The scene's ray_num is the run's
     budget (an "infinite" config only ends through a cone stop target, else this times out).
+
+    `chain_id_symmetry` is the P/B/D bit set the READ reduces the recorded chains under
+    (v4.33) — passed to both frame getters, as the header requires. Default P|B|D, which is
+    what every analysis was recorded under before the reduction became a read parameter.
+    `max_entries` caps the rows copied out; None reads every row the frame holds under that
+    symmetry (the Info call's entry_count sizes the array) — an unreduced read of a long run
+    has thousands of rows, and a silent cap would make its sums come up short.
 
     `preferred_backend` goes to LUMICE_CreateServerEx; the analysis run is expected to
     ignore it (CPU is a session property), and `active_backend` in the result is what
@@ -1015,14 +1035,16 @@ def run_raypath_analysis_capi(
 
             info = LUMICE_RaypathAnalysisInfo()
             stats = LUMICE_StatsResult()
-            entries_c = (LUMICE_RaypathHistogramEntry * (max_entries + 1))()
             with _result_frame(lib, server) as frame:
-                err = lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, ctypes.byref(info))
+                err = lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, chain_id_symmetry, ctypes.byref(info))
                 if err != 0:
                     raise RuntimeError(f"FrameGetRaypathAnalysisInfo failed err={err}")
                 if not info.present:
                     raise RuntimeError("the frame carries no analysis result")
-                err = lib.LUMICE_FrameGetRaypathAnalysis(frame, entries_c, max_entries)
+                if max_entries is None:
+                    max_entries = int(info.entry_count)
+                entries_c = (LUMICE_RaypathHistogramEntry * (max_entries + 1))()
+                err = lib.LUMICE_FrameGetRaypathAnalysis(frame, chain_id_symmetry, entries_c, max_entries)
                 if err != 0:
                     raise RuntimeError(f"FrameGetRaypathAnalysis failed err={err}")
                 err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(stats))

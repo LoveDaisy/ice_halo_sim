@@ -98,9 +98,6 @@ class Simulator {
   // WARN per entry saying so. Same thread contract as SetPreferredBackend:
   // written by the server thread, snapshotted at the top of Run().
   void SetAnalysisChainId(bool enabled, uint8_t symmetry);
-  // The session-level symmetry an analysis run reduces under unless the request names
-  // one (server.hpp kChainIdSymmetrySessionDefault): full P|B|D.
-  static constexpr uint8_t kDefaultChainIdSymmetry = FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD;
 
   // The analysis run's other session property: force the legacy CPU path for
   // the next Run(), ahead of BOTH the LUMICE_TRACE_BACKEND override and the
@@ -291,12 +288,16 @@ class Simulator {
   // Raypath-analysis session settings: the atomic is what SetAnalysisChainId
   // writes (one 2-byte trivially-copyable value, so enabled and symmetry can
   // never be observed torn), the plain copy is Run()'s snapshot of it, read on
-  // the simulator thread only. Defaults: off, and full P|B|D symmetry when on.
+  // the simulator thread only. Default: off; the symmetry only means anything
+  // once SetAnalysisChainId turns it on, and that call always sets both. The
+  // server's analysis run passes FilterConfig::kSymNone (chains recorded at
+  // their finest, reduced when read — server.hpp RaypathAnalysisRequest); the
+  // mechanism itself takes any P/B/D bit set, and tests exercise the others.
   struct ChainIdSession {
     bool enabled = false;
-    uint8_t symmetry = 0;
+    uint8_t symmetry = FilterConfig::kSymNone;
   };
-  std::atomic<ChainIdSession> analysis_chain_id_{ ChainIdSession{ false, kDefaultChainIdSymmetry } };
+  std::atomic<ChainIdSession> analysis_chain_id_{ ChainIdSession{ false, FilterConfig::kSymNone } };
   ChainIdSession chain_id_session_{};
   // See SetAnalysisForceCpu / ActiveBackend.
   std::atomic_bool analysis_force_cpu_{ false };

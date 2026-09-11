@@ -23,7 +23,7 @@ namespace {
 
 constexpr int kFnPeriodHex = 6;
 
-// In-place P-canonical shift on the recorder buffer. Mirrors Crystal::PCanonicalShift
+// In-place P-canonical shift on the recorder buffer. Mirrors crystal.cpp PCanonicalShiftByPeriod
 // for hexagonal crystals (fn_period=6).
 void PCanonicalShiftInPlace(uint8_t* data, size_t size) {
   int first_pri = -1;

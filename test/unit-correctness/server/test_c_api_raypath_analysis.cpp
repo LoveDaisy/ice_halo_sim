@@ -27,10 +27,11 @@
 #include "core/lens_proj_build.hpp"     // BuildProjParams
 #include "core/scatter_accum.hpp"       // MakeCameraRotation
 #include "include/lumice.h"
-#include "server/c_api_internal.hpp"  // ToAnnotationViewSnapshot, WrapResultFrameForTest
+#include "server/c_api_internal.hpp"              // ToAnnotationViewSnapshot, WrapResultFrameForTest
+#include "server/raypath_histogram_consumer.hpp"  // FormatRaypathChainDisplay (the truncation fixture premise)
 #include "server/server.hpp"
 
-static_assert(LUMICE_API_VERSION >= 432, "the analysis run needs the v4.32 header (the request's own ray budget)");
+static_assert(LUMICE_API_VERSION >= 433, "the analysis run needs the v4.33 header (symmetry is a read parameter)");
 
 // The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
 // offsets, so a field inserted in the middle (which keeps the size) is caught as well as
@@ -41,8 +42,7 @@ static_assert(sizeof(LUMICE_RaypathAnalysisRequest) == 96, "LUMICE_RaypathAnalys
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, frame_view) == 4, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_center) == 52, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_stop_target) == 72, "");
-static_assert(offsetof(LUMICE_RaypathAnalysisRequest, chain_id_symmetry) == 80, "");
-static_assert(offsetof(LUMICE_RaypathAnalysisRequest, infinite) == 84, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, infinite) == 80, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, ray_num) == 88, "");
 static_assert(sizeof(LUMICE_RaypathChainSegment) == 264, "LUMICE_RaypathChainSegment layout changed");
 static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 5600, "LUMICE_RaypathHistogramEntry layout changed");
@@ -90,10 +90,13 @@ LUMICE_ErrorCode CommitJson(LUMICE_Server* server, const std::string& json) {
 LUMICE_RaypathAnalysisRequest FullSky() {
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
-  req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
   req.infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT;
   return req;
 }
+
+// The reduction every read here asks for unless it is the subject: P|B|D, the GUI's default and
+// what the old record-time reduction always applied.
+constexpr int kSymAll = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
 
 LUMICE_RaypathAnalysisRequest Cone() {
   LUMICE_RaypathAnalysisRequest req = FullSky();
@@ -173,12 +176,6 @@ TEST_F(CApiRaypathAnalysis, RequestValidation) {
   EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_CONFIG);
 
   req.roi_mode = 7;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
-
-  req = FullSky();
-  req.chain_id_symmetry = 8;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
-  req.chain_id_symmetry = -1;
   EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
 
   // The ray budget's `infinite` has exactly three spellings (v4.32). The three legal ones reach the
@@ -267,9 +264,14 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   ASSERT_NE(frame, nullptr);
 
   LUMICE_RaypathAnalysisInfo info{};
-  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(nullptr, &info), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, nullptr), LUMICE_ERR_NULL_ARG);
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(nullptr, kSymAll, &info), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, nullptr), LUMICE_ERR_NULL_ARG);
+  // The read's symmetry is a bit set 0..7 and nothing else; a bad one writes nothing.
+  std::memset(&info, 0x5A, sizeof(info));
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, 8, &info), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, -1, &info), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(info.present, 0x5A5A5A5A) << "nothing written on a rejected symmetry";
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
   EXPECT_EQ(info.present, 1);
   EXPECT_EQ(info.roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
   ASSERT_GE(info.entry_count, 2);
@@ -278,9 +280,11 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   // One more slot than entries: the sentinel lands at [entry_count].
   std::vector<LUMICE_RaypathHistogramEntry> entries(static_cast<size_t>(info.entry_count) + 1);
   std::memset(entries.data(), 0x5A, entries.size() * sizeof(LUMICE_RaypathHistogramEntry));  // not zero
-  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysis(nullptr, entries.data(), 1), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, entries.data(), info.entry_count + 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysis(nullptr, kSymAll, entries.data(), 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, 8, entries.data(), 1), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(entries[0].count, 0x5A5A5A5A5A5A5A5Au) << "nothing written on a rejected symmetry";
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, entries.data(), info.entry_count + 1), LUMICE_OK);
   EXPECT_EQ(entries.back().count, 0u) << "sentinel at [entry_count]";
   LUMICE_RayCount total = 0;
   for (int i = 0; i < info.entry_count; i++) {
@@ -292,25 +296,65 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
     EXPECT_GE(e.chain[0].segment_len, 1);
     EXPECT_EQ(e.ring_count, 0);
     EXPECT_NE(std::memchr(e.display, 0, sizeof(e.display)), nullptr) << "NUL-terminated";
-    EXPECT_EQ(std::string(e.display).rfind("crystal1(", 0), 0u) << e.display;
+    // One crystal on one layer: the bare face sequence, no "C1(" prefix and no parentheses.
+    EXPECT_EQ(std::string(e.display).find_first_not_of("0123456789-"), std::string::npos) << e.display;
     if (i > 0) {
       EXPECT_GE(entries[static_cast<size_t>(i - 1)].energy, e.energy) << "energy descending at " << i;
     }
     total += e.count;
   }
-  // The 22° path — faces 3 -> 5 of the prism, which the session's P|B|D reduction leaves as
-  // the canonical "3-5" (the same literal test_raypath_histogram_consumer.cpp derives through
+  // The 22° path — faces 3 -> 5 of the prism, which the read's P|B|D reduction leaves as the
+  // canonical "3-5" (the same literal test_raypath_histogram_consumer.cpp derives through
   // Crystal::ReduceRaypath; pinned as text here because the text IS this API's contract).
-  EXPECT_STREQ(entries[0].display, "crystal1(3-5)");
+  EXPECT_STREQ(entries[0].display, "3-5");
   EXPECT_EQ(entries[0].chain[0].segment_len, 2);
   EXPECT_EQ(entries[0].chain[0].segment[0], 3);
   EXPECT_EQ(entries[0].chain[0].segment[1], 5);
+
+  // The same frame under the other three symmetries a reader can ask for: Σ count is the run's
+  // whole output at each, the row count never grows as bits are added, and at the finest the
+  // 22° path is spread over its orbit — "3-5" and its one-face rotation "4-6" are both rows —
+  // which is the positive control that the read, not the run, does the reducing.
+  LUMICE_RayCount pbd_total = total;
+  int prev_rows = -1;
+  for (const int sym :
+       { 0, LUMICE_RAYPATH_SYMMETRY_P, LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B, kSymAll }) {
+    LUMICE_RaypathAnalysisInfo isym{};
+    if (LUMICE_FrameGetRaypathAnalysisInfo(frame, sym, &isym) != LUMICE_OK) {
+      ADD_FAILURE() << "symmetry " << sym << ": the info read failed";
+      continue;
+    }
+    EXPECT_EQ(isym.present, 1);
+    EXPECT_EQ(isym.snapshot_generation, info.snapshot_generation) << "the symmetry is not a new result";
+    std::vector<LUMICE_RaypathHistogramEntry> rows(static_cast<size_t>(isym.entry_count) + 1);
+    if (LUMICE_FrameGetRaypathAnalysis(frame, sym, rows.data(), isym.entry_count + 1) != LUMICE_OK) {
+      ADD_FAILURE() << "symmetry " << sym << ": the entry read failed";
+      continue;
+    }
+    EXPECT_EQ(rows.back().count, 0u) << "entry_count under symmetry " << sym << " sizes the read exactly";
+    LUMICE_RayCount t = 0;
+    bool saw_35 = false;
+    bool saw_46 = false;
+    for (int i = 0; i < isym.entry_count; i++) {
+      t += rows[static_cast<size_t>(i)].count;
+      saw_35 = saw_35 || std::strcmp(rows[static_cast<size_t>(i)].display, "3-5") == 0;
+      saw_46 = saw_46 || std::strcmp(rows[static_cast<size_t>(i)].display, "4-6") == 0;
+    }
+    EXPECT_EQ(t, pbd_total) << "symmetry " << sym;
+    if (prev_rows >= 0) {
+      EXPECT_LE(isym.entry_count, prev_rows) << "symmetry " << sym;
+    }
+    prev_rows = isym.entry_count;
+    EXPECT_TRUE(saw_35) << "symmetry " << sym;
+    EXPECT_EQ(saw_46, sym == 0) << "symmetry " << sym << ": the P-image is its own row only unreduced";
+  }
+  EXPECT_EQ(prev_rows, info.entry_count) << "the loop's last symmetry is the one `info` was read under";
 
   // A short read fills exactly max_count and, the array being full, writes NO sentinel —
   // the slot past it is the caller's and stays as it was.
   LUMICE_RaypathHistogramEntry two[3];
   std::memset(two, 0x5A, sizeof(two));
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, two, 2), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, two, 2), LUMICE_OK);
   EXPECT_STREQ(two[0].display, entries[0].display);
   EXPECT_STREQ(two[1].display, entries[1].display);
   EXPECT_EQ(two[2].count, 0x5A5A5A5A5A5A5A5Au) << "no sentinel written past a full array";
@@ -338,12 +382,12 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   ASSERT_EQ(CommitJson(server_, Halo22Json("2000")), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
   EXPECT_EQ(info.present, 0);
   EXPECT_EQ(info.entry_count, 0);
   EXPECT_EQ(info.snapshot_generation, 0u) << "every field is 0 when present == 0";
   std::memset(one, 0x5A, sizeof(one));
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, one, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, one, 1), LUMICE_OK);
   EXPECT_EQ(one[0].count, 0u) << "sentinel at [0] on a render frame";
   std::memset(xyz, 0x5A, sizeof(xyz));
   ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, 1), LUMICE_OK);
@@ -368,8 +412,8 @@ TEST_F(CApiRaypathAnalysis, InfoSnapshotGenerationIsStableWithinAFrameAndGrowsAc
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &b), LUMICE_OK);
   LUMICE_RaypathAnalysisInfo ia{};
   LUMICE_RaypathAnalysisInfo ib{};
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(a, &ia), LUMICE_OK);
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(b, &ib), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(a, kSymAll, &ia), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(b, kSymAll, &ib), LUMICE_OK);
   EXPECT_EQ(ia.present, 1);
   EXPECT_NE(ia.snapshot_generation, 0u);
   EXPECT_EQ(ia.snapshot_generation, ib.snapshot_generation) << "same published frame, same counter";
@@ -382,7 +426,7 @@ TEST_F(CApiRaypathAnalysis, InfoSnapshotGenerationIsStableWithinAFrameAndGrowsAc
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &a), LUMICE_OK);
   LUMICE_RaypathAnalysisInfo ic{};
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(a, &ic), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(a, kSymAll, &ic), LUMICE_OK);
   EXPECT_EQ(ic.present, 1);
   EXPECT_GT(ic.snapshot_generation, ia.snapshot_generation);
   LUMICE_ReleaseResultFrame(a);
@@ -412,7 +456,7 @@ TEST_F(CApiRaypathAnalysis, RequestRayBudgetOverridesTheSceneAndTheSentinelKeeps
   ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
   EXPECT_EQ(stats.sim_ray_num, 10000u) << "the request's budget, not the scene's";
   LUMICE_RaypathAnalysisInfo info{};
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
   EXPECT_EQ(info.present, 1) << "a smaller budget is still a full analysis frame";
   LUMICE_ReleaseResultFrame(frame);
 
@@ -461,10 +505,10 @@ TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilTheCon
   ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
   EXPECT_GT(stats.sim_ray_num, 1000u) << "past the scene's budget: the run was the request's";
   LUMICE_RaypathAnalysisInfo info{};
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
   ASSERT_GE(info.entry_count, 1);
   std::vector<LUMICE_RaypathHistogramEntry> entries(static_cast<size_t>(info.entry_count) + 1);
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, entries.data(), info.entry_count + 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, entries.data(), info.entry_count + 1), LUMICE_OK);
   LUMICE_RayCount landed = 0;
   for (int i = 0; i < info.entry_count; i++) {
     landed += entries[static_cast<size_t>(i)].count;
@@ -493,14 +537,14 @@ TEST_F(CApiRaypathAnalysis, ConeEchoAndRings) {
   LUMICE_ResultFrame* frame = nullptr;
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
   LUMICE_RaypathAnalysisInfo info{};
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
   EXPECT_EQ(info.present, 1);
   EXPECT_EQ(info.roi_mode, LUMICE_RAYPATH_ROI_CONE);
   EXPECT_EQ(info.cone_ring_count, 5);
   EXPECT_FLOAT_EQ(info.cone_radius_rad, req.cone_radius_rad);
   ASSERT_GE(info.entry_count, 1);
   std::vector<LUMICE_RaypathHistogramEntry> entries(static_cast<size_t>(info.entry_count) + 1);
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, entries.data(), info.entry_count + 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, entries.data(), info.entry_count + 1), LUMICE_OK);
   LUMICE_RayCount total = 0;
   for (int i = 0; i < info.entry_count; i++) {
     const auto& e = entries[static_cast<size_t>(i)];
@@ -516,7 +560,7 @@ TEST_F(CApiRaypathAnalysis, ConeEchoAndRings) {
     total += e.count;
   }
   EXPECT_GE(total, 300u);
-  EXPECT_STREQ(entries[0].display, "crystal1(3-5)") << "the 22° path leads in the cone";
+  EXPECT_STREQ(entries[0].display, "3-5") << "the 22° path leads in the cone";
   LUMICE_ReleaseResultFrame(frame);
 }
 
@@ -532,15 +576,22 @@ TEST(CApiRaypathAnalysisTruncation, DeepChainIsTruncatedNotOverrun) {
     lumice::RaypathChainSegment seg;
     seg.crystal_id = static_cast<lumice::IdType>(l + 1);
     for (int f = 0; f < LUMICE_MAX_RAYPATH_SEGMENT_LEN + 5; f++) {
-      seg.segment.push_back(static_cast<lumice::IdType>(f + 1));
+      // Five-digit "faces" (nothing reduces them: no crystal is described, the read is at
+      // symmetry 0), so the display text the read formats from this chain also overruns
+      // LUMICE_RAYPATH_DISPLAY_MAX — 11 layers of 69 five-digit faces is ~4.6k characters.
+      seg.segment.push_back(static_cast<lumice::IdType>(60000 + f + 1));
     }
     deep.chain_.push_back(seg);
   }
-  deep.display_ = std::string(LUMICE_RAYPATH_DISPLAY_MAX + 100, 'x');
   deep.energy_ = 2.5;
   deep.count_ = 7;
   r.entries_.push_back(deep);
+  // Every layer multi-crystal: the "C<id>(" prefix is part of the longest-text derivation.
+  r.reduce_ctx_.layer_multi_crystal_.assign(deep.chain_.size(), true);
   frame->raypath_histogram_result_ = r;
+  ASSERT_GT(lumice::FormatRaypathChainDisplay(deep.chain_, r.reduce_ctx_.layer_multi_crystal_).size(),
+            static_cast<size_t>(LUMICE_RAYPATH_DISPLAY_MAX))
+      << "fixture premise: the formatted text must exceed the cap for the truncation to be exercised";
 
   LUMICE_ResultFrame* handle = WrapResultFrameForTest(frame);
   // Guard bytes around the one entry: a write past it is a test failure, not silent UB.
@@ -550,7 +601,7 @@ TEST(CApiRaypathAnalysisTruncation, DeepChainIsTruncatedNotOverrun) {
     unsigned char after[64];
   } g;
   std::memset(&g, 0xA5, sizeof(g));
-  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(handle, &g.entry, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(handle, 0, &g.entry, 1), LUMICE_OK);
   LUMICE_ReleaseResultFrame(handle);
 
   EXPECT_EQ(std::count(std::begin(g.before), std::end(g.before), 0xA5), static_cast<long>(sizeof(g.before)))
@@ -562,11 +613,12 @@ TEST(CApiRaypathAnalysisTruncation, DeepChainIsTruncatedNotOverrun) {
     EXPECT_EQ(g.entry.chain[l].crystal_id, l + 1);
     EXPECT_EQ(g.entry.chain[l].segment_len, LUMICE_MAX_RAYPATH_SEGMENT_LEN);
     for (int f = 0; f < LUMICE_MAX_RAYPATH_SEGMENT_LEN; f++) {
-      EXPECT_EQ(g.entry.chain[l].segment[f], f + 1);
+      EXPECT_EQ(g.entry.chain[l].segment[f], 60000 + f + 1);
     }
   }
   EXPECT_EQ(std::strlen(g.entry.display), static_cast<size_t>(LUMICE_RAYPATH_DISPLAY_MAX - 1));
   EXPECT_EQ(g.entry.display[LUMICE_RAYPATH_DISPLAY_MAX - 1], '\0');
+  EXPECT_EQ(std::string(g.entry.display).rfind("C1(60001-60002-", 0), 0u) << "a prefix of the formatted text";
   EXPECT_DOUBLE_EQ(g.entry.energy, 2.5);
   EXPECT_EQ(g.entry.count, 7u);
   EXPECT_EQ(g.entry.ring_count, 0);

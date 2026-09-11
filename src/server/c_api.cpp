@@ -32,6 +32,7 @@
 #endif
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"
+#include "server/raypath_histogram_consumer.hpp"  // ReduceRaypathHistogram (the analysis reads)
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
 #include "util/color_space.hpp"
@@ -3860,8 +3861,10 @@ static_assert(static_cast<int>(ns::RaypathRoiMode::kInFrame) == LUMICE_RAYPATH_R
               "LUMICE_RAYPATH_ROI_IN_FRAME drifted from RaypathRoiMode");
 static_assert(static_cast<int>(ns::RaypathRoiMode::kCone) == LUMICE_RAYPATH_ROI_CONE,
               "LUMICE_RAYPATH_ROI_CONE drifted from RaypathRoiMode");
-static_assert(ns::kChainIdSymmetrySessionDefault == LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT,
-              "LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT drifted from kChainIdSymmetrySessionDefault");
+// The read-time symmetry bits are FilterConfig's, so a C caller's bit set is core's bit set.
+static_assert(ns::FilterConfig::kSymP == LUMICE_RAYPATH_SYMMETRY_P, "LUMICE_RAYPATH_SYMMETRY_P drifted");
+static_assert(ns::FilterConfig::kSymB == LUMICE_RAYPATH_SYMMETRY_B, "LUMICE_RAYPATH_SYMMETRY_B drifted");
+static_assert(ns::FilterConfig::kSymD == LUMICE_RAYPATH_SYMMETRY_D, "LUMICE_RAYPATH_SYMMETRY_D drifted");
 // The entry caps are sized to the data a run can produce (see the header): a segment is at most
 // one crystal's max_hits faces, and the layer cap is the scene's scatter-layer cap by definition.
 static_assert(LUMICE_MAX_RAYPATH_SEGMENT_LEN == ns::kMaxHits,
@@ -3923,13 +3926,6 @@ LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE
     default:
       return LUMICE_ERR_INVALID_VALUE;
   }
-  if (request->chain_id_symmetry == LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT) {
-    req.chain_id_symmetry_ = ns::kChainIdSymmetrySessionDefault;
-  } else if (request->chain_id_symmetry >= 0 && request->chain_id_symmetry <= 7) {
-    req.chain_id_symmetry_ = static_cast<uint8_t>(request->chain_id_symmetry);
-  } else {
-    return LUMICE_ERR_INVALID_VALUE;
-  }
   // The budget's three legal spellings; anything else is a return code, not a guess. The
   // sentinel is checked first so the boolean reading below never sees it.
   if (request->infinite == LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT) {
@@ -3946,9 +3942,24 @@ LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE
 }
 
 
-LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, LUMICE_RaypathAnalysisInfo* out) {
+namespace {
+
+// The legal read-time symmetry values are the bit sets of the three flags, and nothing else.
+bool ChainIdSymmetryValid(int chain_id_symmetry) {
+  constexpr int kAll = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
+  return chain_id_symmetry >= 0 && chain_id_symmetry <= kAll;
+}
+
+}  // namespace
+
+
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry,
+                                                    LUMICE_RaypathAnalysisInfo* out) {
   if (!frame || !out) {
     return LUMICE_ERR_NULL_ARG;
+  }
+  if (!ChainIdSymmetryValid(chain_id_symmetry)) {
+    return LUMICE_ERR_INVALID_VALUE;
   }
   std::memset(out, 0, sizeof(LUMICE_RaypathAnalysisInfo));
   const auto& result = frame->frame_->raypath_histogram_result_;
@@ -3957,7 +3968,10 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* fr
   }
   out->present = 1;
   out->roi_mode = static_cast<int>(result->roi_mode_);
-  out->entry_count = static_cast<int>(result->entries_.size());
+  // The merged row count under this symmetry — the same reduction the entry read performs
+  // (and, through the frame's cache, the same instance of it), so the two agree by construction.
+  const auto reduced = ns::ReducedRaypathHistogramOf(*frame->frame_, static_cast<uint8_t>(chain_id_symmetry));
+  out->entry_count = static_cast<int>(reduced->entries_.size());
   out->cone_ring_count = result->cone_ring_count_;
   out->cone_radius_rad = result->cone_radius_rad_;
   out->snapshot_generation = frame->frame_->snapshot_generation_;
@@ -3965,16 +3979,23 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* fr
 }
 
 
-LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, LUMICE_RaypathHistogramEntry* out,
-                                                int max_count) {
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry,
+                                                LUMICE_RaypathHistogramEntry* out, int max_count) {
   if (!frame || !out) {
     return LUMICE_ERR_NULL_ARG;
+  }
+  if (!ChainIdSymmetryValid(chain_id_symmetry)) {
+    return LUMICE_ERR_INVALID_VALUE;
   }
   const auto& result = frame->frame_->raypath_histogram_result_;
   int count = 0;
   bool truncated = false;
   if (result.has_value()) {
-    const auto& entries = result->entries_;
+    // The frame holds the run's finest chains; what the caller reads is the reduction under the
+    // symmetry it named, made here (raypath_histogram_consumer.hpp says how) — the frame itself
+    // is never rewritten, so the next read under another symmetry starts from the same record.
+    const auto reduced = ns::ReducedRaypathHistogramOf(*frame->frame_, static_cast<uint8_t>(chain_id_symmetry));
+    const auto& entries = reduced->entries_;
     count = static_cast<int>(std::min<size_t>(entries.size(), static_cast<size_t>(std::max(max_count, 0))));
     for (int i = 0; i < count; i++) {
       const ns::RaypathHistogramEntry& src = entries[static_cast<size_t>(i)];
@@ -3993,7 +4014,8 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame,
         dst.chain[l].segment_len = static_cast<int>(faces);
       }
       dst.chain_len = static_cast<int>(layers);
-      // A byte copy of core's one Format() output, never re-assembled here (lumice.h says why).
+      // A byte copy of the server's one FormatRaypathChainDisplay() output, never re-assembled here
+      // (lumice.h says why).
       const size_t n = std::min(src.display_.size(), sizeof(dst.display) - 1);
       truncated = truncated || n < src.display_.size();
       std::memcpy(dst.display, src.display_.data(), n);

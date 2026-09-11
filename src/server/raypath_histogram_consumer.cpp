@@ -2,15 +2,35 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <mutex>
 #include <utility>
 
+#include "config/proj_config.hpp"
 #include "core/color_util.hpp"
+#include "core/crystal.hpp"
 #include "core/lens_proj_build.hpp"
 #include "core/scatter_accum.hpp"
 
 namespace lumice {
 
-RaypathHistogramConsumer::RaypathHistogramConsumer(RaypathRoiSpec roi) : roi_(std::move(roi)) {
+namespace {
+
+// The recorded result and the reduced one order alike: energy descending, ties
+// by display text ascending, so equal energies land the same way on every run.
+void SortByEnergyThenDisplay(std::vector<RaypathHistogramEntry>& entries) {
+  std::sort(entries.begin(), entries.end(), [](const RaypathHistogramEntry& a, const RaypathHistogramEntry& b) {
+    if (a.energy_ != b.energy_) {
+      return a.energy_ > b.energy_;
+    }
+    return a.display_ < b.display_;
+  });
+}
+
+}  // namespace
+
+RaypathHistogramConsumer::RaypathHistogramConsumer(RaypathRoiSpec roi, RaypathReduceContext reduce_ctx)
+    : roi_(std::move(roi)), reduce_ctx_(std::move(reduce_ctx)) {
   switch (roi_.mode_) {
     case RaypathRoiMode::kFullSky:
       break;
@@ -169,13 +189,7 @@ void RaypathHistogramConsumer::PrepareSnapshot() {
     out.ring_energy_ = e.ring_energy_;
     snapshot_entries_.push_back(std::move(out));
   }
-  std::sort(snapshot_entries_.begin(), snapshot_entries_.end(),
-            [](const RaypathHistogramEntry& a, const RaypathHistogramEntry& b) {
-              if (a.energy_ != b.energy_) {
-                return a.energy_ > b.energy_;
-              }
-              return a.display_ < b.display_;
-            });
+  SortByEnergyThenDisplay(snapshot_entries_);
 }
 
 Result RaypathHistogramConsumer::GetResult() const {
@@ -186,6 +200,7 @@ Result RaypathHistogramConsumer::GetResult() const {
     r.cone_ring_count_ = roi_.cone_ring_count_;
     r.cone_radius_rad_ = roi_.cone_radius_rad_;
   }
+  r.reduce_ctx_ = reduce_ctx_;
   return r;
 }
 
@@ -200,6 +215,153 @@ void RaypathHistogramConsumer::Reset() {
 
 bool RaypathHistogramConsumer::RoiTargetReached() const {
   return roi_.mode_ == RaypathRoiMode::kCone && roi_.cone_stop_target_ > 0 && roi_hit_count_ >= roi_.cone_stop_target_;
+}
+
+// ---- Read-time reduction ----------------------------------------------------
+
+namespace {
+
+// Every crystal family the engine builds has six prism faces (crystal.cpp sets
+// fn_period_ = 6 in both factories; filter_spec.cpp pins the same as
+// kFnPeriodHex). The reduce context carries no period because there is only
+// this one to carry.
+constexpr int kFnPeriodHex = 6;
+
+}  // namespace
+
+RaypathReduceContext BuildRaypathReduceContext(const SceneConfig& scene) {
+  RaypathReduceContext ctx;
+  ctx.layer_multi_crystal_.reserve(scene.ms_.size());
+  for (const auto& layer : scene.ms_) {
+    ctx.layer_multi_crystal_.push_back(layer.setting_.size() > 1);
+    for (const auto& setting : layer.setting_) {
+      // Same two derivations, in the same order, as FilterSpec::Create and
+      // MakeChainIdLayerContext. A crystal id reused across layers names the
+      // same config, so a second visit writes the same values.
+      RaypathCrystalReduceParams p;
+      p.d_applicable = detail::IsDApplicable(setting.crystal_.axis_);
+      p.sigma_a = p.d_applicable ? detail::ComputeSigmaA(setting.crystal_.axis_.roll_dist.center) : 0;
+      ctx.crystal_params_[setting.crystal_.id_] = p;
+    }
+  }
+  return ctx;
+}
+
+std::string FormatRaypathChainDisplay(const std::vector<RaypathChainSegment>& chain,
+                                      const std::vector<bool>& layer_multi_crystal) {
+  const bool multi_layer = chain.size() > 1;
+  bool logged_out_of_range = false;
+  std::string out;
+  for (size_t i = 0; i < chain.size(); i++) {
+    const auto& seg = chain[i];
+    if (i > 0) {
+      out += " -> ";
+    }
+    bool multi_crystal = false;
+    if (i < layer_multi_crystal.size()) {
+      multi_crystal = layer_multi_crystal[i];
+    } else if (!logged_out_of_range) {
+      Logger logger("RaypathHistogram");
+      ILOG_WARN(logger,
+                "chain has {} layers but the reduce context describes {}; layer {} labelled as single-crystal "
+                "(reported once per chain)",
+                chain.size(), layer_multi_crystal.size(), i);
+      logged_out_of_range = true;
+    }
+    if (multi_crystal) {
+      out += 'C';
+      out += std::to_string(seg.crystal_id);
+    }
+    if (multi_crystal || multi_layer) {
+      out += '(';
+    }
+    for (size_t f = 0; f < seg.segment.size(); f++) {
+      if (f > 0) {
+        out += '-';
+      }
+      out += std::to_string(seg.segment[f]);
+    }
+    if (multi_crystal || multi_layer) {
+      out += ')';
+    }
+  }
+  return out;
+}
+
+RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& finest, uint8_t symmetry) {
+  RaypathHistogramResult out;
+  out.roi_mode_ = finest.roi_mode_;
+  out.cone_ring_count_ = finest.cone_ring_count_;
+  out.cone_radius_rad_ = finest.cone_radius_rad_;
+  out.reduce_ctx_ = finest.reduce_ctx_;
+
+  // A table of this call's own: interning the reduced segments layer by layer,
+  // parent before child exactly as the recording table did, gives one dense id
+  // per distinct reduced chain — the merge key — and keeps the chain's layer
+  // order (Segments() is root-first) without a second walk of our own.
+  ChainIdInterningTable table;
+  std::unordered_map<uint32_t, RaypathHistogramEntry> merged;
+  bool logged_unknown_crystal = false;
+  const auto& params = finest.reduce_ctx_.crystal_params_;
+  for (const auto& src : finest.entries_) {
+    uint32_t id = ChainIdInterningTable::kRootChainId;
+    for (const auto& seg : src.chain_) {
+      RaypathCrystalReduceParams p;
+      if (const auto it = params.find(seg.crystal_id); it != params.end()) {
+        p = it->second;
+      } else if (!logged_unknown_crystal) {
+        Logger logger("RaypathHistogram");
+        ILOG_WARN(logger,
+                  "chain names crystal id {} the reduce context does not describe; reduced with sigma_a=0, D off "
+                  "(reported once per read)",
+                  seg.crystal_id);
+        logged_unknown_crystal = true;
+      }
+      id = table.Intern(id, seg.crystal_id,
+                        ReduceRaypathByPeriod(seg.segment, symmetry, p.sigma_a, p.d_applicable, kFnPeriodHex));
+    }
+    auto& dst = merged[id];
+    if (dst.chain_.empty()) {
+      for (const auto& e : table.Segments(id)) {
+        dst.chain_.push_back(RaypathChainSegment{ e.crystal_id, e.segment });
+      }
+      dst.display_ = FormatRaypathChainDisplay(dst.chain_, finest.reduce_ctx_.layer_multi_crystal_);
+    }
+    dst.energy_ += src.energy_;
+    dst.count_ += src.count_;
+    if (dst.ring_energy_.size() < src.ring_energy_.size()) {
+      dst.ring_energy_.resize(src.ring_energy_.size(), 0.0);
+    }
+    for (size_t r = 0; r < src.ring_energy_.size(); r++) {
+      dst.ring_energy_[r] += src.ring_energy_[r];
+    }
+  }
+  out.entries_.reserve(merged.size());
+  for (auto& [id, e] : merged) {
+    out.entries_.push_back(std::move(e));
+  }
+  SortByEnergyThenDisplay(out.entries_);
+  return out;
+}
+
+std::shared_ptr<const RaypathHistogramResult> ReducedRaypathHistogramOf(const ResultFrame& frame, uint8_t symmetry) {
+  if (!frame.raypath_histogram_result_.has_value()) {
+    return nullptr;
+  }
+  if (!frame.raypath_reduce_cache_) {
+    // A frame assembled without the cache (a test building one by hand): reduce, no memo.
+    return std::make_shared<const RaypathHistogramResult>(
+        ReduceRaypathHistogram(*frame.raypath_histogram_result_, symmetry));
+  }
+  auto& cache = *frame.raypath_reduce_cache_;
+  std::lock_guard<std::mutex> lock(cache.mutex_);
+  if (!cache.filled_ || cache.symmetry_ != symmetry) {
+    cache.reduced_ = std::make_shared<const RaypathHistogramResult>(
+        ReduceRaypathHistogram(*frame.raypath_histogram_result_, symmetry));
+    cache.symmetry_ = symmetry;
+    cache.filled_ = true;
+  }
+  return cache.reduced_;
 }
 
 }  // namespace lumice

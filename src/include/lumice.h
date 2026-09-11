@@ -299,11 +299,28 @@ extern "C" {
 // the user trade a quicker answer against a fuller histogram without touching the document, and a
 // CLI caller can size the run for the question asked. `infinite` set to
 // LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT keeps the pre-v4.32 behaviour (the scene's own budget);
-// it is a sentinel outside the boolean domain for the same reason
-// LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT is outside chain_id_symmetry's 0..7 — a zero-initialized
+// it is a sentinel outside the boolean domain for the same reason the request's symmetry default
+// (LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT, removed in v4.33) sat outside 0..7 — a zero-initialized
 // request asks for zero rays, not for the default, so a caller that wants the default says so.
 // Nothing else moved.
-#define LUMICE_API_VERSION 432
+//
+// BREAKING (v4.33): symmetry moves from the analysis REQUEST to the analysis READ. Three changes.
+// (1) LUMICE_RaypathAnalysisRequest loses `chain_id_symmetry` and the header loses
+// LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT — `infinite` moves up (offset 84 -> 80; sizeof stays 96,
+// the vacated int becoming padding before `ray_num`), recompile: a v4.32 caller's `infinite`
+// would land in that padding and its request would ask for zero rays. A run now records every
+// chain at its FINEST (no reduction at all) — the
+// reduction is no longer a property of the run. (2) LUMICE_FrameGetRaypathAnalysisInfo and
+// LUMICE_FrameGetRaypathAnalysis each take a `chain_id_symmetry` (a P/B/D bit set 0..7, else
+// LUMICE_ERR_INVALID_VALUE): the entries of a frame are reduced under it and merged AT READ TIME,
+// on the server, so a consumer can show the same finished result under any symmetry without
+// re-running — and the two calls must be given the SAME value, since `entry_count` is the merged
+// row count under that symmetry. (3) `display` changes format (below): "3-5" for a single-
+// crystal layer, "C1(3-5)" where the layer holds several crystals, layers joined by " -> ". The
+// old "crystal1(3-5)" text was the interning table's diagnostic form; it never leaves core now.
+// LUMICE_RaypathHistogramEntry's layout is unchanged (LUMICE_RAYPATH_DISPLAY_MAX still covers the
+// longest text the new format can need — its derivation is at the constant).
+#define LUMICE_API_VERSION 433
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1941,16 +1958,18 @@ LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float
 #define LUMICE_RAYPATH_ROI_IN_FRAME 1  // rays that land inside `frame_view` (lens, view, visible, front)
 #define LUMICE_RAYPATH_ROI_CONE 2      // rays within `cone_radius_rad` of `cone_center`, binned by angular distance
 
-// `chain_id_symmetry` value meaning "reduce under the session default" (P|B|D, the same
-// FilterConfig symmetry the filter grammar uses). The legal explicit values are the bit sets
-// 0..7 (P = 1, B = 2, D = 4), and 0 — no reduction at all — is one of them, which is why the
-// default needs a value no combination of those bits can spell.
-#define LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT 0xFF
+// The symmetry a READ of the result reduces under (LUMICE_FrameGetRaypathAnalysisInfo /
+// LUMICE_FrameGetRaypathAnalysis, v4.33): a bit set of these, 0..7, the same FilterConfig
+// symmetry the filter grammar uses. 0 is a legal value — no reduction, every recorded face
+// sequence its own row. There is no "default" sentinel: the run records unreduced, and each read
+// says what it wants.
+#define LUMICE_RAYPATH_SYMMETRY_P 1
+#define LUMICE_RAYPATH_SYMMETRY_B 2
+#define LUMICE_RAYPATH_SYMMETRY_D 4
 
 // `infinite` value meaning "use the committed scene's own ray_num / infinite" (v4.32). Sits
-// outside the boolean domain {0, 1} for the same reason the symmetry default sits outside 0..7: a
-// zero-initialized request must not silently ask for it — `infinite = 0, ray_num = 0` is a request
-// for zero rays, a degenerate but honest budget.
+// outside the boolean domain {0, 1}: a zero-initialized request must not silently ask for it —
+// `infinite = 0, ray_num = 0` is a request for zero rays, a degenerate but honest budget.
 #define LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT (-1)
 
 // What one result entry can hold, sized so that NO chain a run can produce is cut: a chain has
@@ -1968,9 +1987,9 @@ LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float
 // split would silently change what the entries mean.
 #define LUMICE_MAX_RAYPATH_CONE_RINGS 32
 // Longest `display` text an untruncated entry can need, including the terminating NUL. Derived
-// from the types rather than from what scenes produce: per layer, "crystal" (7) + a uint16 id
-// (5) + "(" + 64 uint16 faces joined by "-" (64*5 + 63 = 383) + ")" + the joining "-" = 398,
-// times LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 3184; rounded up. Longer text (only possible past the
+// from the types rather than from what scenes produce: per layer, "C" (1) + a uint16 id (5) +
+// "(" + 64 uint16 faces joined by "-" (64*5 + 63 = 383) + ")" + the joining " -> " (4) = 395,
+// times LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 3160; rounded up. Longer text (only possible past the
 // caps above) is truncated with the same WARN as the arrays.
 #define LUMICE_RAYPATH_DISPLAY_MAX 3200
 
@@ -1994,11 +2013,8 @@ typedef struct LUMICE_RaypathAnalysisRequest_ {
   int cone_ring_count;
   LUMICE_RayCount cone_stop_target;
 
-  // The symmetry each layer's face sequence is reduced under before chains are compared: a
-  // FilterConfig-style bit set 0..7, or LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT. A zero-initialized
-  // request therefore asks for NO reduction (every face sequence its own chain), not for the
-  // default — set this field.
-  int chain_id_symmetry;
+  // No symmetry here (v4.33): the run records every chain unreduced, and the symmetry is a
+  // parameter of the READ — see LUMICE_FrameGetRaypathAnalysis.
 
   // ADDED v4.32: THIS run's own ray budget, independent of the committed scene's ray_num /
   // infinite (LUMICE_SceneSetSimParams) and in the same representation: `infinite` 1 means
@@ -2011,8 +2027,8 @@ typedef struct LUMICE_RaypathAnalysisRequest_ {
   LUMICE_RayCount ray_num;
 } LUMICE_RaypathAnalysisRequest;
 
-// One scattering layer of a chain: the crystal (its config id) and the reduced face sequence the
-// ray took through it, root-first in the entry's `chain` array.
+// One scattering layer of a chain: the crystal (its config id) and the face sequence the ray
+// took through it, reduced under the read's symmetry, root-first in the entry's `chain` array.
 typedef struct LUMICE_RaypathChainSegment_ {
   int crystal_id;
   int segment[LUMICE_MAX_RAYPATH_SEGMENT_LEN];
@@ -2025,11 +2041,19 @@ typedef struct LUMICE_RaypathHistogramEntry_ {
   LUMICE_RaypathChainSegment chain[LUMICE_MAX_RAYPATH_CHAIN_LAYERS];
   int chain_len;  // layers actually written into `chain` (>= 1 for a real entry)
 
-  // The chain as text, e.g. "crystal1(3-5)" or "crystal1(3-5)-crystal2(1-3)": root layer first,
-  // each layer "crystal<id>(<face>-<face>-...)", layers joined by "-". This is a byte copy of the
-  // ONE implementation of that format (core's ChainIdInterningTable::Format); a consumer that
-  // needs the same text prints this field rather than re-assembling it from `chain`, so the CLI
-  // and every GUI agree on it by construction. NUL-terminated.
+  // The chain as text (v4.33 format). Faces joined by "-". A layer that holds more than one
+  // crystal in the scene names its crystal as "C<id>" (the config id, as in `chain`); a layer
+  // that holds one crystal does not, since the position already says which crystal. With more
+  // than one layer every layer is parenthesised and layers are joined by " -> ", root first:
+  //   "3-5"                        one layer, the layer's only crystal
+  //   "C1(3-5)"                    one layer, a layer with several crystals
+  //   "(3-5) -> (1-3)"             two single-crystal layers
+  //   "C1(1-3) -> C4(3-5)"         two multi-crystal layers
+  // This is a byte copy of the ONE implementation of that format (the server's
+  // FormatRaypathChainDisplay); a consumer that needs the same text prints this field rather than
+  // re-assembling it from `chain`, so the CLI and every GUI agree on it by construction. The
+  // arrow is ASCII on purpose — the same bytes in every consumer, and the GUI's font has no
+  // U+2192. NUL-terminated.
   char display[LUMICE_RAYPATH_DISPLAY_MAX];
 
   double energy;          // sum over counted rays of Y(wavelength) * weight
@@ -2060,26 +2084,41 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
 // Start an analysis run on the committed scene (lifecycle above). Returns LUMICE_ERR_NULL_ARG for a
 // NULL server / request; LUMICE_ERR_INVALID_VALUE for an unknown roi_mode, a CONE request with a
 // non-positive radius, a zero centre, a ring count outside 1..LUMICE_MAX_RAYPATH_CONE_RINGS, an
-// IN_FRAME request whose frame_view has an unknown lens_type / visible, or a chain_id_symmetry
-// outside 0..7 that is not the session default; LUMICE_ERR_INVALID_CONFIG when no scene has been
-// committed; LUMICE_ERR_SERVER when a render run is in progress (AC1 — stop it first). Calling it
-// while an ANALYSIS run is in progress restarts the analysis with the new request.
+// IN_FRAME request whose frame_view has an unknown lens_type / visible, or an `infinite` outside
+// its three spellings; LUMICE_ERR_INVALID_CONFIG when no scene has been committed;
+// LUMICE_ERR_SERVER when a render run is in progress (AC1 — stop it first). Calling it while an
+// ANALYSIS run is in progress restarts the analysis with the new request.
 LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request);
 
-// Frame-level view of the analysis result. Writes present = 0 (and zeros) for a frame that is not
-// an analysis frame — a render frame, or a frame acquired before the first snapshot. Returns
-// LUMICE_ERR_NULL_ARG on a NULL frame / out.
-LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, LUMICE_RaypathAnalysisInfo* out);
+// Frame-level view of the analysis result under `chain_id_symmetry` (a LUMICE_RAYPATH_SYMMETRY_*
+// bit set, 0..7). Every field but `entry_count` is independent of the symmetry; `entry_count` is
+// the number of rows LUMICE_FrameGetRaypathAnalysis returns for the SAME symmetry, so a caller
+// sizing an array from it passes the same value to both. Writes present = 0 (and zeros) for a
+// frame that is not an analysis frame — a render frame, or a frame acquired before the first
+// snapshot. Returns LUMICE_ERR_NULL_ARG on a NULL frame / out; LUMICE_ERR_INVALID_VALUE for a
+// symmetry outside 0..7 (nothing is written).
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry,
+                                                    LUMICE_RaypathAnalysisInfo* out);
 
-// The entries, energy descending (ties by `display` ascending, so two runs order equal energies
-// alike). Same (out, max_count) array shape and sentinel contract as LUMICE_FrameGetRawXyz, the
-// sentinel being an entry with `count == 0` — written at out[count] only when count < max_count,
-// so an array of max_count + 1 value-initialized entries is the shape for sentinel iteration.
-// LUMICE_FrameGetRaypathAnalysisInfo's entry_count says how many there are in total. The entries
-// are COPIED into `out` (no pointer into the frame), so they outlive the frame; the frame still has
-// to be held for the duration of this call. Returns LUMICE_ERR_NULL_ARG on a NULL frame / out.
-LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, LUMICE_RaypathHistogramEntry* out,
-                                                int max_count);
+// The entries under `chain_id_symmetry` (0..7, as above): the frame's recorded chains with each
+// layer's face sequence reduced under it — with the D parameters of THAT layer's crystal, the
+// same rule a filter on that crystal canonicalises by — and chains that meet on one reduced form
+// merged into one row whose `energy`, `count` and `ring_energy` are the sums. The sums over all
+// rows are the same at every symmetry; the row count never grows as bits are added. Computed
+// on this call, from the frame's recorded (unreduced) result, so two reads of one frame under two
+// symmetries are two views of the same run.
+//
+// Energy descending (ties by `display` ascending, so two runs order equal energies alike). Same
+// (out, max_count) array shape and sentinel contract as LUMICE_FrameGetRawXyz, the sentinel being
+// an entry with `count == 0` — written at out[count] only when count < max_count, so an array of
+// max_count + 1 value-initialized entries is the shape for sentinel iteration.
+// LUMICE_FrameGetRaypathAnalysisInfo's entry_count (for the same symmetry) says how many there
+// are in total. The entries are COPIED into `out` (no pointer into the frame), so they outlive
+// the frame; the frame still has to be held for the duration of this call. Returns
+// LUMICE_ERR_NULL_ARG on a NULL frame / out; LUMICE_ERR_INVALID_VALUE for a symmetry outside 0..7
+// (nothing is written).
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry,
+                                                LUMICE_RaypathHistogramEntry* out, int max_count);
 
 // Pixel -> world direction, the inverse of the projection LUMICE_ComputeAnnotationAnchors and the
 // IN_FRAME membership test project with — for turning a click on a rendered canvas into a cone
