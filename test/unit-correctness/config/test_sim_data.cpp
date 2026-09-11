@@ -71,8 +71,10 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // buffer in Simulator::SimWorkspace instead of handing it over each batch —
 // shrinking 408 → 360. The raypath-analysis foundation adds
 // outgoing_chain_id_ (vector<uint32_t>, 24B) + chain_id_table_delta_
-// (vector<ChainIdTableEntry>, 24B), bumping 360 → 408.
-static_assert(sizeof(SimData) == 408,
+// (vector<ChainIdTableEntry>, 24B), bumping 360 → 408. The histogram
+// consumer adds producer_effective_seed_ (uint32_t, padded to 8B between two
+// vectors), bumping 408 → 416.
+static_assert(sizeof(SimData) == 416,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -123,6 +125,8 @@ SimData MakePopulatedSimData() {
   s.chain_id_table_delta_[0].parent_id = 3;
   s.chain_id_table_delta_[0].crystal_id = 2;
   s.chain_id_table_delta_[0].segment = { 3, 5 };
+  // The producer tag for those chain ids: a POD that rides all four paths.
+  s.producer_effective_seed_ = 0xC0FFEEu;
   // scrum-258.2: exit_records_ — 2 distinct rich records to exercise the
   // deep-copy / move paths added to SimData's special members.
   s.exit_records_.resize(2);
@@ -1006,6 +1010,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.outgoing_chain_id_, original.outgoing_chain_id_) << "outgoing_chain_id_ not copied";
   ASSERT_EQ(copy.chain_id_table_delta_.size(), 1u) << "chain_id_table_delta_ not copied";
   EXPECT_EQ(copy.chain_id_table_delta_[0].segment, (std::vector<lumice::IdType>{ 3, 5 }));
+  EXPECT_EQ(copy.producer_effective_seed_, 0xC0FFEEu) << "producer_effective_seed_ not copied";
   EXPECT_EQ(copy.crystals_.size(), original.crystals_.size());
   ASSERT_EQ(copy.exit_records_.size(), original.exit_records_.size());
   EXPECT_EQ(copy.exit_records_[0].crystal_id, 7u);
@@ -1080,6 +1085,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.outgoing_chain_id_, original.outgoing_chain_id_) << "outgoing_chain_id_ not assigned";
   ASSERT_EQ(target.chain_id_table_delta_.size(), 1u) << "chain_id_table_delta_ not assigned";
   EXPECT_EQ(target.chain_id_table_delta_[0].id, 8u);
+  EXPECT_EQ(target.producer_effective_seed_, 0xC0FFEEu) << "producer_effective_seed_ not assigned";
   EXPECT_EQ(target.crystals_.size(), 1u);
   ASSERT_EQ(target.exit_records_.size(), 2u);
   EXPECT_EQ(target.exit_records_[0].crystal_id, 7u);
@@ -1141,6 +1147,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.outgoing_component_.size(), 2u);  // task-331.1
   EXPECT_EQ(moved.outgoing_chain_id_.size(), 2u) << "outgoing_chain_id_ not moved";
   EXPECT_EQ(moved.chain_id_table_delta_.size(), 1u) << "chain_id_table_delta_ not moved";
+  EXPECT_EQ(moved.producer_effective_seed_, 0xC0FFEEu) << "producer_effective_seed_ not moved";
   EXPECT_EQ(moved.exit_records_.size(), 2u);
   EXPECT_EQ(moved.crystals_.size(), 1u);
   EXPECT_EQ(moved.xyz_pixel_data_.size(), 3u);  // S1 device-fused
@@ -1218,6 +1225,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(dst.outgoing_chain_id_[1], 8u);
   ASSERT_EQ(dst.chain_id_table_delta_.size(), 1u) << "chain_id_table_delta_ not move-assigned";
   EXPECT_EQ(dst.chain_id_table_delta_[0].parent_id, 3u);
+  EXPECT_EQ(dst.producer_effective_seed_, 0xC0FFEEu) << "producer_effective_seed_ not move-assigned";
   // task-358.1 Step 4: lane_pixel_data_ move-assign coverage (same failure
   // mode as outgoing_wl_ / outgoing_component_).
   ASSERT_EQ(dst.lane_pixel_data_.size(), 4u) << "lane_pixel_data_ not move-assigned";

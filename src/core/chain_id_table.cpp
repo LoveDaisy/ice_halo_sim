@@ -59,12 +59,27 @@ void ChainIdInterningTable::Clear() {
   flush_cursor_ = 1;
 }
 
-std::string ChainIdInterningTable::Format(uint32_t id) const {
-  // Collect leaf -> root, then emit root -> leaf.
+std::vector<uint32_t> ChainIdInterningTable::PathToRoot(uint32_t id) const {
   std::vector<uint32_t> path;
   for (uint32_t cur = id; cur != kRootChainId; cur = entries_.at(cur).parent_id) {
     path.push_back(cur);
   }
+  return path;
+}
+
+std::vector<ChainIdTableEntry> ChainIdInterningTable::Segments(uint32_t id) const {
+  const auto path = PathToRoot(id);
+  std::vector<ChainIdTableEntry> out;
+  out.reserve(path.size());
+  for (auto it = path.rbegin(); it != path.rend(); ++it) {
+    out.push_back(entries_[*it]);
+  }
+  return out;
+}
+
+std::string ChainIdInterningTable::Format(uint32_t id) const {
+  // Collect leaf -> root, then emit root -> leaf.
+  const auto path = PathToRoot(id);
   std::string out;
   for (auto it = path.rbegin(); it != path.rend(); ++it) {
     const auto& e = entries_[*it];
@@ -83,6 +98,46 @@ std::string ChainIdInterningTable::Format(uint32_t id) const {
     out += ')';
   }
   return out;
+}
+
+ChainIdMerger::AbsorbReport ChainIdMerger::Absorb(uint32_t producer_key, const std::vector<ChainIdTableEntry>& delta) {
+  AbsorbReport report;
+  auto& state = producers_[producer_key];
+  for (const auto& e : delta) {
+    uint32_t merged_parent = ChainIdInterningTable::kRootChainId;
+    if (e.parent_id != ChainIdInterningTable::kRootChainId) {
+      auto it = state.remap.find(e.parent_id);
+      if (it == state.remap.end()) {
+        report.orphaned++;
+        continue;
+      }
+      merged_parent = it->second;
+    }
+    if (e.id <= state.max_local_id) {
+      report.non_monotonic++;
+    } else {
+      state.max_local_id = e.id;
+    }
+    state.remap[e.id] = table_.Intern(merged_parent, e.crystal_id, e.segment);
+  }
+  return report;
+}
+
+uint32_t ChainIdMerger::Resolve(uint32_t producer_key, uint32_t local_id) const {
+  if (local_id == ChainIdInterningTable::kRootChainId) {
+    return ChainIdInterningTable::kRootChainId;
+  }
+  auto p = producers_.find(producer_key);
+  if (p == producers_.end()) {
+    return kUnresolved;
+  }
+  auto it = p->second.remap.find(local_id);
+  return it == p->second.remap.end() ? kUnresolved : it->second;
+}
+
+void ChainIdMerger::Clear() {
+  table_.Clear();
+  producers_.clear();
 }
 
 }  // namespace lumice

@@ -551,6 +551,11 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
     worker_count = num_workers > 0 ? num_workers : std::min(PhysicalCoreCount(), kMaxDefaultWorkerCount);
     if (sim_seed != 0) {
       worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
+      // Also what keeps SimData::producer_effective_seed_ distinct per worker
+      // (a fixed seed is returned verbatim as the effective seed): relaxing
+      // this needs every worker's seed made distinct, or ChainIdMerger fuses
+      // chains across workers silently. The per-index offset below is that
+      // guard, dead today.
     }
   }
   // AC1 observability (296.6): the GPU single-engine route must run worker_count==1.

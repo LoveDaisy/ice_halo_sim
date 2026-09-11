@@ -57,8 +57,9 @@ namespace lumice {
 // field shrinks 56B → 8B, shrinking 408 → 360.
 // The raypath-analysis foundation adds outgoing_chain_id_ (vector<uint32_t>,
 // 24B) and chain_id_table_delta_ (vector<ChainIdTableEntry>, 24B), bumping
-// 360 → 408.
-static_assert(sizeof(SimData) == 408, "SimData size changed — update copy/move ctors and operators");
+// 360 → 408. Its histogram consumer adds producer_effective_seed_ (uint32_t,
+// 4B) between two 8-aligned vectors, so it lands as 8B: 408 → 416.
+static_assert(sizeof(SimData) == 416, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -516,11 +517,11 @@ SimData::SimData(const SimData& other)
       crystals_(other.crystals_), crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_),
       outgoing_w_(other.outgoing_w_), outgoing_wl_(other.outgoing_wl_), outgoing_component_(other.outgoing_component_),
       outgoing_chain_id_(other.outgoing_chain_id_), chain_id_table_delta_(other.chain_id_table_delta_),
-      exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
-      xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
-      lane_class_count_(other.lane_class_count_), anchor_y_pixel_data_(other.anchor_y_pixel_data_),
-      root_ray_count_(other.root_ray_count_), emitted_energy_(other.emitted_energy_),
-      stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
+      producer_effective_seed_(other.producer_effective_seed_), exit_records_(other.exit_records_),
+      xyz_pixel_data_(other.xyz_pixel_data_), xyz_landed_weight_(other.xyz_landed_weight_),
+      lane_pixel_data_(other.lane_pixel_data_), lane_class_count_(other.lane_class_count_),
+      anchor_y_pixel_data_(other.anchor_y_pixel_data_), root_ray_count_(other.root_ray_count_),
+      emitted_energy_(other.emitted_energy_), stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
       deterministic_crystal_count_(other.deterministic_crystal_count_),
       stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
       deterministic_orientation_count_(other.deterministic_orientation_count_),
@@ -532,7 +533,8 @@ SimData::SimData(SimData&& other) noexcept
       outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
       outgoing_wl_(std::move(other.outgoing_wl_)), outgoing_component_(std::move(other.outgoing_component_)),
       outgoing_chain_id_(std::move(other.outgoing_chain_id_)),
-      chain_id_table_delta_(std::move(other.chain_id_table_delta_)), exit_records_(std::move(other.exit_records_)),
+      chain_id_table_delta_(std::move(other.chain_id_table_delta_)),
+      producer_effective_seed_(other.producer_effective_seed_), exit_records_(std::move(other.exit_records_)),
       xyz_pixel_data_(std::move(other.xyz_pixel_data_)), xyz_landed_weight_(other.xyz_landed_weight_),
       lane_pixel_data_(std::move(other.lane_pixel_data_)), lane_class_count_(other.lane_class_count_),
       anchor_y_pixel_data_(std::move(other.anchor_y_pixel_data_)), root_ray_count_(other.root_ray_count_),
@@ -558,6 +560,7 @@ SimData& SimData::operator=(const SimData& other) {
   outgoing_component_ = other.outgoing_component_;  // task-331.1
   outgoing_chain_id_ = other.outgoing_chain_id_;
   chain_id_table_delta_ = other.chain_id_table_delta_;
+  producer_effective_seed_ = other.producer_effective_seed_;
   exit_records_ = other.exit_records_;
   xyz_pixel_data_ = other.xyz_pixel_data_;
   xyz_landed_weight_ = other.xyz_landed_weight_;
@@ -604,6 +607,7 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   // missed std::move here would silently deliver empty chain ids.
   outgoing_chain_id_ = std::move(other.outgoing_chain_id_);
   chain_id_table_delta_ = std::move(other.chain_id_table_delta_);
+  producer_effective_seed_ = other.producer_effective_seed_;
   exit_records_ = std::move(other.exit_records_);
   xyz_pixel_data_ = std::move(other.xyz_pixel_data_);
   xyz_landed_weight_ = other.xyz_landed_weight_;

@@ -1599,6 +1599,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     // Only the entries this batch added: the consumer rebuilds the trie
     // incrementally, and every parent an entry names was delivered earlier.
     sim_data.chain_id_table_delta_ = chain_id_table_.FlushDelta();
+    // Tag the batch with who interned those ids, so a consumer fed by several
+    // workers can keep their id spaces apart (ChainIdMerger).
+    sim_data.producer_effective_seed_ = effective_seed_;
   }
   sim_data.root_ray_count_ = original_ray_num;
   sim_data.emitted_energy_ = emitted_weight * static_cast<float>(original_ray_num);

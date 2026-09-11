@@ -78,7 +78,16 @@ class ChainIdInterningTable {
   // "crystal1(1-3-5)-crystal2(3-2)". The root itself formats as "".
   std::string Format(uint32_t id) const;
 
+  // The same walk as Format(), structured: this chain's entries root-first,
+  // one per MS layer the ray traversed, so result[i] is layer i+1 (1-indexed,
+  // the order Format() prints). Empty for kRootChainId. Both walks go through
+  // one private helper so the two can never disagree on the order.
+  std::vector<ChainIdTableEntry> Segments(uint32_t id) const;
+
  private:
+  // Ids from `id` back to (excluding) the root, leaf first.
+  std::vector<uint32_t> PathToRoot(uint32_t id) const;
+
   struct Key {
     uint32_t parent_id;
     IdType crystal_id;
@@ -96,6 +105,64 @@ class ChainIdInterningTable {
   std::vector<ChainIdTableEntry> entries_;
   std::unordered_map<Key, uint32_t, KeyHash> index_;
   size_t flush_cursor_ = 1;
+};
+
+// The consumer-side merge of several producers' tables into one. Each
+// Simulator (one per server worker) interns chains under its own dense ids,
+// so the same chain arrives from two workers under two different local ids
+// and, worse, one local id names different chains on different workers. The
+// merger re-interns every delivered entry into its own table with the parent
+// remapped through what it already merged from THAT producer; because
+// Intern() keys on (parent, crystal_id, segment), two producers reporting one
+// chain converge on one merged id.
+//
+// `producer_key` identifies the producer; the server tags every SimData with
+// SimData::producer_effective_seed_ (the Simulator's effective seed, distinct
+// per worker by construction — see the note at ServerImpl's worker loop). Two
+// live producers sharing a key would silently fuse unrelated chains; the only
+// cheap structural witness of that is a local id arriving out of order, which
+// Absorb() reports (FlushDelta() hands ids out strictly ascending within one
+// Run(), so a repeat or a step backwards means either two producers under one
+// key or a producer that restarted without the consumer being Reset()).
+//
+// Not synchronised: the owning consumer is driven under the server's
+// consumer mutex like every other IConsume.
+class ChainIdMerger {
+ public:
+  // Resolve()'s answer for a (producer, local id) pair Absorb() never saw.
+  static constexpr uint32_t kUnresolved = 0xFFFFFFFFu;
+
+  struct AbsorbReport {
+    // Entries whose parent had not been delivered by this producer before —
+    // a broken delta contract; they are dropped and their local ids stay
+    // unresolved.
+    size_t orphaned = 0;
+    // Entries whose local id was not greater than every id this producer
+    // delivered so far (see the class comment). Still absorbed.
+    size_t non_monotonic = 0;
+  };
+
+  // Merge one batch's delta from `producer_key`. Entries must be in the order
+  // FlushDelta() emits them (ascending id, parents before children).
+  AbsorbReport Absorb(uint32_t producer_key, const std::vector<ChainIdTableEntry>& delta);
+
+  // Merged id of `local_id` as reported by `producer_key`; kRootChainId maps
+  // to itself, anything never absorbed to kUnresolved.
+  uint32_t Resolve(uint32_t producer_key, uint32_t local_id) const;
+
+  const ChainIdInterningTable& Table() const { return table_; }
+
+  // Forget every producer and every chain.
+  void Clear();
+
+ private:
+  struct ProducerState {
+    std::unordered_map<uint32_t, uint32_t> remap;  // local id -> merged id
+    uint32_t max_local_id = ChainIdInterningTable::kRootChainId;
+  };
+
+  ChainIdInterningTable table_;
+  std::unordered_map<uint32_t, ProducerState> producers_;
 };
 
 }  // namespace lumice

@@ -51,6 +51,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_component_gate.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_crosslayer_component.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_chain_id_carry.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_chain_id_merger.cpp"
   # scrum-color-predicate-symmetry: color pass symmetry (per-ref P/B/D)
   "${PROJ_TEST_DIR}/unit-correctness/core/test_color_spec_groups.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_collect_data_symmetry_groups.cpp"

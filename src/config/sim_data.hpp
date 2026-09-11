@@ -244,6 +244,14 @@ struct SimData {
   // both empty, which is the "not populated" signal.
   std::vector<uint32_t> outgoing_chain_id_;
   std::vector<ChainIdTableEntry> chain_id_table_delta_;
+  // Which Simulator produced the two fields above: its effective seed, copied
+  // here under the same condition (analysis on, legacy CPU path) and left 0
+  // otherwise. Chain ids are worker-local, so a consumer merging batches from
+  // several workers keys its per-producer id remap on this
+  // (core/chain_id_table.hpp, ChainIdMerger). Distinct per worker by
+  // construction: ServerImpl runs a single worker whenever the seed is fixed,
+  // and seed 0 derives a process-unique value per Simulator.
+  uint32_t producer_effective_seed_ = 0;
 
   // Rich exit records (scrum-258.2+) parallel to outgoing_d_/w_. Produced by
   // the trace backend via ReadbackExitRays; consumed by 258.3 (filter +

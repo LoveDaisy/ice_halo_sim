@@ -709,38 +709,15 @@ RunOutput RunScene(const SceneConfig& scene, size_t ray_num, size_t batches, uin
   return out;
 }
 
-// Consumer-side trie rebuilt from the deltas of one or more Runs. Each delta
-// entry is re-interned with its parent remapped through this table's own ids,
-// which is exactly what a multi-worker consumer has to do.
-struct MergedTrie {
-  ChainIdInterningTable table;
-  // Per source (worker), local id → merged id.
-  std::vector<std::map<uint32_t, uint32_t>> remap;
-
-  void Absorb(size_t source, const std::vector<ChainIdTableEntry>& delta) {
-    if (remap.size() <= source) {
-      remap.resize(source + 1);
-    }
-    auto& m = remap[source];
-    for (const auto& e : delta) {
-      uint32_t parent = ChainIdInterningTable::kRootChainId;
-      if (e.parent_id != ChainIdInterningTable::kRootChainId) {
-        auto it = m.find(e.parent_id);
-        if (it == m.end()) {
-          ADD_FAILURE() << "delta names parent " << e.parent_id << " before delivering it (source " << source
-                        << ", entry " << e.id << ")";
-          continue;
-        }
-        parent = it->second;
-      }
-      m[e.id] = table.Intern(parent, e.crystal_id, e.segment);
-    }
-  }
-  uint32_t Resolve(size_t source, uint32_t local_id) const {
-    auto it = remap.at(source).find(local_id);
-    return it == remap.at(source).end() ? 0xFFFFFFFFu : it->second;
-  }
-};
+// The consumer-side merge is production code now (ChainIdMerger, exercised
+// by test_chain_id_merger.cpp in isolation); the end-to-end tests below drive
+// it with real deltas. A delta naming a parent it never delivered is a
+// contract break, so an orphan count is a failure here too.
+void AbsorbOrFail(ChainIdMerger& merger, uint32_t producer, const std::vector<ChainIdTableEntry>& delta) {
+  auto report = merger.Absorb(producer, delta);
+  EXPECT_EQ(report.orphaned, 0u) << "producer " << producer << ": delta names a parent before delivering it";
+  EXPECT_EQ(report.non_monotonic, 0u) << "producer " << producer << ": delta ids not strictly ascending";
+}
 
 // Segments of one batch's all_data that are outgoing, in buffer order — the
 // SAME order SimulateOneWavelength pushes outgoing_d_/w_/chain_id_ in (both
@@ -792,19 +769,19 @@ TEST(ChainIdEndToEnd, SingleLayerChainsHaveDepthOneAndTheCanonicalSegment) {
   ASSERT_EQ(sd.outgoing_chain_id_.size(), sd.outgoing_w_.size());
   ASSERT_GT(outgoing.size(), 50u);
 
-  MergedTrie trie;
-  trie.Absorb(0, sd.chain_id_table_delta_);
+  ChainIdMerger trie;
+  AbsorbOrFail(trie, 0, sd.chain_id_table_delta_);
   size_t reduced_differs = 0;
   for (size_t k = 0; k < outgoing.size(); k++) {
     const size_t si = outgoing[k];
     const auto& seg = all[si];
     EXPECT_FLOAT_EQ(seg.w_, sd.outgoing_w_[k]) << "order premise: k-th outgoing segment is k-th delivery";
     uint32_t id = trie.Resolve(0, sd.outgoing_chain_id_[k]);
-    if (id == 0xFFFFFFFFu) {
+    if (id == ChainIdMerger::kUnresolved) {
       ADD_FAILURE() << "delivered id " << sd.outgoing_chain_id_[k] << " missing from the delta";
       continue;
     }
-    const auto& e = trie.table.EntryAt(id);
+    const auto& e = trie.Table().EntryAt(id);
     EXPECT_EQ(e.parent_id, ChainIdInterningTable::kRootChainId) << "MS=1: chain depth must be exactly 1";
     EXPECT_EQ(e.crystal_id, 1u);
     auto raw = RecorderToVec(all, si);
@@ -827,15 +804,15 @@ TEST(ChainIdEndToEnd, SymmetrySettingFlowsIntoTheSegments) {
   const auto& all = out.all_data[0];
   auto outgoing = OutgoingSegmentIndices(all);
   ASSERT_EQ(outgoing.size(), sd.outgoing_chain_id_.size());
-  MergedTrie trie;
-  trie.Absorb(0, sd.chain_id_table_delta_);
+  ChainIdMerger trie;
+  AbsorbOrFail(trie, 0, sd.chain_id_table_delta_);
   for (size_t k = 0; k < outgoing.size(); k++) {
     uint32_t id = trie.Resolve(0, sd.outgoing_chain_id_[k]);
-    if (id == 0xFFFFFFFFu) {
+    if (id == ChainIdMerger::kUnresolved) {
       ADD_FAILURE() << "delivered id " << sd.outgoing_chain_id_[k] << " missing from the delta";
       continue;
     }
-    const auto& e = trie.table.EntryAt(id);
+    const auto& e = trie.Table().EntryAt(id);
     EXPECT_EQ(e.segment, RecorderToVec(all, outgoing[k])) << "kSymNone: segment must be the raw face sequence";
   }
 }
@@ -886,13 +863,13 @@ void VerifyChainsAgainstTheRaysOwnSegments(const SimData& sd, const RayBuffer& a
     }
   }
 
-  MergedTrie trie;
-  trie.Absorb(0, sd.chain_id_table_delta_);
+  ChainIdMerger trie;
+  AbsorbOrFail(trie, 0, sd.chain_id_table_delta_);
   std::vector<size_t> verified_at_depth(layers + 1, 0);
   for (size_t k = 0; k < outgoing.size(); k++) {
     const size_t leaf_si = outgoing[k];
     uint32_t id = trie.Resolve(0, sd.outgoing_chain_id_[k]);
-    if (id == 0xFFFFFFFFu) {
+    if (id == ChainIdMerger::kUnresolved) {
       ADD_FAILURE() << "ray " << k << ": delivered id " << sd.outgoing_chain_id_[k] << " missing from the delta";
       continue;
     }
@@ -904,10 +881,10 @@ void VerifyChainsAgainstTheRaysOwnSegments(const SimData& sd, const RayBuffer& a
     bool skipped = false;
     bool broken = false;
     while (true) {
-      const auto& node = trie.table.EntryAt(node_id);
+      const auto& node = trie.Table().EntryAt(node_id);
       // Scene: layer L carries CrystalConfig::id_ == L+1.
       if (node.crystal_id != layer + 1 || node.segment != reduce_at(si)) {
-        ADD_FAILURE() << "ray " << k << " (left from layer " << leaf_layer + 1 << "): chain " << trie.table.Format(id)
+        ADD_FAILURE() << "ray " << k << " (left from layer " << leaf_layer + 1 << "): chain " << trie.Table().Format(id)
                       << " disagrees at layer " << layer + 1 << " with the ray's own path "
                       << SegmentString(reduce_at(si)) << " on crystal " << layer + 1;
         broken = true;
@@ -915,13 +892,13 @@ void VerifyChainsAgainstTheRaysOwnSegments(const SimData& sd, const RayBuffer& a
       }
       if (layer == 0) {
         if (node.parent_id != ChainIdInterningTable::kRootChainId) {
-          ADD_FAILURE() << "ray " << k << ": chain " << trie.table.Format(id) << " is deeper than the ray's path";
+          ADD_FAILURE() << "ray " << k << ": chain " << trie.Table().Format(id) << " is deeper than the ray's path";
           broken = true;
         }
         break;
       }
       if (node.parent_id == ChainIdInterningTable::kRootChainId) {
-        ADD_FAILURE() << "ray " << k << ": chain " << trie.table.Format(id) << " ends at layer " << layer + 1
+        ADD_FAILURE() << "ray " << k << ": chain " << trie.Table().Format(id) << " ends at layer " << layer + 1
                       << " but the ray came through layer " << layer;
         broken = true;
         break;
@@ -1059,22 +1036,22 @@ TEST(ChainIdEndToEnd, TwoWorkerDeltasMergeByCanonicalKeyWithoutCollisionOrLoss) 
   ASSERT_EQ(w1.batches.size(), 2u);
 
   // Interleave the two workers' batches the way a consumer queue would.
-  MergedTrie merged;
+  ChainIdMerger merged;
   for (size_t b = 0; b < 2; b++) {
-    merged.Absorb(0, w0.batches[b].chain_id_table_delta_);
-    merged.Absorb(1, w1.batches[b].chain_id_table_delta_);
+    AbsorbOrFail(merged, 0, w0.batches[b].chain_id_table_delta_);
+    AbsorbOrFail(merged, 1, w1.batches[b].chain_id_table_delta_);
   }
 
   // Per-worker chain strings, rebuilt from each worker's OWN deltas alone.
   auto own_strings = [](const RunOutput& w) {
-    MergedTrie solo;
+    ChainIdMerger solo;
     std::set<std::string> strings;
     for (const auto& sd : w.batches) {
-      solo.Absorb(0, sd.chain_id_table_delta_);
+      AbsorbOrFail(solo, 0, sd.chain_id_table_delta_);
     }
     for (const auto& sd : w.batches) {
       for (uint32_t id : sd.outgoing_chain_id_) {
-        strings.insert(solo.table.Format(solo.Resolve(0, id)));
+        strings.insert(solo.Table().Format(solo.Resolve(0, id)));
       }
     }
     return strings;
@@ -1107,12 +1084,12 @@ TEST(ChainIdEndToEnd, TwoWorkerDeltasMergeByCanonicalKeyWithoutCollisionOrLoss) 
     const auto& w = src == 0 ? w0 : w1;
     for (const auto& sd : w.batches) {
       for (uint32_t id : sd.outgoing_chain_id_) {
-        uint32_t mid = merged.Resolve(src, id);
-        if (mid == 0xFFFFFFFFu) {
+        uint32_t mid = merged.Resolve(static_cast<uint32_t>(src), id);
+        if (mid == ChainIdMerger::kUnresolved) {
           ADD_FAILURE() << "worker " << src << " delivered an id the merge never saw";
           continue;
         }
-        std::string s = merged.table.Format(mid);
+        std::string s = merged.Table().Format(mid);
         merged_strings.insert(s);
         auto it = merged_id_of.find(s);
         if (it == merged_id_of.end()) {
@@ -1127,10 +1104,10 @@ TEST(ChainIdEndToEnd, TwoWorkerDeltasMergeByCanonicalKeyWithoutCollisionOrLoss) 
   // No chain fused: the merged table has one entry per distinct chain string
   // over BOTH leaves and interior nodes, so count distinct strings over all ids.
   std::set<std::string> all_node_strings;
-  for (uint32_t id = 1; id <= merged.table.Size(); id++) {
-    all_node_strings.insert(merged.table.Format(id));
+  for (uint32_t id = 1; id <= merged.Table().Size(); id++) {
+    all_node_strings.insert(merged.Table().Format(id));
   }
-  EXPECT_EQ(all_node_strings.size(), merged.table.Size()) << "two merged ids format to the same chain";
+  EXPECT_EQ(all_node_strings.size(), merged.Table().Size()) << "two merged ids format to the same chain";
 }
 
 }  // namespace lumice
