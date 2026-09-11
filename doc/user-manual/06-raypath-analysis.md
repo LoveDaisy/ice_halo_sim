@@ -32,7 +32,7 @@ If the configuration has changed since your last run, Analyze stays disabled unt
 
 ## 4. Reading the result list
 
-Each row is one distinct raypath — the full sequence of crystals and faces a group of rays went through, root to exit, written like `crystal1(3-5)` (one crystal, entering face 3 and exiting face 5) or `crystal1(3-5)-crystal2(1-3)` (two crystals in sequence, for multiple scattering). The columns:
+Each row is one distinct raypath — the full sequence of crystals and faces a group of rays went through, root to exit. A path through one crystal is written as its faces, `3-5` (entering face 3, exiting face 5). When a scattering layer holds more than one crystal, the crystal is named in front: `C1(3-5)`. With multiple scattering every layer is parenthesised and the layers are joined by ` -> `, root first: `(3-5) -> (1-3)`, or `C1(1-3) -> C4(3-5)` where the layers hold several crystals. The columns:
 
 | Column | Meaning |
 |--------|---------|
@@ -43,9 +43,11 @@ Each row is one distinct raypath — the full sequence of crystals and faces a g
 
 A raypath's raw energy is **not** the same as how visually prominent its arc looks on screen: a faint but wide-spread pattern (common with randomly-oriented crystals) can carry more total energy than a narrow bright arc, and can therefore outrank it in this list. The list answers "how much light", not "how eye-catching".
 
+**Symmetry (P / B / D)**. The three checkboxes above the list decide which raypaths count as the same row — the same P, B and D symmetries the filter editor uses (prism-face rotation, basal-face reflection, mirror symmetry). With all three on (the default) the six rotations and the mirror image of `3-5` are one row; turn D off and the mirror path `3-7` becomes its own row, turn P off and every rotation does. This is a display-time choice: the analysis records every path unreduced, and toggling a checkbox regroups the result on hand at once — nothing re-runs, the totals do not change, and a selected row stays selected as long as its raypath is still a row (a row that merged into another is simply deselected). If you have pressed Run since the analysis, the result can no longer be regrouped; the window says which symmetry the list is showing, and the next Analyze applies the checkboxes.
+
 ## 5. "Exclude this raypath"
 
-Select a row and press **Exclude this raypath** to generate a filter that removes rays taking that exact path, and mark the document as modified — press Run again to see the picture without it. This reuses the same filter mechanism as manually editing a crystal's filter in the crystal editor; it does not introduce a new kind of rule.
+Select a row and press **Exclude this raypath** to generate a filter that removes rays taking that exact path, under the same P / B / D symmetry the list is showing (so the filter removes exactly what the row merged, no more and no less), and mark the document as modified — press Run again to see the picture without it. This reuses the same filter mechanism as manually editing a crystal's filter in the crystal editor; it does not introduce a new kind of rule.
 
 The button is disabled, with a tooltip explaining why, when:
 

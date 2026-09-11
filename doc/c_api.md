@@ -773,8 +773,8 @@ exclude each other.
 
 ```c
 LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request);
-LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, LUMICE_RaypathAnalysisInfo* out);
-LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, LUMICE_RaypathHistogramEntry* out, int max_count);
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathAnalysisInfo* out);
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathHistogramEntry* out, int max_count);
 LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3], int* out_valid);
 LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend);
 ```
@@ -787,9 +787,9 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
 3. `LUMICE_StartRaypathAnalysis` with a request: `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
    `_IN_FRAME` (membership in `frame_view`, a `LUMICE_AnnotationView`) or `_CONE` (`cone_center`,
    `cone_radius_rad`, `cone_ring_count`, and `cone_stop_target` — the number of in-cone rays after
-   which the run ends on its own; 0 = the scene's `ray_num` alone). Set `chain_id_symmetry` to
-   `LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT` unless you want an explicit P/B/D bit set (a
-   zero-initialized request asks for **no** reduction). The run's ray budget is the request's
+   which the run ends on its own; 0 = the scene's `ray_num` alone). The request names no
+   symmetry (v4.33): the run records every chain unreduced, and the P/B/D reduction is a
+   parameter of the read (step 4). The run's ray budget is the request's
    own (v4.32): `infinite = 1` traces until stopped (or until `cone_stop_target` in CONE mode),
    `infinite = 0` traces `ray_num` rays in total across every wavelength, and
    `infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` traces the committed scene's own
@@ -798,10 +798,18 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
    `LUMICE_ERR_INVALID_VALUE`. The scene is never edited by the run: the next
    `LUMICE_CommitScene` traces the document's own budget. Calling it while an analysis is
    already in progress restarts the analysis with the new request.
-4. Poll as for a render; read through a frame. `LUMICE_FrameGetRaypathAnalysisInfo` says whether
-   the frame is an analysis frame (`present`) and how many entries it holds; the entries follow the
-   `(out, max_count)` sentinel contract of `LUMICE_FrameGetRawXyz` with `count == 0` as the sentinel,
-   and are copied (they outlive the frame). On an analysis frame the render / raw-XYZ getters write
+4. Poll as for a render; read through a frame. Both getters take `chain_id_symmetry`, a bit set
+   of `LUMICE_RAYPATH_SYMMETRY_P` / `_B` / `_D` (0..7, else `LUMICE_ERR_INVALID_VALUE`; 0 is
+   "no reduction"): the frame's recorded chains are reduced per layer under it — with that
+   layer's crystal's D parameters, the same rule a filter on that crystal canonicalises by — and
+   chains that meet on one reduced form are merged into one row whose `energy`, `count` and
+   `ring_energy` are the sums. This happens on the read, from the frame's unreduced record, so
+   one frame can be read under several symmetries and the sums are the same at every one; the
+   two calls must be given the same value, since `entry_count` is the merged row count.
+   `LUMICE_FrameGetRaypathAnalysisInfo` says whether the frame is an analysis frame (`present`)
+   and how many rows it holds under that symmetry; the entries follow the `(out, max_count)`
+   sentinel contract of `LUMICE_FrameGetRawXyz` with `count == 0` as the sentinel, and are
+   copied (they outlive the frame). On an analysis frame the render / raw-XYZ getters write
    their sentinel at `out[0]`; on a render frame `present` is 0.
 5. The next `LUMICE_CommitScene` is a render run again.
 
@@ -811,10 +819,12 @@ route ahead of both `LUMICE_SetPreferredBackend` and `LUMICE_TRACE_BACKEND`, as 
 0). `LUMICE_GetActiveBackend` reads what the simulation actually runs on — `LUMICE_BACKEND_CPU`
 for the whole analysis session — as opposed to what was asked for.
 
-**Chain text**: `LUMICE_RaypathHistogramEntry::display` is a byte copy of core's one chain
-formatter (`raypath-analysis-panel.md` §7): root layer first, each layer
-`crystal<id>(<face>-<face>-...)`, layers joined by `-`. Print this field rather than re-assembling
-it from `chain[]`.
+**Chain text**: `LUMICE_RaypathHistogramEntry::display` is a byte copy of the server's one chain
+formatter (v4.33 format): faces joined by `-`; a layer that holds more than one crystal in the
+scene names its crystal as `C<id>`, a layer with one crystal does not; with more than one layer
+every layer is parenthesised and layers are joined by ` -> `, root first — `3-5`, `C1(3-5)`,
+`(3-5) -> (1-3)`, `C1(1-3) -> C4(3-5)`. Print this field rather than re-assembling it from
+`chain[]`.
 
 **Pixel → direction**: `LUMICE_UnprojectPixel` turns a pixel index of a `LUMICE_AnnotationView`
 canvas into the world direction it images (unit vector, the direction light travels), through the
