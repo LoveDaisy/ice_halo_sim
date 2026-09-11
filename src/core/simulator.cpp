@@ -32,6 +32,7 @@
 #include "core/math.hpp"
 #include "core/optics.hpp"
 #include "core/shared/lat_path_selection.hpp"
+#include "core/trace_ops.hpp"
 #include "util/env_knobs.hpp"
 #include "util/fatal.hpp"
 #include "util/illuminant.hpp"
@@ -299,6 +300,16 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
   // forward" semantics that T2/T3 rely on.
   for (size_t i = 0; i < buffer_data[0].size_; i++) {
     buffer_data[0].SetComponent(i, 0);
+  }
+  // 1.5 First-MS reset of the per-ray chain id to the root (raypath-analysis
+  // foundation): same reasoning as the mask above — the column only exists in
+  // analysis mode, and it must NOT be reset on later layers (InitRayOtherMs
+  // carries it in through the batch EmplaceBack), because the value carried
+  // in IS the parent the next intern hangs off.
+  if (buffer_data[0].HasChainIds()) {
+    for (size_t i = 0; i < buffer_data[0].size_; i++) {
+      buffer_data[0].SetChainId(i, ChainIdInterningTable::kRootChainId);
+    }
   }
 
   all_data.EmplaceBack(buffer_data[0]);
@@ -621,13 +632,13 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // cpu_trace_backend.cpp, whose comment records the ASan-diagnosed
 // heap-buffer-overflow that *2 caused there). That path was fixed and this one
 // was not — keep the two in step if either changes.
-void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num) {
-  buffer_data[0].Reset(ray_num * 2);
+void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num, bool chain_id_enabled) {
+  buffer_data[0].Reset(ray_num * 2, chain_id_enabled);
   // Read the capacity back rather than recomputing `ray_num * 2`: Reset is
   // grow-never-shrink, so a buffer recycled from a larger batch keeps the
   // larger capacity, and the invariant must hold against the capacity that
   // actually bounds buffer_data[0].size_.
-  buffer_data[1].Reset(buffer_data[0].capacity_ * 2);
+  buffer_data[1].Reset(buffer_data[0].capacity_ * 2, chain_id_enabled);
 }
 
 
@@ -688,6 +699,10 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
     // loop). Currently a no-op semantically (all masks are 0 in T1), but wiring
     // it now means T2 doesn't have to touch simulator.cpp fan-out code.
     buffer_data[1].ComponentFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
+    // Raypath-analysis foundation: the chain id carried into this layer fans
+    // out to both children unchanged (it only changes at the layer boundary).
+    // No-op unless the column is allocated, i.e. outside analysis mode.
+    buffer_data[1].ChainIdFanOut(buffer_data[0], i, i * 2 + 0, i * 2 + 1);
     // Each child segment's from_face_ = parent's to_face_ (the face just hit).
     buffer_data[1][i * 2 + 0].from_face_ = buffer_data[0][i].to_face_;
     buffer_data[1][i * 2 + 1].from_face_ = buffer_data[0][i].to_face_;
@@ -729,6 +744,10 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]) {
 void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const FilterSpec* spec,  // input
                  RayBuffer* buffer_data, RayBuffer* init_data,                               // output
                  const std::vector<ColorSpecGroup>* color_groups) {                          // input
+  // Raypath-analysis foundation: whether the per-ray chain id rides along
+  // with the mask on the two explicit hand-offs below. Hoisted: a per-buffer
+  // constant, and the disabled path must not pay a per-ray branch.
+  const bool carry_chain_ids = buffer_data[1].HasChainIds();
   for (size_t idx = 0; idx < buffer_data[1].size_; idx++) {
     auto& r = buffer_data[1][idx];
     const auto& rec = buffer_data[1].RecorderAt(idx);
@@ -801,6 +820,11 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
     // hit bits" step and so pool-reused destination slots don't leak stale
     // values from earlier iterations.
     uint64_t src_component = buffer_data[1].ComponentAt(idx);
+    // The chain id is handed over VERBATIM at both sites: within a layer it
+    // never changes, and for a continuation the caller interns the child id
+    // over the carried parent right after this pass (it needs the crystal and
+    // the symmetry settings, which this function has no business knowing).
+    const uint32_t src_chain_id = carry_chain_ids ? buffer_data[1].ChainIdAt(idx) : 0u;
     if (r.IsNormal()) {
       // rec comes from buffer_data[1]; pass it as arena_src so overflow slots
       // get duped into buffer_data[0]'s own arena (fix for max_hits>kInlineCap
@@ -813,6 +837,9 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       // actually appended.
       if (buffer_data[0].size_ > dst_idx) {
         buffer_data[0].SetComponent(dst_idx, src_component);
+        if (carry_chain_ids) {
+          buffer_data[0].SetChainId(dst_idx, src_chain_id);
+        }
       }
     }
     if (r.IsContinue()) {
@@ -820,9 +847,37 @@ void CollectData(RandomNumberGenerator& rng, const MsInfo& ms_info, const Filter
       init_data[1].EmplaceBack(r, rec, buffer_data[1]);
       if (init_data[1].size_ > dst_idx) {
         init_data[1].SetComponent(dst_idx, src_component);
+        if (carry_chain_ids) {
+          init_data[1].SetChainId(dst_idx, src_chain_id);
+        }
       }
     }
   }
+}
+
+// Raypath-analysis foundation — see the declarations in trace_ops.hpp.
+ChainIdLayerContext MakeChainIdLayerContext(ChainIdInterningTable& table, const Crystal& crystal, IdType crystal_id,
+                                            const AxisDistribution& axis, uint8_t symmetry) {
+  ChainIdLayerContext ctx;
+  ctx.table = &table;
+  ctx.crystal = &crystal;
+  ctx.crystal_id = crystal_id;
+  ctx.symmetry = symmetry;
+  // Same two derivations, in the same order, as FilterSpec::Create.
+  ctx.d_applicable = detail::IsDApplicable(axis);
+  ctx.sigma_a = ctx.d_applicable ? detail::ComputeSigmaA(axis.roll_dist.center) : 0;
+  return ctx;
+}
+
+uint32_t InternRayChainId(const ChainIdLayerContext& ctx, const RayBuffer& buf, size_t idx) {
+  assert(ctx.table != nullptr && ctx.crystal != nullptr);
+  const auto& rec = buf.RecorderAt(idx);
+  const uint8_t* data = buf.RecorderDataPtr(idx);  // inline or arena, either way
+  std::vector<IdType> segment(data, data + rec.size_);
+  // Crystal::ReduceRaypath is the single authority for the canonical form;
+  // it is also what a filter on this crystal canonicalises against.
+  segment = ctx.crystal->ReduceRaypath(segment, ctx.symmetry, ctx.sigma_a, ctx.d_applicable);
+  return ctx.table->Intern(buf.ChainIdAt(idx), ctx.crystal_id, std::move(segment));
 }
 
 // Two-parameter overload preserved so existing single-spec / single-bits-vector
@@ -875,6 +930,8 @@ Simulator::Simulator(Simulator&& other) noexcept
       all_data_observer_(other.all_data_observer_), all_data_observer_ctx_(other.all_data_observer_ctx_),
       rng_(other.rng_), logger_(std::move(other.logger_)),
       preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)),
+      analysis_chain_id_(other.analysis_chain_id_.load(std::memory_order_acquire)),
+      chain_id_session_(other.chain_id_session_), chain_id_table_(std::move(other.chain_id_table_)),
       backend_active_(other.backend_active_.load(std::memory_order_acquire)) {
   // The observer is a raw function pointer plus a context that the test owns (typically a stack
   // object in the test body). Leaving it live on the moved-from object would let a later Run() on
@@ -901,12 +958,19 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   rng_ = other.rng_;
   logger_ = std::move(other.logger_);
   preferred_backend_.store(other.preferred_backend_.load(std::memory_order_acquire), std::memory_order_release);
+  analysis_chain_id_.store(other.analysis_chain_id_.load(std::memory_order_acquire), std::memory_order_release);
+  chain_id_session_ = other.chain_id_session_;
+  chain_id_table_ = std::move(other.chain_id_table_);
   backend_active_.store(other.backend_active_.load(std::memory_order_acquire), std::memory_order_release);
   return *this;
 }
 
 void Simulator::SetPreferredBackend(BackendKind backend) {
   preferred_backend_.store(backend, std::memory_order_release);
+}
+
+void Simulator::SetAnalysisChainId(bool enabled, uint8_t symmetry) {
+  analysis_chain_id_.store(ChainIdSession{ enabled, symmetry }, std::memory_order_release);
 }
 
 namespace {
@@ -1060,6 +1124,14 @@ void Simulator::Run() {
   // honour). The server's producer reads this to decide whether its per-batch
   // dispatch grain is still the right one; see Simulator::BackendActive().
   backend_active_.store(backend != nullptr, std::memory_order_release);
+  // Raypath-analysis session snapshot (see SetAnalysisChainId). One Run() is
+  // one session: the interning table restarts from id 1 here, so a consumer
+  // never sees ids from a previous session's table.
+  chain_id_session_ = analysis_chain_id_.load(std::memory_order_acquire);
+  chain_id_table_.Clear();
+  if (chain_id_session_.enabled) {
+    ILOG_INFO(logger_, "Raypath-analysis chain ids: ON (symmetry flags 0x{:x})", chain_id_session_.symmetry);
+  }
   // scrum-312 third-clock drain cadence cap + fresh window per Run().
   xyz_drain_batches_ = env::XyzDrainBatches(logger_, kDefaultXyzDrainBatches);
   geom_clock_ = env::GeomClock(logger_, kSmallBatchRayNum);
@@ -1067,6 +1139,7 @@ void Simulator::Run() {
   bool warned_no_renders = false;
   bool warned_multi_renderer = false;
   bool warned_compat = false;
+  bool warned_chain_id_backend = false;
 
   CrystalCache crystal_cache;
   SimWorkspace workspace;
@@ -1112,6 +1185,16 @@ void Simulator::Run() {
 
     bool use_backend =
         CanUseBackend(backend.get(), batch, logger_, warned_no_renders, warned_multi_renderer, warned_compat);
+    // Analysis chain ids exist on the legacy CPU path only (v1, doc/raypath-
+    // analysis-panel.md §2 ruling 1). Every backend route — CpuTraceBackend
+    // via the env override as much as Metal / CUDA — leaves
+    // SimData::outgoing_chain_id_ empty, and says so once rather than never.
+    if (chain_id_session_.enabled && use_backend && !warned_chain_id_backend) {
+      ILOG_WARN(logger_,
+                "Raypath-analysis chain ids are not populated on the trace-backend route; "
+                "outgoing_chain_id_ stays empty for this Run()");
+      warned_chain_id_backend = true;
+    }
 
     // task-282: BackendUnavailableError signals the backend cannot run this
     // session (Metal PSO build failure on macOS 26.5, etc.). On first miss
@@ -1247,10 +1330,15 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   // Phase-1 emits 0s (no producer wired), but the plumbing must exist so T2/T3
   // don't need to touch this legacy path.
   std::vector<uint64_t> outgoing_component;
+  // Raypath-analysis foundation: per-outgoing-ray chain id, parallel to
+  // outgoing_w. Stays empty (and every chain-id column stays unallocated)
+  // unless this Run() was entered in analysis mode.
+  const bool chain_ids_on = chain_id_session_.enabled;
+  std::vector<uint32_t> outgoing_chain_id;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;
   init_data[0].size_ = 0;
-  init_data[1].Reset(ray_num * config.max_hits_);
+  init_data[1].Reset(ray_num * config.max_hits_, chain_ids_on);
 
   std::vector<Crystal> all_crystals;
   all_crystals.reserve(16);
@@ -1291,7 +1379,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num, ray_alloc_carry[mi]);
 
     // NOTE: ray_num will change between scatterings.
-    ResetHitLoopBuffers(buffer_data, ray_num);
+    ResetHitLoopBuffers(buffer_data, ray_num, chain_ids_on);
 
     size_t init_ray_offset = 0;
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
@@ -1299,6 +1387,11 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
       std::unique_ptr<FilterSpec> spec;
       std::vector<ColorSpecGroupOwned> color_groups_owned;
       std::vector<ColorSpecGroup> color_groups;
+      // Raypath-analysis foundation: the (layer, crystal) fold rule for the two
+      // intern points in the hit loop. Rebuilt per cn batch below because it
+      // points at all_crystals, which may reallocate on the next emplace.
+      ChainIdLayerContext chain_ctx_storage;
+      const ChainIdLayerContext* chain_ctx = nullptr;
 
       // Design 2: color pass is keyed by CrystalConfig::id_ (user-visible id),
       // not ci (setting-slot index). The predicates for this (layer, crystal_id)
@@ -1377,6 +1470,11 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
+        if (chain_ids_on) {
+          chain_ctx_storage = MakeChainIdLayerContext(chain_id_table_, curr_crystal, s.crystal_.id_, s.crystal_.axis_,
+                                                      chain_id_session_.symmetry);
+          chain_ctx = &chain_ctx_storage;
+        }
         // Reuse spec across cn batches when crystal is invariant (deterministic).
         // Random crystals: rebuild per cn batch since each batch may produce a new crystal.
         if (!spec || !deterministic) {
@@ -1418,9 +1516,22 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
           FillRayOtherInfo(curr_crystal, buffer_data);
 
           // 2.3 Collect data. And set ray properties: state.
+          const size_t continue_begin = init_data[1].size_;             // for the chain-id hand-off below
           CollectData(rng_, m, spec.get(),                              // input
                       buffer_data, init_data,                           // output
                       color_groups.empty() ? nullptr : &color_groups);  // input (Design-2 color producer)
+
+          // 2.3.1 Raypath-analysis intern point #1 — continuation hand-off.
+          // CollectData copied each continuing ray (recorder included) into
+          // init_data[1] carrying the chain id it ENTERED this layer with; fold
+          // this layer's segment into it so what crosses the boundary is the
+          // child id. Done here rather than inside CollectData because the fold
+          // needs the crystal + symmetry settings CollectData does not have.
+          if (chain_ctx != nullptr) {
+            for (size_t j = continue_begin; j < init_data[1].size_; j++) {
+              init_data[1].SetChainId(j, InternRayChainId(*chain_ctx, init_data[1], j));
+            }
+          }
 
           // 2.4 Copy to all_data + collect outgoing rays (d/w pre-pack).
           all_data.EmplaceBack(buffer_data[1]);
@@ -1434,6 +1545,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
               // task-331.2: CollectData has now OR'd this layer's component
               // bits into the mask (0 only when no summand matched / no map).
               outgoing_component.push_back(buffer_data[1].ComponentAt(j));
+              // Raypath-analysis intern point #2 — true exit: the same fold,
+              // delivered instead of carried. Runs at whichever layer the ray
+              // actually leaves from, so a chain is as long as the ray's path.
+              if (chain_ctx != nullptr) {
+                outgoing_chain_id.push_back(InternRayChainId(*chain_ctx, buffer_data[1], j));
+              }
             }
           }
         }  // hit loop
@@ -1441,7 +1558,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     }  // crystal loop
 
     ray_num = init_data[1].size_;
-    init_data[0].Reset(ray_num * (config.max_hits_ + 1));
+    init_data[0].Reset(ray_num * (config.max_hits_ + 1), chain_ids_on);
     std::swap(init_data[0], init_data[1]);
 
     // Shuffle init_data. SwapRay (not std::swap(buf[i],buf[j])) so each ray's
@@ -1477,6 +1594,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1
+  if (chain_ids_on) {
+    sim_data.outgoing_chain_id_ = std::move(outgoing_chain_id);
+    // Only the entries this batch added: the consumer rebuilds the trie
+    // incrementally, and every parent an entry names was delivered earlier.
+    sim_data.chain_id_table_delta_ = chain_id_table_.FlushDelta();
+  }
   sim_data.root_ray_count_ = original_ray_num;
   sim_data.emitted_energy_ = emitted_weight * static_cast<float>(original_ray_num);
   // Newly DRAWN stochastic geometries, not materialised instances. `crystals_`

@@ -6,6 +6,7 @@
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/chain_id_table.hpp"
 #include "core/crystal.hpp"
 #include "core/math.hpp"
 
@@ -62,6 +63,33 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
 
 // Append the new to_face_ id onto every recorder slot in buffer_data[1].
 void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]);
+
+// Raypath-analysis foundation: everything needed to fold ONE layer's
+// traversal of ONE crystal into a ray's chain id. Built per (layer, crystal)
+// batch by SimulateOneWavelength while analysis mode is on; nullptr otherwise,
+// which is the whole of the disabled path's cost at the two intern points.
+struct ChainIdLayerContext {
+  ChainIdInterningTable* table = nullptr;
+  const Crystal* crystal = nullptr;
+  IdType crystal_id = kInvalidId;  // CrystalConfig::id_, see ChainIdTableEntry
+  uint8_t symmetry = 0;            // FilterConfig::kSym* flags
+  int sigma_a = 0;
+  bool d_applicable = false;
+};
+
+// sigma_a / d_applicable derive from `axis` exactly the way FilterSpec::Create
+// derives them for a filter on the same crystal, so a chain segment reduces to
+// the same canonical form a filter on that crystal would match against.
+ChainIdLayerContext MakeChainIdLayerContext(ChainIdInterningTable& table, const Crystal& crystal, IdType crystal_id,
+                                            const AxisDistribution& axis, uint8_t symmetry);
+
+// The ONE rule for turning "chain id carried into this layer" into "chain id
+// carried out of it", used at both intern points (continuation hand-off and
+// true exit): intern (buf.ChainIdAt(idx), ctx.crystal_id, reduce(recorder of
+// idx)) and return the child id. Reads only; the caller stores the result
+// where it belongs (back into the slot for a continuation, into the outgoing
+// list for an exit). Requires buf.HasChainIds().
+uint32_t InternRayChainId(const ChainIdLayerContext& ctx, const RayBuffer& buf, size_t idx);
 
 // Expected total-ray capacity of the all_data buffer for a session. Pure
 // function of the scene and the session's root ray count: split out of
