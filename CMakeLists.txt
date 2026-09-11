@@ -584,8 +584,9 @@ endif()
 # - PTX floor = compute_61 (Pascal, 2016+); driver JITs to native sm on any
 #   GPU >= sm_61, including future cards.
 # - Multi-arch fatbin (scrum-310.2): on top of the compute_61 PTX floor, emit
-#   native SASS for the common modern cards so they skip first-launch JIT and
-#   the dev49 RTX 4060 (sm_89) bench runs native (not PTX-JIT'd) for fidelity.
+#   native SASS for the common modern cards (Turing through Blackwell, i.e.
+#   RTX 20/30/40/50) so they skip first-launch JIT and the CUDA reference box
+#   bench runs native (not PTX-JIT'd) for fidelity.
 # - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
 #   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
 if(LUMICE_CUDA_ENABLED)
@@ -603,10 +604,18 @@ if(LUMICE_CUDA_ENABLED)
     set(_lumice_cuda_archs "61-virtual")
     # Opportunistic native SASS for common cards: skips first-launch JIT and
     # gives bench fidelity. Each real arch is gated on the toolkit version that
-    # introduced that sm, so older toolchains (dev49 docker 11.6, win-builder
-    # 11.7) still build — they just emit fewer `-real` archs and fall back to
-    # PTX JIT. Distribution/CI builds use a modern toolkit (CI: 12.6) and get
-    # the full fatbin. The PTX floor guarantees universal compat regardless.
+    # introduced that sm, so older toolchains (e.g. an 11.6 / 11.7 docker
+    # image) still build — they just emit fewer `-real` archs and fall back to
+    # PTX JIT. Distribution/CI builds use a modern toolkit (CI: 12.9, the last
+    # 12.x minor) and get the full fatbin. The PTX floor guarantees universal
+    # compat regardless.
+    # Toolkit >= 12.8 prints a deprecation warning for compute_61 (the PTX
+    # floor). That is the expected, accepted cost of keeping the Pascal floor
+    # — not a defect: do not silence it with -Wno-deprecated-gpu-targets and
+    # do not drop 61-virtual over it. It is not promoted to an error by any
+    # flag in this tree (-Werror=switch is CXX-only; there is no /WX).
+    # CUDA 13 removes compute_61 outright, which is why the CUDA major stays
+    # pinned at 12 in ci.yml / release.yml.
     if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "10.0")
       list(APPEND _lumice_cuda_archs "75-real")  # Turing (RTX 20 / GTX 16)
     endif()
@@ -614,7 +623,10 @@ if(LUMICE_CUDA_ENABLED)
       list(APPEND _lumice_cuda_archs "86-real")  # Ampere (RTX 30)
     endif()
     if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-      list(APPEND _lumice_cuda_archs "89-real")  # Ada Lovelace (RTX 40, dev49)
+      list(APPEND _lumice_cuda_archs "89-real")  # Ada Lovelace (RTX 40)
+    endif()
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
+      list(APPEND _lumice_cuda_archs "120-real")  # Blackwell (RTX 50)
     endif()
     set(CMAKE_CUDA_ARCHITECTURES "${_lumice_cuda_archs}" CACHE STRING "CUDA archs")
   endif()
