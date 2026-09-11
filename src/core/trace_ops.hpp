@@ -80,6 +80,17 @@ struct ChainIdLayerContext {
 // sigma_a / d_applicable derive from `axis` exactly the way FilterSpec::Create
 // derives them for a filter on the same crystal, so a chain segment reduces to
 // the same canonical form a filter on that crystal would match against.
+//
+// Reducing each layer's segment on its own — with that layer's crystal, that
+// layer's axis distribution, and nothing from any other layer — is legitimate
+// because the layers' orientations are sampled independently: InitRayFirstMs
+// and InitRayOtherMs each call InitRay_rot afresh for every ray of the layer,
+// drawing from that layer's AxisDistribution with no memory of the orientation
+// the ray had one crystal earlier. Each segment's symmetry equivalence class
+// is therefore a property of its own layer's crystal ensemble alone, which is
+// the single-layer case doc/raypath-symmetry.md §2b argues for (that document
+// says nothing about cross-layer independence; the independence rests on the
+// two InitRay_rot call sites, not on the document).
 ChainIdLayerContext MakeChainIdLayerContext(ChainIdInterningTable& table, const Crystal& crystal, IdType crystal_id,
                                             const AxisDistribution& axis, uint8_t symmetry);
 
