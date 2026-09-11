@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <string>
 
 #include "IconsFontAwesome6.h"
@@ -31,6 +32,7 @@ const char* const kWindowRef = "//" ICON_FA_ROUTE " Raypath Analysis";
 const char* const kTopBarButton = "##TopBar/" ICON_FA_ROUTE " Analysis";
 const char* const kAnalyzeButton = ICON_FA_PLAY " Analyze";
 const char* const kPickButton = ICON_FA_CROSSHAIRS " Pick on preview";
+const char* const kPickBanner = "//" ICON_FA_ROUTE " Raypath Analysis/##pick_banner";
 
 const char* const kHalo22Json = R"({
   "crystal": [{"id": 1, "type": "prism", "shape": {"height": 1.2},
@@ -132,6 +134,55 @@ gui::CanvasPixel PickPreviewCentre(ImGuiTestContext* ctx) {
   ctx->MouseClick(0);
   ctx->Yield(2);
   return *px;
+}
+
+// The cone marker's position on screen this frame (the panel's own projection, through the DPI
+// path the drawing uses), or nullopt when there is none.
+std::optional<ImVec2> MarkerScreenPos(ImGuiTestContext* ctx) {
+  ImGuiWindow* w = ctx->GetWindowByRef("//##PreviewPanel");
+  if (w == nullptr) {
+    return std::nullopt;
+  }
+  const LUMICE_AnnotationView view =
+      gui::PreviewAnnotationView(gui::g_state, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+  const std::optional<gui::CanvasPixel> px = gui::ProjectConeCenterMarker(gui::g_state, view);
+  if (!px.has_value()) {
+    return std::nullopt;
+  }
+  float x_pt = 0.0f;
+  float y_pt = 0.0f;
+  gui::CanvasPixelToPreviewPoint(px->px, px->py, gui::g_preview_vp.dpi_scale_x, gui::g_preview_vp.dpi_scale_y, &x_pt,
+                                 &y_pt);
+  return ImVec2(w->Pos.x + x_pt, w->Pos.y + y_pt);
+}
+
+// The direction LUMICE_UnprojectPixel gives for the mouse's CURRENT position on the preview — the
+// oracle for "the centre is the direction under the cursor", built from the same pixel the panel
+// saw (PickPreviewCentre's reasoning).
+bool UnprojectMouse(float out[3]) {
+  ImGuiWindow* w = ImGui::FindWindowByName("##PreviewPanel");
+  if (w == nullptr) {
+    return false;
+  }
+  const ImVec2 mouse = ImGui::GetIO().MousePos;
+  const std::optional<gui::CanvasPixel> px =
+      gui::PreviewPointToCanvasPixel(mouse.x - w->Pos.x, mouse.y - w->Pos.y, gui::g_preview_vp.dpi_scale_x,
+                                     gui::g_preview_vp.dpi_scale_y, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+  if (!px.has_value()) {
+    return false;
+  }
+  const LUMICE_AnnotationView view =
+      gui::PreviewAnnotationView(gui::g_state, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+  int valid = 0;
+  return LUMICE_UnprojectPixel(&view, px->px, px->py, out, &valid) == LUMICE_OK && valid == 1;
+}
+
+// Whether the pick banner is on screen: the child window exists and was submitted last frame
+// (a child that stopped being submitted stays in ImGui's window list, so existence alone says
+// nothing — WasActive does).
+bool PickBannerVisible(ImGuiTestContext* ctx) {
+  const ImGuiTestItemInfo info = ctx->WindowInfo(kPickBanner, ImGuiTestOpFlags_NoError);
+  return info.Window != nullptr && info.Window->WasActive;
 }
 
 bool RunPointAnalysisToCompletion(ImGuiTestContext* ctx) {
@@ -402,6 +453,200 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(after.lifecycle, before.lifecycle);
       IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
       IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+    };
+  }
+
+  // AC3: entering Point mode places a centre at once — the viewport's middle pixel, unprojected —
+  // so there is a marker to drag before any pick. The oracle is the C API on that pixel.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "point_mode_defaults_centre_to_viewport_middle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      IM_CHECK(!gui::g_state.analysis.cone_center_valid);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Point");
+      ctx->SetRef("");
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.cone_center_valid);
+      IM_CHECK(!gui::g_state.analysis.pick_armed);
+      const LUMICE_AnnotationView view =
+          gui::PreviewAnnotationView(gui::g_state, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+      float want[3] = { 0.0f, 0.0f, 0.0f };
+      int valid = 0;
+      IM_CHECK_EQ(LUMICE_UnprojectPixel(&view, gui::g_preview_vp.vp_w / 2, gui::g_preview_vp.vp_h / 2, want, &valid),
+                  LUMICE_OK);
+      IM_CHECK_EQ(valid, 1);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[0], want[0]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[1], want[1]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[2], want[2]);
+      // And the marker is on the picture, at that pixel.
+      const std::optional<gui::CanvasPixel> marker = gui::ProjectConeCenterMarker(gui::g_state, view);
+      IM_CHECK(marker.has_value());
+      IM_CHECK_EQ(marker->px, gui::g_preview_vp.vp_w / 2);
+      IM_CHECK_EQ(marker->py, gui::g_preview_vp.vp_h / 2);
+      // Analyze is open at once: the centre the button needed is there.
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      ctx->SetRef("");
+    };
+  }
+
+  // AC1: the marker is the direction's projection on THIS view. A camera drag on the preview
+  // (started away from the marker, so the camera and not the marker owns it) turns the view;
+  // the marker's screen position moves with the picture and the direction does not change.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "marker_follows_the_view_drag");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Point");
+      ctx->ItemClick(kPickButton);
+      ctx->SetRef("");
+      ctx->Yield(1);
+      PickPreviewCentre(ctx);
+      IM_CHECK(gui::g_state.analysis.cone_center_valid);
+      IM_CHECK(!gui::g_state.analysis.pick_armed);
+      const float dir_before[3] = { gui::g_state.analysis.cone_center_dir[0], gui::g_state.analysis.cone_center_dir[1],
+                                    gui::g_state.analysis.cone_center_dir[2] };
+      const std::optional<ImVec2> marker_before = MarkerScreenPos(ctx);
+      IM_CHECK(marker_before.has_value());
+      const float az_before = gui::g_state.renderer.azimuth;
+
+      // Press well clear of the marker's grab radius (down-right of it, inside the preview) and
+      // drag horizontally: an orbit of the camera, on the linear lens the scene renders with.
+      const ImVec2 grab(marker_before->x + 150.0f, marker_before->y + 120.0f);
+      ctx->MouseMoveToPos(grab);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.cone_marker_dragging);
+      ctx->MouseDown(0);
+      ctx->MouseMoveToPos(ImVec2(grab.x + 60.0f, grab.y));
+      ctx->MouseUp(0);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.cone_marker_dragging);
+      IM_CHECK_NE(gui::g_state.renderer.azimuth, az_before);  // the view turned
+      const std::optional<ImVec2> marker_after = MarkerScreenPos(ctx);
+      IM_CHECK(marker_after.has_value());
+      // The picture moved under the fixed direction, so the marker moved on screen — by a good
+      // fraction of the mouse travel (an orbit moves the content one pixel per pixel of drag).
+      IM_CHECK_GT(ImFabs(marker_after->x - marker_before->x), 20.0f);
+      // The direction is the truth and did not change.
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[0], dir_before[0]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[1], dir_before[1]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[2], dir_before[2]);
+    };
+  }
+
+  // AC2: the marker itself can be dragged. Hovering it shows the hand cursor; a press on it and a
+  // move re-aim the centre to the direction under the cursor (LUMICE_UnprojectPixel on the
+  // mouse's pixel — bit-identical, the drag transfers the inverse's output verbatim) while the
+  // camera stays exactly where it was.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "marker_drag_moves_the_centre_not_the_view");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Point");
+      ctx->SetRef("");
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.cone_center_valid);  // the default centre, AC3
+      const std::optional<ImVec2> marker = MarkerScreenPos(ctx);
+      IM_CHECK(marker.has_value());
+      const float az_before = gui::g_state.renderer.azimuth;
+      const float el_before = gui::g_state.renderer.elevation;
+      const float fov_before = gui::g_state.renderer.fov;
+
+      // Off the marker: the arrow. On it: the hand.
+      ctx->MouseMoveToPos(ImVec2(marker->x + 120.0f, marker->y + 90.0f));
+      ctx->Yield(2);
+      IM_CHECK_EQ(ImGui::GetMouseCursor(), ImGuiMouseCursor_Arrow);
+      ctx->MouseMoveToPos(*marker);
+      ctx->Yield(2);
+      IM_CHECK_EQ(ImGui::GetMouseCursor(), ImGuiMouseCursor_Hand);
+
+      // Grab and drag to another point of the sky.
+      ctx->MouseDown(0);
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.cone_marker_dragging);
+      ctx->MouseMoveToPos(ImVec2(marker->x + 45.0f, marker->y - 30.0f));
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.cone_marker_dragging);
+      IM_CHECK_EQ(ImGui::GetMouseCursor(), ImGuiMouseCursor_Hand);
+      float want[3] = { 0.0f, 0.0f, 0.0f };
+      IM_CHECK(UnprojectMouse(want));
+      ctx->MouseUp(0);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.cone_marker_dragging);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[0], want[0]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[1], want[1]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[2], want[2]);
+      // The marker now sits under the mouse (to the pixel rounding of the projection).
+      const std::optional<ImVec2> marker_after = MarkerScreenPos(ctx);
+      IM_CHECK(marker_after.has_value());
+      IM_CHECK_LT(ImFabs(marker_after->x - ImGui::GetIO().MousePos.x), 2.0f);
+      IM_CHECK_LT(ImFabs(marker_after->y - ImGui::GetIO().MousePos.y), 2.0f);
+      // The camera did not move.
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, az_before);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, el_before);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, fov_before);
+    };
+  }
+
+  // AC4: the pick mode is visible for as long as it is on. The button arms it and the banner
+  // appears; Esc disarms it and the banner goes; armed again, the click on the preview sets the
+  // centre and disarms.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "pick_mode_shows_a_banner_until_consumed");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Point");
+      ctx->Yield(1);
+      IM_CHECK(!PickBannerVisible(ctx));
+      ctx->ItemClick(kPickButton);
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.analysis.pick_armed);
+      IM_CHECK(PickBannerVisible(ctx));
+      ctx->SetRef("");
+      // Esc, from the preview (where the click would go): banner and flag both clear.
+      ImGuiWindow* preview = ctx->GetWindowByRef("//##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      ctx->MouseMoveToPos(ImVec2(preview->Pos.x + preview->Size.x * 0.75f, preview->Pos.y + preview->Size.y * 0.75f));
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.pick_armed);
+      IM_CHECK(!PickBannerVisible(ctx));
+      // Armed again, the click consumes it — at a point AWAY from the default marker (a click on
+      // the marker is the drag gesture, which consumes the pick as well; the pick path proper is
+      // what this case drives).
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick(kPickButton);
+      ctx->SetRef("");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.analysis.pick_armed);
+      IM_CHECK(PickBannerVisible(ctx));
+      const std::optional<ImVec2> marker = MarkerScreenPos(ctx);
+      IM_CHECK(marker.has_value());
+      ctx->MouseMoveToPos(ImVec2(marker->x + 80.0f, marker->y + 60.0f));
+      ctx->Yield(2);
+      IM_CHECK_EQ(ImGui::GetMouseCursor(), ImGuiMouseCursor_Arrow);  // not the hand: not on the marker
+      float want[3] = { 0.0f, 0.0f, 0.0f };
+      IM_CHECK(UnprojectMouse(want));
+      ctx->MouseClick(0);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.pick_armed);
+      IM_CHECK(!PickBannerVisible(ctx));
+      IM_CHECK(!gui::g_state.analysis.cone_marker_dragging);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[0], want[0]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[1], want[1]);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[2], want[2]);
     };
   }
 
