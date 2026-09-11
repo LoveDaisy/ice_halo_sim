@@ -353,7 +353,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_edit_modal_delete_binding.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_view_look_at.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_wedge_presets.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_custom_wedge_input.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_custom_wedge_input.cpp"
+    # The Raypath Analysis panel's logic: adoption gate, ring sums, click arithmetic, the exclude
+    # closure — every proposition the panel makes that is not an ImGui call.
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_analysis_panel_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
@@ -442,7 +445,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_field_editor_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_edit_modal_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_preview_projection_chain.cpp"
-    "${PROJ_TEST_DIR}/composition-correctness/gui/test_absolute_ev_additivity_chain.cpp")
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_absolute_ev_additivity_chain.cpp"
+    # Analysis result -> Exclude -> filter pool -> exported core JSON: the closure the Raypath
+    # Analysis panel promises the CLI, asserted on the JSON the export hands over.
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_analysis_filter_exclude_chain.cpp")
   target_include_directories(composition_correctness_test
     PRIVATE ${PROJ_TEST_DIR})
   # Same three definitions gui_unit_test carries, for the same reasons (see its block above):

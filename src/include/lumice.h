@@ -275,7 +275,15 @@ extern "C" {
 // form of that. A frame acquired during an analysis run has no render / raw-XYZ rows (their getters
 // write their sentinel at out[0]) and carries the histogram instead; the next LUMICE_CommitScene
 // switches back, and its frames carry no histogram.
-#define LUMICE_API_VERSION 429
+//
+// v4.30: LUMICE_RaypathAnalysisInfo gains a trailing `snapshot_generation` — APPENDED, sizeof
+// grows (20 -> 32), recompile. It is the same counter LUMICE_RawXyzResult::snapshot_generation
+// carries, exported on the analysis side because an analysis frame has no raw-XYZ row to read it
+// off. Without it a consumer had no way to tell "a new histogram arrived" from "the same result
+// observed again": `present` is a property of the frame, true on every poll for as long as the
+// result is held, so a GUI keying its list refresh (and the selection it clears with it) on
+// `present` would clear the user's selection every frame. Nothing else moved.
+#define LUMICE_API_VERSION 430
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -2005,6 +2013,12 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
   int entry_count;        // total entries in the frame — what a full read of LUMICE_FrameGetRaypathAnalysis returns
   int cone_ring_count;    // echo of the request (CONE), else 0
   float cone_radius_rad;  // echo of the request (CONE), else 0
+  // The server's snapshot counter this frame was published under — the same
+  // LUMICE_RawXyzResult::snapshot_generation, which an analysis frame cannot supply (its raw-XYZ
+  // row is the sentinel). Strictly increases with every snapshot the server takes; two acquires of
+  // the same frame read the same value. THIS is the "is there a new result" signal: `present`
+  // above is true on every frame of the session, not once. 0 when present == 0. (v4.30)
+  unsigned long long snapshot_generation;
 } LUMICE_RaypathAnalysisInfo;
 
 // Start an analysis run on the committed scene (lifecycle above). Returns LUMICE_ERR_NULL_ARG for a

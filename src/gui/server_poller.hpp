@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 
+#include "gui/analysis_result.hpp"
 #include "include/lumice.h"
 
 namespace lumice::gui {
@@ -142,6 +143,14 @@ struct PreviewSnapshot {
   // Descriptive bit: did THIS poll just materialize a texture? Behavior-equivalent / observable;
   // the actual upload gate is driven by texture_serial dedup (§5), not this flag.
   bool has_new_texture = false;
+  // The raypath analysis result, when the server is in an analysis session (lumice.h "Raypath
+  // Analysis Run"). Read off the SAME frame as everything above, materialized only when its
+  // snapshot_generation differs from the last one materialized, and otherwise carried forward
+  // like `payload` — so the main thread sees one immutable object per new result and dedups on
+  // its generation (AdoptAnalysisPayloadIfNew, analysis_panel.hpp). Null until the first analysis
+  // frame; kept across a later render commit, whose frames carry no histogram, so the list stays
+  // readable while the user re-runs the scene they just edited from it.
+  std::shared_ptr<const AnalysisPayload> analysis;
 };
 
 // The self-pause predicate (invariant I3a). Pure: no locks, no member access, no server calls —
@@ -354,6 +363,10 @@ class ServerPoller {
   std::mutex publish_mutex_;
   std::atomic<uint64_t> texture_serial_{ 0 };  // Monotonic texture serial source (producer side)
   uint64_t last_generation_{ 0 };              // Tracks snapshot generation to detect new data
+  // Same role for the analysis result: the generation of the last AnalysisPayload materialized.
+  // Its own cursor, not last_generation_: that one is advanced by the texture path, which an
+  // analysis frame never takes (no xyz buffer), and the two must not gate each other.
+  uint64_t last_analysis_generation_{ 0 };
 
   // Adaptive quality gate: calibrated threshold set once at startup via SetCalibratedThreshold().
   // If not set (calibrated_ == false), falls back to gui::kMinRaysFloor.

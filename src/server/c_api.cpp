@@ -3949,6 +3949,7 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* fr
   out->entry_count = static_cast<int>(result->entries_.size());
   out->cone_ring_count = result->cone_ring_count_;
   out->cone_radius_rad = result->cone_radius_rad_;
+  out->snapshot_generation = frame->frame_->snapshot_generation_;
   return LUMICE_OK;
 }
 

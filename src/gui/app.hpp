@@ -346,6 +346,13 @@ void CalibrateQualityThreshold();
 // wrong dedup semantics.
 bool DoRun(bool user_initiated);
 void DoStop();
+// Start a raypath analysis run on the committed scene (doc/raypath-analysis-panel.md), with the
+// ROI GuiState::analysis describes, through LUMICE_StartRaypathAnalysis. Same poller, same
+// lifecycle as a render run; what it writes is the analysis INTENT (analysis.started) and an
+// empty result view — sim_state is untouched, since nothing about the picture changes. Returns
+// whether the server accepted the request; the caller has already gated on CanStartAnalysis, so a
+// refusal here is logged as the surprise it is rather than shown as a modal.
+bool DoAnalyze();
 void DoRevert();
 void DoLoadBackground(GLFWwindow* window);
 void DoClearBackground();

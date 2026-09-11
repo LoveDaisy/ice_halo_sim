@@ -309,10 +309,13 @@ class LUMICE_RaypathAnalysisInfo(ctypes.Structure):
         ("entry_count",     ctypes.c_int),
         ("cone_ring_count", ctypes.c_int),
         ("cone_radius_rad", ctypes.c_float),
+        # v4.30: the server's snapshot counter (LUMICE_RawXyzResult.snapshot_generation's twin);
+        # 4 bytes of padding sit before it, hence 32 and not 28.
+        ("snapshot_generation", ctypes.c_ulonglong),
     ]
 
 
-assert ctypes.sizeof(LUMICE_RaypathAnalysisInfo) == 20
+assert ctypes.sizeof(LUMICE_RaypathAnalysisInfo) == 32
 
 
 @dataclass

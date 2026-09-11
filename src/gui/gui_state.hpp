@@ -6,12 +6,14 @@
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
 #include <variant>
 #include <vector>
 
+#include "gui/analysis_result.hpp"
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"  // LUMICE_RayCount (64-bit ray-count type)
 #include "util/contrast_headroom.hpp"
@@ -1555,6 +1557,68 @@ struct GuiState {
   // own contents (search text, which rows are unchecked) do NOT live here — they are TU-local to
   // defaults_panel.cpp, are rebuilt every time the panel opens, and have no Revert semantics.
   bool defaults_panel_open = false;
+
+  // The "Raypath Analysis" window (analysis_panel.cpp, doc/raypath-analysis-panel.md). ONE
+  // session-tier field rather than eight: everything in it is the tool's own state — which window
+  // is open, which region the user pointed at, which row they selected — none of it is part of the
+  // document (not serialized, not in ConfigSnapshot, not diffed for dirty) and none of it reaches
+  // the sim commit. The analysis REQUEST is built from these at the moment Analyze is pressed;
+  // the RESULT lives in `analysis_result` below, which is derived (poller-fed), not session.
+  struct RaypathAnalysisSession {
+    bool window_open = false;
+    // LUMICE_RAYPATH_ROI_* verbatim — the wire values are the GUI values, no second enum to keep
+    // aligned (the RadioButton row indexes this int directly, exactly as AxisDistType's does).
+    int roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
+    // CONE mode: the direction light travels toward the cone's centre (the unprojected click),
+    // valid only while cone_center_valid. cone_center_px is the CANVAS pixel that click landed on,
+    // cached so the ROI ring can be drawn without a forward projection — see analysis_panel.cpp
+    // for the known limit this caching carries (a view drag after the click moves the picture
+    // but not the ring; the direction, which is what the server judges by, stays right).
+    bool cone_center_valid = false;
+    float cone_center_dir[3] = { 0.0f, 0.0f, 0.0f };
+    int cone_center_px[2] = { 0, 0 };
+    // Display-time angular radius in degrees: which of the request's rings the list sums over.
+    // Dragging it re-sorts the list from the ring energies already on hand and starts no run.
+    float cone_radius_deg = kAnalysisConeDefaultRadiusDeg;
+    // "The next left click on the preview picks the cone centre." Armed by the panel's button in
+    // CONE mode, disarmed by the click that consumes it, by Esc, and by leaving CONE mode — never
+    // left armed across a mode switch, or a later click would write a centre no mode reads.
+    bool pick_armed = false;
+    // The selected row as an index into analysis_result.payload->entries — the UNSORTED array —
+    // so a re-sort of the display order moves the row, not the selection. Reset to nullopt when
+    // a new result is adopted: an index into the old entries means nothing in the new ones.
+    std::optional<int> selected_entry;
+    // Reconcile INPUT, the analysis-side twin of `run_intent`: set by DoAnalyze, cleared by DoRun
+    // (the server is a render session again) and by every document switch. Read each frame by
+    // SyncFromPoller, which derives `analysis_run_in_progress` from it and the poller's
+    // lifecycle observation — the same "intent + observation -> display state" shape sim_state
+    // has, kept off the SimState enum so its five values and their tests stay as they are.
+    bool started = false;
+  };
+  RaypathAnalysisSession analysis;
+
+  // DERIVED: the analysis result on show and the display-time projection of it. Written by
+  // SyncFromPoller (adoption of a new payload) and by the panel (re-sort on the radius slider),
+  // never by a widget writing a document field. Kept apart from PreviewSnapshot / the texture
+  // payload on purpose: the two arrive on different clocks and are consumed by different code,
+  // and a struct that carries two lifetimes is the shape doc/gui-preview-lifecycle-architecture.md
+  // warns against.
+  struct AnalysisResultView {
+    std::shared_ptr<const AnalysisPayload> payload;
+    // Per entry (same index as payload->entries): the energy the list shows — the sum of the rings
+    // inside the slider's radius in CONE mode, `energy` itself otherwise.
+    std::vector<double> display_energy;
+    // Row order: indices into payload->entries, display_energy descending. The entries themselves
+    // are never moved.
+    std::vector<int> display_order;
+    double display_total = 0.0;  // sum of display_energy — the percentage column's denominator
+    int display_ring_count = 0;  // rings summed in CONE mode (what the slider resolved to)
+  };
+  AnalysisResultView analysis_result;
+  // DERIVED each frame from analysis.started and the poller's lifecycle observation
+  // (DeriveAnalysisInProgress, analysis_panel.hpp). Gates the top bar's Run / New / Open the
+  // same way IsBusy does, and the panel's own Analyze button.
+  bool analysis_run_in_progress = false;
 
   // Simulation state — DERIVED, not directly written. ReconcileSimState (app.cpp) is the single
   // owner (I2): it maps (run_intent, committed_epoch, last backend observation, dirty) → sim_state

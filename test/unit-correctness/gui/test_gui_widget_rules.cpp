@@ -75,12 +75,44 @@ TEST(SimStateRules, ModifiedIsExactlyOneState) {
 
 TEST(SimStateRules, RunFirstNeedsAServerAndAnIdleBackend) {
   for (GuiState::SimState s : kAllSimStates) {
-    // No server ⇒ never runnable, whatever the lifecycle state says.
-    EXPECT_FALSE(CanRunFromModal(/*has_server=*/false, s)) << "SimState=" << static_cast<int>(s);
-    // With a server, the gate is exactly the top bar's busy notion — this is the shared-owner
-    // claim in sim_state_rules.hpp's header, asserted rather than asserted-in-prose.
-    EXPECT_EQ(CanRunFromModal(/*has_server=*/true, s), !IsBusy(s)) << "SimState=" << static_cast<int>(s);
+    for (bool analysis : { false, true }) {
+      // No server ⇒ never runnable, whatever the lifecycle state says.
+      EXPECT_FALSE(CanRunFromModal(/*has_server=*/false, s, analysis)) << "SimState=" << static_cast<int>(s);
+      // With a server, the gate is exactly the top bar's busy notion — this is the shared-owner
+      // claim in sim_state_rules.hpp's header, asserted rather than asserted-in-prose.
+      EXPECT_EQ(CanRunFromModal(/*has_server=*/true, s, analysis), !IsBackendBusy(s, analysis))
+          << "SimState=" << static_cast<int>(s) << " analysis=" << analysis;
+    }
   }
+}
+
+// The analysis run widens "busy" without touching SimState: over every one of the five values,
+// the flag off reproduces IsBusy exactly (the pre-analysis gate, byte for byte), and the flag on
+// is busy unconditionally. Total over both axes, so a sixth SimState value or a third run kind
+// would have to be argued into this table rather than slip past it.
+TEST(SimStateRules, BackendBusyIsBusyOrAnalysisInProgress) {
+  for (GuiState::SimState s : kAllSimStates) {
+    EXPECT_EQ(IsBackendBusy(s, false), IsBusy(s)) << "SimState=" << static_cast<int>(s);
+    EXPECT_TRUE(IsBackendBusy(s, true)) << "SimState=" << static_cast<int>(s);
+  }
+}
+
+// Analyze: server + committed scene + nothing in flight + the picture reflects the config. Each
+// of the four denials is shown to deny on its own, and the one row that satisfies all four is
+// shown to be the only enabled one, per SimState.
+TEST(SimStateRules, AnalyzeNeedsAServerASceneAnIdleBackendAndAnUnmodifiedPicture) {
+  for (GuiState::SimState s : kAllSimStates) {
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/false, /*has_committed_scene=*/true, s, false));
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, /*has_committed_scene=*/false, s, false));
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, /*has_committed_scene=*/true, s, true));
+    const bool expect = !IsBusy(s) && !IsModified(s);
+    EXPECT_EQ(CanStartAnalysis(/*has_server=*/true, /*has_committed_scene=*/true, s, false), expect)
+        << "SimState=" << static_cast<int>(s);
+  }
+  // Spelled out for the row that matters: a completed, unedited run is analysable; an edited one
+  // is not until it is re-run.
+  EXPECT_TRUE(CanStartAnalysis(true, true, GuiState::SimState::kDone, false));
+  EXPECT_FALSE(CanStartAnalysis(true, true, GuiState::SimState::kModified, false));
 }
 
 // ---- Zero-contribution layer notice (panels.cpp scattering-layer header) ----

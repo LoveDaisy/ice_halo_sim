@@ -30,7 +30,7 @@
 #include "server/c_api_internal.hpp"  // ToAnnotationViewSnapshot, WrapResultFrameForTest
 #include "server/server.hpp"
 
-static_assert(LUMICE_API_VERSION >= 429, "the analysis run needs the v4.29 header");
+static_assert(LUMICE_API_VERSION >= 430, "the analysis run needs the v4.30 header (snapshot_generation on the info)");
 
 // The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
 // offsets, so a field inserted in the middle (which keeps the size) is caught as well as
@@ -50,7 +50,8 @@ static_assert(offsetof(LUMICE_RaypathHistogramEntry, energy) == 5320, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, count) == 5328, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_energy) == 5336, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_count) == 5592, "");
-static_assert(sizeof(LUMICE_RaypathAnalysisInfo) == 20, "LUMICE_RaypathAnalysisInfo layout changed");
+static_assert(sizeof(LUMICE_RaypathAnalysisInfo) == 32, "LUMICE_RaypathAnalysisInfo layout changed");
+static_assert(offsetof(LUMICE_RaypathAnalysisInfo, snapshot_generation) == 24, "");
 
 namespace {
 
@@ -320,6 +321,7 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
   EXPECT_EQ(info.present, 0);
   EXPECT_EQ(info.entry_count, 0);
+  EXPECT_EQ(info.snapshot_generation, 0u) << "every field is 0 when present == 0";
   std::memset(one, 0x5A, sizeof(one));
   ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, one, 1), LUMICE_OK);
   EXPECT_EQ(one[0].count, 0u) << "sentinel at [0] on a render frame";
@@ -327,6 +329,43 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, 1), LUMICE_OK);
   EXPECT_NE(xyz[0].xyz_buffer, nullptr) << "and the render's own image is back";
   LUMICE_ReleaseResultFrame(frame);
+}
+
+// snapshot_generation (v4.30) is the consumer's "new result?" signal, so pin the two halves of its
+// contract: two acquires of one published frame read the same non-zero value (a GUI observing the
+// same result over many polls must NOT see it change — that is what would make it clear a
+// selection every frame), and the next snapshot the server takes reads a strictly larger one.
+TEST_F(CApiRaypathAnalysis, InfoSnapshotGenerationIsStableWithinAFrameAndGrowsAcrossSnapshots) {
+  ASSERT_EQ(CommitJson(server_, Halo22Json("40000")), LUMICE_OK);
+  LUMICE_StopServer(server_);
+  const LUMICE_RaypathAnalysisRequest req = FullSky();
+  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+
+  LUMICE_ResultFrame* a = nullptr;
+  LUMICE_ResultFrame* b = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &a), LUMICE_OK);
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &b), LUMICE_OK);
+  LUMICE_RaypathAnalysisInfo ia{};
+  LUMICE_RaypathAnalysisInfo ib{};
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(a, &ia), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(b, &ib), LUMICE_OK);
+  EXPECT_EQ(ia.present, 1);
+  EXPECT_NE(ia.snapshot_generation, 0u);
+  EXPECT_EQ(ia.snapshot_generation, ib.snapshot_generation) << "same published frame, same counter";
+  LUMICE_ReleaseResultFrame(a);
+  LUMICE_ReleaseResultFrame(b);
+
+  // A second analysis session publishes at least one further snapshot; whatever the count, the
+  // counter it carries is past the one above.
+  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &a), LUMICE_OK);
+  LUMICE_RaypathAnalysisInfo ic{};
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(a, &ic), LUMICE_OK);
+  EXPECT_EQ(ic.present, 1);
+  EXPECT_GT(ic.snapshot_generation, ia.snapshot_generation);
+  LUMICE_ReleaseResultFrame(a);
 }
 
 // The cone request round-trips its echo fields and ring split through the getters.

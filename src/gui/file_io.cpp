@@ -1828,6 +1828,32 @@ void FillGridLines(const std::vector<float>& angles, const float color[3], float
 
 }  // namespace
 
+std::map<int, int> ComputeCrystalPoolToCoreIdMap(const GuiState& state) {
+  std::map<int, int> pool_to_core;
+  const int layer_n =
+      static_cast<int>(std::min(state.layers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
+  for (int i = 0; i < layer_n; i++) {
+    const auto& layer = state.layers[i];
+    const int entry_n =
+        static_cast<int>(std::min(layer.entries.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_ENTRIES)));
+    for (int k = 0; k < entry_n; k++) {
+      const int pool_id = layer.entries[k].crystal_id;
+      if (pool_to_core.count(pool_id) != 0) {
+        continue;
+      }
+      if (static_cast<int>(pool_to_core.size()) >= LUMICE_MAX_CONFIG_CRYSTALS) {
+        // Capacity: BuildScene truncates THIS layer's entries from here, and later layers can
+        // still reference crystals already mapped — so stop this layer, not the walk.
+        break;
+      }
+      // The scene numbers crystals by insertion order (LUMICE_SceneAddCrystal writes
+      // arr.size() as the id), which is this map's size at the moment of insertion.
+      pool_to_core.emplace(pool_id, static_cast<int>(pool_to_core.size()));
+    }
+  }
+  return pool_to_core;
+}
+
 ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInfo* overflow,
                     ColorClassOverflowInfo* color_overflow, GridOverflowInfo* grid_overflow) {
   ScenePtr scene(LUMICE_SceneCreate());
@@ -1844,9 +1870,14 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
   // consistently. The Scene owns id assignment (lumice.h: "The Scene assigns this id itself and
   // IGNORES any `.id` field on the incoming POD"), so those two counters are gone. Ids stay
   // insertion-ordered either way, so the dedupe walk below is unchanged.
-  std::map<int, int> crystal_pool_to_core;  // pool_id -> scene crystal id
-  std::map<int, int> filter_pool_to_core;   // pool_id -> main_id
-  int filter_count = 0;                     // filters added so far (ABI capacity pre-check)
+  // pool_id -> scene crystal id, decided BEFORE the walk by the same rule the walk follows (see
+  // the declaration): the walk adds each mapped crystal on first reference and checks that the
+  // scene numbered it as the map says, so the map the analysis panel reads is the numbering the
+  // committed scene actually has — asserted at the one place the two meet, not assumed.
+  const std::map<int, int> crystal_pool_to_core = ComputeCrystalPoolToCoreIdMap(state);
+  std::vector<bool> crystal_added(state.crystals.size(), false);
+  std::map<int, int> filter_pool_to_core;  // pool_id -> main_id
+  int filter_count = 0;                    // filters added so far (ABI capacity pre-check)
 
   const int layer_n =
       static_cast<int>(std::min(state.layers.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_SCATTER_LAYERS)));
@@ -1861,23 +1892,31 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     for (int k = 0; k < dst_layer.entry_count; k++) {
       const auto& entry = layer.entries[k];
 
-      int cid;
       auto it_c = crystal_pool_to_core.find(entry.crystal_id);
       if (it_c == crystal_pool_to_core.end()) {
-        if (static_cast<int>(crystal_pool_to_core.size()) >= LUMICE_MAX_CONFIG_CRYSTALS) {
-          // Scene crystal capacity reached — truncate entries from this point.
-          dst_layer.entry_count = k;
-          break;
-        }
+        // Scene crystal capacity reached (the map stopped at exactly this reference) — truncate
+        // entries from this point.
+        dst_layer.entry_count = k;
+        break;
+      }
+      const int cid = it_c->second;
+      if (!crystal_added[static_cast<size_t>(entry.crystal_id)]) {
         LUMICE_CrystalParam param{};
         FillCrystalParam(state.crystals[entry.crystal_id], &param);
-        if (LUMICE_SceneAddCrystal(scene.get(), &param, &cid) != LUMICE_OK) {
+        int scene_cid = -1;
+        if (LUMICE_SceneAddCrystal(scene.get(), &param, &scene_cid) != LUMICE_OK) {
           GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddCrystal rejected crystal pool {}", entry.crystal_id);
           return nullptr;
         }
-        crystal_pool_to_core.emplace(entry.crystal_id, cid);
-      } else {
-        cid = it_c->second;
+        if (scene_cid != cid) {
+          // The scene's numbering rule and ComputeCrystalPoolToCoreIdMap's have parted — a
+          // committed config would then name crystals the analysis panel maps to other slots.
+          // Fail the build loudly rather than commit a scene the GUI's own map cannot read.
+          GUI_LOG_ERROR("[FileIO] BuildScene: scene assigned crystal id {} to pool {} but the pool map expected {}",
+                        scene_cid, entry.crystal_id, cid);
+          return nullptr;
+        }
+        crystal_added[static_cast<size_t>(entry.crystal_id)] = true;
       }
       dst_layer.entries[k].crystal_id = cid;
       // enabled=false is translated here — the single GUI->core assembly point — into the

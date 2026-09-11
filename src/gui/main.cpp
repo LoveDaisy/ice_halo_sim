@@ -13,6 +13,7 @@
 #include <string_view>
 #include <thread>
 
+#include "gui/analysis_panel.hpp"
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
@@ -370,6 +371,7 @@ int main(int argc, char** argv) {
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderColorWindow(gui::g_state, gui::g_server);
+    gui::RenderAnalysisPanel(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);
     gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);

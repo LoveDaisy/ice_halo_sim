@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 
+#include "gui/analysis_panel.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
@@ -731,6 +732,17 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
     g_server_poller.InvalidateStagedTexture();
   }
 
+  // The analysis tool's state is about the scene that was on screen: its picked centre, its
+  // selection and its list mean nothing for another document. The window stays open — which
+  // panels are open is not document state. Revert keeps all of it: the scene is the same one.
+  if (reason != FrontendResetReason::kRevert) {
+    const bool window_open = state.analysis.window_open;
+    state.analysis = GuiState::RaypathAnalysisSession{};
+    state.analysis.window_open = window_open;
+    state.analysis_result = GuiState::AnalysisResultView{};
+    state.analysis_run_in_progress = false;
+  }
+
   // crystal_mesh_hash reset — as-built: only DoNew clears it (Open branches don't touch it;
   // edit_modals writes -1 as a distinct "force re-upload" signal, not a "no mesh" reset).
   if (reason == FrontendResetReason::kNewDocument) {
@@ -1341,6 +1353,10 @@ bool DoRun(bool user_initiated) {
     LUMICE_GetSimLifecycle(g_server, &lc);
     g_state.committed_epoch = lc.epoch;
     g_state.run_intent = RunIntent::kRunning;
+    // The server is a render session again (a commit withdraws the analysis session, server.cpp
+    // CommitConfig), so the analysis intent is over; the result on show is deliberately kept — the
+    // user is most often re-running the scene they just edited FROM that list.
+    g_state.analysis.started = false;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_state.stats_crystal_num = 0;
@@ -1405,6 +1421,11 @@ void DoStop() {
   // drains (server.cpp active_workers_==0); doing it off the UI thread keeps the toolbar live.
   // This writes the INTENT only — sim_state stays single-owner (ReconcileSimState in SyncFromPoller).
   g_state.run_intent = RunIntent::kStopping;
+  // A Stop ends whichever run is in flight. For an analysis the intent is withdrawn here, at the
+  // command, rather than waited for from the poller: Stop() pauses the poller, so the last
+  // observation it published (RUNNING) would otherwise stand until the next wake and keep the
+  // in-progress flag up over a run that is over. The result adopted so far stays on show.
+  g_state.analysis.started = false;
   g_stop_inflight.store(true);
   g_stop_future = std::async(std::launch::async, [srv = g_server] {
     g_server_poller.Stop();  // fast: wait out one readback poll (reuses the validated stop order)
@@ -1412,6 +1433,39 @@ void DoStop() {
     g_stop_inflight.store(false);
   });
   GUI_LOG_INFO("[GUI] DoStop: stopping (async)");
+}
+
+bool DoAnalyze() {
+  if (!g_server) {
+    return false;
+  }
+  // Same reason DoRun joins first: a Stop may still be draining on the background thread, and the
+  // server call below must not race it.
+  JoinPendingStop();
+  // The IN_FRAME canvas is the preview's own — the frame on screen is what "in frame" means. The
+  // panel disables IN_FRAME while the preview is inactive, so the fallback is for the other two
+  // modes, whose requests never read the canvas size.
+  const int canvas_w = g_preview_vp.active ? g_preview_vp.vp_w : 1;
+  const int canvas_h = g_preview_vp.active ? g_preview_vp.vp_h : 1;
+  const LUMICE_RaypathAnalysisRequest req = BuildAnalysisRequest(g_state, canvas_w, canvas_h);
+  const LUMICE_ErrorCode err = LUMICE_StartRaypathAnalysis(g_server, &req);
+  if (err != LUMICE_OK) {
+    GUI_LOG_WARNING("[GUI] DoAnalyze: LUMICE_StartRaypathAnalysis failed with error code {} (roi_mode={})",
+                    static_cast<int>(err), req.roi_mode);
+    return false;
+  }
+  // Intent + an empty view: the previous result must not sit under this run's list, and the
+  // held generation stays as it was — the run's first snapshot carries a larger one (the
+  // counter only grows), so the first result is adopted without any reset of the cursor.
+  g_state.analysis.started = true;
+  g_state.analysis.selected_entry.reset();
+  g_state.analysis_result = GuiState::AnalysisResultView{};
+  // Same wake as a fresh commit: the poller publishes valid=false across the edge, so the first
+  // observation SyncFromPoller derives the in-progress flag from is this run's, not the last
+  // render's COMPLETED.
+  g_server_poller.WakeForRestart(g_server);
+  GUI_LOG_INFO("[GUI] DoAnalyze: analysis run started (roi_mode={})", req.roi_mode);
+  return true;
 }
 
 void DoRevert() {
@@ -1669,6 +1723,25 @@ void SyncFromPoller() {
   g_state.sim_state = ReconcileSimState(g_state.run_intent, g_state.committed_epoch, snap.get(), g_state.dirty);
   if (prev_state != SimState::kDone && g_state.sim_state == SimState::kDone) {
     GUI_LOG_INFO("[GUI] Simulation done");
+  }
+
+  // The analysis run's display state, derived the same way and beside it: intent + observation,
+  // every frame, one writer. A render commit does not bump the lifecycle epoch for an analysis
+  // (server.cpp StartRaypathAnalysis: same scene, same epoch), so nothing above changes while one
+  // runs — the picture is still the render's, and sim_state says so.
+  {
+    const bool prev_in_progress = g_state.analysis_run_in_progress;
+    g_state.analysis_run_in_progress = DeriveAnalysisInProgress(g_state.analysis.started, snap.get());
+    if (prev_in_progress && !g_state.analysis_run_in_progress) {
+      GUI_LOG_INFO("[GUI] Raypath analysis finished");
+    }
+    // The result: adopted when its generation is new, ignored otherwise (a carry-forward of the
+    // result already on show is what every poll after the last snapshot carries).
+    if (snap && AdoptAnalysisPayloadIfNew(g_state, snap->analysis)) {
+      GUI_LOG_VERBOSE("[GUI] SyncFromPoller: analysis result adopted ({} entries, gen={})",
+                      g_state.analysis_result.payload->entries.size(),
+                      g_state.analysis_result.payload->snapshot_generation);
+    }
   }
 
   // Mealy next-intent advance for the async Stop (blueprint §5/§8): once the background stop thread

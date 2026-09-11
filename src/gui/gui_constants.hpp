@@ -162,6 +162,23 @@ constexpr float kDefaultCrystalZoom = 1.4f;
 // world coordinates while the camera position stays put.
 constexpr float kCameraTiltDeg = 15.0f;
 
+// Raypath analysis panel (analysis_panel.cpp, doc/raypath-analysis-panel.md). The CONE request
+// the panel sends is always the FULL cone below, split into kAnalysisConeRingCount equal rings;
+// the angular-radius slider then decides, at display time, how many of those rings the list sums
+// over — so dragging it never starts a run. Its default is the panel's opening radius and its
+// range is [one ring, the whole cone]. Engineering values, not rulings: a wider or finer cone is a
+// change to these three numbers and nothing else.
+constexpr float kAnalysisConeMaxRadiusDeg = 15.0f;
+constexpr int kAnalysisConeRingCount = 30;  // 0.5 degrees per ring
+constexpr float kAnalysisConeDefaultRadiusDeg = 2.0f;
+// Early stop for a CONE analysis: enough rays landed in the cone to answer "what is here", so the
+// run ends there instead of tracing the scene's whole budget (0 would mean no early stop).
+constexpr LUMICE_RayCount kAnalysisConeStopTarget = 200000;
+static_assert(kAnalysisConeRingCount >= 1 && kAnalysisConeRingCount <= LUMICE_MAX_RAYPATH_CONE_RINGS,
+              "the cone ring count must be a request the C API accepts (it rejects, not truncates)");
+static_assert(kAnalysisConeDefaultRadiusDeg > 0.0f && kAnalysisConeDefaultRadiusDeg <= kAnalysisConeMaxRadiusDeg,
+              "the default radius must lie inside the cone the request asks for");
+
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
 // AnnotationAnchors::Compute() (annotation_anchors.cpp) clamps the angular-distance-circle list to

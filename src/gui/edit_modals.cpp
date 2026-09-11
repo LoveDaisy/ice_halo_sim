@@ -1528,6 +1528,42 @@ bool IsCurrentModalDApplicable() {
   return IsDApplicableGuiAxis(cr.azimuth, cr.roll);
 }
 
+// See edit_modals.hpp. Propagate a filter_id change from one entry to all entries that were
+// "linked" with it before the change — the same (crystal_id, old_filter_id) pair. Preserves the
+// "linked group is an atomic share unit" semantic when a filter is added or removed: editing one
+// card's filter must also flip the linked siblings' filter_id so the group stays coherent
+// (otherwise the fa-link badge disappears the moment a filter is added to a previously
+// filter-less linked group). Mutating pool slot contents in-place (filter edit on an already-bound
+// slot) is unaffected — siblings see the new content via the shared filter_id.
+void PropagateFilterIdToLinked(GuiState& state, int crystal_id, std::optional<int> old_filter_id,
+                               std::optional<int> new_filter_id) {
+  if (new_filter_id == old_filter_id) {
+    return;  // nothing changed; in-place edit, siblings already see it
+  }
+  for (auto& layer : state.layers) {
+    for (auto& other : layer.entries) {
+      if (other.crystal_id == crystal_id && other.filter_id == old_filter_id) {
+        other.filter_id = new_filter_id;
+      }
+    }
+  }
+}
+
+// See edit_modals.hpp. Write the materialized FilterConfig into the pool, updating entry.filter_id
+// (existing slot or new append). When append is needed (entry had no filter), propagate the new
+// filter_id to entries that were linked with `entry` at (crystal_id, None) so the group stays
+// coherent.
+void WriteFilterToPool(GuiState& state, EntryCard& entry, const FilterConfig& filter) {
+  if (entry.filter_id.has_value()) {
+    state.filters[*entry.filter_id] = filter;
+  } else {
+    const std::optional<int> old_filter_id = entry.filter_id;
+    entry.filter_id = static_cast<int>(state.filters.size());
+    state.filters.push_back(filter);
+    PropagateFilterIdToLinked(state, entry.crystal_id, old_filter_id, entry.filter_id);
+  }
+}
+
 namespace {
 
 // Validation kind based on the in-flight Crystal-tab buffer (not the entry),
@@ -1601,42 +1637,9 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   pool_crystal.azimuth = g_axis_buf[1];
   pool_crystal.roll = g_axis_buf[2];
 
-  // Local helper: propagate a filter_id change from `entry` to all entries
-  // that were "linked" with it before the change — i.e., entries sharing the
-  // same (crystal_id, old_filter_id) pair. Preserves the "linked group is an
-  // atomic share unit" semantic when a filter is added or removed: editing
-  // one card's filter must also flip the linked siblings' filter_id so the
-  // group stays coherent (otherwise the fa-link badge disappears the moment
-  // a filter is added to a previously filter-less linked group). Mutating
-  // pool slot contents in-place (filter edit on an already-bound slot) is
-  // unaffected — siblings see the new content via the shared filter_id.
-  auto propagate_filter_id_to_linked = [&](int cid, std::optional<int> old_filter_id) {
-    if (entry.filter_id == old_filter_id) {
-      return;  // nothing changed; in-place edit, siblings already see it
-    }
-    for (auto& layer : state.layers) {
-      for (auto& other : layer.entries) {
-        if (other.crystal_id == cid && other.filter_id == old_filter_id) {
-          other.filter_id = entry.filter_id;
-        }
-      }
-    }
-  };
-
-  // Local helper: write the materialized FilterConfig into the pool, updating
-  // entry.filter_id (existing slot or new append). When append is needed
-  // (entry had no filter), propagate the new filter_id to entries that were
-  // linked with `entry` at (crystal_id, None) so the group stays coherent.
-  auto write_filter_to_pool = [&](const FilterConfig& f) {
-    if (entry.filter_id.has_value()) {
-      state.filters[*entry.filter_id] = f;
-    } else {
-      const std::optional<int> old_filter_id = entry.filter_id;
-      entry.filter_id = static_cast<int>(state.filters.size());
-      state.filters.push_back(f);
-      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
-    }
-  };
+  // The pool writes below go through PropagateFilterIdToLinked / WriteFilterToPool (edit_modals.hpp),
+  // the two primitives this function used to hold as local lambdas — promoted so the analysis
+  // panel's "Exclude this raypath" binds a filter the same way the OK button does.
 
   // H5 sum-of-products commit. Three exit paths:
   //   1. Explicit Remove Filter (intent flag): drop filter_id unconditionally,
@@ -1649,7 +1652,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   if (g_filter_remove_intent) {
     const std::optional<int> old_filter_id = entry.filter_id;
     entry.filter_id = std::nullopt;
-    propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
+    PropagateFilterIdToLinked(state, entry.crystal_id, old_filter_id, entry.filter_id);
     g_filter_remove_intent = false;
   } else {
     const bool buf_changed = IsFilterDirty();
@@ -1669,7 +1672,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
       // No non-blank rows ≡ no filter.
       const std::optional<int> old_filter_id = entry.filter_id;
       entry.filter_id = std::nullopt;
-      propagate_filter_id_to_linked(entry.crystal_id, old_filter_id);
+      PropagateFilterIdToLinked(state, entry.crystal_id, old_filter_id, entry.filter_id);
     } else if (g_filter_initial_present || buf_changed) {
       const auto kind = CurrentValidationKind();
       bool all_valid = true;
@@ -1688,7 +1691,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
         out.sym_b = g_filter_top.sym_b;
         out.sym_d = g_filter_top.sym_d;
         out.param = std::move(sop);
-        write_filter_to_pool(out);
+        WriteFilterToPool(state, entry, out);
       }
     }
   }

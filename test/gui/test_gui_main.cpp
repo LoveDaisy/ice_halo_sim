@@ -23,6 +23,7 @@
 #include "gui/gl_common.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "gui/analysis_panel.hpp"
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
@@ -737,6 +738,9 @@ int main(int argc, char** argv) {
     // early-returns when color_window_open is false, so cost for existing
     // tests is negligible.
     gui::RenderColorWindow(gui::g_state, gui::g_server);
+    // The Raypath Analysis window, mirrored from src/gui/main.cpp for the same reason as the
+    // Colors window above; a no-op while analysis.window_open is false.
+    gui::RenderAnalysisPanel(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);
     // Intentional deviation from plan (which suggested nullptr): the test
     // harness owns a real GLFW window (hidden in CI), so passing it yields

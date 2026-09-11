@@ -39,6 +39,11 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // first new snapshot, preventing visible flicker during slider scrubbing.
   PublishValidReset();
   ResetPerResumeState();
+  // A (possibly new) server's snapshot counter starts over, so the analysis cursor must too —
+  // otherwise its first analysis result could carry a generation the old server already used and
+  // be skipped as "seen". Not part of ResetPerResumeState on purpose: a wake on the SAME server
+  // has nothing to re-read (the consumer dedups on the payload's own generation anyway).
+  last_analysis_generation_ = 0;
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -531,6 +536,40 @@ void ServerPoller::PollOnce() {
     }
   }
 
+  // ---- Raypath analysis result (lumice.h "Raypath Analysis Run"), off the same frame. An
+  // analysis frame carries no xyz buffer, so it never enters the texture branch above; this is
+  // its own branch with its own generation cursor. `present` is a property of the frame and holds
+  // on every poll of the session, so it is NOT the "new result" test — snapshot_generation is
+  // (the v4.30 field, exported for exactly this). The entries are COPIED out (the C API's
+  // contract), so the payload does not need to hold the frame.
+  std::shared_ptr<const AnalysisPayload> new_analysis;
+  {
+    LUMICE_RaypathAnalysisInfo info{};
+    if (LUMICE_FrameGetRaypathAnalysisInfo(frame.get(), &info) == LUMICE_OK && info.present != 0 &&
+        info.snapshot_generation != last_analysis_generation_) {
+      auto payload = std::make_shared<AnalysisPayload>();
+      payload->snapshot_generation = info.snapshot_generation;
+      payload->roi_mode = info.roi_mode;
+      payload->cone_ring_count = info.cone_ring_count;
+      payload->cone_radius_rad = info.cone_radius_rad;
+      // One more slot than entries: the sentinel (count == 0) lands at [entry_count] when the
+      // frame holds exactly entry_count entries, and the read below stops at it in every case.
+      std::vector<LUMICE_RaypathHistogramEntry> raw(static_cast<size_t>(std::max(info.entry_count, 0)) + 1);
+      if (LUMICE_FrameGetRaypathAnalysis(frame.get(), raw.data(), info.entry_count) == LUMICE_OK) {
+        size_t n = 0;
+        while (n < raw.size() && raw[n].count != 0) {
+          ++n;
+        }
+        raw.resize(n);
+        payload->entries = std::move(raw);
+        last_analysis_generation_ = info.snapshot_generation;
+        new_analysis = std::move(payload);
+        GUI_LOG_VERBOSE("[Poller] analysis result: {} entries, roi_mode={}, gen={}", new_analysis->entries.size(),
+                        info.roi_mode, info.snapshot_generation);
+      }
+    }
+  }
+
   // ---- Publish: whole RMW (load prev → decide carry-forward → store) inside publish_mutex_.
   // Critical section is pointer/refcount-level only.
   {
@@ -573,6 +612,9 @@ void ServerPoller::PollOnce() {
       next->texture_serial = prev->texture_serial;
       next->has_new_texture = false;
     }
+    // Analysis result: fresh when this poll read a new generation, else carried forward (the
+    // consumer dedups on the payload's own generation, so a carry-forward is not a re-adoption).
+    next->analysis = new_analysis ? std::move(new_analysis) : (prev ? prev->analysis : nullptr);
     StorePublished(std::move(next));
   }
 

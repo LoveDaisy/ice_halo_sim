@@ -167,6 +167,8 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "pick_link_source",           FieldTier::kSession,    false },
     { "color_window_open",          FieldTier::kSession,    false },
     { "defaults_panel_open",        FieldTier::kSession,    false },
+    // The analysis tool's own state (window, ROI, selection, intent) — one struct, one row.
+    { "analysis",                   FieldTier::kSession,    false },
     { "current_file_path",          FieldTier::kSession,    false },
     { "save_texture",               FieldTier::kSession,    false },
     { "modal_immediate_mode",       FieldTier::kSession,    false },
@@ -205,6 +207,10 @@ inline constexpr const char* kDerivedFieldsExcludeList[] = {
     // InvalidateEffectsBaselines on DoRun / DoRevert / backend swap so the next reconcile
     // unconditionally re-pushes (repush discipline; fixes 偏离 B').
     "last_pushed_display_state",
+    // Raypath analysis: the result on show (poller-fed) and the in-progress flag derived from
+    // analysis.started + the lifecycle observation, both written by SyncFromPoller.
+    "analysis_result",
+    "analysis_run_in_progress",
     // Dirty flag (this is the effect output, not an input to the reconciler)
     "dirty",
     // Runtime-derived aspect clamp info (populated by ApplyAspectRatio)

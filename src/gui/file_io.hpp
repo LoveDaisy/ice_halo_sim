@@ -2,6 +2,7 @@
 #define LUMICE_GUI_FILE_IO_HPP
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -93,6 +94,17 @@ enum class SceneIntent {
 // LUMICE_MAX_CONFIG_GRID_LINES (kJsonExport only; the commit arm writes no grid).
 ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInfo* filter_overflow = nullptr,
                     ColorClassOverflowInfo* color_overflow = nullptr, GridOverflowInfo* grid_overflow = nullptr);
+
+// Which crystal-pool slots BuildScene commits, and the id core knows each one by:
+// crystal pool index -> the scene's crystal id. The scene numbers crystals 0..n-1 in the order they
+// are added (lumice.h "sequential id out"), and BuildScene adds them in first-reference order
+// walking layers then entries, under LUMICE_MAX_CONFIG_SCATTER_LAYERS / _ENTRIES / _CRYSTALS —
+// so the map is a pure function of the document, computed here and used by BuildScene itself,
+// which checks the id the scene hands back against it rather than deriving a second numbering.
+// The other reader is the analysis panel, which gets a chain's crystal as that scene id
+// (LUMICE_RaypathChainSegment::crystal_id) and needs the pool slot it came from. Injective by
+// construction (each value is the map's size at insertion), so the reverse lookup is unique.
+std::map<int, int> ComputeCrystalPoolToCoreIdMap(const GuiState& state);
 
 // Format a human-readable locator ("filter \"NAME\", Layer L / Entry E", or just
 // "Layer L / Entry E" when the filter is unnamed) from a FilterOverflowInfo, using 1-based

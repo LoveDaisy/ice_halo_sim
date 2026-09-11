@@ -9,6 +9,7 @@
 #include <string>
 
 #include "IconsFontAwesome6.h"
+#include "gui/analysis_panel.hpp"
 #include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/aspect_ratio_rules.hpp"
@@ -367,7 +368,9 @@ void RenderTopBar(float window_width) {
   // the backend is still draining an async Stop (kStopping), not just while simulating.
   bool simulating = IsSimulating(g_state.sim_state);
   bool stopping = IsStopping(g_state.sim_state);
-  bool busy = IsBusy(g_state.sim_state);
+  // Counts the analysis run: while one is tracing, a render commit would be refused by the server
+  // and New / Open would tear down the backend under it, so all three stay shut until it ends.
+  bool busy = IsBackendBusy(g_state.sim_state, g_state.analysis_run_in_progress);
   const auto& style = ImGui::GetStyle();
   const char* kRunLabel = ICON_FA_PLAY " Run";
   const char* kStopLabel = ICON_FA_STOP " Stop";
@@ -390,11 +393,18 @@ void RenderTopBar(float window_width) {
     ImGui::Button(kStoppingLabel, ImVec2(run_stop_width, 0));
     ImGui::EndDisabled();
   } else {
+    // The analysis run does not change the picture, so sim_state stays where the last render
+    // left it and this branch is the one drawn; the button itself is what says "not now".
+    ImGui::BeginDisabled(g_state.analysis_run_in_progress);
     PushGoodButtonStyle();
     if (ImGui::Button(kRunLabel, ImVec2(run_stop_width, 0))) {
       DoRun(/*user_initiated=*/true);
     }
     PopGoodButtonStyle();
+    ImGui::EndDisabled();
+    if (g_state.analysis_run_in_progress && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("A raypath analysis is running. Wait for it, or stop it from the Raypath Analysis window.");
+    }
   }
 
   // Revert area — always rendered for stable layout, hidden when not modified.
@@ -528,6 +538,16 @@ void RenderTopBar(float window_width) {
   }
   if (tint_colors_button) {
     ImGui::PopStyleColor(3);
+  }
+  // The second occupant of the feature-button group: the Raypath Analysis window
+  // (analysis_panel.cpp). A plain toggle — the window has no "default on open" rule the way
+  // Colors does; what it shows is decided by its own controls once open.
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_ROUTE " Analysis")) {
+    g_state.analysis.window_open = !g_state.analysis.window_open;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Which raypaths make the light in a region of the sky. Opens the Raypath Analysis window.");
   }
 
   // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
@@ -1839,6 +1859,13 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   if (g_bg_pick.swallow_drag_until_release && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
     g_bg_pick.swallow_drag_until_release = false;
   }
+  // The analysis panel's "pick a point" mode has the same two ways out, for the same reasons:
+  // Esc, read here ahead of any widget; and the preview going away under it (a document switch,
+  // a texture cleared), which would otherwise leave a click armed over nothing to click on. The
+  // window being closed counts as the latter — its button is the only way to arm it.
+  if (g_state.analysis.pick_armed && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || !g_state.analysis.window_open)) {
+    g_state.analysis.pick_armed = false;
+  }
 
   float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
@@ -2161,7 +2188,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // branches too, which is wider than the defect requires — a wheel notch carries no leftover
       // motion from the press that took the colour. Conservative on purpose; not a condition the
       // bug imposes, so it can be narrowed without reopening that defect.
-      const bool gestures_locked = g_bg_pick.active || g_bg_pick.swallow_drag_until_release;
+      // The analysis pick is a third owner of the click, locking the camera the way the
+      // eyedropper does: the press that picks a point must not also orbit by a pixel.
+      const bool analysis_pick = g_state.analysis.pick_armed;
+      const bool gestures_locked = g_bg_pick.active || g_bg_pick.swallow_drag_until_release || analysis_pick;
       // Same predicate the eyedropper button is enabled by, and deliberately not a second copy of
       // the expression: "there is a photo on screen to act on" is one question, whether the act is
       // dragging it or sampling it.
@@ -2300,6 +2330,29 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // A click on the letterbox is deliberately inert — not a cancel: the user aimed at the
         // photo and missed its edge, and dropping them out of the mode would make the miss cost a
         // second trip to the button.
+      }
+
+      // The analysis pick: the sixth branch, exclusive with the five above through
+      // gestures_locked. The click's point goes through the same window-origin / DPI path the
+      // eyedropper's does, then through LUMICE_UnprojectPixel under the view the picture on
+      // screen was drawn with (PreviewAnnotationView) — so the direction the server judges by is
+      // the direction under the cursor, on this lens, at this DPI.
+      if (analysis_pick && !g_bg_pick.active && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 vp_origin = ImGui::GetWindowPos();
+        const std::optional<CanvasPixel> px =
+            PreviewPointToCanvasPixel(io.MousePos.x - vp_origin.x, io.MousePos.y - vp_origin.y, dpi_scale_x,
+                                      dpi_scale_y, g_preview_vp.vp_w, g_preview_vp.vp_h);
+        if (px.has_value()) {
+          const LUMICE_AnnotationView view = PreviewAnnotationView(g_state, g_preview_vp.vp_w, g_preview_vp.vp_h);
+          PickAnalysisConeCenter(g_state, view, px->px, px->py);
+        }
+      }
+      // The ROI ring, whenever a centre is picked in Point mode; nothing otherwise. The guard is
+      // repeated here only so the view is not rebuilt every frame for the common no-ring case.
+      if (g_state.analysis.window_open && g_state.analysis.roi_mode == LUMICE_RAYPATH_ROI_CONE &&
+          g_state.analysis.cone_center_valid) {
+        DrawAnalysisRoiRing(g_state, PreviewAnnotationView(g_state, g_preview_vp.vp_w, g_preview_vp.vp_h),
+                            ImGui::GetWindowPos(), dpi_scale_x, dpi_scale_y);
       }
     }
   } else {
@@ -2696,7 +2749,7 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
     // used to sit at this line ("single-source would be nicer but the top bar's enable predicate
     // is inlined and not exported") asked for. The two gates are still distinct predicates: this
     // one additionally requires a live server.
-    const bool can_run = CanRunFromModal(g_server != nullptr, g_state.sim_state);
+    const bool can_run = CanRunFromModal(g_server != nullptr, g_state.sim_state, g_state.analysis_run_in_progress);
     ImGui::BeginDisabled(!can_run);
     if (ImGui::Button("Run first", ImVec2(100, 0))) {
       DoRun(/*user_initiated=*/true);
