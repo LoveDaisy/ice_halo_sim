@@ -29,3 +29,20 @@ if(BUILD_SHARED_LIBS)
 endif()
 install(TARGETS Lumice
     DESTINATION "${CMAKE_INSTALL_PREFIX}")
+
+# Linux x64 release: the tarball carries two builds of every entry point (`<name>.baseline`,
+# `<name>.x86-64-v4`, produced by two configures at different LUMICE_ISA_LEVEL) and this
+# launcher installed under the user-facing name picks one by CPUID at run time
+# (src/launcher/isa_launcher.c has the full story). It deliberately gets none of the engine:
+# no lumice_obj, no -march flag — it has to run on exactly the CPUs the v4 sidecar cannot.
+# Built on every Linux x86_64 configure so a plain CI build compiles it, but only
+# release.yml's merge step installs it under the entry-point names; a local
+# build/cmake_install/<flavor>/Lumice is still the real binary.
+# Compiler floor: `__builtin_cpu_supports("x86-64-v4")` needs GCC 12+ or Clang 18+ (it is a
+# compile error below that, not a silent misdetection).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  add_executable(LumiceIsaLauncher "${PROJ_SRC_DIR}/launcher/isa_launcher.c")
+  target_compile_options(LumiceIsaLauncher PRIVATE -Wall -Wextra)
+  install(TARGETS LumiceIsaLauncher
+      DESTINATION "${CMAKE_INSTALL_PREFIX}")
+endif()
