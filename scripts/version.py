@@ -4,12 +4,15 @@
 Usage:
     python scripts/version.py check              # Compare CMakeLists.txt version with latest git tag
     python scripts/version.py check --tag v4.0.0 # Compare CMakeLists.txt version with specified tag (CI mode)
-    python scripts/version.py set 4.1.0          # Bump CMakeLists.txt version and cut CHANGELOG.md
+    python scripts/version.py set 4.1.0          # Bump CMakeLists.txt version; validate the CHANGELOG.md section
     python scripts/version.py extract-notes 4.1.0  # Print one CHANGELOG.md version section to stdout
 
-``set`` writes two files: it bumps the version in ``CMakeLists.txt`` *and* turns the
-``[Unreleased]`` section of ``CHANGELOG.md`` into a dated section for the new version,
-leaving a fresh empty ``[Unreleased]`` behind and adding the matching link definition.
+``set`` writes two files: it bumps the version in ``CMakeLists.txt`` *and* checks that
+``CHANGELOG.md`` already carries a dated ``## [X.Y.Z] - YYYY-MM-DD`` section for the new
+version with at least one bullet, then adds the matching ``[X.Y.Z]: .../compare/...``
+link definition. The section itself is written by hand, from the mechanical PR
+enumeration in CHANGELOG.md's "Sourcing" rule, *before* ``set`` runs — the file has no
+accumulator section to cut from (see the "Release Process" in CONTRIBUTING.md).
 Everything is computed and validated in memory first, so a failed check leaves both
 files untouched rather than half-updated.
 
@@ -22,7 +25,6 @@ import argparse
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,12 +36,16 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # CHANGELOG.md structure anchors. A section runs from its own "## [...]" heading up to
 # the next one, so NEXT_SECTION_RE is deliberately *not* required to be unique: the real
 # file has one match per released version.
-# ``[ \t]*`` rather than ``\s*``: ``\s`` would eat the newline (and the blank line
-# after it), which silently moves where a cut section starts.
-UNRELEASED_HEADING_RE = r"^## \[Unreleased\][ \t]*$"
 NEXT_SECTION_RE = r"^## \["
-UNRELEASED_LINK_RE = re.compile(
-    r"^\[Unreleased\]: (https://\S+)/compare/v(\S+)\.\.\.HEAD$", re.MULTILINE
+# A released version's heading carries its UTC date. ``[ \t]*`` rather than ``\s*``:
+# ``\s`` would eat the newline (and the blank line after it), which silently moves
+# where a section body starts.
+DATED_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}[ \t]*$", re.MULTILINE)
+# One "[X.Y.Z]: <base>/compare/vPREV...vX.Y.Z" link definition. The file lists them
+# newest-first, so the first match is the latest released version — which is how ``set``
+# learns the previous version without a git tag lookup (the new tag does not exist yet).
+VERSION_LINK_RE = re.compile(
+    r"^\[(\d+\.\d+\.\d+)\]: (https://\S+)/compare/v(\S+)\.\.\.v(\S+)$", re.MULTILINE
 )
 
 
@@ -47,7 +53,7 @@ def version_heading_re(version: str) -> str:
     """Regex matching the CHANGELOG heading of one released version.
 
     Single owner of "what a version heading looks like", shared by section slicing
-    (``extract-notes``, and any future cut) and by the existence check (``check``).
+    (``extract-notes``, ``set``) and by the existence check (``check``).
     """
     return rf"^## \[{re.escape(version)}\]"
 
@@ -114,55 +120,78 @@ def changelog_has_version(text: str, version: str) -> bool:
     return re.search(version_heading_re(version), text, re.MULTILINE) is not None
 
 
-def parse_unreleased_link(text: str) -> tuple[str, str]:
-    """Return ``(base_url, previous_version)`` from the [Unreleased] link definition.
+def semver_key(version: str) -> tuple[int, int, int]:
+    """Sort key for an ``X.Y.Z`` string."""
+    major, minor, patch = version.split(".")
+    return int(major), int(minor), int(patch)
 
-    That one line already encodes the previous released version, so cutting a new
-    section needs no git tag lookup — which matters because the cut happens *before*
-    the new tag exists.
+
+def latest_version_link(text: str) -> tuple[str, str, int]:
+    """Return ``(version, base_url, offset)`` of the topmost version link definition.
+
+    CHANGELOG.md keeps its link definitions newest-first, so the first ``[X.Y.Z]:`` line
+    names the latest released version. ``offset`` is where that line starts, which is
+    where the next version's definition is inserted. The newest-first order is checked,
+    not assumed: a hand edit that moved an older definition to the top would otherwise
+    make ``set`` derive the wrong previous version and write a compare link spanning the
+    wrong range, silently.
     """
-    matches = list(UNRELEASED_LINK_RE.finditer(text))
-    if len(matches) != 1:
+    matches = list(VERSION_LINK_RE.finditer(text))
+    if not matches:
+        print("Error: CHANGELOG.md has no [X.Y.Z]: .../compare/... link definition", file=sys.stderr)
+        sys.exit(1)
+    top = matches[0]
+    newest = max(matches, key=lambda m: semver_key(m.group(1)))
+    if newest is not top:
         print(
-            "Error: expected exactly 1 match for the [Unreleased] link definition, "
-            f"got {len(matches)}",
+            f"Error: the topmost link definition is [{top.group(1)}] but [{newest.group(1)}] "
+            "is newer — CHANGELOG.md's link definitions must be ordered newest-first",
             file=sys.stderr,
         )
         sys.exit(1)
-    return matches[0].group(1), matches[0].group(2)
+    return top.group(1), top.group(2), top.start()
 
 
-def cut_changelog(text: str, new_version: str, date_str: str, allow_empty: bool) -> str:
-    """Turn [Unreleased] into a dated section for ``new_version``, in memory."""
-    if changelog_has_version(text, new_version):
+def validate_changelog(text: str, new_version: str, allow_empty: bool) -> str:
+    """Check the hand-written section for ``new_version`` and add its link definition, in memory.
+
+    The section must exist exactly once, its heading must carry a date
+    (``## [X.Y.Z] - YYYY-MM-DD``), and it must hold at least one bullet unless
+    ``allow_empty`` says this release genuinely has no user-perceptible change.
+    """
+    start, end, body = find_section(text, version_heading_re(new_version), f"[{new_version}]")
+    line_end = text.find("\n", start)
+    heading = text[start:] if line_end < 0 else text[start:line_end]
+    if not DATED_HEADING_RE.match(heading):
         print(
-            f"Error: CHANGELOG.md already has a section for {new_version}",
+            f"Error: CHANGELOG.md heading {heading!r} lacks a date — expected "
+            f"'## [{new_version}] - YYYY-MM-DD'",
             file=sys.stderr,
         )
         sys.exit(1)
-
-    start, end, body = find_section(text, UNRELEASED_HEADING_RE, "[Unreleased]")
     if not allow_empty and not changelog_has_bullets(body):
         print(
-            "Error: [Unreleased] is empty — write the user-perceptible changes first, "
-            "or pass --allow-empty-changelog to confirm this release has none",
+            f"Error: the [{new_version}] section is empty — write the user-perceptible "
+            "changes first, or pass --allow-empty-changelog to confirm this release has none",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    text = text[:start] + f"## [Unreleased]\n\n## [{new_version}] - {date_str}\n" + body + text[end:]
-
-    base_url, old_version = parse_unreleased_link(text)
-    old_line = f"[Unreleased]: {base_url}/compare/v{old_version}...HEAD"
-    new_lines = (
-        f"[Unreleased]: {base_url}/compare/v{new_version}...HEAD\n"
-        f"[{new_version}]: {base_url}/compare/v{old_version}...v{new_version}"
-    )
-    count = text.count(old_line)
-    if count != 1:
-        print(f"Error: expected exactly 1 replacement, got {count}", file=sys.stderr)
+    if re.search(rf"^\[{re.escape(new_version)}\]: ", text, re.MULTILINE):
+        print(
+            f"Error: CHANGELOG.md already has a link definition for [{new_version}]",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    return text.replace(old_line, new_lines)
+    prev_version, base_url, offset = latest_version_link(text)
+    if semver_key(new_version) <= semver_key(prev_version):
+        print(
+            f"Error: {new_version} is not newer than the latest released version {prev_version}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    new_line = f"[{new_version}]: {base_url}/compare/v{prev_version}...v{new_version}\n"
+    return text[:offset] + new_line + text[offset:]
 
 
 def read_git_tag_version() -> str:
@@ -225,7 +254,7 @@ def cmd_check(args: argparse.Namespace) -> None:
 
 
 def cmd_set(args: argparse.Namespace) -> None:
-    """Bump the version in CMakeLists.txt and cut the CHANGELOG section for it."""
+    """Bump the version in CMakeLists.txt and validate the CHANGELOG section written for it."""
     version = args.version
     if not SEMVER_RE.match(version):
         print(f"Error: '{version}' is not a valid semver (expected X.Y.Z)", file=sys.stderr)
@@ -235,16 +264,13 @@ def cmd_set(args: argparse.Namespace) -> None:
     # never leaves CMakeLists.txt already bumped.
     old_ver = read_cmake_version()
     new_cmake = render_cmake_version(CMAKELISTS.read_text(encoding="utf-8"), version)
-    date_str = datetime.now(timezone.utc).date().isoformat()
-    new_changelog = cut_changelog(
-        read_changelog_text(), version, date_str, args.allow_empty_changelog
-    )
+    new_changelog = validate_changelog(read_changelog_text(), version, args.allow_empty_changelog)
 
     CMAKELISTS.write_text(new_cmake, encoding="utf-8")
     CHANGELOG.write_text(new_changelog, encoding="utf-8")
 
     print(f"Updated CMakeLists.txt version: {old_ver} -> {version}")
-    print(f"Cut CHANGELOG.md [Unreleased] into [{version}] - {date_str}")
+    print(f"Validated CHANGELOG.md section [{version}] and added its link definition")
 
 
 def cmd_extract_notes(args: argparse.Namespace) -> None:
@@ -263,12 +289,14 @@ def main() -> None:
     check_parser = sub.add_parser("check", help="Check version consistency")
     check_parser.add_argument("--tag", help="Compare against this tag (CI mode, e.g. v4.0.0)")
 
-    set_parser = sub.add_parser("set", help="Set version in CMakeLists.txt and cut CHANGELOG.md")
+    set_parser = sub.add_parser(
+        "set", help="Set version in CMakeLists.txt and validate its CHANGELOG.md section"
+    )
     set_parser.add_argument("version", help="Version to set (X.Y.Z)")
     set_parser.add_argument(
         "--allow-empty-changelog",
         action="store_true",
-        help="Cut an empty [Unreleased] section (only for a release with no user-perceptible changes)",
+        help="Accept a version section with no bullets (only for a release with no user-perceptible changes)",
     )
 
     notes_parser = sub.add_parser("extract-notes", help="Print one CHANGELOG.md version section")

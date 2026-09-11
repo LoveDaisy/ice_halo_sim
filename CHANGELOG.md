@@ -16,6 +16,14 @@ as a transcription of the commit or PR title. The conventional-commit prefix is 
 never the criterion: a `refactor:` that fixes a crash earns an entry, a `feat:` that only adds
 an internal helper does not.
 
+**When entries are written**: at release time, in one batch, for the whole span since the
+previous tag. This file records changes between tags only — there is no accumulator section for
+work merged since the last release, and a PR does not add its own entry when it lands. The
+release chore enumerates every PR in the span mechanically (the Sourcing rule below), decides
+per PR whether it earns an entry, and writes the version's section in one pass; a section that
+grew one PR at a time was measured to end up half-full, which reads as complete and is worse
+than empty. The steps are in `CONTRIBUTING.md`, "Release Process".
+
 <details>
 <summary>The full rule (what earns an entry, granularity, breaking changes, sourcing)</summary>
 
@@ -100,13 +108,18 @@ against git:
 ```bash
 git log <prev_tag>..<tag> --oneline --grep='^Merge pull request #'   # PRs merged via merge commit
 git log <prev_tag>..<tag> --first-parent --no-merges                 # squashed PRs and direct commits
+git diff <prev_tag>..<tag> -- src/include/lumice.h | grep LUMICE_API_VERSION   # C API moved → Breaking candidates
 ```
 
 The second command is not redundant: dependabot bumps and admin-merged single-commit PRs land
 with no merge commit to grep for, and direct-to-main commits appear in no PR list at all.
+The third is the mechanical trigger for the `Breaking Changes` subsection: if the version
+constant moved, at least one PR in the span changed the C API and its entry has to say what
+a compiled consumer sees. (Before the release is cut, `<tag>` does not exist yet — use the
+branch, e.g. `v4.5.0..main`.)
 
 A PR's own description is not authoritative on whether it breaks the C API. Diff the header
-across each version boundary instead:
+across each version boundary instead, to see *what* moved rather than only that it did:
 
 ```bash
 git diff <prev_tag> <tag> -- src/include/lumice.h
@@ -120,10 +133,46 @@ it was thinking of and false of the C struct beside it.
 
 </details>
 
-## [Unreleased]
+## [4.5.1] - 2026-09-10
 
 ### Added
-- **A config can now ask for a grid family's numbers without its lines.** The parallels, the
+- **Print mode: ink laid on paper, for a halo on a light background** (#337, #343). A white or
+  pale background used to erase the halo entirely. Light is *added* to the background and clamps
+  at white, so with a white sky every pixel was at the ceiling before any ray energy arrived —
+  while the grid and overlay lines, which are blended rather than added, stayed perfectly visible,
+  so the result read as a failed simulation rather than a colour choice. No foreground colour can
+  fix that under an additive operator, so the fix is a second operator. `render.tone` chooses it:
+  `screen` (the default, and byte-for-byte what every existing config rendered) or `print`, under
+  which accumulated radiance becomes a neutral ink density laid on `render.paper` (a new field,
+  default white): `D = 11·log10(1+e)`, `out = paper·10^(-D)`, so a white page can go dark. Print is
+  greyscale by construction — hue is given up on purpose, since "ink absorbs the complementary
+  colour" would make white-light features such as parhelic circles vanish on white paper — so a
+  print reads like a drawing and its arcs are told apart by position and shape. In the GUI the
+  Display panel's `Mode` switch selects it and the ground-colour row becomes `Paper Color`. Because
+  ink owns the colour channel under `print`, four things that colour pixels are mutually exclusive
+  with it and say so instead of silently doing nothing — the background photo overlay, raypath
+  colouring, `ray_color`, and per-family annotation colours: the CLI logs one warning per field it
+  will not read, and the GUI greys the control with the reason. Overlay text labels are ink too
+  (#343 closed the one path — the GUI's ImGui-drawn labels — the first cut missed, so under Print
+  every label was still drawn in its family's hue beside a black line). A contrast-headroom notice
+  guards the degenerate end of *each* operator through one shared predicate: a `screen` background
+  within a few 8-bit levels of white, or a `print` paper within a few of black, both render a blank
+  picture from a configuration that looks reasonable — the CLI warns at commit, the GUI shows an
+  inline notice with a one-click repair (`Switch to Print` / `Reset paper to white`). `.lmc` and
+  exported JSON round-trip both fields.
+  **ABI**: `LUMICE_RenderParam` gains trailing `tone` / `paper[3]` (`LUMICE_API_VERSION` 426 → 427,
+  appended so every existing field keeps its offset; `sizeof` grows, recompile against the new
+  header). A zero-initialized `tone` is `LUMICE_TONE_SCREEN`, the operator this API has always
+  used — but `paper`'s JSON default is white while a zeroed struct names black paper, which under
+  `print` is an all-black page. Set it, or go through JSON.
+- **An eyedropper for Sky Color that samples the background photo** (#334). Next to the Sky Color
+  swatch, a pipette enters a picking mode in which the preview shows the photo alone — render,
+  auxiliary lines and lens border are suppressed, so what you see is what you get — and a colour
+  chip follows the cursor until you click. Sampling the *sky* of the photo is the point: the photo
+  blend is `background·(1−α) + render·α`, so the closer `background` is to the photo's own sky
+  colour, the less the photo is washed out and the more the halo comes through as pure increment.
+  The button is greyed, with the reason, while the photo is hidden or none is loaded.
+- **A config can now ask for a grid family's numbers without its lines.** (#323) The parallels, the
   meridians and the sun's angular-distance circles each gain a line switch of their own —
   `grid.elevation_line`, `grid.longitude_line`, `grid.angular_dist_line`, all defaulting to true, so
   every existing config renders exactly as before. Previously only the horizon could be asked for
@@ -131,75 +180,172 @@ it was thinking of and false of the C struct beside it.
   angles, which removed their labels too. The GUI's exported config follows suit: turning grid or
   circle **lines** off while leaving their **labels** on used to drop the numbers from the CLI
   render with no warning, and now exports exactly what the preview shows.
-- **`LUMICE_RenderParam` gains `elevation_line` / `longitude_line` / `angular_dist_line`**
+- **`LUMICE_RenderParam` gains `elevation_line` / `longitude_line` / `angular_dist_line`** (#323)
   (`LUMICE_API_VERSION` 425 → 426, appended at the end of the struct — recompile against the new
   header). Note the defaults run the other way from every other annotation flag: the JSON default is
   *on*, so a zero-initialized struct asks for no lines even when it carries a full angle list. Set
   the three fields, or go through JSON.
-- **`LUMICE_ConvertMillerIndexToWedgeAngle` — one place to ask what Miller indices mean.** New C API
-  function returning the wedge angle *and* a verdict on the indices themselves: valid, "no cone this
-  side", "not enough indices yet" (so a UI can call it on every keystroke without owning a rule for
-  when a row is finished), or invalid, with the offending slot named where one slot is at fault. No
-  `LUMICE_API_VERSION` change — a new function, no struct or ABI change.
-- **The wedge-angle dropdown takes custom Miller indices.** Below the four built-in presets the
-  Crystal editor's Upper A / Lower A dropdowns now carry a row of index boxes in the same
-  `{h,k,i,l}` notation the preset labels use, so a face the table does not offer — `{3,0,-3,1}`,
-  say — can be asked for by name instead of converted to degrees by hand. The angle updates as
-  you type and is only written when you press Apply, so a triple being typed through never lands
+- **`LUMICE_ConvertMillerIndexToWedgeAngle` — one place to ask what Miller indices mean.** (#336)
+  New C API function returning the wedge angle *and* a verdict on the indices themselves: valid, "no
+  cone this side", "not enough indices yet" (so a UI can call it on every keystroke without owning a
+  rule for when a row is finished), or invalid, with the offending slot named where one slot is at
+  fault. No `LUMICE_API_VERSION` change — a new function, no struct or ABI change.
+- **The wedge-angle dropdown takes custom Miller indices.** (#336) Below the four built-in presets
+  the Crystal editor's Upper A / Lower A dropdowns now carry a row of index boxes in the same
+  `{h,k,i,l}` notation the preset labels use, so a face the table does not offer — `{3,0,-3,1}`, say
+  — can be asked for by name instead of converted to degrees by hand. The angle updates as you type
+  and is only written when you press Apply, so a triple being typed through never lands
   half-finished. `i` is shown, not typed: it is `-(h+k)` by definition, and deriving it means the
-  four numbers can never contradict each other. Indices that name no buildable face are refused
-  with the reason spelled out and Apply greyed — a non-zero `k` (a second-order pyramidal face
-  this crystal model cannot express), a negative index, an h:l ratio outside the buildable range,
-  and `h = 0`, which says "no pyramidal cap on this side" and belongs in the pyramid height rather
-  than in an angle. Nothing is stored: the dropdown writes the angle and no Miller indices enter
-  the document.
-- **The Settings panel keeps the wedge angles you use.** A new region under Settings > Presets
-  saves crystal faces by their Miller indices, and everything saved there is offered in the
+  four numbers can never contradict each other. Indices that name no buildable face are refused with
+  the reason spelled out and Apply greyed — a non-zero `k` (a second-order pyramidal face this
+  crystal model cannot express), a negative index, an h:l ratio outside the buildable range, and `h
+  = 0`, which says "no pyramidal cap on this side" and belongs in the pyramid height rather than in
+  an angle. Nothing is stored: the dropdown writes the angle and no Miller indices enter the
+  document.
+- **The Settings panel keeps the wedge angles you use.** (#336) A new region under Settings >
+  Presets saves crystal faces by their Miller indices, and everything saved there is offered in the
   Crystal editor's Upper A / Lower A dropdowns from then on, across restarts. The add row is the
   same `{h,k,i,l}` control the dropdown carries, refusing the same triples for the same stated
   reasons. Entries are stored as indices rather than as degrees, so a saved face keeps naming the
   same face if the ice constants are ever corrected; a preset has no name of its own for the same
-  reason — the indices are the name. The four built-in presets are unaffected and cannot be
-  deleted: your list is added to them, and a triple they already cover is not saved twice. Nothing
-  is written until you press Save, and closing the panel discards the change. A file edited by
-  hand can hold a face that names no buildable cone; the panel shows that row with a warning and
-  a live delete button rather than hiding it, and loading one says which entries it dropped and
-  why.
+  reason — the indices are the name. The four built-in presets are unaffected and cannot be deleted:
+  your list is added to them, and a triple they already cover is not saved twice. Nothing is written
+  until you press Save, and closing the panel discards the change. A file edited by hand can hold a
+  face that names no buildable cone; the panel shows that row with a warning and a live delete
+  button rather than hiding it, and loading one says which entries it dropped and why.
 
 ### Changed
-- **`upper_indices` / `lower_indices` are now judged rather than partly ignored.** These arrays used
-  to be read only when they held exactly three entries, and only entries 0 and 2 were looked at, so
-  three kinds of mistake passed silently: a four-index array — `[1,0,-1,1]`, the notation users
-  actually write — fell through entirely and left the default 28° looking like a stated value; a
-  non-zero second index was dropped, rendering `[1,1,2]` as `[1,0,2]`'s 46.756° instead of the
-  31.545° it names (a shape this crystal model cannot build at all); and a negative index produced a
-  negative angle whose cone then vanished from the render with nothing said. Each of these now leaves
-  the wedge angle at its default **and logs a warning naming the array and the reason**. Applies
-  equally to the CLI, the C API and the GUI's own reader, which had each kept a copy of this
-  conversion. In the GUI the report is also an import-warning popup rather than a line in the log
-  panel alone, matching every other downgrade the document reader performs: the angle a refusal
-  leaves behind is a default the document never stated, and nothing on screen distinguishes it from
-  one the document did state.
-- **`[0,0,l]` now means "no pyramidal cap on this side", not 28°.** ⚠️ Behaviour change for existing
-  configs: a crystal whose `upper_indices` or `lower_indices` starts with 0 (and states no explicit
-  `upper_wedge_angle` / `lower_wedge_angle`) previously rendered a 28° cone on that side and now
-  renders a plain prism end. 28° was never a stated value — it was the field's default showing
-  through — and every other part of the engine already read a leading 0 as "no cone". Add an explicit
-  `upper_wedge_angle: 28.0` to keep the old picture.
+- **The CLI no longer rounds every render up to a whole second** (#324). The output loop used to
+  wait out its 1 s poll interval *before* checking whether the simulation had finished, so a
+  100-ray render and a 6,000,000-ray one both took 1.05 s and every render's wall time was a
+  whole-second staircase. It now checks first and waits only if there is something to wait for;
+  a 20k-ray render measures 1.02 s → 0.04 s, and the results file and stats are written no more
+  often than before. (The test suite does not get proportionally faster — under a parallel run the
+  waits already overlapped — so this is a latency change for a person at the terminal, not a CI
+  one.)
+- **The Display panel's Rendering rows are regrouped and renamed** (#338). The rows now read
+  `Resolution` ‖ `EV Anchor` / `EV` / its read-out ‖ `Mode` / ground colour / warning, so the EV
+  read-out sits under the value it reports instead of two rows away. The ground-colour row is one
+  control with two faces — `Sky Color` (with the eyedropper) under Screen, `Paper Color` under
+  Print — because the renderer reads only one of the two fields in each mode, so one of two
+  permanently shown controls was always dead; both fields keep their own values, `.lmc` keys,
+  Settings rows and Revert baseline, and switching modes back and forth changes neither. Three
+  labels: `Tone` → `Mode`, the `ev_mode` selector's `Mode` → `EV Anchor` (the same word as
+  `anchor_l99_sky`), `Paper` → `Paper Color`.
+- **Importing a core/CLI config into the GUI now warns about the keys the GUI deliberately does
+  not support** (#328). A non-zero `sun.azimuth`, `render[0].lens_shift` or `scene.geom_clock` in
+  an imported JSON used to be dropped without a word — a hand-written `azimuth: 30` rotated the
+  whole picture by 30° in the CLI and by nothing in the GUI, with no hint why. All three now
+  raise the same import-warning popup the reader already uses for a complex filter it cannot hold.
+  This is a boundary, not a gap: the GUI fixes the sun's azimuth at 0 and the CLI keeps the
+  freedom; the change is that the boundary now speaks.
+- **The "layer produces no rays" notice reads the weights that actually reach the engine** (#320).
+  It used to fire only when every crystal in a layer was excluded; a layer whose crystals were all
+  included with `Weight` 0 is the same engine configuration byte for byte and was not reported.
+  The notice now covers both, and names both controls.
+- **`upper_indices` / `lower_indices` are now judged rather than partly ignored.** (#336) These
+  arrays used to be read only when they held exactly three entries, and only entries 0 and 2 were
+  looked at, so three kinds of mistake passed silently: a four-index array — `[1,0,-1,1]`, the
+  notation users actually write — fell through entirely and left the default 28° looking like a
+  stated value; a non-zero second index was dropped, rendering `[1,1,2]` as `[1,0,2]`'s 46.756°
+  instead of the 31.545° it names (a shape this crystal model cannot build at all); and a negative
+  index produced a negative angle whose cone then vanished from the render with nothing said. Each
+  of these now leaves the wedge angle at its default **and logs a warning naming the array and the
+  reason**. Applies equally to the CLI, the C API and the GUI's own reader, which had each kept a
+  copy of this conversion. In the GUI the report is also an import-warning popup rather than a line
+  in the log panel alone, matching every other downgrade the document reader performs: the angle a
+  refusal leaves behind is a default the document never stated, and nothing on screen distinguishes
+  it from one the document did state.
+
+### ⚠️ Breaking Changes
+- **`LUMICE_ComputeAnnotationOverlay` is removed; `LUMICE_ComputeAnnotationAnchors` replaces it**
+  (#342, `LUMICE_API_VERSION` 427 → 428). Gone with it: `LUMICE_ReleaseAnnotationOverlay`, the
+  `LUMICE_AnnotationOverlay` struct (its `drawable` / `horizon` / `elevation` / `longitude` /
+  `angular_dist` masks and the `zenith_*` / `nadir_*` fields), and the `zenith_nadir` and
+  `want_labels` fields of `LUMICE_AnnotationRequest` — that struct's layout changes, so every
+  caller recompiles. The old call rasterized the auxiliary lines into width×height masks on the
+  CPU and was documented as "not a per-frame call"; its one interactive consumer, the GUI preview,
+  answered by freezing every line for the duration of a camera drag (the `Fixed` entry below). The
+  lines are level sets of three world-space angle fields, which any renderer can evaluate from the
+  direction it already has, so the new call answers only what a renderer cannot derive locally —
+  where along each curve its label sits, and where each named marker lands — in tens of
+  microseconds, with nothing in it proportional to the canvas, and is designed to be called every
+  frame. `LUMICE_AnnotationLabel`, `LUMICE_AnnotationMarkerPoint`, `LUMICE_AnnotationView`, the
+  `LUMICE_ANNOTATION_*` constants and the error contract are unchanged; the CLI renderer is
+  unaffected, since it composites through core in-process and bakes the same masks it always did.
+  **What to do**: a C/FFI caller that drew the masks draws the curves itself from the same three
+  angle fields (the preview shader's `blendAnnotationColor` and core's `annotation_overlay.cpp` are
+  the two reference evaluations) and takes text and marker positions from
+  `LUMICE_ComputeAnnotationAnchors` / `LUMICE_ReleaseAnnotationAnchors`; ask for the poles through
+  `marker_ids` (`LUMICE_ANNOTATION_MARKER_ZENITH` / `_NADIR`) rather than the removed switch.
+  No JSON, `.lmc` or rendered-image change.
+- **`[0,0,l]` now means "no pyramidal cap on this side", not 28°.** (#336) ⚠️ Behaviour change for
+  existing configs: a crystal whose `upper_indices` or `lower_indices` starts with 0 (and states no
+  explicit `upper_wedge_angle` / `lower_wedge_angle`) previously rendered a 28° cone on that side
+  and now renders a plain prism end. 28° was never a stated value — it was the field's default
+  showing through — and every other part of the engine already read a leading 0 as "no cone". Add an
+  explicit `upper_wedge_angle: 28.0` to keep the old picture.
 
 ### Fixed
-- **The wedge-angle preset dropdown named crystals it did not draw.** Its four entries carried
-  hand-transcribed angles with the Miller ratio inverted, unchanged since they were first written:
-  `{2,0,-2,1}` set 47.300° where that face is at **14.886°**, `{1,0,-1,2}` set 14.700° where it is at
-  **46.756°**, and `{1,0,-1,1}` set 28.000° for **27.996°**. Picking one built a crystal that was not
-  the one the label named. The angles are now computed from the indices, so the label and the number
-  cannot disagree again. ⚠️ Every config saved by picking one of these presets keeps its stored
-  angle — the old number is still there and still renders what it always did; re-pick the preset to
-  take the corrected value.
-- **`{1,0,-1,0}` has left the preset list; `{1,0,-1,3}` (57.912°) takes its place.** `{10-10}` is a
-  prism face and has no wedge angle at all, so its 90.000° was not a rounding error but a
-  category one. What it produced was a plain prism — reachable, then and now, by setting the pyramid
-  height to 0, which is where "no cone on this side" belongs.
+- **The preview's auxiliary lines follow the camera every frame again** (#342). Since 4.5.0 the
+  horizon, elevation/longitude grid and sun angular-distance circles were rasterized by core into
+  a mask and refreshed only after the view had held still, so during a drag or zoom they froze
+  where they were and jumped into place on release — while the lens border, which never took that
+  path, kept tracking. They are now evaluated per fragment in the preview shader from the same
+  level-set definition the CLI rasterizes, so they move with the picture; measured over twelve
+  consecutive frames of view change, the old path was up to 342 px off, the new one matches the
+  analytic position. The line profile is the same hard set the CLI draws (no antialiasing on
+  either side), so the picture at rest is unchanged.
+- **A config exported from a dual-fisheye view now draws its discs the size the screen shows**
+  (#342). The GUI's export wrote `overlap: 0.0872` — the value it uses to *sample its own source
+  texture*, not a property of the picture — and the CLI drew each disc 4% smaller than the preview
+  did. The export now writes `0`; a JSON file already saved keeps its old value and renders as
+  before, and re-exporting from the GUI picks up the fix.
+- **On CUDA, a run whose first layer has every weight at zero no longer poisons the GPU backend
+  for the rest of the run** (#320). The reported shape — run once with all population weights at
+  0, give one a weight, and get ten-plus seconds of garishly over-saturated colour — was the GPU
+  backend silently dropping to the CPU: an all-zero layer skipped the per-crystal loop that
+  records the kernel timing events, the unchecked timer reads then left a sticky CUDA error behind,
+  and the next run's first kernel-launch check read that error and blamed the launch. The
+  fallback then kept the GPU's batch size, so every CPU batch carried a single wavelength, which is
+  where the colour came from. All three links are fixed. Should the backend genuinely stop
+  mid-run, the GUI now says so in a warning instead of only getting slower, batches queued at the
+  GPU's size are dropped rather than traced one wavelength at a time, and the CPU continues at its
+  own batch size.
+- **Deleting an entry or a layer while the editor is open no longer rewrites a different entry**
+  (#319). In the default Immediate editing mode the Edit Entry window binds its target by index,
+  and deleting an entry *above* it left the index in range but pointing at the next entry down,
+  whose crystal and filter were then overwritten with the deleted entry's contents once per frame
+  — the beta report of "the card below gets closed" was that card's contents being replaced and
+  its label renumbered. The binding now follows its entry down on a delete above it, closes on a
+  delete of the entry itself, and the same holds for deleting a layer above the bound one.
+- **A malformed raypath row in a `.lmc` is refused instead of silently reinterpreted** (#329). A
+  row like `3--5` (or `-3-5`, `3-5-`, or one naming a face that does not exist) used to load as
+  `{3, 5}` — a plausible path the user never wrote — because the load path never ran the syntax
+  check the editor runs. The earlier 4.1.14 / 4.2.0 editors let such a row be typed and saved, so
+  this reaches real files. The row is now dropped on load, logged, and reported in the same popup
+  the open dialog already uses for other downgrades.
+- **A `Run` you press is never dropped by the auto-commit backpressure gate** (#325). The gate
+  that keeps the 70 ms auto-commit from re-submitting while a run's first batch is still in
+  flight applied to the `Run` button too, so pressing it within 500 ms of the previous run, before
+  that batch had landed, discarded the whole commit — "I pressed Run and nothing happened". A
+  user-initiated run is exempt; the gate still governs automatic commits.
+- **Under Print, the photo drag and zoom gestures no longer act on a photo that is not on
+  screen** (#338). Print suppresses the background photo overlay, but the gesture handlers still
+  reported the photo as visible, so dragging the preview moved an image the frame did not show.
+  One predicate now decides both whether the photo is drawn and whether it can be handled.
+- **The wedge-angle preset dropdown named crystals it did not draw.** (#336) Its four entries
+  carried hand-transcribed angles with the Miller ratio inverted, unchanged since they were first
+  written: `{2,0,-2,1}` set 47.300° where that face is at **14.886°**, `{1,0,-1,2}` set 14.700°
+  where it is at **46.756°**, and `{1,0,-1,1}` set 28.000° for **27.996°**. Picking one built a
+  crystal that was not the one the label named. The angles are now computed from the indices, so the
+  label and the number cannot disagree again. ⚠️ Every config saved by picking one of these presets
+  keeps its stored angle — the old number is still there and still renders what it always did;
+  re-pick the preset to take the corrected value.
+- **`{1,0,-1,0}` has left the preset list; `{1,0,-1,3}` (57.912°) takes its place.** (#336)
+  `{10-10}` is a prism face and has no wedge angle at all, so its 90.000° was not a rounding error
+  but a category one. What it produced was a plain prism — reachable, then and now, by setting the
+  pyramid height to 0, which is where "no cone on this side" belongs.
 
 ## [4.5.0] - 2026-09-06
 
@@ -1989,7 +2135,7 @@ it was thinking of and false of the C struct beside it.
 - Basic ice crystal halo simulation
 - Support for common crystal types (hexagonal prism, plate, column)
 
-[Unreleased]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.5.0...HEAD
+[4.5.1]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.5.0...v4.5.1
 [4.5.0]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.3...v4.5.0
 [4.4.3]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.2...v4.4.3
 [4.4.2]: https://github.com/LoveDaisy/ice_halo_sim/compare/v4.4.1...v4.4.2

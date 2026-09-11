@@ -548,6 +548,16 @@ script prints the path for whichever group it ran.
 - `config.json`, `test.json`, `scratchpad/`, remote test output files, and most generated artifacts are intentionally git-ignored.
 - Do not use `git add -f` to force-track ignored files. If a file is ignored and you are unsure, stop and ask first.
 - Reference images under `test/e2e-correctness/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
+- **Release**: a release is a chore — not a task, and not a commit made directly on `main` — worked
+  in its own worktree like any other change, and merged through a PR. Its `CHANGELOG.md` section is
+  written in that chore, in one batch, and the input to "is the section complete" is the mechanical
+  PR enumeration under `CHANGELOG.md`'s "Sourcing" rule (merge commits, first-parent non-merges,
+  `LUMICE_API_VERSION` diff), never memory of what was merged: every PR in that output gets a
+  recorded disposition, entry or one-sentence reason for none. `scripts/version.py set` validates
+  the hand-written section rather than cutting one from an accumulator, so there is no
+  `[Unreleased]` section to keep current between releases. The tag is the owner's to create, on
+  the merge commit. Steps, in order, are in `CONTRIBUTING.md` "Release Process" — that is the one
+  copy; do not restate them here.
 - CI (`.github/workflows/ci.yml`) triggers on `pull_request` and on `push` **filtered to `main`**.
   Every job therefore runs exactly once per commit: once while the change is a PR, once again when
   it lands on `main`. The filter is what makes that true — without it a push to a PR branch fires

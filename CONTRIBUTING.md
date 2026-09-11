@@ -90,22 +90,51 @@ See `CLAUDE.md` for detailed naming conventions and coding guidelines.
 
 ## Release Process
 
-**Before you start**: write the release's entries under `## [Unreleased]` in `CHANGELOG.md`. Step 1 cuts that section into the new version's section and leaves a fresh empty `[Unreleased]` behind, so whatever is not written by then is not in the release notes. `set` refuses to cut an empty `[Unreleased]`; `--allow-empty-changelog` is the escape hatch for a release with genuinely no user-perceptible change.
+A release is a **chore** with its own worktree and branch, not a commit made directly on `main`.
+The version's `CHANGELOG.md` section is written in that chore, in one batch, from a mechanical
+enumeration of every PR merged since the previous tag — never from memory, and not accumulated
+PR by PR beforehand (`CHANGELOG.md`'s own "Maintaining this file" rule says why). The tag is
+the owner's to create, on the merge commit.
 
-1. **Update version**: `python scripts/version.py set X.Y.Z` — bumps `CMakeLists.txt` *and* cuts `CHANGELOG.md`'s `[Unreleased]` into `## [X.Y.Z] - <UTC date>`, adding the matching link definition. Both files are computed and validated before either is written, so a rejected CHANGELOG leaves nothing half-updated.
-2. **Verify**: `python scripts/version.py check --tag vX.Y.Z` (should exit 0) — checks both that `CMakeLists.txt` matches the tag and that `CHANGELOG.md` has a section for it. Pass `--tag` explicitly at this point: without it the check compares against the *previous* tag, which does not yet match the version you just set.
-3. **Commit** the version and CHANGELOG changes
-4. **Tag**: `git tag vX.Y.Z`
-5. **Push**: `git push origin main --tags`
+1. **Version number**: the owner decides `X.Y.Z`. Semver is read against what a *user* can
+   perceive — CLI, GUI, config files, produced images and files. The C API is part of the
+   product only insofar as it ships as a library; while it does not, a C API break alone does
+   not force a major bump, though it still earns a `⚠️ Breaking Changes` entry.
+2. **Bootstrap the chore**: `/chore-bootstrap release-X.Y.Z`, then work it in a linked worktree
+   on its own branch (`AGENTS.md`, "Where a change lives, and from where it is made").
+3. **Enumerate, then decide per PR**: run the three commands under "Sourcing" in `CHANGELOG.md`
+   (merge commits, first-parent non-merges, and the `LUMICE_API_VERSION` diff — with `main` in
+   place of the tag that does not exist yet). For every PR in the output, record in the chore's
+   progress notes a **per-PR disposition**: entry written (and under which heading — `Added` /
+   `Changed` / `Fixed` / `Breaking Changes`), or no entry plus one sentence of why. The table is
+   the audit trail that the section is complete; it stays in the chore, not in the changelog.
+4. **Write the section and set the version**: add `## [X.Y.Z] - <UTC date>` at the top of the
+   version list in `CHANGELOG.md`, with its entries under the file's headings, then
+   `python scripts/version.py set X.Y.Z` — it bumps `CMakeLists.txt`, checks that the dated
+   section exists and holds at least one bullet (`--allow-empty-changelog` is the escape hatch
+   for a release with genuinely no user-perceptible change), and adds the version's link
+   definition. Both files are computed and validated before either is written.
+   Then `python scripts/version.py check --tag vX.Y.Z` must exit 0 — pass `--tag` explicitly:
+   without it the check compares against the *previous* tag, which no longer matches — and
+   read `python scripts/version.py extract-notes X.Y.Z` end to end: that output is the release
+   page's body verbatim, so how it reads is how the release page reads.
+5. **PR → CI → merge**: open the PR from the chore branch; the last commit is the cut
+   (`chore(release): cut X.Y.Z`), on top of the changelog backfill. Merge as usual.
+6. **Tag** (owner): `git tag vX.Y.Z` on the merge commit, then `git push origin vX.Y.Z`.
+   The release workflow (`.github/workflows/release.yml`) triggers on the `v*` tag push, runs
+   the same `check --tag` before building — a `CMakeLists.txt` / `CHANGELOG.md` mismatch blocks
+   the release — and uses `extract-notes` for the release page body.
 
-The release workflow (`.github/workflows/release.yml`) triggers automatically on `v*` tag pushes. It runs the same consistency check before building — if `CMakeLists.txt` version doesn't match the tag, or `CHANGELOG.md` has no section for it, the release is blocked.
+There is one shape of release, not two: every version is cut together with its backfilled
+section, so a "cut only" commit on `main` with the notes written some other time does not
+occur.
 
 The release produces platform-specific packages:
 - **Linux x64/ARM64**: `.tar.gz` with CLI executable (ARM64 excludes GUI due to runner GPU limitations)
 - **macOS ARM64**: `.tar.gz` with CLI executable and `LumiceGUI.app` bundle
 - **Windows x64**: `.zip` with CLI and GUI executables (`.exe` with embedded icon)
 
-The release page's body is that version's `CHANGELOG.md` section; GitHub's auto-generated pull-request list follows it as an appendix. How well the section reads is therefore how well the release page reads.
+The release page's body is that version's `CHANGELOG.md` section; GitHub's auto-generated pull-request list follows it as an appendix.
 
 ### Before tagging
 
