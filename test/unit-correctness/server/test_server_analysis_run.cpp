@@ -19,6 +19,9 @@
 //        the control case beside it shows what Stop() would have made of the same run.
 //   Step 4  the frame's raypath_histogram_result_ is set in an analysis session and
 //        nullopt again after the next render commit.
+//   RenderAfter{ConeStopped,FullSky}AnalysisProducesAFrame: the render that follows an
+//        analysis traces rays and carries an image — the cone-stopped case is the one
+//        whose early-stop flag is still up at the switch, the full-sky case the control.
 
 #include <gtest/gtest.h>
 
@@ -302,6 +305,63 @@ TEST_F(ServerAnalysisRun, ConeStopTargetCompletesThroughNaturalCompletion) {
   ASSERT_EQ(r.entries_[0].chain_.size(), 1u);
   EXPECT_EQ(r.entries_[0].chain_[0].crystal_id, 1u);
   EXPECT_EQ(r.entries_[0].ring_energy_.size(), 5u);
+}
+
+// ---------------------------------------------------------------------------
+// The render AFTER an analysis — the owner's own sequence: Run, Analyze, Run again. The
+// second Run is a plain CommitConfig (an Exclude in between is a GUI-side document edit
+// that reaches the server only as part of that commit), so the proposition is the
+// server's alone: a render session that follows an analysis session traces rays, and
+// its frame carries the image.
+//
+// Two cases, one predicate each, and the pair is the diagnosis: the cone-stopped
+// analysis is the one whose early-stop flag (analysis_roi_target_reached_) is up when the
+// session ends, and the whole-sky analysis is the one that can never raise it
+// (RaypathHistogramConsumer::RoiTargetReached is kCone-only). A render that traces
+// nothing after the first and everything after the second puts the first divergence
+// on that flag, not on the session switch as such.
+//
+// What "traces nothing" reads as at this layer: GenerateScene's loop never runs, so no
+// batch is ever queued or consumed, and the lifecycle settles as kIdle — the producer-
+// side predicates are all quiet and has_ever_consumed_ never turns true — with a frame
+// that has no valid data. (The GUI reads that as "Simulating forever": its sim_state
+// leaves kSimulating on COMPLETED only, and nothing ever completes.)
+// ---------------------------------------------------------------------------
+void RenderAfterAnalysisProducesAFrame(Server& server, const RaypathAnalysisRequest& request) {
+  ASSERT_FALSE(server.CommitConfig(Halo22Config("infinite")));
+  server.Stop();
+  ASSERT_FALSE(server.StartRaypathAnalysis(request));
+  if (request.roi_.mode_ == RaypathRoiMode::kCone) {
+    // The cone target ends the unbounded run by itself, with the early-stop flag up.
+    ASSERT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
+  } else {
+    // A whole-sky analysis of an unbounded run has no end of its own: Stop() it once it
+    // has data, which is the other way an analysis session can be left behind.
+    ASSERT_TRUE(WaitForFirstRays(server, 5000));
+    server.Stop();
+  }
+
+  // The second Run.
+  ASSERT_FALSE(server.CommitConfig(Halo22Config(20000)));
+  EXPECT_TRUE(WaitForFirstRays(server, 5000)) << "the render session after the analysis traced no rays at all";
+  const SimLifecycle lc = WaitForRunToEnd(server, 30000);
+  ASSERT_EQ(lc, SimLifecycle::kCompleted)
+      << "settled as lifecycle " << static_cast<int>(lc) << " (kIdle = no batch was ever produced or consumed)";
+  auto frame = server.AcquireResultFrame();
+  EXPECT_TRUE(frame->has_valid_data_);
+  EXPECT_FALSE(frame->raypath_histogram_result_.has_value()) << "the histogram is the analysis session's";
+  ASSERT_EQ(frame->render_results_.size(), 1u) << "the render's image";
+  ASSERT_TRUE(frame->stats_result_.has_value());
+  EXPECT_EQ(frame->stats_result_->sim_ray_num_, 20000u) << "the whole budget was traced";
+}
+
+TEST_F(ServerAnalysisRun, RenderAfterConeStoppedAnalysisProducesAFrame) {
+  RenderAfterAnalysisProducesAFrame(server_, ConeOnHaloRequest(200));
+}
+
+// The control: the same sequence through the ROI mode that cannot raise the flag.
+TEST_F(ServerAnalysisRun, RenderAfterFullSkyAnalysisProducesAFrame) {
+  RenderAfterAnalysisProducesAFrame(server_, FullSkyRequest());
 }
 
 TEST_F(ServerAnalysisRun, ControlStopReadsAsIdleWithNoData) {

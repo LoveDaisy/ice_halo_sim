@@ -416,7 +416,11 @@ class ServerImpl {
   // GetStatus() infers kIdle from its four predicates while has_ever_consumed_ stays true —
   // is what makes the run read as kCompleted with a valid frame. Stop() resets
   // has_ever_consumed_ and would make the same run read as kIdle with no data.
-  // Cleared by StartRaypathAnalysis for each new analysis session.
+  // Cleared by StartRaypathAnalysis for each new analysis session — and that is the ONLY
+  // clear: the switch back to a render (CommitConfig's was_analysis branch) leaves it as
+  // the analysis left it. Both the write and the read are therefore gated on
+  // mode_ == kAnalysis, so a render session never sees it whatever its value; a second
+  // clearing point on the way out would be a second implementation of the same rule.
   std::atomic_bool analysis_roi_target_reached_{ false };
 
   // ResolveGpuRoute's verdict at CONSTRUCTION time — the route this
@@ -2130,8 +2134,12 @@ void ServerImpl::GenerateScene() {
   fallback_queue_invalidated_.store(false, std::memory_order_release);
   // The cone stop target ends the loop the same way a finite budget does: this producer
   // simply stops enqueueing, and completion is inferred downstream — see the flag.
+  // Gated on kAnalysis exactly as the write in ConsumeData is: the flag outlives the
+  // analysis session that raised it (nothing on the way back to a render clears it), and
+  // read bare here it ended the NEXT render session before its first batch — zero batches,
+  // has_ever_consumed_ never true, a frame with no data and a GUI stuck on "Simulating".
   while ((per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) &&
-         !analysis_roi_target_reached_.load(std::memory_order_acquire)) {
+         !(kAnalysis && analysis_roi_target_reached_.load(std::memory_order_acquire))) {
     const bool backend_active = ReadBackendActive();
     // Shrinking the grain only sizes the batches queued FROM HERE ON, and by the time a
     // fallback is noticed the queue is already full of batches sized for the GPU
