@@ -648,6 +648,7 @@ int main(int argc, char** argv) {
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterSimE2eSmokeTests(engine);
+  RegisterRaypathAnalysisPanelTests(engine);
   RegisterDefaultsPanelTests(engine);
   RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);

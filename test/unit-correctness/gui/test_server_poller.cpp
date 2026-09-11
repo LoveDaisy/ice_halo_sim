@@ -853,3 +853,92 @@ TEST(ServerPollerShutdown, StopQuiescesTheHeartbeatBeforeReturning) {
   EXPECT_EQ(local->HeartbeatTickCountForTest(), ticks_at_return)
       << "a heartbeat tick ran after Stop() returned — its caller had already destroyed the server";
 }
+
+// ---- The analysis result: materialized once per generation, carried forward, fenced on demand ----
+//
+// An analysis session's frames carry a histogram and no image, so they never enter the texture
+// branch; the poller reads them on a branch of their own keyed on the frame's snapshot_generation
+// (lumice.h v4.30). Three things a consumer relies on, pinned against a real analysis run:
+//   1. a poll on a new generation publishes a fresh AnalysisPayload with the frame's entries;
+//   2. a poll on the SAME generation carries the previous object forward (pointer-equal), so the
+//      consumer's generation dedup sees one result once, however many polls observe it;
+//   3. InvalidateAnalysisResult() drops the carried object from the published bundle and leaves
+//      everything else in it alone — the fence DoAnalyze and the document switch take so a view
+//      that has just cleared itself does not adopt the old result back.
+TEST(ServerPollerAnalysis, MaterializesOncePerGenerationCarriesForwardAndFencesOnDemand) {
+  // Its own scene rather than kFiniteSceneJson: that fixture's single layer has prob 1.0, which
+  // hands every ray to a next layer that does not exist, so no ray ever LEAVES the scene and the
+  // histogram — which counts outgoing chains — is empty (the render is unaffected: it does not
+  // need rays to leave). A 22-degree halo with prob 0 is what the analysis's own tests use.
+  static constexpr const char* kHaloJson = R"({
+    "crystal": [{"id": 1, "type": "prism", "shape": {"height": 1.2},
+                 "axis": {"zenith": {"type": "uniform", "mean": 90, "std": 360},
+                          "azimuth": {"type": "uniform", "mean": 0, "std": 360}}}],
+    "filter": [],
+    "scene": {"light_source": {"type": "sun", "altitude": 20.0, "spectrum": "D65"},
+              "ray_num": 40000, "max_hits": 7,
+              "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 10}]}]},
+    "render": [{"id": 1, "lens": {"type": "fisheye_equal_area", "fov": 120},
+                "resolution": [64, 64], "view": {"elevation": 20}}]
+  })";
+  DetachGlobals();
+  LiveServer srv;
+  ASSERT_TRUE(srv.Run(kHaloJson));
+  // A completed render is the state an analysis starts from (the C API refuses over a live one).
+  LUMICE_StopServer(srv);
+  LUMICE_RaypathAnalysisRequest req{};
+  req.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
+  req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
+  ASSERT_EQ(LUMICE_StartRaypathAnalysis(srv, &req), LUMICE_OK);
+  // Not WaitForDrained alone: an analysis keeps the render's epoch (server.cpp — same scene, same
+  // epoch), so "drained_epoch == epoch" is already true from the render that just completed and
+  // would return before a single analysis batch landed. The lifecycle leaving RUNNING is the
+  // analysis's own edge.
+  ASSERT_TRUE(WaitFor(
+      [&srv] {
+        LUMICE_SimLifecycleResult lc{};
+        LUMICE_GetSimLifecycle(srv, &lc);
+        return lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED;
+      },
+      30000))
+      << "the analysis never completed";
+  ASSERT_TRUE(WaitForDrained(srv, 30000)) << "the analysis never drained";
+
+  ScopedPoller local;
+  local->PollOnceForTest(srv);
+  Snapshot s1 = local->LoadSnapshot();
+  ASSERT_TRUE(s1 != nullptr);
+  ASSERT_TRUE(s1->analysis != nullptr) << "an analysis frame publishes a payload";
+  EXPECT_EQ(s1->analysis->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+  EXPECT_FALSE(s1->analysis->entries.empty());
+  EXPECT_NE(s1->analysis->snapshot_generation, 0u);
+  // The frame's own count, read directly, is what the payload holds — no sentinel row, no cut.
+  {
+    LUMICE_ResultFrame* frame = nullptr;
+    ASSERT_EQ(LUMICE_AcquireResultFrame(srv, &frame), LUMICE_OK);
+    LUMICE_RaypathAnalysisInfo info{};
+    ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+    EXPECT_EQ(static_cast<int>(s1->analysis->entries.size()), info.entry_count);
+    EXPECT_EQ(s1->analysis->snapshot_generation, info.snapshot_generation);
+    LUMICE_ReleaseResultFrame(frame);
+  }
+  EXPECT_EQ(s1->payload, nullptr) << "and no texture: an analysis frame has no image";
+
+  // 2. Same generation again: the same object, carried forward.
+  local->PollOnceForTest(srv);
+  Snapshot s2 = local->LoadSnapshot();
+  ASSERT_TRUE(s2 != nullptr);
+  EXPECT_EQ(s2->analysis, s1->analysis);
+
+  // 3. The fence: analysis gone, the rest of the bundle as it was.
+  local->InvalidateAnalysisResult();
+  Snapshot s3 = local->LoadSnapshot();
+  ASSERT_TRUE(s3 != nullptr);
+  EXPECT_EQ(s3->analysis, nullptr);
+  EXPECT_EQ(s3->valid, s2->valid);
+  EXPECT_EQ(s3->epoch, s2->epoch);
+  EXPECT_EQ(s3->lifecycle, s2->lifecycle);
+  // And a further poll on the SAME generation does not bring it back: the cursor already saw it.
+  local->PollOnceForTest(srv);
+  EXPECT_EQ(local->LoadSnapshot()->analysis, nullptr);
+}

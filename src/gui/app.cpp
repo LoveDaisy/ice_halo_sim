@@ -741,6 +741,8 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
     state.analysis.window_open = window_open;
     state.analysis_result = GuiState::AnalysisResultView{};
     state.analysis_run_in_progress = false;
+    // And the poller's carried copy, or the cleared view would adopt it back next frame.
+    g_server_poller.InvalidateAnalysisResult();
   }
 
   // crystal_mesh_hash reset — as-built: only DoNew clears it (Open branches don't touch it;
@@ -1460,6 +1462,9 @@ bool DoAnalyze() {
   g_state.analysis.started = true;
   g_state.analysis.selected_entry.reset();
   g_state.analysis_result = GuiState::AnalysisResultView{};
+  // The poller's snapshot still carries the previous result forward, and with the view just
+  // cleared (held generation 0) the next SyncFromPoller would adopt it as new. Drop it there too.
+  g_server_poller.InvalidateAnalysisResult();
   // Same wake as a fresh commit: the poller publishes valid=false across the edge, so the first
   // observation SyncFromPoller derives the in-progress flag from is this run's, not the last
   // render's COMPLETED.

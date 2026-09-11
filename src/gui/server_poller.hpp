@@ -241,6 +241,16 @@ class ServerPoller {
   // test/unit-correctness/gui/, drive no-GL-context interleavings through it).
   void InvalidateStagedTexture();
 
+  // The analysis-result twin of the fence above: publish an analysis=null copy of the current
+  // snapshot, so the result carried forward from an earlier run is not re-adopted by a consumer
+  // that has just cleared its own view. Two production callers, and both need it for the same
+  // reason — the consumer dedups on the generation it HOLDS, and once it holds nothing (0) any
+  // carried payload reads as new: DoAnalyze (a new run must not show the previous run's list
+  // under its own name until the first result lands) and the document-switch reset (the previous
+  // document's chains mean nothing for this one). Also taken on Start(server) beside the
+  // generation cursor reset, for the same server-restart reason.
+  void InvalidateAnalysisResult();
+
   // Set calibrated quality gate threshold (called once at startup after calibration run).
   // Thread-safe: only called from main thread before any Start().
   void SetCalibratedThreshold(unsigned long long threshold);

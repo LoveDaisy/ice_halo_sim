@@ -44,6 +44,7 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // be skipped as "seen". Not part of ResetPerResumeState on purpose: a wake on the SAME server
   // has nothing to re-read (the consumer dedups on the payload's own generation anyway).
   last_analysis_generation_ = 0;
+  InvalidateAnalysisResult();
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -173,6 +174,17 @@ void ServerPoller::InvalidateStagedTexture() {
   auto next = std::make_shared<PreviewSnapshot>(*prev);
   next->payload.reset();
   next->has_new_texture = false;
+  StorePublished(std::move(next));
+}
+
+void ServerPoller::InvalidateAnalysisResult() {
+  std::lock_guard<std::mutex> lk(publish_mutex_);
+  auto prev = LoadPublished();
+  if (!prev || !prev->analysis) {
+    return;
+  }
+  auto next = std::make_shared<PreviewSnapshot>(*prev);
+  next->analysis.reset();
   StorePublished(std::move(next));
 }
 
