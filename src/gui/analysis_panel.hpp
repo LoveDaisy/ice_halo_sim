@@ -8,8 +8,10 @@
 // single-crystal chain into a filter that excludes it.
 //
 // Pure C API consumer. Everything the window does reaches core through lumice.h — the run
-// (LUMICE_StartRaypathAnalysis), the result (LUMICE_FrameGetRaypathAnalysis via the poller), and
-// the click's direction (LUMICE_UnprojectPixel) — and every piece of logic that is not an ImGui
+// (LUMICE_StartRaypathAnalysis), the result (LUMICE_FrameGetRaypathAnalysis, read on the main
+// thread under the P/B/D symmetry the panel's checkboxes name — the reduction is the server's,
+// done on every read, so a toggle re-reads the result on hand and starts no run), and the
+// click's direction (LUMICE_UnprojectPixel) — and every piece of logic that is not an ImGui
 // call is a free function below, so the unit layer can drive it without a frame.
 //
 // Ownership, stated once. The panel's own state is GuiState::analysis (session tier); the result
@@ -17,6 +19,7 @@
 // (derived). The panel writes the first, the adoption below writes the second, SyncFromPoller
 // writes the third through DeriveAnalysisInProgress. No widget writes a document field.
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -45,8 +48,10 @@ bool DeriveAnalysisInProgress(bool started, const PreviewSnapshot* snap);
 // Adopt `payload` as the result on show iff it is a NEW result: non-null and carrying a
 // snapshot_generation different from the one already held. The ONE place that decides "new",
 // called by SyncFromPoller every frame with whatever the snapshot carries (carry-forwards and all)
-// and by tests directly. On adoption: the selection is cleared (it indexed the old entries) and the
-// display order is recomputed for the current radius. Returns whether it adopted.
+// and by tests directly. On adoption: the selection is cleared (it named a chain of the old
+// result) and the display order is recomputed for the current radius. Returns whether it adopted.
+// A payload the poller published carries no entries; SyncFromPoller follows an adoption with
+// RefreshAnalysisEntries, which reads them under the panel's symmetry.
 //
 // The held generation starts at 0, and 0 is what a payload can never carry (the server's counter
 // is incremented before it is stamped on a frame — server.cpp DoSnapshot), so the first real
@@ -65,8 +70,42 @@ double SumRingEnergy(const LUMICE_RaypathHistogramEntry& entry, int rings);
 // Rebuild analysis_result's display_energy / display_order / display_total from the payload and
 // the slider (state.analysis.cone_radius_deg) — a CONE result sums the rings inside the radius,
 // every other mode shows `energy` as delivered. Pure re-projection of data already on hand:
-// touches no lifecycle, no dirty, no server. Called on adoption and on every slider change.
+// touches no lifecycle, no dirty, no server. Called on adoption, on every entry re-read, and on
+// every slider change.
 void RecomputeAnalysisDisplayOrder(GuiState& state);
+
+// ---- The symmetry, and the read of the entries under it ------------------------------------------
+
+// The panel's three checkboxes as the LUMICE_RAYPATH_SYMMETRY_* bit set a read takes.
+uint8_t AnalysisSymmetryBits(const GuiState& state);
+
+// Whether the entries on show are stale against what the panel asks for: a result is held and
+// it has not yet been read as (its snapshot_generation, AnalysisSymmetryBits) — never read at all
+// (fetched_once false), or read for another generation or another symmetry. Pure.
+bool AnalysisEntriesNeedRefresh(const GuiState& state);
+
+// Read the held result's entries under the panel's symmetry when AnalysisEntriesNeedRefresh says
+// they are stale: LUMICE_AcquireResultFrame -> LUMICE_FrameGetRaypathAnalysisInfo /
+// LUMICE_FrameGetRaypathAnalysis under AnalysisSymmetryBits -> release, on the calling (main)
+// thread, and replace analysis_result.payload with one carrying the entries (and the frame's own
+// identity and echo fields), recompute the display order and record what was read. The selection
+// is kept: it names a chain, and SelectedAnalysisEntry finds it again iff the chain is still a
+// row under the new symmetry. Starts no run and never waits for a poll — this is what makes a
+// checkbox immediate.
+//
+// The frame the server hands back can be past the poller's payload (a newer snapshot landed
+// since); the payload then takes the frame's generation, so what is shown is one consistent
+// frame. If the server no longer holds an analysis frame (a render has since been committed —
+// the result on show is deliberately kept across that, app.cpp DoRun), nothing can be re-read:
+// the entries and entries_symmetry stay as they are, the attempt is recorded so it is not
+// repeated every frame, and the panel shows the difference. Returns whether entries were read.
+// No-op with a null server.
+bool RefreshAnalysisEntries(GuiState& state, LUMICE_Server* server);
+
+// The selected row's entry — the entry of analysis_result.payload whose `display` equals
+// analysis.selected_entry — or nullptr when nothing is selected or no row carries that text
+// (the chain was merged away by a symmetry change, or the result is a new one).
+const LUMICE_RaypathHistogramEntry* SelectedAnalysisEntry(const GuiState& state);
 
 // ---- ROI: the click on the preview ---------------------------------------------------------------
 
@@ -165,17 +204,17 @@ void EnsureDefaultAnalysisRayBudget(GuiState& state);
 // The LUMICE_RaypathAnalysisRequest for the session's ROI. IN_FRAME takes the preview view on the
 // canvas_w x canvas_h canvas; CONE takes the picked centre with the FULL cone
 // (kAnalysisConeMaxRadiusDeg / kAnalysisConeRingCount, and the session's cone_stop_target) — the
-// slider is applied at display time, never here. Symmetry is always the session default. The ray
-// budget is the session's own (ray_num_millions / infinite), always explicit: the GUI never sends
-// LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT, because it already holds the value the sentinel would
-// stand for.
+// slider is applied at display time, never here, and so is the symmetry (the request has none;
+// v4.33). The ray budget is the session's own (ray_num_millions / infinite), always explicit: the
+// GUI never sends LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT, because it already holds the value the
+// sentinel would stand for.
 LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int canvas_w, int canvas_h);
 
 // ---- Exclude this raypath ------------------------------------------------------------------------
 
 enum class ExcludeEligibility {
   kOk,
-  kNoSelection,        // no row selected, or the index no longer addresses an entry
+  kNoSelection,        // no row selected, or no row of the result on show carries that chain
   kMultiSegment,       // the chain crosses scattering layers; a filter on one crystal cannot say it
   kCrystalNotInScene,  // the chain's crystal id is not one the CURRENT document commits (edited
                        // since the analysis) — never guess which crystal was meant
@@ -190,10 +229,12 @@ ExcludeEligibility EvaluateExcludeEligibility(const GuiState& state, std::string
 std::string FormatSegmentRaypathText(const LUMICE_RaypathChainSegment& segment);
 
 // The exclusion itself, on an eligible selection: a filter_out filter on the chain's face
-// sequence, P|B|D symmetric (the same reduction the chain was counted under), bound to every entry
-// that uses the chain's crystal through the filter editor's own pool-write path. The frame-tail
-// reconciler sees the filters diff and marks the document hard-dirty; the user re-runs. Returns
-// false, writing nothing, when the selection is not eligible.
+// sequence, symmetric under the bits the list on show was reduced with
+// (analysis_result.entries_symmetry — the reduction the selected row was counted under, so the
+// filter removes exactly the rows the user sees merged into it, no wider and no narrower), bound
+// to every entry that uses the chain's crystal through the filter editor's own pool-write path.
+// The frame-tail reconciler sees the filters diff and marks the document hard-dirty; the user
+// re-runs. Returns false, writing nothing, when the selection is not eligible.
 bool ApplyExcludeSelectedRaypath(GuiState& state);
 
 // ---- Rendering -----------------------------------------------------------------------------------

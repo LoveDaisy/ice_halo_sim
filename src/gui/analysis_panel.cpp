@@ -6,6 +6,7 @@
 #include <map>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "IconsFontAwesome6.h"
@@ -21,9 +22,11 @@
 #include "gui/semantic_colors.hpp"
 #include "gui/server_poller.hpp"
 #include "gui/sim_state_rules.hpp"
+#include "gui/symmetry_ui.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
+#include "util/result_frame.hpp"
 
 namespace lumice::gui {
 
@@ -60,6 +63,22 @@ void DirToAltAz(const float dir[3], float* alt_deg, float* az_deg) {
     az += 360.0f;
   }
   *az_deg = az;
+}
+
+// "P|B|D", "P|B", ..., or "no symmetry": the bits as the user reads them.
+std::string SymmetryBitsLabel(uint8_t bits) {
+  std::string out;
+  for (const auto& [bit, name] : { std::pair<int, const char*>{ LUMICE_RAYPATH_SYMMETRY_P, "P" },
+                                   std::pair<int, const char*>{ LUMICE_RAYPATH_SYMMETRY_B, "B" },
+                                   std::pair<int, const char*>{ LUMICE_RAYPATH_SYMMETRY_D, "D" } }) {
+    if (bits & bit) {
+      if (!out.empty()) {
+        out += '|';
+      }
+      out += name;
+    }
+  }
+  return out.empty() ? "no symmetry" : out;
 }
 
 const char* RoiModeLabel(int mode) {
@@ -153,6 +172,91 @@ void RecomputeAnalysisDisplayOrder(GuiState& state) {
   // ascending), so the list is deterministic for equal sums too.
   std::stable_sort(view.display_order.begin(), view.display_order.end(),
                    [&](int a, int b) { return view.display_energy[a] > view.display_energy[b]; });
+}
+
+// ---- The symmetry, and the read of the entries under it ------------------------------------------
+
+uint8_t AnalysisSymmetryBits(const GuiState& state) {
+  const auto& a = state.analysis;
+  return static_cast<uint8_t>((a.symmetry_p ? LUMICE_RAYPATH_SYMMETRY_P : 0) |
+                              (a.symmetry_b ? LUMICE_RAYPATH_SYMMETRY_B : 0) |
+                              (a.symmetry_d ? LUMICE_RAYPATH_SYMMETRY_D : 0));
+}
+
+bool AnalysisEntriesNeedRefresh(const GuiState& state) {
+  const auto& payload = state.analysis_result.payload;
+  if (!payload) {
+    return false;
+  }
+  const auto& a = state.analysis;
+  return !(a.fetched_once && a.fetched_generation == payload->snapshot_generation &&
+           a.fetched_symmetry == AnalysisSymmetryBits(state));
+}
+
+bool RefreshAnalysisEntries(GuiState& state, LUMICE_Server* server) {
+  if (server == nullptr || !AnalysisEntriesNeedRefresh(state)) {
+    return false;
+  }
+  auto& a = state.analysis;
+  const uint8_t symmetry = AnalysisSymmetryBits(state);
+  // Recorded before the read, whatever it finds: a frame that cannot be read now will not be
+  // readable next frame either, and the record is what keeps this from being a per-frame poll.
+  a.fetched_once = true;
+  a.fetched_generation = state.analysis_result.payload->snapshot_generation;
+  a.fetched_symmetry = symmetry;
+
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK || raw_frame == nullptr) {
+    return false;
+  }
+  lumice::ResultFramePtr frame(raw_frame);
+  LUMICE_RaypathAnalysisInfo info{};
+  if (LUMICE_FrameGetRaypathAnalysisInfo(frame.get(), symmetry, &info) != LUMICE_OK || info.present == 0) {
+    GUI_LOG_INFO("[Analysis] the server holds no analysis frame; the list keeps the entries on hand (symmetry {})",
+                 static_cast<int>(state.analysis_result.entries_symmetry));
+    return false;
+  }
+  auto payload = std::make_shared<AnalysisPayload>();
+  payload->snapshot_generation = info.snapshot_generation;
+  payload->roi_mode = info.roi_mode;
+  payload->cone_ring_count = info.cone_ring_count;
+  payload->cone_radius_rad = info.cone_radius_rad;
+  // One more slot than entries: the sentinel (count == 0) lands at [entry_count] when the frame
+  // holds exactly entry_count entries, and the read below stops at it in every case.
+  std::vector<LUMICE_RaypathHistogramEntry> raw(static_cast<size_t>(std::max(info.entry_count, 0)) + 1);
+  if (LUMICE_FrameGetRaypathAnalysis(frame.get(), symmetry, raw.data(), info.entry_count) != LUMICE_OK) {
+    return false;
+  }
+  size_t n = 0;
+  while (n < raw.size() && raw[n].count != 0) {
+    ++n;
+  }
+  raw.resize(n);
+  payload->entries = std::move(raw);
+  // The frame may be a newer snapshot than the payload the poller published; what is shown is
+  // this frame, so the record follows it — and AdoptAnalysisPayloadIfNew, seeing the same
+  // generation from the poller later, will not clear the selection for a result already on show.
+  a.fetched_generation = info.snapshot_generation;
+  state.analysis_result.payload = std::move(payload);
+  state.analysis_result.entries_symmetry = symmetry;
+  RecomputeAnalysisDisplayOrder(state);
+  GUI_LOG_VERBOSE("[Analysis] entries read under symmetry {}: {} rows, gen={}", static_cast<int>(symmetry),
+                  state.analysis_result.payload->entries.size(), info.snapshot_generation);
+  return true;
+}
+
+const LUMICE_RaypathHistogramEntry* SelectedAnalysisEntry(const GuiState& state) {
+  const auto& sel = state.analysis.selected_entry;
+  const auto& payload = state.analysis_result.payload;
+  if (!sel.has_value() || !payload) {
+    return nullptr;
+  }
+  for (const auto& e : payload->entries) {
+    if (*sel == e.display) {
+      return &e;
+    }
+  }
+  return nullptr;
 }
 
 // ---- ROI: the click on the preview ---------------------------------------------------------------
@@ -313,7 +417,6 @@ void EnsureDefaultAnalysisRayBudget(GuiState& state) {
 LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int canvas_w, int canvas_h) {
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = state.analysis.roi_mode;
-  req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
   // The budget applies to every ROI mode, so it sits outside the switch. Millions -> rays in
   // double, as the document's own field is converted, so 12.5 M is 12500000 and not a float
   // rounding of it.
@@ -339,15 +442,6 @@ LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int ca
 
 namespace {
 
-const LUMICE_RaypathHistogramEntry* SelectedEntry(const GuiState& state) {
-  const auto& sel = state.analysis.selected_entry;
-  const auto& payload = state.analysis_result.payload;
-  if (!sel.has_value() || !payload || *sel < 0 || *sel >= static_cast<int>(payload->entries.size())) {
-    return nullptr;
-  }
-  return &payload->entries[static_cast<size_t>(*sel)];
-}
-
 // The pool slot a scene crystal id came from, through the same map BuildScene commits with.
 std::optional<int> PoolSlotForSceneCrystal(const GuiState& state, int scene_crystal_id) {
   const std::map<int, int> pool_to_core = ComputeCrystalPoolToCoreIdMap(state);
@@ -362,7 +456,7 @@ std::optional<int> PoolSlotForSceneCrystal(const GuiState& state, int scene_crys
 }  // namespace
 
 ExcludeEligibility EvaluateExcludeEligibility(const GuiState& state, std::string* why) {
-  const LUMICE_RaypathHistogramEntry* e = SelectedEntry(state);
+  const LUMICE_RaypathHistogramEntry* e = SelectedAnalysisEntry(state);
   if (e == nullptr) {
     if (why) {
       *why = "Select a raypath in the list first.";
@@ -422,7 +516,7 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
     GUI_LOG_WARNING("[Analysis] exclude refused: {}", why);
     return false;
   }
-  const LUMICE_RaypathHistogramEntry* e = SelectedEntry(state);
+  const LUMICE_RaypathHistogramEntry* e = SelectedAnalysisEntry(state);
   const std::optional<int> pool = PoolSlotForSceneCrystal(state, e->chain[0].crystal_id);
   // Eligibility above guarantees both; a second check costs nothing and keeps this function safe
   // to call on its own.
@@ -433,12 +527,13 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
   FilterConfig filter;
   filter.name = std::string("Exclude ") + e->display;
   filter.action = 1;  // filter_out
-  // The chain was counted under the session's P|B|D reduction, so the filter matches it under
-  // the same symmetry — otherwise excluding "3-5" would leave every orientation-equivalent path
-  // of the same chain in the picture.
-  filter.sym_p = true;
-  filter.sym_b = true;
-  filter.sym_d = true;
+  // The row was counted under the symmetry the list on show was reduced with, so the filter
+  // matches it under the same bits: fewer and "3-5" would leave orientation-equivalent paths the
+  // row merged in the picture; more and it would remove paths the user saw as separate rows.
+  const uint8_t sym = state.analysis_result.entries_symmetry;
+  filter.sym_p = (sym & LUMICE_RAYPATH_SYMMETRY_P) != 0;
+  filter.sym_b = (sym & LUMICE_RAYPATH_SYMMETRY_B) != 0;
+  filter.sym_d = (sym & LUMICE_RAYPATH_SYMMETRY_D) != 0;
   RaypathParams rp;
   rp.raypath_text = FormatSegmentRaypathText(e->chain[0]);
   filter.param = FromLegacyRaypath(rp);
@@ -451,8 +546,8 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
     for (auto& entry : layer.entries) {
       if (entry.crystal_id == *pool) {
         WriteFilterToPool(state, entry, filter);
-        GUI_LOG_INFO("[Analysis] excluded raypath {} on crystal pool {} (filter \"{}\")", rp.raypath_text, *pool,
-                     filter.name);
+        GUI_LOG_INFO("[Analysis] excluded raypath {} on crystal pool {} (filter \"{}\", symmetry {})", rp.raypath_text,
+                     *pool, filter.name, static_cast<int>(sym));
         return true;
       }
     }
@@ -497,7 +592,10 @@ void RenderRoiControls(GuiState& state) {
     }
     const bool can_pick = g_preview_vp.active;
     ImGui::BeginDisabled(!can_pick);
-    if (a.pick_armed) {
+    // Read once: the button below flips pick_armed, and the pop must match the push made
+    // for the value the frame STARTED with, not the one the click just wrote.
+    const bool armed_style = a.pick_armed;
+    if (armed_style) {
       ImGui::PushStyleColor(ImGuiCol_Button, AccentColor(0.55f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, AccentColor(0.75f));
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, AccentColor(0.40f));
@@ -505,7 +603,7 @@ void RenderRoiControls(GuiState& state) {
     if (ImGui::Button(ICON_FA_CROSSHAIRS " Pick on preview")) {
       a.pick_armed = !a.pick_armed;
     }
-    if (a.pick_armed) {
+    if (armed_style) {
       ImGui::PopStyleColor(3);
     }
     ImGui::EndDisabled();
@@ -677,6 +775,31 @@ void RenderRadiusSlider(GuiState& state) {
   }
 }
 
+// The P/B/D checkboxes — the filter editor's own widget — and the read they drive: a change
+// re-reads the result on hand under the new bits (RefreshAnalysisEntries short-circuits when
+// nothing changed, so calling it every frame costs nothing). `d_applicable` is passed as true:
+// the list spans the whole scene, and "some crystal here has no D" is not "D does nothing".
+void RenderSymmetryControls(GuiState& state, LUMICE_Server* server) {
+  auto& a = state.analysis;
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Symmetry");
+  ImGui::SameLine();
+  RenderSymmetryCheckboxes(a.symmetry_p, a.symmetry_b, a.symmetry_d, /*d_applicable=*/true, "analysis_symmetry");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Merge raypaths that are the same up to this symmetry. Re-reads the result on hand; does not re-run.");
+  }
+  RefreshAnalysisEntries(state, server);
+  // The list could not be re-read under the bits asked for (the server has left the analysis
+  // session): say which bits it IS showing rather than let the checkboxes claim otherwise.
+  const auto& payload = state.analysis_result.payload;
+  if (payload && !payload->entries.empty() && state.analysis_result.entries_symmetry != AnalysisSymmetryBits(state)) {
+    ImGui::SameLine();
+    ImGui::TextColored(WarningTextColor(), ICON_FA_TRIANGLE_EXCLAMATION " List shows %s; analyze again to apply.",
+                       SymmetryBitsLabel(state.analysis_result.entries_symmetry).c_str());
+  }
+}
+
 void RenderResultList(GuiState& state) {
   const auto& view = state.analysis_result;
   if (!view.payload) {
@@ -711,11 +834,12 @@ void RenderResultList(GuiState& state) {
     }
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    // The id is the ORIGINAL index, so a re-sort moves the row and not the selection.
+    // The id is the ORIGINAL index, so a re-sort moves the row and not the widget; the selection
+    // itself is the chain's text, so it survives a re-read under another symmetry too.
     ImGui::PushID(idx);
-    const bool selected = state.analysis.selected_entry.has_value() && *state.analysis.selected_entry == idx;
+    const bool selected = state.analysis.selected_entry.has_value() && *state.analysis.selected_entry == e.display;
     if (ImGui::Selectable(e.display, selected, ImGuiSelectableFlags_SpanAllColumns)) {
-      state.analysis.selected_entry = idx;
+      state.analysis.selected_entry = std::string(e.display);
     }
     ImGui::PopID();
     ImGui::TableSetColumnIndex(1);
@@ -742,8 +866,8 @@ void RenderExcludeButton(GuiState& state) {
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     if (elig == ExcludeEligibility::kOk) {
       ImGui::SetTooltip(
-          "Add a filter on this chain's crystal that removes rays taking this path (P/B/D symmetric).\n"
-          "The document becomes modified; press Run to see the picture without it.");
+          "Add a filter on this chain's crystal that removes rays taking this path, under the symmetry\n"
+          "the list is shown with. The document becomes modified; press Run to see the picture without it.");
     } else {
       ImGui::SetTooltip("%s", why.c_str());
     }
@@ -768,6 +892,7 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
   RenderRequestParamsControls(state);
   RenderRunControls(state, server);
   RenderRadiusSlider(state);
+  RenderSymmetryControls(state, server);
   ImGui::Separator();
   RenderResultList(state);
   RenderExcludeButton(state);

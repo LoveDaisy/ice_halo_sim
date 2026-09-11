@@ -55,7 +55,7 @@ std::shared_ptr<AnalysisPayload> OneChainResult(int chain_len) {
     e.chain[l].segment[0] = 3;
     e.chain[l].segment[1] = 5;
   }
-  snprintf(e.display, sizeof(e.display), "%s", chain_len == 1 ? "crystal0(3-5)" : "crystal0(3-5)-crystal0(3-5)");
+  snprintf(e.display, sizeof(e.display), "%s", chain_len == 1 ? "3-5" : "(3-5) -> (3-5)");
   e.energy = 1.0;
   e.count = 1000;
   p->entries.push_back(e);
@@ -65,7 +65,11 @@ std::shared_ptr<AnalysisPayload> OneChainResult(int chain_len) {
 TEST(RaypathAnalysisFilterExcludeChain, SingleSegmentExcludeReachesTheExportedConfigAsFilterOut) {
   SeedUnfilteredPrismDocument();
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(g_state, OneChainResult(1)));
-  g_state.analysis.selected_entry = 0;
+  // As RefreshAnalysisEntries leaves it after a read under the panel's default: the list on show
+  // is P|B|D-reduced.
+  g_state.analysis_result.entries_symmetry =
+      LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
+  g_state.analysis.selected_entry = "3-5";
   ASSERT_EQ(EvaluateExcludeEligibility(g_state, nullptr), ExcludeEligibility::kOk);
   ASSERT_TRUE(ApplyExcludeSelectedRaypath(g_state));
 
@@ -77,8 +81,8 @@ TEST(RaypathAnalysisFilterExcludeChain, SingleSegmentExcludeReachesTheExportedCo
   EXPECT_EQ(f["type"], "raypath");
   EXPECT_EQ(f["action"], "filter_out");
   EXPECT_EQ(f["raypath"], nlohmann::json({ 3, 5 }));
-  // The symmetry the chain was counted under, so the exclusion covers every orientation-equivalent
-  // 3-5 and not just the one face labelling core happened to print.
+  // The symmetry the list on show was reduced under, so the exclusion covers every
+  // orientation-equivalent 3-5 the row merged and not just the one face labelling it printed.
   EXPECT_EQ(f["symmetry"], "PBD");
   // And the entry references it: the export's scattering entry carries the filter id.
   ASSERT_TRUE(doc.contains("scene") && doc["scene"].contains("scattering"));
@@ -94,7 +98,7 @@ TEST(RaypathAnalysisFilterExcludeChain, ExcludeIsAHardStructChangeToTheReconcile
   SeedUnfilteredPrismDocument();
   g_state.last_committed_state = GuiState::ConfigSnapshot::From(g_state);
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(g_state, OneChainResult(1)));
-  g_state.analysis.selected_entry = 0;
+  g_state.analysis.selected_entry = "3-5";
   const GuiEffects before = ReconcileGuiEffects(g_state);
   EXPECT_FALSE(before.need_resim);
   EXPECT_FALSE(before.need_hard_reset);
@@ -107,7 +111,7 @@ TEST(RaypathAnalysisFilterExcludeChain, ExcludeIsAHardStructChangeToTheReconcile
 TEST(RaypathAnalysisFilterExcludeChain, MultiSegmentChainIsRefusedAndExportsNoFilter) {
   SeedUnfilteredPrismDocument();
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(g_state, OneChainResult(2)));
-  g_state.analysis.selected_entry = 0;
+  g_state.analysis.selected_entry = "(3-5) -> (3-5)";
   std::string why;
   EXPECT_EQ(EvaluateExcludeEligibility(g_state, &why), ExcludeEligibility::kMultiSegment);
   EXPECT_NE(why.find("scattering layers"), std::string::npos);

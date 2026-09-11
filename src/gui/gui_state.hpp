@@ -1606,10 +1606,26 @@ struct GuiState {
     // CONE mode, disarmed by the click that consumes it, by Esc, and by leaving CONE mode — never
     // left armed across a mode switch, or a later click would write a centre no mode reads.
     bool pick_armed = false;
-    // The selected row as an index into analysis_result.payload->entries — the UNSORTED array —
-    // so a re-sort of the display order moves the row, not the selection. Reset to nullopt when
-    // a new result is adopted: an index into the old entries means nothing in the new ones.
-    std::optional<int> selected_entry;
+    // The P/B/D symmetry the list is reduced under — a DISPLAY-time choice (v4.33): the run
+    // records every chain unreduced, and every read of the result asks the server to reduce and
+    // merge under these bits (analysis_panel.hpp RefreshAnalysisEntries), so toggling one re-reads
+    // the result on hand and starts no run. Default all on: the P|B|D every analysis used to be
+    // recorded under.
+    bool symmetry_p = true;
+    bool symmetry_b = true;
+    bool symmetry_d = true;
+    // The selected row, by the chain's display text — the canonical key of a merged row (unique
+    // within one result at one symmetry, since the text is the chain) — rather than by index: a
+    // re-sort of the display order moves the row, not the selection, and a re-read under another
+    // symmetry keeps the selection iff the same chain is still a row (a merged-away chain is a
+    // cleared selection, by definition). Reset to nullopt when a new result is adopted.
+    std::optional<std::string> selected_entry;
+    // What the entries on show were last read as: the result's snapshot_generation and the
+    // symmetry bits, so RefreshAnalysisEntries re-reads only when one of them changes. Explicit
+    // "never read yet" rather than a sentinel value in either field.
+    bool fetched_once = false;
+    unsigned long long fetched_generation = 0;
+    uint8_t fetched_symmetry = 0;
     // Reconcile INPUT, the analysis-side twin of `run_intent`: set by DoAnalyze, cleared by DoRun
     // (the server is a render session again) and by every document switch. Read each frame by
     // SyncFromPoller, which derives `analysis_run_in_progress` from it and the poller's
@@ -1627,6 +1643,13 @@ struct GuiState {
   // warns against.
   struct AnalysisResultView {
     std::shared_ptr<const AnalysisPayload> payload;
+    // The symmetry bits payload->entries are reduced under — what the list actually shows, as
+    // opposed to analysis.symmetry_* (what the user asks for). Equal whenever the last
+    // RefreshAnalysisEntries could read the frame; they part when the server has left the
+    // analysis session (a render was started) and the result on show can no longer be re-read,
+    // in which case the panel says so and the Exclude filter follows THIS value, since it is the
+    // reduction the selected row was counted under.
+    uint8_t entries_symmetry = 0;
     // Per entry (same index as payload->entries): the energy the list shows — the sum of the rings
     // inside the slider's radius in CONE mode, `energy` itself otherwise.
     std::vector<double> display_energy;

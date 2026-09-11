@@ -859,7 +859,9 @@ TEST(ServerPollerShutdown, StopQuiescesTheHeartbeatBeforeReturning) {
 // An analysis session's frames carry a histogram and no image, so they never enter the texture
 // branch; the poller reads them on a branch of their own keyed on the frame's snapshot_generation
 // (lumice.h v4.30). Three things a consumer relies on, pinned against a real analysis run:
-//   1. a poll on a new generation publishes a fresh AnalysisPayload with the frame's entries;
+//   1. a poll on a new generation publishes a fresh AnalysisPayload naming the frame — identity
+//      and echo fields, and NO entries: those are the main thread's to read under the symmetry
+//      it chooses (v4.33, analysis_panel.hpp RefreshAnalysisEntries);
 //   2. a poll on the SAME generation carries the previous object forward (pointer-equal), so the
 //      consumer's generation dedup sees one result once, however many polls observe it;
 //   3. InvalidateAnalysisResult() drops the carried object from the published bundle and leaves
@@ -888,7 +890,6 @@ TEST(ServerPollerAnalysis, MaterializesOncePerGenerationCarriesForwardAndFencesO
   LUMICE_StopServer(srv);
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
-  req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
   req.infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT;  // the scene's 40000, not zero rays
   ASSERT_EQ(LUMICE_StartRaypathAnalysis(srv, &req), LUMICE_OK);
   // Not WaitForDrained alone: an analysis keeps the render's epoch (server.cpp — same scene, same
@@ -911,15 +912,16 @@ TEST(ServerPollerAnalysis, MaterializesOncePerGenerationCarriesForwardAndFencesO
   ASSERT_TRUE(s1 != nullptr);
   ASSERT_TRUE(s1->analysis != nullptr) << "an analysis frame publishes a payload";
   EXPECT_EQ(s1->analysis->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
-  EXPECT_FALSE(s1->analysis->entries.empty());
+  EXPECT_TRUE(s1->analysis->entries.empty()) << "the poller names the result; the entries are the main thread's read";
   EXPECT_NE(s1->analysis->snapshot_generation, 0u);
-  // The frame's own count, read directly, is what the payload holds — no sentinel row, no cut.
+  // The frame's own identity, read directly, is what the payload holds; and the frame does carry
+  // rows for the main thread to read.
   {
     LUMICE_ResultFrame* frame = nullptr;
     ASSERT_EQ(LUMICE_AcquireResultFrame(srv, &frame), LUMICE_OK);
     LUMICE_RaypathAnalysisInfo info{};
-    ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
-    EXPECT_EQ(static_cast<int>(s1->analysis->entries.size()), info.entry_count);
+    ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, 0, &info), LUMICE_OK);
+    EXPECT_GT(info.entry_count, 0);
     EXPECT_EQ(s1->analysis->snapshot_generation, info.snapshot_generation);
     LUMICE_ReleaseResultFrame(frame);
   }

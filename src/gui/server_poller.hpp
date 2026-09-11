@@ -147,9 +147,11 @@ struct PreviewSnapshot {
   // Analysis Run"). Read off the SAME frame as everything above, materialized only when its
   // snapshot_generation differs from the last one materialized, and otherwise carried forward
   // like `payload` — so the main thread sees one immutable object per new result and dedups on
-  // its generation (AdoptAnalysisPayloadIfNew, analysis_panel.hpp). Null until the first analysis
-  // frame; kept across a later render commit, whose frames carry no histogram, so the list stays
-  // readable while the user re-runs the scene they just edited from it.
+  // its generation (AdoptAnalysisPayloadIfNew, analysis_panel.hpp). Identity and echo fields
+  // only — the entries are the main thread's to read, under the symmetry it chooses
+  // (RefreshAnalysisEntries). Null until the first analysis frame; kept across a later render
+  // commit, whose frames carry no histogram, so the list stays readable while the user re-runs
+  // the scene they just edited from it.
   std::shared_ptr<const AnalysisPayload> analysis;
 };
 

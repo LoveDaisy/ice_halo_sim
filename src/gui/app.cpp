@@ -1745,7 +1745,10 @@ void SyncFromPoller() {
     }
     // The result: adopted when its generation is new, ignored otherwise (a carry-forward of the
     // result already on show is what every poll after the last snapshot carries).
+    // The poller's payload names the result; its entries are read here, on this thread, under
+    // the panel's symmetry — in the same frame as the adoption, so the list is never a frame late.
     if (snap && AdoptAnalysisPayloadIfNew(g_state, snap->analysis)) {
+      RefreshAnalysisEntries(g_state, g_server);
       GUI_LOG_VERBOSE("[GUI] SyncFromPoller: analysis result adopted ({} entries, gen={})",
                       g_state.analysis_result.payload->entries.size(),
                       g_state.analysis_result.payload->snapshot_generation);

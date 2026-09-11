@@ -552,33 +552,24 @@ void ServerPoller::PollOnce() {
   // analysis frame carries no xyz buffer, so it never enters the texture branch above; this is
   // its own branch with its own generation cursor. `present` is a property of the frame and holds
   // on every poll of the session, so it is NOT the "new result" test — snapshot_generation is
-  // (the v4.30 field, exported for exactly this). The entries are COPIED out (the C API's
-  // contract), so the payload does not need to hold the frame.
+  // (the v4.30 field, exported for exactly this). Identity and echo fields only: the ENTRIES are
+  // read by the main thread under the symmetry the panel's checkboxes name (v4.33 — the
+  // reduction is a read parameter, and a display-time choice the poller does not hold), so the
+  // payload published here carries none. The symmetry passed to the Info call is irrelevant to
+  // every field read below (only entry_count depends on it, and it is not read).
   std::shared_ptr<const AnalysisPayload> new_analysis;
   {
     LUMICE_RaypathAnalysisInfo info{};
-    if (LUMICE_FrameGetRaypathAnalysisInfo(frame.get(), &info) == LUMICE_OK && info.present != 0 &&
+    if (LUMICE_FrameGetRaypathAnalysisInfo(frame.get(), 0, &info) == LUMICE_OK && info.present != 0 &&
         info.snapshot_generation != last_analysis_generation_) {
       auto payload = std::make_shared<AnalysisPayload>();
       payload->snapshot_generation = info.snapshot_generation;
       payload->roi_mode = info.roi_mode;
       payload->cone_ring_count = info.cone_ring_count;
       payload->cone_radius_rad = info.cone_radius_rad;
-      // One more slot than entries: the sentinel (count == 0) lands at [entry_count] when the
-      // frame holds exactly entry_count entries, and the read below stops at it in every case.
-      std::vector<LUMICE_RaypathHistogramEntry> raw(static_cast<size_t>(std::max(info.entry_count, 0)) + 1);
-      if (LUMICE_FrameGetRaypathAnalysis(frame.get(), raw.data(), info.entry_count) == LUMICE_OK) {
-        size_t n = 0;
-        while (n < raw.size() && raw[n].count != 0) {
-          ++n;
-        }
-        raw.resize(n);
-        payload->entries = std::move(raw);
-        last_analysis_generation_ = info.snapshot_generation;
-        new_analysis = std::move(payload);
-        GUI_LOG_VERBOSE("[Poller] analysis result: {} entries, roi_mode={}, gen={}", new_analysis->entries.size(),
-                        info.roi_mode, info.snapshot_generation);
-      }
+      last_analysis_generation_ = info.snapshot_generation;
+      new_analysis = std::move(payload);
+      GUI_LOG_VERBOSE("[Poller] analysis result: roi_mode={}, gen={}", info.roi_mode, info.snapshot_generation);
     }
   }
 

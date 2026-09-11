@@ -246,11 +246,12 @@ bool RunAfterAnalysisRenders(ImGuiTestContext* ctx, bool exclude, bool gpu) {
     ctx->SetRef(kWindowRef);
     // The row is a Selectable under PushID(original index) inside the results table; the
     // wildcard finds it by label through the table's and the id's anonymous path segments.
-    const std::string row = std::string("**/") + view_result.payload->entries[static_cast<size_t>(top)].display;
+    const std::string top_display = view_result.payload->entries[static_cast<size_t>(top)].display;
+    const std::string row = std::string("**/") + top_display;
     ctx->ItemClick(row.c_str());
     ctx->Yield(1);
     IM_CHECK_RETV(gui::g_state.analysis.selected_entry.has_value(), false);
-    IM_CHECK_RETV(*gui::g_state.analysis.selected_entry == top, false);
+    IM_CHECK_RETV(*gui::g_state.analysis.selected_entry == top_display, false);
     IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo(ICON_FA_BAN " Exclude this raypath")), false);
     ctx->ItemClick(ICON_FA_BAN " Exclude this raypath");
     ctx->SetRef("");
@@ -349,8 +350,7 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       const double largest = *std::max_element(view_result.display_energy.begin(), view_result.display_energy.end());
       IM_CHECK_EQ(first, largest);
       // The 22-degree halo IS the top chain at this point of the sky.
-      IM_CHECK_STR_EQ(view_result.payload->entries[static_cast<size_t>(view_result.display_order[0])].display,
-                      "crystal0(3-5)");
+      IM_CHECK_STR_EQ(view_result.payload->entries[static_cast<size_t>(view_result.display_order[0])].display, "3-5");
       // The analysis shares the render's epoch (server.cpp: same scene, same epoch) and the
       // picture on screen is still the render's: sim_state stayed kDone throughout.
       LUMICE_SimLifecycleResult after{};
@@ -401,7 +401,10 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
 
       // Stop from the window: the intent is withdrawn at the command, the top bar reopens, and
-      // the result adopted so far stays on show.
+      // the result stays on show — the one adopted so far, or the run's final snapshot if the
+      // stop drained one more (a newer generation, never an older one, and never nothing).
+      // Not pointer equality: the entries are read on this thread per (generation, symmetry)
+      // and every read publishes a new payload object for the same result.
       const auto partial = gui::g_state.analysis_result.payload;
       ctx->SetRef(kWindowRef);
       ctx->ItemClick(ICON_FA_STOP " Stop");
@@ -410,7 +413,9 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(DriveUntil(
           ctx, [] { return !gui::g_state.analysis_run_in_progress && gui::g_state.sim_state == SimState::kDone; }, 20));
       IM_CHECK(!IsDisabled(ctx->ItemInfo("##TopBar/" ICON_FA_PLAY " Run")));
-      IM_CHECK(gui::g_state.analysis_result.payload == partial);
+      IM_CHECK(gui::g_state.analysis_result.payload != nullptr);
+      IM_CHECK_GE(gui::g_state.analysis_result.payload->snapshot_generation, partial->snapshot_generation);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
       ctx->SetRef(kWindowRef);
       IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
       ctx->SetRef("");
@@ -453,6 +458,93 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(after.lifecycle, before.lifecycle);
       IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
       IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+    };
+  }
+
+  // The P/B/D checkboxes are display-time (v4.33): the run recorded every chain unreduced, and a
+  // toggle re-reads the result on hand under the new bits — on this thread, in the frame of the
+  // click — starting no run. On the 22-degree halo the prism's D symmetry is what folds the
+  // mirror-image path 3-7 into 3-5, so turning D off splits the top row in two: more rows, less
+  // energy on "3-5", the same total; and the selection, which names the chain, survives because
+  // "3-5" is still a row. Turning D back on merges them again.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "symmetry_checkboxes_are_display_time");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      IM_CHECK(RunPointAnalysisToCompletion(ctx));
+      auto sum_energy = [] {
+        double s = 0.0;
+        for (const auto& e : gui::g_state.analysis_result.payload->entries) {
+          s += e.energy;
+        }
+        return s;
+      };
+      auto row = [](const char* display) -> const LUMICE_RaypathHistogramEntry* {
+        for (const auto& e : gui::g_state.analysis_result.payload->entries) {
+          if (std::strcmp(e.display, display) == 0) {
+            return &e;
+          }
+        }
+        return nullptr;
+      };
+      const int kAll = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.analysis_result.entries_symmetry), kAll);
+      const size_t rows_before = gui::g_state.analysis_result.payload->entries.size();
+      const unsigned long long gen_before = gui::g_state.analysis_result.payload->snapshot_generation;
+      const double total_before = sum_energy();
+      const LUMICE_RaypathHistogramEntry* top = row("3-5");
+      IM_CHECK(top != nullptr);
+      const double top_before = top->energy;
+      IM_CHECK(row("3-7") == nullptr);  // folded into 3-5 by D
+      LUMICE_SimLifecycleResult before{};
+      LUMICE_GetSimLifecycle(gui::g_server, &before);
+      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
+
+      // Select the top row, then turn D off.
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("**/3-5");
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.selected_entry.has_value() && *gui::g_state.analysis.selected_entry == "3-5");
+      ctx->ItemClick("**/D##analysis_symmetry");
+      ctx->Yield(2);
+      ctx->SetRef("");
+      IM_CHECK(!gui::g_state.analysis.symmetry_d);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.analysis_result.entries_symmetry),
+                  LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->snapshot_generation, gen_before);
+      IM_CHECK_GT(gui::g_state.analysis_result.payload->entries.size(), rows_before);
+      IM_CHECK(row("3-7") != nullptr);
+      top = row("3-5");
+      IM_CHECK(top != nullptr);
+      IM_CHECK_LT(top->energy, top_before);
+      IM_CHECK_FLOAT_NEAR(sum_energy(), total_before, 1e-9 * total_before);
+      // The selection names the chain and "3-5" is still a row: kept, and Exclude still has it.
+      IM_CHECK(gui::SelectedAnalysisEntry(gui::g_state) == top);
+      // And nothing ran: same epoch, same lifecycle, no in-progress edge, no upload.
+      IM_CHECK(!gui::g_state.analysis_run_in_progress);
+      LUMICE_SimLifecycleResult after{};
+      LUMICE_GetSimLifecycle(gui::g_server, &after);
+      IM_CHECK_EQ(after.epoch, before.epoch);
+      IM_CHECK_EQ(after.lifecycle, before.lifecycle);
+      IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+
+      // D back on: the rows merge again, the same count and total as at first.
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("**/D##analysis_symmetry");
+      ctx->Yield(2);
+      ctx->SetRef("");
+      IM_CHECK(gui::g_state.analysis.symmetry_d);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.analysis_result.entries_symmetry), kAll);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->entries.size(), rows_before);
+      IM_CHECK(row("3-7") == nullptr);
+      IM_CHECK_FLOAT_NEAR(sum_energy(), total_before, 1e-9 * total_before);
+      top = row("3-5");
+      IM_CHECK(top != nullptr);
+      IM_CHECK_FLOAT_NEAR(top->energy, top_before, 1e-9 * top_before);
+      IM_CHECK(gui::SelectedAnalysisEntry(gui::g_state) == top);
     };
   }
 

@@ -40,7 +40,7 @@ std::shared_ptr<AnalysisPayload> MakePayload(unsigned long long gen, int roi_mod
     e.chain[0].segment_len = 2;
     e.chain[0].segment[0] = static_cast<int>(i) + 1;
     e.chain[0].segment[1] = static_cast<int>(i) + 2;
-    snprintf(e.display, sizeof(e.display), "crystal0(%d-%d)", e.chain[0].segment[0], e.chain[0].segment[1]);
+    snprintf(e.display, sizeof(e.display), "%d-%d", e.chain[0].segment[0], e.chain[0].segment[1]);
     e.energy = energies[i];
     e.count = 100 * (static_cast<LUMICE_RayCount>(i) + 1);
     e.ring_count = ring_count;
@@ -127,13 +127,13 @@ TEST(AnalysisPanelLogic, SameGenerationObservedRepeatedlyKeepsSelectionAndOrder)
   GuiState state;
   auto p = MakePayload(11, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0, 5.0, 3.0 });
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
-  state.analysis.selected_entry = 2;
+  state.analysis.selected_entry = "3-4";
   const std::vector<int> order_before = state.analysis_result.display_order;
   // Three more polls of the same generation — a carried-forward pointer and a fresh copy alike.
   for (int i = 0; i < 3; ++i) {
     auto same = i == 0 ? p : std::make_shared<AnalysisPayload>(*p);
     EXPECT_FALSE(AdoptAnalysisPayloadIfNew(state, same)) << "poll " << i;
-    EXPECT_EQ(state.analysis.selected_entry, std::optional<int>{ 2 }) << "poll " << i;
+    EXPECT_EQ(state.analysis.selected_entry, std::optional<std::string>{ "3-4" }) << "poll " << i;
     EXPECT_EQ(state.analysis_result.display_order, order_before);
     EXPECT_EQ(state.analysis_result.payload, p) << "the held object is not replaced either";
   }
@@ -144,6 +144,75 @@ TEST(AnalysisPanelLogic, SameGenerationObservedRepeatedlyKeepsSelectionAndOrder)
   EXPECT_EQ(state.analysis_result.payload, next);
   ASSERT_EQ(state.analysis_result.display_order.size(), 2u);
   EXPECT_EQ(state.analysis_result.display_order[0], 0);
+}
+
+// ---- the selection, by chain ----
+
+// The selection is the chain's text, so it is found again in any payload that still has that
+// chain as a row — and is nothing in one that does not (a chain merged away by a symmetry
+// change, or a different result), without ever indexing past the entries.
+TEST(AnalysisPanelLogic, SelectedAnalysisEntryIsFoundByChainTextOrNotAtAll) {
+  GuiState state;
+  EXPECT_EQ(SelectedAnalysisEntry(state), nullptr) << "no result, no selection";
+  auto p = MakePayload(3, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0, 5.0, 3.0 });
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
+  EXPECT_EQ(SelectedAnalysisEntry(state), nullptr) << "a result, no selection";
+  state.analysis.selected_entry = "2-3";
+  EXPECT_EQ(SelectedAnalysisEntry(state), &p->entries[1]);
+  state.analysis.selected_entry = "9-9";
+  EXPECT_EQ(SelectedAnalysisEntry(state), nullptr) << "no row carries that chain";
+  // The same chain in a re-read payload (another symmetry, same generation) is found again —
+  // the payload object is replaced, the key still names a row.
+  auto reread = MakePayload(3, LUMICE_RAYPATH_ROI_FULL_SKY, { 4.0, 2.0 });
+  state.analysis.selected_entry = "2-3";
+  state.analysis_result.payload = reread;
+  EXPECT_EQ(SelectedAnalysisEntry(state), &reread->entries[1]);
+  state.analysis.selected_entry = "3-4";
+  EXPECT_EQ(SelectedAnalysisEntry(state), nullptr) << "merged away: cleared by definition";
+}
+
+// ---- the symmetry, and when the entries need re-reading ----
+
+TEST(AnalysisPanelLogic, SymmetryBitsFollowTheCheckboxesAndDefaultToAll) {
+  GuiState state;
+  EXPECT_EQ(AnalysisSymmetryBits(state),
+            LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D)
+      << "the default is the P|B|D every analysis used to be recorded under";
+  state.analysis.symmetry_d = false;
+  EXPECT_EQ(AnalysisSymmetryBits(state), LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B);
+  state.analysis.symmetry_p = false;
+  EXPECT_EQ(AnalysisSymmetryBits(state), LUMICE_RAYPATH_SYMMETRY_B);
+  state.analysis.symmetry_b = false;
+  EXPECT_EQ(AnalysisSymmetryBits(state), 0);
+}
+
+// The refresh gate: stale iff a result is held and it has not been read as (this generation,
+// these bits). "Never read" is the explicit flag, not a sentinel value — a zeroed record with
+// fetched_once false must read as stale even against a payload whose generation happened to be
+// what the record holds.
+TEST(AnalysisPanelLogic, EntriesNeedRefreshOnFirstReadNewGenerationOrNewSymmetry) {
+  GuiState state;
+  EXPECT_FALSE(AnalysisEntriesNeedRefresh(state)) << "nothing held, nothing to read";
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, MakePayload(7, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0 })));
+  EXPECT_TRUE(AnalysisEntriesNeedRefresh(state)) << "held, never read";
+  // As RefreshAnalysisEntries records a read.
+  state.analysis.fetched_once = true;
+  state.analysis.fetched_generation = 7;
+  state.analysis.fetched_symmetry = AnalysisSymmetryBits(state);
+  EXPECT_FALSE(AnalysisEntriesNeedRefresh(state)) << "read as (7, P|B|D): up to date";
+  state.analysis.symmetry_b = false;
+  EXPECT_TRUE(AnalysisEntriesNeedRefresh(state)) << "the bits changed";
+  state.analysis.fetched_symmetry = AnalysisSymmetryBits(state);
+  EXPECT_FALSE(AnalysisEntriesNeedRefresh(state));
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, MakePayload(8, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0 })));
+  EXPECT_TRUE(AnalysisEntriesNeedRefresh(state)) << "a new generation";
+  state.analysis.fetched_generation = 8;
+  EXPECT_FALSE(AnalysisEntriesNeedRefresh(state));
+  state.analysis.fetched_once = false;
+  EXPECT_TRUE(AnalysisEntriesNeedRefresh(state)) << "the flag alone decides 'never read', not the values";
+  // And with no server there is nothing to read from: a no-op, the record untouched.
+  EXPECT_FALSE(RefreshAnalysisEntries(state, nullptr));
+  EXPECT_FALSE(state.analysis.fetched_once);
 }
 
 // ---- rings and the slider ----
@@ -175,9 +244,10 @@ TEST(AnalysisPanelLogic, SumRingEnergyIsAPrefixSumClampedToTheEntry) {
   EXPECT_DOUBLE_EQ(SumRingEnergy(e, -1), 0.0);
 }
 
-// The slider re-sorts the rows and moves the selection WITH its entry: the selected index stays
-// the original index, whatever row it is shown on. Also the AC3 statement at the unit level —
-// nothing in this path touches the lifecycle (there is no server here to touch).
+// The slider re-sorts the rows and moves the selection WITH its entry: the selection names the
+// chain, and SelectedAnalysisEntry finds the same entry whatever row it is shown on. Also the AC3
+// statement at the unit level — nothing in this path touches the lifecycle (there is no server
+// here to touch).
 TEST(AnalysisPanelLogic, SliderReorderMovesRowsNotTheSelection) {
   GuiState state;
   state.analysis.cone_radius_deg = 1.0f;  // ring 0 only
@@ -185,7 +255,8 @@ TEST(AnalysisPanelLogic, SliderReorderMovesRowsNotTheSelection) {
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
   EXPECT_EQ(state.analysis_result.display_ring_count, 1);
   EXPECT_EQ(state.analysis_result.display_order[0], 0) << "only entry 0 is inside ring 0";
-  state.analysis.selected_entry = 0;
+  state.analysis.selected_entry = "1-2";
+  EXPECT_EQ(SelectedAnalysisEntry(state), &p->entries[0]);
 
   state.analysis.cone_radius_deg = 4.0f;  // every ring
   RecomputeAnalysisDisplayOrder(state);
@@ -194,7 +265,7 @@ TEST(AnalysisPanelLogic, SliderReorderMovesRowsNotTheSelection) {
   EXPECT_EQ(state.analysis_result.display_order[0], 3);
   EXPECT_EQ(state.analysis_result.display_order[3], 0) << "entry 0 is now the last row";
   ASSERT_TRUE(state.analysis.selected_entry.has_value());
-  EXPECT_EQ(*state.analysis.selected_entry, 0) << "still entry 0, shown on the last row";
+  EXPECT_EQ(SelectedAnalysisEntry(state), &p->entries[0]) << "still entry 0, shown on the last row";
   EXPECT_EQ(state.analysis_result.payload, p) << "the data itself is untouched";
   EXPECT_DOUBLE_EQ(state.analysis_result.display_total, 121.0);
 }
@@ -440,7 +511,7 @@ TEST(AnalysisPanelLogic, RingRadiusFollowsTheLensScaleAtTheCentre) {
 
 // ---- the request ----
 
-TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionSymmetry) {
+TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionBudget) {
   GuiState state;
   state.analysis.roi_mode = LUMICE_RAYPATH_ROI_CONE;
   state.analysis.cone_center_valid = true;
@@ -452,7 +523,6 @@ TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionSymmetry) {
   state.analysis.infinite = false;
   const LUMICE_RaypathAnalysisRequest req = BuildAnalysisRequest(state, 100, 100);
   EXPECT_EQ(req.roi_mode, LUMICE_RAYPATH_ROI_CONE);
-  EXPECT_EQ(req.chain_id_symmetry, LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT);
   EXPECT_FLOAT_EQ(req.cone_center[0], 0.1f);
   EXPECT_FLOAT_EQ(req.cone_center[2], -0.9f);
   EXPECT_NEAR(req.cone_radius_rad, kAnalysisConeMaxRadiusDeg * 3.14159265f / 180.0f, 1e-6f);
@@ -486,7 +556,6 @@ TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionSymmetry) {
   EXPECT_EQ(in_frame.frame_view.height, 200);
   EXPECT_EQ(in_frame.frame_view.lens_type, LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA);
   EXPECT_FLOAT_EQ(in_frame.frame_view.lens_fov, 120.0f);
-  EXPECT_EQ(in_frame.chain_id_symmetry, LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT);
   EXPECT_EQ(in_frame.ray_num, 12500000u) << "the budget is not a CONE-only field";
 
   state.analysis.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
@@ -581,12 +650,12 @@ TEST(AnalysisPanelLogic, ExcludeEligibilityDeniesEachReasonOnItsOwn) {
   p->entries[1].chain[0].crystal_id = 1;
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
 
-  state.analysis.selected_entry = 1;
+  state.analysis.selected_entry = "2-3";
   EXPECT_EQ(EvaluateExcludeEligibility(state, &why), ExcludeEligibility::kMultiSegment);
-  state.analysis.selected_entry = 7;
+  state.analysis.selected_entry = "7-8";
   EXPECT_EQ(EvaluateExcludeEligibility(state, &why), ExcludeEligibility::kNoSelection)
-      << "out of range is no selection";
-  state.analysis.selected_entry = 0;
+      << "a chain no row carries is no selection";
+  state.analysis.selected_entry = "1-2";
   EXPECT_EQ(EvaluateExcludeEligibility(state, &why), ExcludeEligibility::kOk);
   EXPECT_TRUE(why.empty());
 
@@ -626,16 +695,21 @@ TEST(AnalysisPanelLogic, ExcludeWritesOneFilterOutFilterBoundToEveryEntryOfTheCr
   p->entries[0].chain[0].segment[0] = 3;
   p->entries[0].chain[0].segment[1] = 5;
   ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
-  state.analysis.selected_entry = 0;
+  // The list on show was read under P|B (as RefreshAnalysisEntries records it); the filter
+  // follows THAT, not the checkboxes, which may since have moved on to bits the list does not show.
+  state.analysis_result.entries_symmetry = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B;
+  state.analysis.symmetry_d = true;
+  state.analysis.selected_entry = "1-2";
   ASSERT_TRUE(ApplyExcludeSelectedRaypath(state));
 
   ASSERT_EQ(state.filters.size(), 1u);
   const FilterConfig& f = state.filters[0];
   EXPECT_EQ(f.action, 1) << "filter_out";
-  EXPECT_TRUE(f.sym_p && f.sym_b && f.sym_d) << "the reduction the chain was counted under";
+  EXPECT_TRUE(f.sym_p && f.sym_b) << "the reduction the row was counted under";
+  EXPECT_FALSE(f.sym_d) << "and not a bit more";
   ASSERT_TRUE(f.IsRaypath());
   EXPECT_EQ(f.RaypathText(), "3-5");
-  EXPECT_NE(f.name.find("crystal0(1-2)"), std::string::npos) << "named after the chain's display text";
+  EXPECT_NE(f.name.find("1-2"), std::string::npos) << "named after the chain's display text";
   // Bound to both entries of pool 0, and to neither entry of pool 1.
   ASSERT_TRUE(state.layers[0].entries[1].filter_id.has_value());
   EXPECT_EQ(*state.layers[0].entries[1].filter_id, 0);
