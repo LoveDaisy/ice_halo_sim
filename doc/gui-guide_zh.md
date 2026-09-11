@@ -236,3 +236,4 @@ Lumice 使用二进制项目文件格式（`.lmc`），存储：
 - [系统架构文档](architecture_zh.md) —— 系统架构和 GUI 模块设计
 - [开发指南](developer-guide_zh.md) —— GUI 测试与开发
 - [用户手册 — GUI 快速上手](user-manual/02-gui-quickstart_zh.md) —— 面向新用户的逐步教程
+- [用户手册 — 光路分析](user-manual/06-raypath-analysis_zh.md) —— 一道晕是哪些光路做的、如何排除某一条

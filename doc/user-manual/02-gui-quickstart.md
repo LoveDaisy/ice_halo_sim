@@ -79,5 +79,6 @@ Want to build a halo recipe yourself instead of opening the example? The shortes
 
 - Run the same `.lmc` headless from the CLI → [`03-cli-quickstart.md`](03-cli-quickstart.md)
 - Reproduce classic halos with ready-made recipes → [`04-recipes.md`](04-recipes.md)
+- Find out which raypaths make a halo, and exclude one → [`06-raypath-analysis.md`](06-raypath-analysis.md)
 - Full panel reference → [`../gui-guide.md`](../gui-guide.md)
 - All field names and types → [`../configuration.md`](../configuration.md)
