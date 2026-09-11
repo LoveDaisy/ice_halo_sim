@@ -865,6 +865,94 @@ jobs:
       - name: Build (compile + link only, no run)
         run: cmake --build build --parallel
 
+  # x86-64-v3 under clang-cl, with CUDA on. The Windows release ships a second build of the
+  # engine compiled by clang-cl at -march=x86-64-v3 (release.yml, windows-x64 row: two
+  # configures, baseline on cl.exe and x86-64-v3 on clang-cl, merged behind a CPUID launcher).
+  # No other job here uses clang-cl at all, so without this leg the clang-cl (C/C++) x nvcc
+  # (.cu, cl.exe host) mixed compile — the one thing the Windows split gambles on that the Linux
+  # split did not — is first exercised on the day a tag is cut.
+  #
+  # Unlike isa-v4-compile this job also RUNS the binary, once, for --benchmark: v3 is AVX2,
+  # which every hosted x64 runner has, so there is no SIGILL coin toss, and the assertion it
+  # buys is the regression this whole path once had — CMake reports MSVC=TRUE for clang-cl,
+  # and a macro gated on if(MSVC) alone left every clang-cl build reporting "baseline" while
+  # -march was in fact applied. A green compile cannot see that; the isa key can.
+  # BUILD_TEST=OFF keeps the claim narrow (does the mixed toolchain build the engine, and does
+  # the tier reach the binary); BUILD_GUI=OFF for the reason isa-v4-compile gives.
+  #
+  # Own cache discriminator, before the platform name, for the reason spelled out on
+  # windows-cuda-compile above. The LLVM pin mirrors release.yml's — a compile gate for a
+  # toolchain the release does not use would be checking the wrong thing.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
+  windows-isa-v3-compile:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Before the CUDA step, as on windows-cuda-compile: nvcc needs cl.exe on PATH as its
+      # host compiler, and so does this job's .cu translation unit even though every other
+      # TU goes through clang-cl.
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install clang-cl (LLVM, pinned)
+        shell: pwsh
+        run: |
+          choco install llvm --version=20.1.0 -y --no-progress --allow-downgrade
+          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
+
+      - name: Install CUDA toolkit (nvcc + cudart_dev)
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.9.2'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart"]'
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: cpm_cache
+          key: cpm-isa-v3-windows-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-isa-v3-windows-x64-
+
+      - name: Configure (x86-64-v3, clang-cl + nvcc/cl.exe, compile-only)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_ISA_LEVEL=x86-64-v3
+          -DLUMICE_CUDA_ENABLED=ON
+          -DCMAKE_CXX_COMPILER=clang-cl
+          -DCMAKE_C_COMPILER=clang-cl
+          -DCMAKE_CUDA_HOST_COMPILER=cl
+
+      # The whole default graph: the CLI (lumice_obj at v3 under clang-cl, the .cu TU under
+      # nvcc + cl.exe, linked by lld-link) and the Windows launcher (LumiceIsaLauncher, which
+      # every Windows x86_64 configure builds — here under clang-cl, which must accept it too).
+      - name: Build (compile + link only)
+        run: cmake --build build --parallel
+
+      # The one run this job makes. The output directory is the top-level CMakeLists.txt's
+      # CMAKE_RUNTIME_OUTPUT_DIRECTORY (anchored on the source dir, not on -B). Runs the
+      # legacy CPU backend: the CUDA-linked binary starts without a GPU (cudart is on PATH
+      # from the toolkit step, the device probe finds nothing and routes to CPU), which is
+      # the same thing windows-cuda-compile's test binaries already rely on.
+      - name: Assert the isa key reports x86-64-v3 under clang-cl
+        shell: pwsh
+        run: |
+          $out = & "build\Release\static\bin\Lumice.exe" --benchmark -f examples\bench_config.json 2>&1 | Out-String
+          if ($out -notmatch '"isa"\s*:\s*"x86-64-v3"') {
+            Write-Error "isa key did not report x86-64-v3 under clang-cl; output:`n$out"
+            exit 1
+          }
+          Write-Host "isa key reports x86-64-v3 (clang-cl, -march applied)."
+
   # Shared + tests + GUI compile-only: the one combination no other job builds.
   # The `build` job builds tests and the GUI but only statically; `e2e-slow` is the
   # only shared-library job and it passes -DBUILD_TEST=OFF -DBUILD_GUI=OFF. That gap

@@ -51,7 +51,8 @@ jobs:
         include:
           # linux-x64 is built TWICE (baseline + x86-64-v4) and merged behind a CPUID
           # launcher — see the "ISA variants" steps below; the shared Configure/Build/
-          # Install steps skip this row.
+          # Install steps skip this row. windows-x64 below is split the same way
+          # (baseline + x86-64-v3), so every isa_split step also names its runner.os.
           - name: linux-x64
             os: ubuntu-24.04
             build_gui: ON
@@ -79,6 +80,7 @@ jobs:
             ext: zip
             msvc: true
             cuda: ON  # ship a CUDA-enabled Windows artifact (multi-arch fatbin)
+            isa_split: true  # baseline (MSVC cl.exe) + x86-64-v3 (clang-cl) behind the launcher
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -167,7 +169,7 @@ jobs:
       # re-download. Cost: roughly 2x this row's build time (release runs on tags and manual
       # dispatch only, never as a PR gate).
       - name: Configure, build and install (linux-x64, baseline)
-        if: matrix.isa_split
+        if: matrix.isa_split && runner.os == 'Linux'
         run: |
           cmake -S . -B build-baseline -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -179,7 +181,7 @@ jobs:
           cmake --install build-baseline
 
       - name: Configure, build and install (linux-x64, x86-64-v4)
-        if: matrix.isa_split
+        if: matrix.isa_split && runner.os == 'Linux'
         run: |
           cmake -S . -B build-v4 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -198,7 +200,7 @@ jobs:
       # cmake config files), which the single-build rows still ship because they tar the
       # whole prefix; that was never product content, and this row no longer carries it.
       - name: Merge ISA variants behind the launcher (linux-x64)
-        if: matrix.isa_split
+        if: matrix.isa_split && runner.os == 'Linux'
         run: |
           mkdir -p install
           for name in Lumice LumiceGUI; do
@@ -208,6 +210,96 @@ jobs:
           done
           chmod +x install/*
           ls -l install
+
+      # ISA variants (windows-x64). Same shape as linux-x64 above with one more moving part:
+      # the second tier is a different COMPILER, not just a different flag. Real MSVC cl.exe
+      # has no -march equivalent and its /arch flags measured at ~1% on this engine, while
+      # clang-cl (LLVM's MSVC-compatible driver) takes ~2.26x at -march=x86-64-v3 (AVX2+FMA)
+      # on the Windows reference box — so the baseline tree stays on cl.exe (the toolchain that
+      # ships today; nothing about it changes) and only the x86-64-v3 tree switches the C/C++
+      # compiler to clang-cl. The .cu translation unit is compiled by nvcc with cl.exe as its
+      # host compiler in BOTH trees (nvcc on Windows supports no other host compiler;
+      # CMAKE_CUDA_HOST_COMPILER=cl states that on the command line even though nvcc finds
+      # cl.exe on the PATH msvc-dev-cmd set up). The launcher (src/launcher/isa_launcher_win.c)
+      # is taken from the baseline tree like on Linux; the v3 tree compiles its own copy too,
+      # which is discarded — a single-file C program, seconds against two full engine builds,
+      # and not worth a CMake switch of its own.
+      # LLVM is installed from Chocolatey at a pinned version rather than taken from whatever
+      # the runner image ships: the 2.26x figure was measured on 20.1.0, and an image update
+      # moving the compiler under a release is exactly the drift a pin exists to stop.
+      - name: Install clang-cl (LLVM, pinned)
+        if: matrix.isa_split && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install llvm --version=20.1.0 -y --no-progress --allow-downgrade
+          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
+
+      # pwsh, three commands per step: the runner only checks the LAST native command's exit
+      # code, so each cmake call is followed by its own exit check — a failed build must not
+      # be masked by a succeeding install of whatever was there.
+      - name: Configure, build and install (windows-x64, baseline, MSVC cl.exe)
+        if: matrix.isa_split && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S . -B build-baseline -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install-baseline `
+            -DBUILD_TEST=OFF `
+            -DBUILD_GUI=${{ matrix.build_gui }} `
+            -DLUMICE_ISA_LEVEL=baseline `
+            -DLUMICE_CUDA_ENABLED=${{ matrix.cuda || 'OFF' }} `
+            ${{ env.LUMICE_PYTHON_ARGS }}
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-baseline --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --install build-baseline
+
+      - name: Configure, build and install (windows-x64, x86-64-v3, clang-cl)
+        if: matrix.isa_split && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S . -B build-v3 -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install-v3 `
+            -DBUILD_TEST=OFF `
+            -DBUILD_GUI=${{ matrix.build_gui }} `
+            -DLUMICE_ISA_LEVEL=x86-64-v3 `
+            -DLUMICE_CUDA_ENABLED=${{ matrix.cuda || 'OFF' }} `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CUDA_HOST_COMPILER=cl `
+            ${{ env.LUMICE_PYTHON_ARGS }}
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-v3 --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --install build-v3
+
+      # Launcher from the baseline (cl.exe) tree, as on Linux. `$ErrorActionPreference = 'Stop'`
+      # is not boilerplate: PowerShell's default is Continue, under which a Copy-Item whose
+      # source is missing is a NON-terminating error — the script would run on, the zip would
+      # ship without that file, and the job would still be green. The trailing check turns
+      # "all six executables are present" from a thing someone reads off the zip listing into
+      # a red the workflow raises itself.
+      - name: Merge ISA variants behind the launcher (windows-x64)
+        if: matrix.isa_split && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path install | Out-Null
+          $expected = @()
+          foreach ($name in @('Lumice', 'LumiceGUI')) {
+            Copy-Item "install-baseline\$name.exe" "install\$name.baseline.exe"
+            Copy-Item "install-v3\$name.exe" "install\$name.x86-64-v3.exe"
+            Copy-Item "install-baseline\LumiceIsaLauncher.exe" "install\$name.exe"
+            $expected += "$name.baseline.exe", "$name.x86-64-v3.exe", "$name.exe"
+          }
+          Get-ChildItem install
+          $missing = $expected | Where-Object { -not (Test-Path "install\$_") }
+          if ($missing) {
+            Write-Error "Merge produced an incomplete package, missing: $($missing -join ', ')"
+            exit 1
+          }
 
       # Bundle the dynamic CUDA runtime next to the executables so the CUDA
       # backend loads on a user machine that has an NVIDIA driver but no CUDA
