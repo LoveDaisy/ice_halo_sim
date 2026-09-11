@@ -846,3 +846,104 @@ TEST(SunHorizonDir, TheThresholdIsWellClearOfTheAltitudesItMustNotSwallow) {
   ann::SunHorizonDir(sun, d);
   EXPECT_NEAR(AzDelta(AzOf(d), AzOf(sun)), 0.0f, 1e-3f) << "89.9 deg was treated as degenerate";
 }
+
+// =================================================================================================
+// ProjectDirectionOnView: the marker sampler on a caller-supplied direction
+// =================================================================================================
+
+// The strongest statement available: for every named marker, on views that exercise every
+// branch of the policy (the two hemisphere clips and the front clip, on a full-sky lens and on a
+// single one), the direction ResolveMarkerDir gives lands EXACTLY where ComputeAnchors puts that
+// marker — identical px/py/valid, because it is the same sampler and not a re-implementation.
+TEST(ProjectDirectionOnView, AgreesWithEveryNamedMarkerOnEveryPolicy) {
+  const lumice::SunParam sun_param{ 20.0f, 35.0f, 0.5f };
+  float sun[3] = { 0.0f, 0.0f, 0.0f };
+  ann::SunWorldDir(sun_param, sun);
+  const ann::MarkerId ids[] = { ann::kMarkerZenith, ann::kMarkerNadir,     ann::kMarkerSun,
+                                ann::kMarkerSubsun, ann::kMarkerAnthelion, ann::kMarkerAntisolar };
+  struct Policy {
+    const char* name;
+    LensParam::LensType lens;
+    float fov;
+    RenderConfig::VisibleRange visible;
+    bool front;
+    float el;
+  };
+  const Policy policies[] = {
+    { "dual full", LensParam::kDualFisheyeEqualArea, 180.0f, RenderConfig::kFull, false, 0.0f },
+    { "dual upper", LensParam::kDualFisheyeEqualArea, 180.0f, RenderConfig::kUpper, false, 0.0f },
+    { "dual lower", LensParam::kDualFisheyeEqualArea, 180.0f, RenderConfig::kLower, false, 0.0f },
+    { "linear front", LensParam::kLinear, 90.0f, RenderConfig::kFull, true, 30.0f },
+    { "fisheye upper front", LensParam::kFisheyeEqualArea, 150.0f, RenderConfig::kUpper, true, 60.0f },
+  };
+  int visible_total = 0;
+  int hidden_total = 0;
+  for (const Policy& p : policies) {
+    SCOPED_TRACE(p.name);
+    ann::Request req;
+    req.view = MakeView(p.lens, p.fov, 256, 128);
+    req.view.visible = p.visible;
+    req.view.front = p.front;
+    req.view.el_deg = p.el;
+    req.view.az_deg = 35.0f;
+    req.reference_dir[0] = sun[0];
+    req.reference_dir[1] = sun[1];
+    req.reference_dir[2] = sun[2];
+    req.markers.assign(std::begin(ids), std::end(ids));
+    req.labels = false;
+    const ann::Anchors anchors = ann::ComputeAnchors(req);
+    if (anchors.markers.size() != std::size(ids)) {
+      ADD_FAILURE() << "ComputeAnchors returned " << anchors.markers.size() << " markers";
+      continue;
+    }
+    for (size_t i = 0; i < std::size(ids); ++i) {
+      float dir[3] = { 0.0f, 0.0f, 0.0f };
+      ann::ResolveMarkerDir(ids[i], sun, dir);
+      const ann::CanvasPoint got = ann::ProjectDirectionOnView(req.view, dir);
+      const ann::CanvasPoint want = anchors.markers[i];
+      EXPECT_EQ(got.valid, want.valid) << "marker " << i;
+      if (want.valid) {
+        EXPECT_EQ(got.px, want.px) << "marker " << i;
+        EXPECT_EQ(got.py, want.py) << "marker " << i;
+        ++visible_total;
+      } else {
+        ++hidden_total;
+      }
+    }
+  }
+  // Both branches of the agreement were exercised: the full-sky view places every marker, the
+  // clipped and narrow ones hide some — an all-valid or all-invalid table would compare nothing.
+  EXPECT_GT(visible_total, 0);
+  EXPECT_GT(hidden_total, 0);
+}
+
+TEST(ProjectDirectionOnView, ZeroVectorFallsBackToTheZenithLikeReferenceDir) {
+  const ann::ViewSnapshot view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 128, 64);
+  const float zero[3] = { 0.0f, 0.0f, 0.0f };
+  const float zenith[3] = { 0.0f, 0.0f, -1.0f };
+  const ann::CanvasPoint a = ann::ProjectDirectionOnView(view, zero);
+  const ann::CanvasPoint b = ann::ProjectDirectionOnView(view, zenith);
+  ASSERT_TRUE(b.valid);
+  EXPECT_TRUE(a.valid);
+  EXPECT_EQ(a.px, b.px);
+  EXPECT_EQ(a.py, b.py);
+  // And an unnormalized direction lands where its unit vector does.
+  const float scaled[3] = { 0.0f, 0.0f, -7.5f };
+  const ann::CanvasPoint c = ann::ProjectDirectionOnView(view, scaled);
+  EXPECT_EQ(c.px, b.px);
+  EXPECT_EQ(c.py, b.py);
+}
+
+TEST(ProjectDirectionOnView, DegenerateViewAndOffCanvasDirectionsAreInvalid) {
+  const float zenith[3] = { 0.0f, 0.0f, -1.0f };
+  EXPECT_FALSE(ann::ProjectDirectionOnView(MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 0, 64), zenith).valid);
+  EXPECT_FALSE(ann::ProjectDirectionOnView(MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 128, 0), zenith).valid);
+  // A narrow linear lens looking at the horizon does not image the zenith at all.
+  ann::ViewSnapshot narrow = MakeView(LensParam::kLinear, 30.0f, 128, 64);
+  narrow.el_deg = 0.0f;
+  EXPECT_FALSE(ann::ProjectDirectionOnView(narrow, zenith).valid);
+  // `lower` hides the zenith on a lens that does image it (the same clip the zenith marker gets).
+  ann::ViewSnapshot lower = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 128, 64);
+  lower.visible = RenderConfig::kLower;
+  EXPECT_FALSE(ann::ProjectDirectionOnView(lower, zenith).valid);
+}

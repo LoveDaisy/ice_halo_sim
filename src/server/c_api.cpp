@@ -4051,6 +4051,26 @@ LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px
   return LUMICE_OK;
 }
 
+LUMICE_ErrorCode LUMICE_ProjectDirection(const LUMICE_AnnotationView* view, const float dir[3], float* out_px,
+                                         float* out_py, int* out_valid) {
+  if (!view || !dir || !out_px || !out_py || !out_valid) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (!AnnotationViewEnumsValid(*view) || view->width <= 0 || view->height <= 0) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  // Core's marker sampler on a caller-supplied direction: the projection, the canvas clamp and
+  // the hemisphere slack are the ones LUMICE_ComputeAnnotationAnchors' marker points get.
+  const ns::annotation::CanvasPoint p = ns::annotation::ProjectDirectionOnView(ToAnnotationViewSnapshot(*view), dir);
+  *out_valid = p.valid ? 1 : 0;
+  if (!p.valid) {
+    return LUMICE_OK;
+  }
+  *out_px = p.px;
+  *out_py = p.py;
+  return LUMICE_OK;
+}
+
 
 // =============== Crystal Kind ===============
 // The three kind-taking predicates below share one shape, replacing the

@@ -598,4 +598,89 @@ TEST(CApiUnprojectPixel, ArgumentsAndClips) {
   EXPECT_EQ(valid, 1);
 }
 
+// ---------------------------------------------------------------------------
+// LUMICE_ProjectDirection (v4.31): the forward on a caller's direction. Its geometry is pinned in
+// core (test_annotation_overlay.cpp, ProjectDirectionOnView against every named marker); the bridge
+// is checked here for its argument contract, for the round trip through LUMICE_UnprojectPixel on
+// every lens branch, and for reporting a marker-policy miss as valid 0 with the outputs untouched.
+// ---------------------------------------------------------------------------
+TEST(CApiProjectDirection, RoundTripsUnprojectPixelOnEveryLens) {
+  for (const LensCase& c : kLensCases) {
+    SCOPED_TRACE(c.name);
+    const LUMICE_AnnotationView v = ViewFor(c);
+    int valid_pixels = 0;
+    for (int py = 0; py < v.height; py += 7) {
+      for (int px = 0; px < v.width; px += 5) {
+        float dir[3] = { 0.0f, 0.0f, 0.0f };
+        int valid = -1;
+        if (LUMICE_UnprojectPixel(&v, px, py, dir, &valid) != LUMICE_OK) {
+          ADD_FAILURE() << "(" << px << "," << py << ") inverse returned an error";
+          continue;
+        }
+        if (valid == 0) {
+          continue;
+        }
+        valid_pixels++;
+        float fx = -1.0f;
+        float fy = -1.0f;
+        int fvalid = -1;
+        if (LUMICE_ProjectDirection(&v, dir, &fx, &fy, &fvalid) != LUMICE_OK) {
+          ADD_FAILURE() << "(" << px << "," << py << ") forward returned an error";
+          continue;
+        }
+        // The marker policy is a superset of the render-domain one (half a degree of slack at the
+        // hemisphere edge), so a direction the inverse called sky the forward must place.
+        EXPECT_EQ(fvalid, 1) << "(" << px << "," << py << ")";
+        // The forward bins with floor(v + 0.5) about the centre and the inverse returns the pixel's
+        // centre: the landing point is the pixel index itself, to float noise.
+        EXPECT_NEAR(fx, static_cast<float>(px), 1e-3f) << "(" << px << "," << py << ")";
+        EXPECT_NEAR(fy, static_cast<float>(py), 1e-3f) << "(" << px << "," << py << ")";
+      }
+    }
+    EXPECT_GT(valid_pixels, 100) << "the sample must actually cover the lens";
+  }
+}
+
+TEST(CApiProjectDirection, ArgumentsAndPolicy) {
+  LUMICE_AnnotationView v = ViewFor(kLensCases[1]);
+  const float zenith[3] = { 0.0f, 0.0f, -1.0f };
+  float px = 0.0f;
+  float py = 0.0f;
+  int valid = -1;
+  EXPECT_EQ(LUMICE_ProjectDirection(nullptr, zenith, &px, &py, &valid), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, nullptr, &px, &py, &valid), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, nullptr, &py, &valid), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, nullptr, &valid), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, nullptr), LUMICE_ERR_NULL_ARG);
+  v.lens_type = -1;
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, &valid), LUMICE_ERR_INVALID_VALUE);
+  v = ViewFor(kLensCases[1]);
+  v.visible = 99;
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, &valid), LUMICE_ERR_INVALID_VALUE);
+  v = ViewFor(kLensCases[1]);
+  v.height = 0;
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, &valid), LUMICE_ERR_INVALID_VALUE);
+
+  // A 150-degree fisheye at elevation 25 images the zenith (65 degrees off axis); `lower` hides
+  // it under the marker policy, and the outputs are untouched on the miss.
+  v = ViewFor(kLensCases[1]);
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, &valid), LUMICE_OK);
+  ASSERT_EQ(valid, 1);
+  EXPECT_GE(px, 0.0f);
+  EXPECT_LE(px, static_cast<float>(v.width - 1));
+  EXPECT_GE(py, 0.0f);
+  EXPECT_LE(py, static_cast<float>(v.height - 1));
+  v.visible = LUMICE_VISIBLE_LOWER;
+  px = py = 42.0f;
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, &valid), LUMICE_OK);
+  EXPECT_EQ(valid, 0);
+  EXPECT_FLOAT_EQ(px, 42.0f);
+  EXPECT_FLOAT_EQ(py, 42.0f);
+  // A narrow linear lens on the horizon does not image the zenith at all.
+  v = ViewFor(kLensCases[0]);
+  v.view_elevation = 0.0f;
+  EXPECT_EQ(LUMICE_ProjectDirection(&v, zenith, &px, &py, &valid), LUMICE_OK);
+  EXPECT_EQ(valid, 0);
+}
+
 }  // namespace

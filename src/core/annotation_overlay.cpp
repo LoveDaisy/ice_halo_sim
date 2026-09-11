@@ -510,6 +510,23 @@ Anchors ComputeAnchors(const Request& req) {
   return out;
 }
 
+CanvasPoint ProjectDirectionOnView(const ViewSnapshot& view, const float dir[3]) {
+  if (view.width <= 0 || view.height <= 0) {
+    return {};
+  }
+  // A request carrying nothing but the view and the direction: SetUp builds the same frame the
+  // marker sampler reads (projection, forward, canvas) and normalizes the direction with the same
+  // zero-vector fallback it applies to reference_dir, so there is no second copy of either here.
+  Request req;
+  req.view = view;
+  req.reference_dir[0] = dir[0];
+  req.reference_dir[1] = dir[1];
+  req.reference_dir[2] = dir[2];
+  const RequestFrame f = SetUp(req);
+  const CurveSample s = SampleWorldDir(f.ctx, AltitudeDegOfDir(f.ref_dir[2]), f.ref_dir[0], f.ref_dir[1], f.ref_dir[2]);
+  return { s.px, s.py, s.vis };
+}
+
 Overlay ComputeOverlay(const Request& req) {
   Overlay out;
   const int width = req.view.width;

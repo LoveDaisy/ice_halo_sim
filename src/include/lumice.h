@@ -283,7 +283,16 @@ extern "C" {
 // observed again": `present` is a property of the frame, true on every poll for as long as the
 // result is held, so a GUI keying its list refresh (and the selection it clears with it) on
 // `present` would clear the user's selection every frame. Nothing else moved.
-#define LUMICE_API_VERSION 430
+//
+// v4.31: LUMICE_ProjectDirection — ADDED, nothing removed or reordered; the exported symbol set
+// grew, per the rule at the top of this block. It is the forward half LUMICE_UnprojectPixel is the
+// inverse of, on a direction the caller holds rather than one of the six named marker ids
+// LUMICE_ComputeAnnotationAnchors projects: the same sampler as those markers (projection, canvas
+// clamp, half-degree hemisphere slack), so a consumer that keeps a direction of its own — the GUI
+// keeps its analysis cone centre as one — can place it on the picture every frame and have it move
+// with the view exactly as the zenith or the sun marker does. Zero allocation, no storage handle:
+// it is designed to be called per frame from a hover test.
+#define LUMICE_API_VERSION 431
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -2063,6 +2072,32 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame,
 // unknown lens_type / visible or a non-positive width / height.
 LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3],
                                        int* out_valid);
+
+// World direction -> canvas position, the forward of LUMICE_UnprojectPixel above and the sampler
+// LUMICE_ComputeAnnotationAnchors' marker points come from, on a direction of the caller's own —
+// for keeping a marker that is defined by a direction (the GUI's analysis cone centre) on the
+// picture as the view changes. Pure computation, no Server or Scene lifetime, no allocation: one
+// projection, safe to call every frame.
+//
+// `dir` is the direction light TRAVELS (the convention at LUMICE_ResolveAnnotationMarkerDirection;
+// what LUMICE_UnprojectPixel returns). It need not be normalized; a zero vector reads as the zenith,
+// as LUMICE_AnnotationRequest::reference_dir does.
+//
+// `*out_px` / `*out_py` are a CONTINUOUS position on the `view`'s width x height canvas, in the
+// same pixel space and with the same clamp as LUMICE_AnnotationMarkerPoint::px / py: x right,
+// y down, origin at the top-left corner, clamped to [0, width-1] x [0, height-1]. Float on purpose
+// where LUMICE_UnprojectPixel's input is an int: a pixel index is discrete by nature, a projected
+// landing point is not, and this is the marker family's answer, not a second inverse.
+//
+// `*out_valid` is 1 iff the direction lands on the canvas under the MARKER policy — imaged by the
+// lens, inside the canvas, and inside the `visible` / `front` hemisphere with the same half-degree
+// slack every named marker gets at the edge. That is deliberately not LUMICE_UnprojectPixel's
+// exact render-domain verdict: a marker is drawn beside the other markers and should appear and
+// disappear as they do. `out_px` / `out_py` are written only on 1; on 0 they are untouched.
+// Returns LUMICE_ERR_NULL_ARG for a NULL view / dir / out_px / out_py / out_valid,
+// LUMICE_ERR_INVALID_VALUE for an unknown lens_type / visible or a non-positive width / height.
+LUMICE_ErrorCode LUMICE_ProjectDirection(const LUMICE_AnnotationView* view, const float dir[3], float* out_px,
+                                         float* out_py, int* out_valid);
 
 // =============== Config ID Range ===============
 // Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).

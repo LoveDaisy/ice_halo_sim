@@ -275,6 +275,22 @@ struct Anchors {
 };
 Anchors ComputeAnchors(const Request& req);
 
+// ONE direction, forward-projected onto `view`'s canvas under the SAME projection, canvas
+// containment and hemisphere policy the marker points of ComputeAnchors get — this is the
+// sampler behind Request::markers, generalized to a direction the caller supplies instead of one
+// derived from the sun by a MarkerId. A consumer that keeps a world direction of its own (the
+// GUI's analysis cone centre) places it on the picture each frame through this, so it moves with
+// the view exactly as the six named markers do, and shows and hides at the hemisphere edge on
+// the same half-degree slack (VisibleForLabel). It is NOT the render-domain verdict of
+// mask_detail::VisibleByRange / FrontVisible — that one is for "does this pixel image sky" and
+// belongs to the inverse (LUMICE_UnprojectPixel), not to a marker.
+//
+// `dir` is in the convention every direction here is in (light TRAVELS, zenith is z = -1); it
+// need not be normalized, and a zero vector falls back to the zenith the way Request::reference_dir
+// does. A degenerate view (non-positive width / height) yields `valid == false`. Cost: one
+// projection — no allocation, no walk — so it is safe to call per frame, per marker.
+CanvasPoint ProjectDirectionOnView(const ViewSnapshot& view, const float dir[3]);
+
 }  // namespace lumice::annotation
 
 #endif  // CORE_ANNOTATION_OVERLAY_H_
