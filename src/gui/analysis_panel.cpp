@@ -16,6 +16,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/panels.hpp"  // SliderWithInput / SliderIntWithInput
 #include "gui/raypath_segments.hpp"
 #include "gui/semantic_colors.hpp"
 #include "gui/server_poller.hpp"
@@ -300,10 +301,24 @@ std::optional<float> ConeRingRadiusCanvasPx(const LUMICE_AnnotationView& view, i
 
 // ---- The request ---------------------------------------------------------------------------------
 
+void EnsureDefaultAnalysisRayBudget(GuiState& state) {
+  if (state.analysis.ray_budget_initialized) {
+    return;
+  }
+  state.analysis.ray_num_millions = state.sim.ray_num_millions;
+  state.analysis.infinite = state.sim.infinite;
+  state.analysis.ray_budget_initialized = true;
+}
+
 LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int canvas_w, int canvas_h) {
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = state.analysis.roi_mode;
   req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
+  // The budget applies to every ROI mode, so it sits outside the switch. Millions -> rays in
+  // double, as the document's own field is converted, so 12.5 M is 12500000 and not a float
+  // rounding of it.
+  req.infinite = state.analysis.infinite ? 1 : 0;
+  req.ray_num = static_cast<LUMICE_RayCount>(static_cast<double>(state.analysis.ray_num_millions) * 1e6);
   switch (state.analysis.roi_mode) {
     case LUMICE_RAYPATH_ROI_IN_FRAME:
       req.frame_view = PreviewAnnotationView(state, canvas_w, canvas_h);
@@ -312,7 +327,7 @@ LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int ca
       std::copy(state.analysis.cone_center_dir, state.analysis.cone_center_dir + 3, req.cone_center);
       req.cone_radius_rad = kAnalysisConeMaxRadiusDeg * kDeg2Rad;
       req.cone_ring_count = kAnalysisConeRingCount;
-      req.cone_stop_target = kAnalysisConeStopTarget;
+      req.cone_stop_target = static_cast<LUMICE_RayCount>(std::max(state.analysis.cone_stop_target, 0));
       break;
     default:
       break;
@@ -511,6 +526,43 @@ void RenderRoiControls(GuiState& state) {
   }
 }
 
+// The request's parameters that are not the region: the ray budget, and in CONE mode the early
+// stop. Session state, sent with the next Analyze — editing them starts nothing, like the region.
+void RenderRequestParamsControls(GuiState& state) {
+  auto& a = state.analysis;
+  EnsureDefaultAnalysisRayBudget(state);
+  // The document's Rays row, re-drawn for the session's own field: a checkbox that turns the
+  // total off and a slider for the total. Kept in step with panels.cpp by hand — evaluated and
+  // not shared, because the two rows read different fields under different constraint sources
+  // (the registry's versus these constants), and a helper would need both spelled as parameters.
+  PushLabelColumnItemWidth();
+  Checkbox("Infinite rays", &a.infinite);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Trace until stopped (or, for a point, until 'Stop at' rays have landed).");
+  }
+  ImGui::PopItemWidth();
+  ImGui::BeginGroup();
+  ImGui::BeginDisabled(a.infinite);
+  SliderWithInput("Rays(M)", &a.ray_num_millions, kAnalysisRayNumMinMillions, kAnalysisRayNumMaxMillions, "%.1f");
+  ImGui::EndDisabled();
+  ImGui::EndGroup();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip(
+        "Total rays the analysis traces across all wavelengths, in millions.\n"
+        "Starts from the document's Rays; independent of it from then on.");
+  }
+  if (a.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
+    ImGui::BeginGroup();
+    SliderIntWithInput("Stop at", &a.cone_stop_target, 0, kAnalysisConeStopTargetMax);
+    ImGui::EndGroup();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "End the run once this many rays have landed in the cone.\n"
+          "0 = no early stop; the ray budget alone decides.");
+    }
+  }
+}
+
 // The persistent "you are in pick mode" line at the top of the window while a pick is armed. A
 // bordered child rather than a bare TextColored, so a test can find it by name — an ImGui text
 // item has no id of its own (ItemInfo cannot address it), a child window does.
@@ -604,17 +656,20 @@ void RenderRadiusSlider(GuiState& state) {
   const float cone_deg = cone_result ? payload->cone_radius_rad * kRad2Deg : kAnalysisConeMaxRadiusDeg;
   const int rings = cone_result ? payload->cone_ring_count : kAnalysisConeRingCount;
   const float min_deg = cone_deg / static_cast<float>(std::max(rings, 1));
-  ImGui::BeginDisabled(!cone_result);
+  // Never disabled: the radius is display-time state whether or not a result exists yet. Before
+  // one, it sizes the ring on the preview (DrawAnalysisRoiRing reads it every frame) so the
+  // user sees the region the list will be summed over; after one, it re-sums the rings on hand.
+  // Either way the request is the full cone and nothing here starts a run.
   ImGui::SetNextItemWidth(220.0f);
   if (ImGui::SliderFloat("Radius", &state.analysis.cone_radius_deg, min_deg, cone_deg, "%.1f deg")) {
-    // Display-time only: re-sums the rings already on hand, starts nothing.
+    // Display-time only: re-sums the rings already on hand (a no-op without one), starts nothing.
     RecomputeAnalysisDisplayOrder(state);
   }
-  ImGui::EndDisabled();
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+  if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(cone_result ?
                           "How far from the picked point counts. Re-sums the result on hand; does not re-run." :
-                          "Enabled once a point analysis has a result.");
+                          "How far from the picked point will count, shown as the ring on the preview.\n"
+                          "The analysis always traces the whole cone; this picks the part the list sums.");
   }
   if (cone_result) {
     ImGui::SameLine();
@@ -710,6 +765,7 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
   }
   RenderPickBanner(state);
   RenderRoiControls(state);
+  RenderRequestParamsControls(state);
   RenderRunControls(state, server);
   RenderRadiusSlider(state);
   ImGui::Separator();

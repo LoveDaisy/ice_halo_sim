@@ -448,6 +448,8 @@ TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionSymmetry) {
   state.analysis.cone_center_dir[1] = 0.2f;
   state.analysis.cone_center_dir[2] = -0.9f;
   state.analysis.cone_radius_deg = 1.0f;  // the slider: must NOT reach the request
+  state.analysis.ray_num_millions = 12.5f;
+  state.analysis.infinite = false;
   const LUMICE_RaypathAnalysisRequest req = BuildAnalysisRequest(state, 100, 100);
   EXPECT_EQ(req.roi_mode, LUMICE_RAYPATH_ROI_CONE);
   EXPECT_EQ(req.chain_id_symmetry, LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT);
@@ -455,7 +457,25 @@ TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionSymmetry) {
   EXPECT_FLOAT_EQ(req.cone_center[2], -0.9f);
   EXPECT_NEAR(req.cone_radius_rad, kAnalysisConeMaxRadiusDeg * 3.14159265f / 180.0f, 1e-6f);
   EXPECT_EQ(req.cone_ring_count, kAnalysisConeRingCount);
-  EXPECT_EQ(req.cone_stop_target, kAnalysisConeStopTarget);
+  EXPECT_EQ(req.cone_stop_target, kAnalysisConeStopTarget) << "the session's default is the constant";
+  // The budget is the session's, explicit — never the scene-default sentinel — and to the ray.
+  EXPECT_EQ(req.infinite, 0);
+  EXPECT_EQ(req.ray_num, 12500000u);
+
+  // The session's stop target and an unlimited budget reach the request as such.
+  state.analysis.cone_stop_target = 12345;
+  state.analysis.infinite = true;
+  const LUMICE_RaypathAnalysisRequest cone2 = BuildAnalysisRequest(state, 100, 100);
+  EXPECT_EQ(cone2.cone_stop_target, 12345u);
+  EXPECT_EQ(cone2.infinite, 1);
+  // A stop target of 0 is "no early stop", and a negative one (unreachable through the input,
+  // whose floor is 0) is clamped to the same rather than wrapping to a huge unsigned target.
+  state.analysis.cone_stop_target = 0;
+  EXPECT_EQ(BuildAnalysisRequest(state, 100, 100).cone_stop_target, 0u);
+  state.analysis.cone_stop_target = -1;
+  EXPECT_EQ(BuildAnalysisRequest(state, 100, 100).cone_stop_target, 0u);
+  state.analysis.cone_stop_target = static_cast<int>(kAnalysisConeStopTarget);
+  state.analysis.infinite = false;
 
   state.analysis.roi_mode = LUMICE_RAYPATH_ROI_IN_FRAME;
   state.renderer.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
@@ -467,9 +487,46 @@ TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionSymmetry) {
   EXPECT_EQ(in_frame.frame_view.lens_type, LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA);
   EXPECT_FLOAT_EQ(in_frame.frame_view.lens_fov, 120.0f);
   EXPECT_EQ(in_frame.chain_id_symmetry, LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT);
+  EXPECT_EQ(in_frame.ray_num, 12500000u) << "the budget is not a CONE-only field";
 
   state.analysis.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
-  EXPECT_EQ(BuildAnalysisRequest(state, 1, 1).roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+  const LUMICE_RaypathAnalysisRequest full = BuildAnalysisRequest(state, 1, 1);
+  EXPECT_EQ(full.roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+  EXPECT_EQ(full.ray_num, 12500000u);
+  EXPECT_EQ(full.infinite, 0);
+}
+
+// The session's ray budget is seeded from the document ONCE — the first call copies, a later
+// document edit does not reach it, and a session that was seeded is not re-seeded.
+TEST(AnalysisPanelLogic, EnsureDefaultAnalysisRayBudgetSeedsOnceFromTheDocument) {
+  GuiState state;
+  state.sim.ray_num_millions = 33.0f;
+  state.sim.infinite = true;
+  EXPECT_FALSE(state.analysis.ray_budget_initialized);
+  EnsureDefaultAnalysisRayBudget(state);
+  EXPECT_TRUE(state.analysis.ray_budget_initialized);
+  EXPECT_FLOAT_EQ(state.analysis.ray_num_millions, 33.0f);
+  EXPECT_TRUE(state.analysis.infinite);
+
+  state.sim.ray_num_millions = 99.0f;
+  state.sim.infinite = false;
+  EnsureDefaultAnalysisRayBudget(state);
+  EXPECT_FLOAT_EQ(state.analysis.ray_num_millions, 33.0f) << "seeded once; the document's later edit stays its own";
+  EXPECT_TRUE(state.analysis.infinite);
+
+  // The user's edit survives the same way.
+  state.analysis.ray_num_millions = 2.0f;
+  state.analysis.infinite = false;
+  EnsureDefaultAnalysisRayBudget(state);
+  EXPECT_FLOAT_EQ(state.analysis.ray_num_millions, 2.0f);
+  EXPECT_FALSE(state.analysis.infinite);
+
+  // A fresh session (what a document switch leaves behind) seeds again, from the document as it
+  // is then.
+  state.analysis = GuiState::RaypathAnalysisSession{};
+  EnsureDefaultAnalysisRayBudget(state);
+  EXPECT_FLOAT_EQ(state.analysis.ray_num_millions, 99.0f);
+  EXPECT_FALSE(state.analysis.infinite);
 }
 
 // ---- the exclude closure ----

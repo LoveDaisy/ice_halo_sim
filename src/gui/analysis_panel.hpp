@@ -154,10 +154,21 @@ std::optional<float> ConeRingRadiusCanvasPx(const LUMICE_AnnotationView& view, i
 
 // ---- The request ---------------------------------------------------------------------------------
 
+// Seed the session's own ray budget (analysis.ray_num_millions / analysis.infinite) from the
+// document's (state.sim.ray_num_millions / state.sim.infinite) once — level-triggered on
+// !ray_budget_initialized, the shape EnsureDefaultConeCenter has, so the first frame the window
+// shows carries the document's Rays and every later frame carries whatever the user left. Nothing
+// re-syncs it to a later document edit; a document switch resets the whole session (app.cpp
+// ResetFrontendState) and so re-seeds from the new document.
+void EnsureDefaultAnalysisRayBudget(GuiState& state);
+
 // The LUMICE_RaypathAnalysisRequest for the session's ROI. IN_FRAME takes the preview view on the
 // canvas_w x canvas_h canvas; CONE takes the picked centre with the FULL cone
-// (kAnalysisConeMaxRadiusDeg / kAnalysisConeRingCount / kAnalysisConeStopTarget) — the slider is
-// applied at display time, never here. Symmetry is always the session default.
+// (kAnalysisConeMaxRadiusDeg / kAnalysisConeRingCount, and the session's cone_stop_target) — the
+// slider is applied at display time, never here. Symmetry is always the session default. The ray
+// budget is the session's own (ray_num_millions / infinite), always explicit: the GUI never sends
+// LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT, because it already holds the value the sentinel would
+// stand for.
 LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int canvas_w, int canvas_h);
 
 // ---- Exclude this raypath ------------------------------------------------------------------------

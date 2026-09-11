@@ -1589,6 +1589,19 @@ struct GuiState {
     // Display-time angular radius in degrees: which of the request's rings the list sums over.
     // Dragging it re-sorts the list from the ring energies already on hand and starts no run.
     float cone_radius_deg = kAnalysisConeDefaultRadiusDeg;
+    // The analysis run's own ray budget (LUMICE_RaypathAnalysisRequest::infinite / ray_num,
+    // v4.32), decoupled from the document's sim.ray_num_millions / sim.infinite and in the same
+    // representation. Seeded from the document's current values the first time the window is
+    // shown (EnsureDefaultAnalysisRayBudget, analysis_panel.hpp); from then on it is the user's
+    // own, and nothing re-syncs it to a later document edit. The two initializers below are
+    // placeholders for the un-seeded state only — they carry no product meaning, and no code
+    // path reads them before the seed.
+    float ray_num_millions = 5.0f;
+    bool infinite = false;
+    bool ray_budget_initialized = false;
+    // CONE mode's early-stop target, sent as the request's cone_stop_target: the run ends once
+    // this many rays have landed in the cone. 0 = no early stop (the ray budget alone decides).
+    int cone_stop_target = static_cast<int>(kAnalysisConeStopTarget);
     // "The next left click on the preview picks the cone centre." Armed by the panel's button in
     // CONE mode, disarmed by the click that consumes it, by Esc, and by leaving CONE mode — never
     // left armed across a mode switch, or a later click would write a centre no mode reads.

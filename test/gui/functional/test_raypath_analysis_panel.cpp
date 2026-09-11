@@ -456,6 +456,113 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The radius slider is live BEFORE any result: in Point mode with the default centre and no
+  // Analyze pressed, it is enabled, setting it changes the session's radius and the ring drawn on
+  // the preview (the pixel radius DrawAnalysisRoiRing draws from), and nothing runs — no result
+  // appears, the intent flag stays clear, the lifecycle is the render's, the sim state is Done.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "radius_slider_drags_before_any_result");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Point");
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.cone_center_valid);
+      IM_CHECK(!gui::g_state.analysis_result.payload);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Radius")));
+      const LUMICE_AnnotationView view =
+          gui::PreviewAnnotationView(gui::g_state, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+      const std::optional<gui::CanvasPixel> marker = gui::ProjectConeCenterMarker(gui::g_state, view);
+      IM_CHECK(marker.has_value());
+      const std::optional<float> ring_before =
+          gui::ConeRingRadiusCanvasPx(view, marker->px, marker->py, gui::g_state.analysis.cone_radius_deg);
+      IM_CHECK(ring_before.has_value());
+      LUMICE_SimLifecycleResult before{};
+      LUMICE_GetSimLifecycle(gui::g_server, &before);
+      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
+
+      ctx->ItemInputValue("Radius", 10.0f);
+      ctx->SetRef("");
+      ctx->Yield(5);
+
+      IM_CHECK_FLOAT_NEAR(gui::g_state.analysis.cone_radius_deg, 10.0f, 1e-3f);
+      const std::optional<float> ring_after =
+          gui::ConeRingRadiusCanvasPx(view, marker->px, marker->py, gui::g_state.analysis.cone_radius_deg);
+      IM_CHECK(ring_after.has_value());
+      IM_CHECK_GT(*ring_after, *ring_before);
+      // And nothing ran.
+      IM_CHECK(!gui::g_state.analysis.started);
+      IM_CHECK(!gui::g_state.analysis_run_in_progress);
+      IM_CHECK(!gui::g_state.analysis_result.payload);
+      LUMICE_SimLifecycleResult after{};
+      LUMICE_GetSimLifecycle(gui::g_server, &after);
+      IM_CHECK_EQ(after.epoch, before.epoch);
+      IM_CHECK_EQ(after.lifecycle, before.lifecycle);
+      IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+    };
+  }
+
+  // The request's parameters are the panel's own session inputs: Rays(M) / Infinite rays open
+  // with the document's values and then move independently of them; Stop at appears in Point
+  // mode at the constant's default; editing any of the three starts nothing and dirties nothing.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "request_params_are_session_inputs_seeded_once");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));  // sim.ray_num_millions = 0.1, infinite off
+      IM_CHECK(!gui::g_state.analysis.ray_budget_initialized);
+      OpenWindow(ctx);
+      IM_CHECK(gui::g_state.analysis.ray_budget_initialized);
+      IM_CHECK_FLOAT_NEAR(gui::g_state.analysis.ray_num_millions, gui::g_state.sim.ray_num_millions, 1e-6f);
+      IM_CHECK_EQ(gui::g_state.analysis.infinite, gui::g_state.sim.infinite);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_stop_target, static_cast<int>(gui::kAnalysisConeStopTarget));
+      LUMICE_SimLifecycleResult before{};
+      LUMICE_GetSimLifecycle(gui::g_server, &before);
+      const SimState sim_state_before = gui::g_state.sim_state;
+
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(ctx->ItemInfo("##Rays(M)_input").ID != 0);
+      // Stop at is a Point-mode input: absent in Whole sky.
+      IM_CHECK(ctx->ItemInfo("##Stop at_input", ImGuiTestOpFlags_NoError).ID == 0);
+      ctx->ItemInputValue("##Rays(M)_input", 2.5f);
+      ctx->Yield(2);
+      IM_CHECK_FLOAT_NEAR(gui::g_state.analysis.ray_num_millions, 2.5f, 1e-4f);
+      IM_CHECK_FLOAT_NEAR(gui::g_state.sim.ray_num_millions, 0.1f, 1e-6f);  // the document's Rays is not the panel's
+
+      ctx->ItemClick("Point");
+      ctx->Yield(1);
+      IM_CHECK(ctx->ItemInfo("##Stop at_input").ID != 0);
+      ctx->ItemInputValue("##Stop at_input", 12345);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.analysis.cone_stop_target, 12345);
+
+      ctx->ItemClick("Infinite rays");
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.infinite);
+      IM_CHECK(!gui::g_state.sim.infinite);                    // the document's Infinite rays is not the panel's
+      IM_CHECK(IsDisabled(ctx->ItemInfo("##Rays(M)_input")));  // no total applies while unlimited
+      ctx->SetRef("");
+
+      // None of it ran anything or dirtied the document.
+      IM_CHECK(!gui::g_state.analysis.started);
+      IM_CHECK(!gui::g_state.analysis_run_in_progress);
+      LUMICE_SimLifecycleResult after{};
+      LUMICE_GetSimLifecycle(gui::g_server, &after);
+      IM_CHECK_EQ(after.epoch, before.epoch);
+      IM_CHECK_EQ(after.lifecycle, before.lifecycle);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)sim_state_before);
+
+      // Last, because it dirties the document: a later edit to the document's Rays does not
+      // reach the seeded session field.
+      gui::g_state.sim.ray_num_millions = 7.0f;
+      ctx->Yield(2);
+      IM_CHECK_FLOAT_NEAR(gui::g_state.analysis.ray_num_millions, 2.5f, 1e-4f);
+    };
+  }
+
   // AC3: entering Point mode places a centre at once — the viewport's middle pixel, unprojected —
   // so there is a marker to drag before any pick. The oracle is the C API on that pixel.
   {
