@@ -1461,6 +1461,9 @@ bool DoAnalyze() {
   // counter only grows), so the first result is adopted without any reset of the cursor.
   g_state.analysis.started = true;
   g_state.analysis.selected_entry.reset();
+  // What this run was asked about, for the "centre has moved" hint: the request's own copy, so
+  // it is the value the server received and not a re-read of the session field.
+  std::copy(req.cone_center, req.cone_center + 3, g_state.analysis.analyzed_cone_center_dir);
   g_state.analysis_result = GuiState::AnalysisResultView{};
   // The poller's snapshot still carries the previous result forward, and with the view just
   // cleared (held generation 0) the next SyncFromPoller would adopt it as new. Drop it there too.

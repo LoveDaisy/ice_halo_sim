@@ -1569,14 +1569,23 @@ struct GuiState {
     // LUMICE_RAYPATH_ROI_* verbatim — the wire values are the GUI values, no second enum to keep
     // aligned (the RadioButton row indexes this int directly, exactly as AxisDistType's does).
     int roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
-    // CONE mode: the direction light travels toward the cone's centre (the unprojected click),
-    // valid only while cone_center_valid. cone_center_px is the CANVAS pixel that click landed on,
-    // cached so the ROI ring can be drawn without a forward projection — see analysis_panel.cpp
-    // for the known limit this caching carries (a view drag after the click moves the picture
-    // but not the ring; the direction, which is what the server judges by, stays right).
+    // CONE mode: the direction light travels toward the cone's centre, valid only while
+    // cone_center_valid. The ONE representation of the centre — where it sits on the picture is
+    // projected from it every frame (analysis_panel.cpp ProjectConeCenterMarker, through
+    // LUMICE_ProjectDirection), never cached as a pixel, so a view drag moves the marker with the
+    // picture and the direction the server judges by is the direction the marker shows.
     bool cone_center_valid = false;
     float cone_center_dir[3] = { 0.0f, 0.0f, 0.0f };
-    int cone_center_px[2] = { 0, 0 };
+    // The marker is being dragged: set by the press on it, cleared by the release, and while set
+    // every frame's mouse position is unprojected into cone_center_dir. Session state because the
+    // drag outlives a frame; nothing else reads it.
+    bool cone_marker_dragging = false;
+    // The centre the analysis on show was REQUESTED with — a copy DoAnalyze takes of
+    // cone_center_dir at the moment it builds the request (the result itself does not carry it:
+    // LUMICE_RaypathAnalysisInfo has no cone field). Compared against cone_center_dir at display
+    // time to say "the centre has moved since this result; press Analyze" — a hint, never an
+    // automatic re-run.
+    float analyzed_cone_center_dir[3] = { 0.0f, 0.0f, 0.0f };
     // Display-time angular radius in degrees: which of the request's rings the list sums over.
     // Dragging it re-sorts the list from the ring energies already on hand and starts no run.
     float cone_radius_deg = kAnalysisConeDefaultRadiusDeg;

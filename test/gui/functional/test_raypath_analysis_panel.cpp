@@ -253,15 +253,18 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       ctx->SetRef("");
 
       const gui::CanvasPixel px = PickPreviewCentre(ctx);
-      // The ROI is placed: the pick is consumed, the centre is valid and remembers the pixel.
+      // The ROI is placed: the pick is consumed, the centre is valid, and this frame's marker
+      // projects back onto the pixel that was clicked.
       IM_CHECK(!gui::g_state.analysis.pick_armed);
       IM_CHECK(gui::g_state.analysis.cone_center_valid);
-      IM_CHECK_EQ(gui::g_state.analysis.cone_center_px[0], px.px);
-      IM_CHECK_EQ(gui::g_state.analysis.cone_center_px[1], px.py);
-      // And its direction is the click's unprojection under the view the picture is drawn with —
-      // the oracle is the C API called directly on the same pixel, not the panel's own function.
       const LUMICE_AnnotationView view =
           gui::PreviewAnnotationView(gui::g_state, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+      const std::optional<gui::CanvasPixel> marker = gui::ProjectConeCenterMarker(gui::g_state, view);
+      IM_CHECK(marker.has_value());
+      IM_CHECK_EQ(marker->px, px.px);
+      IM_CHECK_EQ(marker->py, px.py);
+      // And its direction is the click's unprojection under the view the picture is drawn with —
+      // the oracle is the C API called directly on the same pixel, not the panel's own function.
       float want[3] = { 0.0f, 0.0f, 0.0f };
       int valid = 0;
       IM_CHECK_EQ(LUMICE_UnprojectPixel(&view, px.px, px.py, want, &valid), LUMICE_OK);

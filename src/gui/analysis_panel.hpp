@@ -92,10 +92,57 @@ void CanvasPixelToPreviewPoint(int px, int py, float dpi_scale_x, float dpi_scal
 LUMICE_AnnotationView PreviewAnnotationView(const GuiState& state, int canvas_w, int canvas_h);
 
 // Turn the click at canvas pixel (px, py) into the cone centre: LUMICE_UnprojectPixel through
-// `view`. On sky, writes cone_center_dir / cone_center_px / cone_center_valid and disarms the
-// pick; off sky (letterbox, outside the lens's image circle, the clipped hemisphere) writes
-// nothing and leaves the pick armed, so the user can aim again. Returns whether it hit sky.
+// `view`. On sky, writes cone_center_dir / cone_center_valid and disarms the pick; off sky
+// (letterbox, outside the lens's image circle, the clipped hemisphere) writes nothing and leaves
+// the pick armed, so the user can aim again. Returns whether it hit sky.
 bool PickAnalysisConeCenter(GuiState& state, const LUMICE_AnnotationView& view, int px, int py);
+
+// Where the cone centre sits on the canvas THIS frame: cone_center_dir forward-projected through
+// `view` by LUMICE_ProjectDirection (the sampler the sky-reference markers use, so it moves with
+// the view and shows/hides at the hemisphere edge as they do), rounded to the nearest canvas
+// pixel and clamped into the canvas. nullopt when there is no valid centre or the direction is
+// not on this view's picture — then nothing is drawn and nothing can be grabbed; the list is
+// unaffected. Rounded to the integer CanvasPixel on purpose: the marker is drawn and hit-tested
+// through the same CanvasPixelToPreviewPoint the ring uses, and half a canvas pixel is invisible
+// under a 3-point dot.
+std::optional<CanvasPixel> ProjectConeCenterMarker(const GuiState& state, const LUMICE_AnnotationView& view);
+
+// Who owns the mouse over the preview while the analysis window is in CONE mode. ONE arbiter
+// for three gestures that share the same rectangle, evaluated once per frame and read by every
+// branch: the marker under the cursor (or a drag already in flight) wins over an armed pick,
+// which wins over the camera. Hover-over-pick is the ruling stated in the design (a cursor on
+// the old marker while a new pick is armed grabs the marker: the two overlap only there, and
+// dragging what is under the cursor is the less surprising outcome). Outside CONE mode the
+// caller does not consult this and the camera owns the preview as it always did.
+enum class ConeInputOwner {
+  kMarkerDrag,  // hover on the marker, or a drag in progress
+  kPickClick,   // pick armed: the next click sets the centre
+  kCamera,      // neither: orbit / zoom / background gestures as before
+};
+ConeInputOwner ArbitrateConeInput(bool marker_hover_or_dragging, bool pick_armed);
+
+// Move the centre to the direction under canvas pixel (px, py) — the drag's per-frame write.
+// The sibling of PickAnalysisConeCenter: the same LUMICE_UnprojectPixel through the same view,
+// the same "on sky writes, off sky writes nothing" rule (a drag past the picture's edge keeps the
+// last direction that was sky rather than parking the centre on garbage). Touches nothing else:
+// not pick_armed, not cone_center_valid (a drag can only start on a marker, which only exists
+// while the centre is valid), and it does not log per frame. Returns whether it hit sky.
+bool DragAnalysisConeCenter(GuiState& state, const LUMICE_AnnotationView& view, int px, int py);
+
+// Give CONE mode a centre when it has none: the direction under the viewport's centre pixel
+// (vp_w/2, vp_h/2) through `view`. Level-triggered by the panel each frame CONE mode has no
+// valid centre and a preview is on screen, so a mode switch before the first picture still gets
+// its default once the picture arrives. Returns whether a centre was placed; a miss (the centre
+// pixel not on sky — a degenerate view) writes nothing and the caller tries again next frame.
+bool EnsureDefaultConeCenter(GuiState& state, const LUMICE_AnnotationView& view, int vp_w, int vp_h);
+
+// "The centre has moved since the result on show was computed": a CONE result is held, the
+// centre is valid, and cone_center_dir differs from the direction that result was requested
+// with (analysis.analyzed_cone_center_dir) by more than float noise — the dot product of the two
+// unit vectors under 1 - 1e-6. Not bitwise, because the drag path re-derives the direction
+// through LUMICE_UnprojectPixel while the request copied the field, and any move the eye can
+// see is far past that band. False whenever there is no CONE result to compare against.
+bool ConeCenterDriftedFromResult(const GuiState& state);
 
 // The on-screen radius, in canvas pixels, of a `radius_deg` cone around the pixel (px, py) under
 // `view` — the LOCAL scale, measured by unprojecting a neighbouring pixel and reading the angle
@@ -143,9 +190,10 @@ bool ApplyExcludeSelectedRaypath(GuiState& state);
 // The window. No-op while state.analysis.window_open is false.
 void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server);
 
-// The ROI ring on the preview, drawn by RenderPreviewPanel after its interaction button: CONE mode
-// with a valid centre draws the ring of the slider's radius around the cached click pixel; every
-// other state draws nothing. `origin` is the preview window's top-left in screen points.
+// The ROI marker and ring on the preview, drawn by RenderPreviewPanel after its interaction
+// button: CONE mode with a valid centre that projects onto this frame's picture draws the centre
+// dot and the ring of the slider's radius around it (ProjectConeCenterMarker); every other state
+// draws nothing. `origin` is the preview window's top-left in screen points.
 void DrawAnalysisRoiRing(const GuiState& state, const LUMICE_AnnotationView& view, const ImVec2& origin,
                          float dpi_scale_x, float dpi_scale_y);
 

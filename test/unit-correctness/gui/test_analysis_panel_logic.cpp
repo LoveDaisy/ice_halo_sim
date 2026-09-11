@@ -265,8 +265,6 @@ TEST(AnalysisPanelLogic, PickWritesTheCentreOnSkyAndNothingOffSky) {
   ASSERT_TRUE(PickAnalysisConeCenter(state, view, 100, 50));
   EXPECT_TRUE(state.analysis.cone_center_valid);
   EXPECT_FALSE(state.analysis.pick_armed) << "the click that picks disarms";
-  EXPECT_EQ(state.analysis.cone_center_px[0], 100);
-  EXPECT_EQ(state.analysis.cone_center_px[1], 50);
   // The same pixel through the C API directly: identical direction (AC2's "the centre direction
   // is the click's unprojection", stated as equality with the oracle rather than as a property).
   float expect[3] = { 0.0f, 0.0f, 0.0f };
@@ -288,6 +286,139 @@ TEST(AnalysisPanelLogic, PickWritesTheCentreOnSkyAndNothingOffSky) {
   for (int i = 0; i < 3; ++i) {
     EXPECT_FLOAT_EQ(state.analysis.cone_center_dir[i], before[i]);
   }
+}
+
+// ---- the marker: the direction placed on the picture each frame ----
+
+TEST(AnalysisPanelLogic, MarkerIsThePickedPixelAndFollowsTheView) {
+  GuiState state;
+  state.renderer.lens_type = LUMICE_LENS_TYPE_LINEAR;
+  state.renderer.fov = 60.0f;
+  state.renderer.azimuth = 0.0f;
+  state.renderer.elevation = 30.0f;
+  const LUMICE_AnnotationView view = PreviewAnnotationView(state, 200, 100);
+  EXPECT_FALSE(ProjectConeCenterMarker(state, view).has_value()) << "no centre, no marker";
+  ASSERT_TRUE(PickAnalysisConeCenter(state, view, 120, 40));
+  // Round trip: the pixel picked is the pixel the marker lands on, exactly (the inverse returns
+  // the pixel's centre and the forward bins it back — the C API's own round-trip guarantee).
+  const std::optional<CanvasPixel> same = ProjectConeCenterMarker(state, view);
+  ASSERT_TRUE(same.has_value());
+  EXPECT_EQ(same->px, 120);
+  EXPECT_EQ(same->py, 40);
+  // The view turns; the direction does not; the marker moves with the picture. The camera
+  // yawing 10 degrees (azimuth +10) shifts the fixed direction sideways by roughly 10 deg of
+  // bearing foreshortened by the 30-degree elevation, at the focal length the SHORT side sets:
+  // 100 / (2 tan 30) * tan(10 cos 30) = 13 px. A loose oracle on purpose — the sign and the
+  // exact figure are the lens's business (pinned in core); what this case pins is that the
+  // marker moves by the view's amount while the direction stays put.
+  const float dir_before[3] = { state.analysis.cone_center_dir[0], state.analysis.cone_center_dir[1],
+                                state.analysis.cone_center_dir[2] };
+  state.renderer.azimuth = 10.0f;
+  const LUMICE_AnnotationView turned = PreviewAnnotationView(state, 200, 100);
+  const std::optional<CanvasPixel> moved = ProjectConeCenterMarker(state, turned);
+  ASSERT_TRUE(moved.has_value());
+  EXPECT_NE(moved->px, 120);
+  EXPECT_NEAR(std::abs(moved->px - 120), 13, 4);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(state.analysis.cone_center_dir[i], dir_before[i]) << "the direction is the truth";
+  }
+  // Turned far enough that the direction leaves the 60-degree frame: no marker, the centre
+  // still valid (the list is unaffected; only the drawing is absent).
+  state.renderer.azimuth = 90.0f;
+  EXPECT_FALSE(ProjectConeCenterMarker(state, PreviewAnnotationView(state, 200, 100)).has_value());
+  EXPECT_TRUE(state.analysis.cone_center_valid);
+}
+
+// AC5: the arbiter's truth table. Three inputs combinations that matter, three exclusive owners,
+// and the one ruling worth pinning on its own — hover beats an armed pick.
+TEST(AnalysisPanelLogic, ConeInputArbiterTruthTable) {
+  EXPECT_EQ(ArbitrateConeInput(false, false), ConeInputOwner::kCamera);
+  EXPECT_EQ(ArbitrateConeInput(false, true), ConeInputOwner::kPickClick);
+  EXPECT_EQ(ArbitrateConeInput(true, false), ConeInputOwner::kMarkerDrag);
+  EXPECT_EQ(ArbitrateConeInput(true, true), ConeInputOwner::kMarkerDrag) << "the marker under the cursor wins";
+}
+
+TEST(AnalysisPanelLogic, DragWritesTheDirectionOnSkyAndNothingElse) {
+  // A linear lens on the horizon showing the upper hemisphere only: the top half of the canvas
+  // is sky, the bottom half is clipped — a drag that crosses the horizon must stop writing.
+  GuiState state;
+  state.renderer.lens_type = LUMICE_LENS_TYPE_LINEAR;
+  state.renderer.fov = 60.0f;
+  state.renderer.elevation = 0.0f;
+  state.renderer.visible = LUMICE_VISIBLE_UPPER;
+  const LUMICE_AnnotationView view = PreviewAnnotationView(state, 200, 100);
+  state.analysis.pick_armed = true;
+  ASSERT_TRUE(PickAnalysisConeCenter(state, view, 100, 20));
+  state.analysis.pick_armed = true;  // a drag must leave an armed pick armed
+  float want[3] = { 0.0f, 0.0f, 0.0f };
+  int valid = 0;
+  ASSERT_EQ(LUMICE_UnprojectPixel(&view, 130, 30, want, &valid), LUMICE_OK);
+  ASSERT_EQ(valid, 1);
+  EXPECT_TRUE(DragAnalysisConeCenter(state, view, 130, 30));
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(state.analysis.cone_center_dir[i], want[i]) << "the drag is the pixel's unprojection, verbatim";
+  }
+  EXPECT_TRUE(state.analysis.pick_armed);
+  EXPECT_TRUE(state.analysis.cone_center_valid);
+  // Below the horizon (clipped by `upper`): nothing written, the last sky direction kept.
+  int below_valid = 1;
+  float below[3] = { 0.0f, 0.0f, 0.0f };
+  ASSERT_EQ(LUMICE_UnprojectPixel(&view, 100, 90, below, &below_valid), LUMICE_OK);
+  ASSERT_EQ(below_valid, 0) << "the case needs a pixel that is not sky";
+  EXPECT_FALSE(DragAnalysisConeCenter(state, view, 100, 90));
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(state.analysis.cone_center_dir[i], want[i]);
+  }
+  EXPECT_FALSE(DragAnalysisConeCenter(state, view, 5000, 30)) << "outside the canvas";
+}
+
+TEST(AnalysisPanelLogic, DefaultCentreIsTheViewportCentreOnceAndOnlyWhenOnSky) {
+  GuiState state;
+  state.renderer.lens_type = LUMICE_LENS_TYPE_LINEAR;
+  state.renderer.fov = 60.0f;
+  state.renderer.elevation = 30.0f;
+  const LUMICE_AnnotationView view = PreviewAnnotationView(state, 200, 100);
+  float want[3] = { 0.0f, 0.0f, 0.0f };
+  int valid = 0;
+  ASSERT_EQ(LUMICE_UnprojectPixel(&view, 100, 50, want, &valid), LUMICE_OK);
+  ASSERT_EQ(valid, 1);
+  EXPECT_TRUE(EnsureDefaultConeCenter(state, view, 200, 100));
+  EXPECT_TRUE(state.analysis.cone_center_valid);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FLOAT_EQ(state.analysis.cone_center_dir[i], want[i]);
+  }
+  // A view whose centre pixel is not sky: `lower` hides the direction the centre looks at
+  // (elevation 30, above the horizon). Nothing placed, nothing marked valid.
+  GuiState lower;
+  lower.renderer.lens_type = LUMICE_LENS_TYPE_LINEAR;
+  lower.renderer.fov = 60.0f;
+  lower.renderer.elevation = 30.0f;
+  lower.renderer.visible = LUMICE_VISIBLE_LOWER;
+  EXPECT_FALSE(EnsureDefaultConeCenter(lower, PreviewAnnotationView(lower, 200, 100), 200, 100));
+  EXPECT_FALSE(lower.analysis.cone_center_valid);
+}
+
+TEST(AnalysisPanelLogic, DriftHintNeedsAConeResultAndAMovedCentre) {
+  GuiState state;
+  state.analysis.cone_center_valid = true;
+  state.analysis.cone_center_dir[0] = 0.0f;
+  state.analysis.cone_center_dir[1] = 0.0f;
+  state.analysis.cone_center_dir[2] = -1.0f;
+  std::copy(state.analysis.cone_center_dir, state.analysis.cone_center_dir + 3,
+            state.analysis.analyzed_cone_center_dir);
+  EXPECT_FALSE(ConeCenterDriftedFromResult(state)) << "no result at all";
+  state.analysis_result.payload = MakePayload(1, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0 });
+  EXPECT_FALSE(ConeCenterDriftedFromResult(state)) << "not a cone result";
+  state.analysis_result.payload = MakePayload(2, LUMICE_RAYPATH_ROI_CONE, { 1.0 }, 4, 2.0f);
+  EXPECT_FALSE(ConeCenterDriftedFromResult(state)) << "same centre";
+  // Float noise of a round trip is not a move; a visible move is.
+  state.analysis.cone_center_dir[0] = 1e-5f;
+  EXPECT_FALSE(ConeCenterDriftedFromResult(state));
+  state.analysis.cone_center_dir[0] = std::sin(2.0f * 3.14159265f / 180.0f);
+  state.analysis.cone_center_dir[2] = -std::cos(2.0f * 3.14159265f / 180.0f);
+  EXPECT_TRUE(ConeCenterDriftedFromResult(state)) << "two degrees is a move";
+  state.analysis.cone_center_valid = false;
+  EXPECT_FALSE(ConeCenterDriftedFromResult(state)) << "no centre, nothing to compare";
 }
 
 TEST(AnalysisPanelLogic, RingRadiusFollowsTheLensScaleAtTheCentre) {

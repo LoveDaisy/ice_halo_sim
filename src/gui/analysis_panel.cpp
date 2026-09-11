@@ -38,6 +38,11 @@ constexpr float kRad2Deg = 180.0f / kPi;
 constexpr int kRingScaleProbePx = 8;
 constexpr float kRoiRingThicknessPt = 2.0f;
 constexpr int kRoiRingSegments = 96;
+constexpr float kRoiMarkerDotRadiusPt = 3.0f;
+// Two unit directions with a dot product at or above this are "the same centre" for the moved-
+// since-the-result hint: 1e-6 in the dot is ~0.08 degrees, an order of magnitude past the float
+// noise of one LUMICE_UnprojectPixel round trip and far under anything a drag produces.
+constexpr float kConeCenterSameDirDot = 1.0f - 1e-6f;
 
 // The Point-mode centre as the user reads it: the altitude and azimuth of the direction light
 // comes FROM, i.e. of the sky point clicked, from a direction light TRAVELS (altitude = asin(-z),
@@ -190,8 +195,6 @@ bool PickAnalysisConeCenter(GuiState& state, const LUMICE_AnnotationView& view, 
   }
   auto& a = state.analysis;
   std::copy(dir, dir + 3, a.cone_center_dir);
-  a.cone_center_px[0] = px;
-  a.cone_center_px[1] = py;
   a.cone_center_valid = true;
   a.pick_armed = false;
   float alt = 0.0f;
@@ -200,6 +203,75 @@ bool PickAnalysisConeCenter(GuiState& state, const LUMICE_AnnotationView& view, 
   GUI_LOG_INFO("[Analysis] cone centre picked at pixel ({},{}): altitude {:.2f} deg, azimuth {:.2f} deg", px, py, alt,
                az);
   return true;
+}
+
+std::optional<CanvasPixel> ProjectConeCenterMarker(const GuiState& state, const LUMICE_AnnotationView& view) {
+  const auto& a = state.analysis;
+  if (!a.cone_center_valid) {
+    return std::nullopt;
+  }
+  float fx = 0.0f;
+  float fy = 0.0f;
+  int valid = 0;
+  if (LUMICE_ProjectDirection(&view, a.cone_center_dir, &fx, &fy, &valid) != LUMICE_OK || valid == 0) {
+    return std::nullopt;
+  }
+  // The C API already clamps into [0, w-1] x [0, h-1]; the clamp here only guards the rounding of
+  // a value sitting exactly on the far edge from stepping one past it.
+  const int px = std::max(0, std::min(view.width - 1, static_cast<int>(std::lround(fx))));
+  const int py = std::max(0, std::min(view.height - 1, static_cast<int>(std::lround(fy))));
+  return CanvasPixel{ px, py };
+}
+
+ConeInputOwner ArbitrateConeInput(bool marker_hover_or_dragging, bool pick_armed) {
+  if (marker_hover_or_dragging) {
+    return ConeInputOwner::kMarkerDrag;
+  }
+  if (pick_armed) {
+    return ConeInputOwner::kPickClick;
+  }
+  return ConeInputOwner::kCamera;
+}
+
+bool DragAnalysisConeCenter(GuiState& state, const LUMICE_AnnotationView& view, int px, int py) {
+  float dir[3] = { 0.0f, 0.0f, 0.0f };
+  int valid = 0;
+  if (LUMICE_UnprojectPixel(&view, px, py, dir, &valid) != LUMICE_OK || valid == 0) {
+    return false;
+  }
+  std::copy(dir, dir + 3, state.analysis.cone_center_dir);
+  return true;
+}
+
+bool EnsureDefaultConeCenter(GuiState& state, const LUMICE_AnnotationView& view, int vp_w, int vp_h) {
+  float dir[3] = { 0.0f, 0.0f, 0.0f };
+  int valid = 0;
+  const int px = vp_w / 2;
+  const int py = vp_h / 2;
+  if (LUMICE_UnprojectPixel(&view, px, py, dir, &valid) != LUMICE_OK || valid == 0) {
+    return false;
+  }
+  auto& a = state.analysis;
+  std::copy(dir, dir + 3, a.cone_center_dir);
+  a.cone_center_valid = true;
+  float alt = 0.0f;
+  float az = 0.0f;
+  DirToAltAz(dir, &alt, &az);
+  GUI_LOG_INFO("[Analysis] cone centre defaulted to the view centre ({},{}): altitude {:.2f} deg, azimuth {:.2f} deg",
+               px, py, alt, az);
+  return true;
+}
+
+bool ConeCenterDriftedFromResult(const GuiState& state) {
+  const auto& a = state.analysis;
+  const auto& payload = state.analysis_result.payload;
+  if (!payload || payload->roi_mode != LUMICE_RAYPATH_ROI_CONE || !a.cone_center_valid) {
+    return false;
+  }
+  const float dot = a.cone_center_dir[0] * a.analyzed_cone_center_dir[0] +
+                    a.cone_center_dir[1] * a.analyzed_cone_center_dir[1] +
+                    a.cone_center_dir[2] * a.analyzed_cone_center_dir[2];
+  return dot < kConeCenterSameDirDot;
 }
 
 std::optional<float> ConeRingRadiusCanvasPx(const LUMICE_AnnotationView& view, int px, int py, float radius_deg) {
@@ -395,9 +467,19 @@ void RenderRoiControls(GuiState& state) {
   ImGui::RadioButton("Point", &a.roi_mode, LUMICE_RAYPATH_ROI_CONE);
   if (a.roi_mode != LUMICE_RAYPATH_ROI_CONE && prev_mode == LUMICE_RAYPATH_ROI_CONE) {
     a.pick_armed = false;  // never leave a click armed for a mode that does not read it
+    a.cone_marker_dragging = false;
   }
 
   if (a.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
+    // A centre from the moment the mode is entered, so the marker is on screen to be dragged
+    // before any pick. Level-triggered: "no valid centre and a preview to project on", not "the
+    // frame the radio was clicked" — a switch made before the first picture arrives is served the
+    // frame the picture does. This window renders after the preview panel, so the viewport read
+    // here is this frame's.
+    if (!a.cone_center_valid && g_preview_vp.active) {
+      EnsureDefaultConeCenter(state, PreviewAnnotationView(state, g_preview_vp.vp_w, g_preview_vp.vp_h),
+                              g_preview_vp.vp_w, g_preview_vp.vp_h);
+    }
     const bool can_pick = g_preview_vp.active;
     ImGui::BeginDisabled(!can_pick);
     if (a.pick_armed) {
@@ -413,7 +495,8 @@ void RenderRoiControls(GuiState& state) {
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip(can_pick ? "Then click a point on the preview. Esc cancels." :
+      ImGui::SetTooltip(can_pick ? "Then click a point on the preview. Esc cancels.\n"
+                                   "Or drag the marker on the preview directly." :
                                    "Needs a preview on screen to click on.");
     }
     ImGui::SameLine();
@@ -423,9 +506,30 @@ void RenderRoiControls(GuiState& state) {
       DirToAltAz(a.cone_center_dir, &alt, &az);
       ImGui::Text("Centre: altitude %.1f deg, azimuth %.1f deg", alt, az);
     } else {
-      ImGui::TextDisabled(a.pick_armed ? "Click on the preview..." : "No centre picked");
+      ImGui::TextDisabled("No centre yet");
     }
   }
+}
+
+// The persistent "you are in pick mode" line at the top of the window while a pick is armed. A
+// bordered child rather than a bare TextColored, so a test can find it by name — an ImGui text
+// item has no id of its own (ItemInfo cannot address it), a child window does.
+void RenderPickBanner(const GuiState& state) {
+  if (!state.analysis.pick_armed) {
+    return;
+  }
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, AccentColor(0.18f));
+  ImGui::PushStyleColor(ImGuiCol_Border, AccentColor(0.9f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+  const float h = ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y;
+  if (ImGui::BeginChild("##pick_banner", ImVec2(0.0f, h), ImGuiChildFlags_Borders)) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(AccentColor(),
+                       ICON_FA_CROSSHAIRS " Click on the preview to set the centre  \xe2\x80\x94  Esc to cancel");
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(2);
 }
 
 void RenderRunControls(GuiState& state, LUMICE_Server* server) {
@@ -479,6 +583,12 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       ImGui::SameLine();
       ImGui::TextDisabled("%zu raypaths (%s)", state.analysis_result.payload->entries.size(),
                           RoiModeLabel(state.analysis_result.payload->roi_mode));
+    }
+    // The marker moved (a drag, a pick) since the result on show was asked for: the list is
+    // about the old centre. A hint only — Analyze stays the one way to re-run.
+    if (ConeCenterDriftedFromResult(state)) {
+      ImGui::TextColored(WarningTextColor(), ICON_FA_TRIANGLE_EXCLAMATION
+                         " Centre has moved \xe2\x80\x94 press Analyze to update the list.");
     }
   }
 }
@@ -598,6 +708,7 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
     ImGui::End();
     return;
   }
+  RenderPickBanner(state);
   RenderRoiControls(state);
   RenderRunControls(state, server);
   RenderRadiusSlider(state);
@@ -610,23 +721,28 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
 void DrawAnalysisRoiRing(const GuiState& state, const LUMICE_AnnotationView& view, const ImVec2& origin,
                          float dpi_scale_x, float dpi_scale_y) {
   const auto& a = state.analysis;
-  if (!a.window_open || a.roi_mode != LUMICE_RAYPATH_ROI_CONE || !a.cone_center_valid) {
+  if (!a.window_open || a.roi_mode != LUMICE_RAYPATH_ROI_CONE) {
     return;
   }
-  // Known limit, accepted for v1: the centre is the CLICK's pixel, cached, so a view drag after
-  // the click leaves the ring where the click was while the picture moves under it. The direction
-  // is what the server judges by and it stays right; re-placing the ring each frame needs a
-  // forward projection the C API does not expose yet.
-  const std::optional<float> radius_px =
-      ConeRingRadiusCanvasPx(view, a.cone_center_px[0], a.cone_center_px[1], a.cone_radius_deg);
+  // This frame's projection of the direction: off the picture (behind the camera, outside the
+  // lens's circle, the clipped hemisphere) means no marker and no ring — the direction is still
+  // the request's, and the list is unaffected.
+  const std::optional<CanvasPixel> marker = ProjectConeCenterMarker(state, view);
+  if (!marker.has_value()) {
+    return;
+  }
+  // The ring's radius is the local scale at the marker's pixel — a linearisation, as
+  // ConeRingRadiusCanvasPx says; that approximation is unchanged by placing the centre per frame.
+  const std::optional<float> radius_px = ConeRingRadiusCanvasPx(view, marker->px, marker->py, a.cone_radius_deg);
   float cx = 0.0f;
   float cy = 0.0f;
-  CanvasPixelToPreviewPoint(a.cone_center_px[0], a.cone_center_px[1], dpi_scale_x, dpi_scale_y, &cx, &cy);
+  CanvasPixelToPreviewPoint(marker->px, marker->py, dpi_scale_x, dpi_scale_y, &cx, &cy);
   const ImVec2 centre(origin.x + cx, origin.y + cy);
   ImDrawList* fg = ImGui::GetForegroundDrawList();
   const ImU32 colour = ImGui::ColorConvertFloat4ToU32(AccentColor());
-  // The centre mark is always drawn; the ring only when the local scale could be measured.
-  fg->AddCircleFilled(centre, 3.0f, colour);
+  // The centre mark is always drawn; the ring only when the local scale could be measured. A drag
+  // in flight draws the dot larger, so the grab reads as taken.
+  fg->AddCircleFilled(centre, a.cone_marker_dragging ? kRoiMarkerDotRadiusPt * 1.6f : kRoiMarkerDotRadiusPt, colour);
   if (radius_px.has_value()) {
     fg->AddCircle(centre, *radius_px / dpi_scale_x, colour, kRoiRingSegments, kRoiRingThicknessPt);
   }

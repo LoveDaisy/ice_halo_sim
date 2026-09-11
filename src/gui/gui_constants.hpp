@@ -178,6 +178,11 @@ static_assert(kAnalysisConeRingCount >= 1 && kAnalysisConeRingCount <= LUMICE_MA
               "the cone ring count must be a request the C API accepts (it rejects, not truncates)");
 static_assert(kAnalysisConeDefaultRadiusDeg > 0.0f && kAnalysisConeDefaultRadiusDeg <= kAnalysisConeMaxRadiusDeg,
               "the default radius must lie inside the cone the request asks for");
+// The cone-centre marker's grab radius on the preview, in logical points around the projected
+// centre: inside it the cursor is a hand and a press drags the marker instead of orbiting the
+// camera. A feel value, not a ruling — there is no proxy to measure it by, so it is one number in
+// one place.
+constexpr float kAnalysisConeMarkerHitRadiusPt = 12.0f;
 
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
