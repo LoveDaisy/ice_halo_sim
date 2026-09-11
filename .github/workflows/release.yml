@@ -227,12 +227,16 @@ jobs:
       # LLVM is installed from Chocolatey at a pinned version rather than taken from whatever
       # the runner image ships: the 2.26x figure was measured on 20.1.0, and an image update
       # moving the compiler under a release is exactly the drift a pin exists to stop.
+      # It is NOT put on PATH, and both trees name their compiler explicitly. The first dispatch
+      # of this row prepended LLVM\bin to PATH and let the baseline tree take CMake's default
+      # compiler: with Ninja, CMake's search list reaches `clang++` before `cl`, so the tree
+      # that exists to be the MSVC build was silently compiled by clang's GNU-style driver
+      # (MSVC=FALSE, no NOMINMAX, `std::max` broken by windows.h) and the job went red there.
       - name: Install clang-cl (LLVM, pinned)
         if: matrix.isa_split && runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install llvm --version=20.1.0 -y --no-progress --allow-downgrade
-          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
 
       # pwsh, three commands per step: the runner only checks the LAST native command's exit
@@ -249,6 +253,8 @@ jobs:
             -DBUILD_GUI=${{ matrix.build_gui }} `
             -DLUMICE_ISA_LEVEL=baseline `
             -DLUMICE_CUDA_ENABLED=${{ matrix.cuda || 'OFF' }} `
+            -DCMAKE_CXX_COMPILER=cl `
+            -DCMAKE_C_COMPILER=cl `
             ${{ env.LUMICE_PYTHON_ARGS }}
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build-baseline --parallel
@@ -266,8 +272,8 @@ jobs:
             -DBUILD_GUI=${{ matrix.build_gui }} `
             -DLUMICE_ISA_LEVEL=x86-64-v3 `
             -DLUMICE_CUDA_ENABLED=${{ matrix.cuda || 'OFF' }} `
-            -DCMAKE_CXX_COMPILER=clang-cl `
-            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" `
+            -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" `
             -DCMAKE_CUDA_HOST_COMPILER=cl `
             ${{ env.LUMICE_PYTHON_ARGS }}
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

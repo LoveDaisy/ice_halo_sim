@@ -899,11 +899,12 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Not put on PATH, same as release.yml: the compiler is named by full path below, so
+      # nothing else in this job can pick LLVM up by accident.
       - name: Install clang-cl (LLVM, pinned)
         shell: pwsh
         run: |
           choco install llvm --version=20.1.0 -y --no-progress --allow-downgrade
-          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
 
       - name: Install CUDA toolkit (nvcc + cudart_dev)
@@ -928,8 +929,8 @@ jobs:
           -DBUILD_GUI=OFF
           -DLUMICE_ISA_LEVEL=x86-64-v3
           -DLUMICE_CUDA_ENABLED=ON
-          -DCMAKE_CXX_COMPILER=clang-cl
-          -DCMAKE_C_COMPILER=clang-cl
+          -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe"
+          -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe"
           -DCMAKE_CUDA_HOST_COMPILER=cl
 
       # The whole default graph: the CLI (lumice_obj at v3 under clang-cl, the .cu TU under

@@ -1561,6 +1561,14 @@ post-dates this table. Its first run, with nothing under its own cache key to re
 (run 34574596545); the same shape as `bench-compile` — narrow configure, `BUILD_TEST=OFF`,
 `BUILD_GUI=OFF`, compile and link only — and in the same "no — compile-only" column of §7.0's head.
 
+`windows-isa-v3-compile` (the clang-cl `-march=x86-64-v3` × nvcc/cl.exe leg added for the two-variant
+Windows release) post-dates it as well. Its first run, with nothing under its own cache key, took
+**338s** (run 34587240975): LLVM 20.1.0 from Chocolatey 79s, CUDA toolkit 59s, configure 42s, build
+122s, and 11s for the one thing that makes it more than compile-only — a `--benchmark` run asserting
+the `isa` key reads `x86-64-v3`. That is the `windows-cuda-compile` shape plus a compiler install,
+which is why it sits at the same scale as that row and not at `isa-v4-compile`'s; it still belongs in
+the "no" column of §7.0's head, since one benchmark invocation is not a test suite.
+
 ⚠️ **The `Ubuntu x86_64` row is still settling, and its history is worth more than its number.**
 That leg went 650s uncached → 657s (cold, nothing to restore) → 567s → 479s → 353s across five
 consecutive runs, and its ccache hit rate over the last three was 26.34% → 41.39% → **55.96%**, still
