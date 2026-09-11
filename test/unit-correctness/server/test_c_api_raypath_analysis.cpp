@@ -30,18 +30,20 @@
 #include "server/c_api_internal.hpp"  // ToAnnotationViewSnapshot, WrapResultFrameForTest
 #include "server/server.hpp"
 
-static_assert(LUMICE_API_VERSION >= 430, "the analysis run needs the v4.30 header (snapshot_generation on the info)");
+static_assert(LUMICE_API_VERSION >= 432, "the analysis run needs the v4.32 header (the request's own ray budget)");
 
 // The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
 // offsets, so a field inserted in the middle (which keeps the size) is caught as well as
 // one appended; the Python side pins the same numbers, so either side moving turns one of
 // the two red before the library writes past a Python buffer.
 static_assert(sizeof(LUMICE_AnnotationView) == 48, "LUMICE_AnnotationView layout changed; update capi_runner.py");
-static_assert(sizeof(LUMICE_RaypathAnalysisRequest) == 88, "LUMICE_RaypathAnalysisRequest layout changed");
+static_assert(sizeof(LUMICE_RaypathAnalysisRequest) == 96, "LUMICE_RaypathAnalysisRequest layout changed");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, frame_view) == 4, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_center) == 52, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_stop_target) == 72, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, chain_id_symmetry) == 80, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, infinite) == 84, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, ray_num) == 88, "");
 static_assert(sizeof(LUMICE_RaypathChainSegment) == 264, "LUMICE_RaypathChainSegment layout changed");
 static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 5600, "LUMICE_RaypathHistogramEntry layout changed");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, chain_len) == 2112, "");
@@ -82,10 +84,14 @@ LUMICE_ErrorCode CommitJson(LUMICE_Server* server, const std::string& json) {
   return err;
 }
 
+// The scene's own budget, as every request here asked for before the field existed (v4.32): a
+// zero-initialized `infinite` would be "0 rays", so the sentinel is set explicitly, as the header
+// says it must be.
 LUMICE_RaypathAnalysisRequest FullSky() {
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
   req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
+  req.infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT;
   return req;
 }
 
@@ -174,6 +180,20 @@ TEST_F(CApiRaypathAnalysis, RequestValidation) {
   EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
   req.chain_id_symmetry = -1;
   EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+
+  // The ray budget's `infinite` has exactly three spellings (v4.32). The three legal ones reach the
+  // scene check (no scene committed -> INVALID_CONFIG, i.e. the request itself passed); the rest
+  // are rejected before it.
+  for (const int legal : { 0, 1, LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT }) {
+    req = FullSky();
+    req.infinite = legal;
+    EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_CONFIG) << "infinite = " << legal;
+  }
+  for (const int illegal : { 2, -2, 0xFF }) {
+    req = FullSky();
+    req.infinite = illegal;
+    EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE) << "infinite = " << illegal;
+  }
 
   req = Cone();
   req.cone_radius_rad = 0.0f;
@@ -366,6 +386,91 @@ TEST_F(CApiRaypathAnalysis, InfoSnapshotGenerationIsStableWithinAFrameAndGrowsAc
   EXPECT_EQ(ic.present, 1);
   EXPECT_GT(ic.snapshot_generation, ia.snapshot_generation);
   LUMICE_ReleaseResultFrame(a);
+}
+
+// ---------------------------------------------------------------------------
+// The request's own ray budget (v4.32). Two ingest paths, one committed scene at 40000 rays:
+// a request carrying 10000 traces 10000; a request carrying the sentinel traces the scene's
+// 40000, as every request did before the field existed. The counts are EXACT, not
+// approximate: the CPU route queues batches of min(cap, remaining) until the budget is met
+// (server.cpp GenerateScene), and the D65 illuminant is a single wavelength, so the total
+// traced is the total asked for with no rounding — the same equality FrameGettersEndToEnd
+// already pins at 40000. So "proportional" is 10000 : 40000 to the ray, not to a tolerance.
+// ---------------------------------------------------------------------------
+TEST_F(CApiRaypathAnalysis, RequestRayBudgetOverridesTheSceneAndTheSentinelKeepsIt) {
+  ASSERT_EQ(CommitJson(server_, Halo22Json("40000")), LUMICE_OK);
+  LUMICE_StopServer(server_);
+
+  LUMICE_RaypathAnalysisRequest own = FullSky();
+  own.infinite = 0;
+  own.ray_num = 10000;
+  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &own), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  LUMICE_StatsResult stats{};
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(stats.sim_ray_num, 10000u) << "the request's budget, not the scene's";
+  LUMICE_RaypathAnalysisInfo info{};
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  EXPECT_EQ(info.present, 1) << "a smaller budget is still a full analysis frame";
+  LUMICE_ReleaseResultFrame(frame);
+
+  // Same server, same scene, the sentinel: the scene's own 40000 — so the override did not
+  // write itself into the scene, and a session without one does not inherit the last one.
+  const LUMICE_RaypathAnalysisRequest scene_default = FullSky();
+  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &scene_default), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(stats.sim_ray_num, 40000u) << "the scene's budget, untouched by the previous request";
+  LUMICE_ReleaseResultFrame(frame);
+
+  // And the render that follows traces the document's budget: the analysis edited nothing.
+  ASSERT_EQ(CommitJson(server_, Halo22Json("2000")), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(stats.sim_ray_num, 2000u);
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+// The other direction of the same field: a FINITE scene, a request for an unlimited run. The
+// only thing that can end it is the cone's stop target (as ConeEchoAndRings shows for an
+// infinite scene), and the proof the budget was the request's rather than the scene's is that
+// more rays were traced than the scene's 1000 allow — a run on the scene's budget stops at
+// exactly 1000 whether or not the target was reached.
+TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilTheConeTarget) {
+  ASSERT_EQ(CommitJson(server_, Halo22Json("1000")), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  LUMICE_RaypathAnalysisRequest req = Cone();
+  const float lat = -43.0f * 3.14159265f / 180.0f;  // on the 22° ring above the sun
+  req.cone_center[0] = -std::cos(lat);
+  req.cone_center[1] = 0.0f;
+  req.cone_center[2] = std::sin(lat);
+  req.cone_radius_rad = 2.5f * 3.14159265f / 180.0f;
+  req.cone_ring_count = 5;
+  req.cone_stop_target = 300;
+  req.infinite = 1;
+  req.ray_num = 7;  // ignored under infinite, and would be a smaller budget still if it were read
+  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000)) << "the stop target must end the unlimited run";
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  LUMICE_StatsResult stats{};
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_GT(stats.sim_ray_num, 1000u) << "past the scene's budget: the run was the request's";
+  LUMICE_RaypathAnalysisInfo info{};
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, &info), LUMICE_OK);
+  ASSERT_GE(info.entry_count, 1);
+  std::vector<LUMICE_RaypathHistogramEntry> entries(static_cast<size_t>(info.entry_count) + 1);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, entries.data(), info.entry_count + 1), LUMICE_OK);
+  LUMICE_RayCount landed = 0;
+  for (int i = 0; i < info.entry_count; i++) {
+    landed += entries[static_cast<size_t>(i)].count;
+  }
+  EXPECT_GE(landed, 300u) << "and it ended because the cone target was reached";
+  LUMICE_ReleaseResultFrame(frame);
 }
 
 // The cone request round-trips its echo fields and ring split through the getters.

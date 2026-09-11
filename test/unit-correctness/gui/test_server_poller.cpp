@@ -889,6 +889,7 @@ TEST(ServerPollerAnalysis, MaterializesOncePerGenerationCarriesForwardAndFencesO
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
   req.chain_id_symmetry = LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT;
+  req.infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT;  // the scene's 40000, not zero rays
   ASSERT_EQ(LUMICE_StartRaypathAnalysis(srv, &req), LUMICE_OK);
   // Not WaitForDrained alone: an analysis keeps the render's epoch (server.cpp — same scene, same
   // epoch), so "drained_epoch == epoch" is already true from the render that just completed and

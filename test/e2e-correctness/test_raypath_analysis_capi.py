@@ -58,6 +58,9 @@ def _full_sky_request() -> cr.LUMICE_RaypathAnalysisRequest:
     req = cr.LUMICE_RaypathAnalysisRequest()
     req.roi_mode = cr.LUMICE_RAYPATH_ROI_FULL_SKY
     req.chain_id_symmetry = cr.LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT
+    # The scene's own ray budget, as every request here asked for before v4.32 gave the request
+    # one of its own: a zero-initialized `infinite` would be a budget of zero rays.
+    req.infinite = cr.LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT
     return req
 
 

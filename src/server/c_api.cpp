@@ -3930,6 +3930,17 @@ LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE
   } else {
     return LUMICE_ERR_INVALID_VALUE;
   }
+  // The budget's three legal spellings; anything else is a return code, not a guess. The
+  // sentinel is checked first so the boolean reading below never sees it.
+  if (request->infinite == LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT) {
+    req.ray_num_ = std::nullopt;
+  } else if (request->infinite == 0) {
+    req.ray_num_ = static_cast<size_t>(request->ray_num);
+  } else if (request->infinite == 1) {
+    req.ray_num_ = ns::kInfSize;
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
   const ns::Error err = server->server_->StartRaypathAnalysis(req);
   return MapErrorCode(err.code);
 }

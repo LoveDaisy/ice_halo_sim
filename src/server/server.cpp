@@ -423,6 +423,18 @@ class ServerImpl {
   // clearing point on the way out would be a second implementation of the same rule.
   std::atomic_bool analysis_roi_target_reached_{ false };
 
+  // The analysis run's own ray budget (RaypathAnalysisRequest::ray_num_), carried from
+  // StartRaypathAnalysis (control thread) to GenerateScene's budget ingest point (worker
+  // thread) — the same write/read pair, and the same reason for atomics, as the flag
+  // above. Two atomics rather than one optional because an optional is not lock-free
+  // and the pair is only ever read under mode_ == kAnalysis, after both stores: the
+  // flag says whether the value applies, the value is the budget (kInfSize = unlimited).
+  // Written by StartRaypathAnalysis for every analysis session, on both branches, so a
+  // session that inherits the scene's budget cannot read the previous session's
+  // override; never read by a render session (the gate is kAnalysis, as for the flag).
+  std::atomic<size_t> analysis_ray_num_override_{ 0 };
+  std::atomic_bool analysis_ray_num_overridden_{ false };
+
   // ResolveGpuRoute's verdict at CONSTRUCTION time — the route this
   // server was actually sized for (worker_count, and hence simulators_.size()).
   // GenerateScene re-derives its own kGpuRoute from the live preferred_backend_
@@ -1112,6 +1124,14 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
   // New session, new stop flag: the previous analysis' "target reached" must not end this
   // one before its first batch.
   analysis_roi_target_reached_.store(false, std::memory_order_release);
+  // The session's ray budget: the request's own when it carries one, the scene's otherwise.
+  // Value before flag, so a reader that sees the flag sees the value it belongs to.
+  if (request.ray_num_.has_value()) {
+    analysis_ray_num_override_.store(*request.ray_num_, std::memory_order_release);
+    analysis_ray_num_overridden_.store(true, std::memory_order_release);
+  } else {
+    analysis_ray_num_overridden_.store(false, std::memory_order_release);
+  }
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     consumers_.clear();
@@ -2112,7 +2132,13 @@ void ServerImpl::GenerateScene() {
   // quantities in distinctly-named variables (avoids the "same name carrying two dimensions" trap):
   // per_wl = ceil(total / N_wl) guarantees at least `total` rays are traced across the spectrum.
   // Illuminant (N_wl=1) is the identity transform. kInfSize is passed through unchanged.
+  // An analysis session with a budget of its own (RaypathAnalysisRequest::ray_num_) reads that
+  // here, at the ONE ingest point, in the same total-across-wavelengths unit — the scene's own
+  // ray_num_ is left as committed, so the render that follows traces what the document says.
   size_t total_ray_num = scene->ray_num_;
+  if (kAnalysis && analysis_ray_num_overridden_.load(std::memory_order_acquire)) {
+    total_ray_num = analysis_ray_num_override_.load(std::memory_order_acquire);
+  }
   // A hand-written discrete config with total < N_wl asks for fewer rays than wavelengths; ceil still
   // yields >=1 per wavelength, so the actual total is rounded UP to N_wl. Warn so the author of a bad
   // config notices the bump (the GUI never hits this — total is always >> the wavelength count).

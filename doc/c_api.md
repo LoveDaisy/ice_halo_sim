@@ -789,8 +789,15 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
    `cone_radius_rad`, `cone_ring_count`, and `cone_stop_target` — the number of in-cone rays after
    which the run ends on its own; 0 = the scene's `ray_num` alone). Set `chain_id_symmetry` to
    `LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT` unless you want an explicit P/B/D bit set (a
-   zero-initialized request asks for **no** reduction). Calling it while an analysis is already
-   in progress restarts the analysis with the new request.
+   zero-initialized request asks for **no** reduction). The run's ray budget is the request's
+   own (v4.32): `infinite = 1` traces until stopped (or until `cone_stop_target` in CONE mode),
+   `infinite = 0` traces `ray_num` rays in total across every wavelength, and
+   `infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` traces the committed scene's own
+   `ray_num` / `infinite` — the behaviour before v4.32. A zero-initialized request asks for
+   **zero** rays, not for the scene's budget; set the field. Any other `infinite` is
+   `LUMICE_ERR_INVALID_VALUE`. The scene is never edited by the run: the next
+   `LUMICE_CommitScene` traces the document's own budget. Calling it while an analysis is
+   already in progress restarts the analysis with the new request.
 4. Poll as for a render; read through a frame. `LUMICE_FrameGetRaypathAnalysisInfo` says whether
    the frame is an analysis frame (`present`) and how many entries it holds; the entries follow the
    `(out, max_count)` sentinel contract of `LUMICE_FrameGetRawXyz` with `count == 0` as the sentinel,

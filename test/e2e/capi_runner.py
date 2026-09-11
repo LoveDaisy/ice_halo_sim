@@ -222,6 +222,7 @@ LUMICE_RAYPATH_ROI_FULL_SKY = 0
 LUMICE_RAYPATH_ROI_IN_FRAME = 1
 LUMICE_RAYPATH_ROI_CONE = 2
 LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT = 0xFF
+LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT = -1  # `infinite` sentinel: the scene's own budget (v4.32)
 LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 8
 LUMICE_MAX_RAYPATH_SEGMENT_LEN = 64
 LUMICE_MAX_RAYPATH_CONE_RINGS = 32
@@ -259,13 +260,16 @@ class LUMICE_RaypathAnalysisRequest(ctypes.Structure):
         ("cone_ring_count",   ctypes.c_int),
         ("cone_stop_target",  ctypes.c_ulonglong),
         ("chain_id_symmetry", ctypes.c_int),
+        ("infinite",          ctypes.c_int),        # v4.32
+        ("ray_num",           ctypes.c_ulonglong),  # v4.32
     ]
 
 
-assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 88, (
+assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 96, (
     "LUMICE_RaypathAnalysisRequest size mismatch — verify lumice.h field layout"
 )
-for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("cone_stop_target", 72), ("chain_id_symmetry", 80)):
+for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("cone_stop_target", 72), ("chain_id_symmetry", 80),
+                       ("infinite", 84), ("ray_num", 88)):
     assert getattr(LUMICE_RaypathAnalysisRequest, _name).offset == _offset, (
         f"LUMICE_RaypathAnalysisRequest.{_name} offset drift — the mirror and lumice.h disagree"
     )

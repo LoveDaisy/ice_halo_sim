@@ -217,6 +217,12 @@ constexpr uint8_t kChainIdSymmetrySessionDefault = 0xFF;
 struct RaypathAnalysisRequest {
   RaypathRoiSpec roi_;
   uint8_t chain_id_symmetry_ = kChainIdSymmetrySessionDefault;
+  // The run's own ray budget, in the scene's representation (total across every
+  // wavelength; kInfSize = unlimited). nullopt = trace the committed scene's own
+  // ray_num_, which is what every analysis run did before the request carried one.
+  // Never written back into the scene: an analysis session does not edit the
+  // document it reports on.
+  std::optional<size_t> ray_num_;
 };
 
 // One MS layer of a chain: which crystal, and the face sequence through it

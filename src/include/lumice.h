@@ -292,7 +292,18 @@ extern "C" {
 // keeps its analysis cone centre as one — can place it on the picture every frame and have it move
 // with the view exactly as the zenith or the sun marker does. Zero allocation, no storage handle:
 // it is designed to be called per frame from a hover test.
-#define LUMICE_API_VERSION 431
+//
+// BREAKING (v4.32): LUMICE_RaypathAnalysisRequest gains a trailing `infinite` / `ray_num` pair —
+// APPENDED, sizeof grows (88 -> 96), recompile. An analysis run now carries its OWN ray budget
+// instead of tracing the committed scene's `ray_num` (LUMICE_SceneSetSimParams) — a GUI can let
+// the user trade a quicker answer against a fuller histogram without touching the document, and a
+// CLI caller can size the run for the question asked. `infinite` set to
+// LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT keeps the pre-v4.32 behaviour (the scene's own budget);
+// it is a sentinel outside the boolean domain for the same reason
+// LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT is outside chain_id_symmetry's 0..7 — a zero-initialized
+// request asks for zero rays, not for the default, so a caller that wants the default says so.
+// Nothing else moved.
+#define LUMICE_API_VERSION 432
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1936,6 +1947,12 @@ LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float
 // default needs a value no combination of those bits can spell.
 #define LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT 0xFF
 
+// `infinite` value meaning "use the committed scene's own ray_num / infinite" (v4.32). Sits
+// outside the boolean domain {0, 1} for the same reason the symmetry default sits outside 0..7: a
+// zero-initialized request must not silently ask for it — `infinite = 0, ray_num = 0` is a request
+// for zero rays, a degenerate but honest budget.
+#define LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT (-1)
+
 // What one result entry can hold, sized so that NO chain a run can produce is cut: a chain has
 // one segment per scattering layer the ray traversed, and a config has at most
 // LUMICE_MAX_CONFIG_SCATTER_LAYERS of those; a segment is the face sequence through one crystal,
@@ -1982,6 +1999,16 @@ typedef struct LUMICE_RaypathAnalysisRequest_ {
   // request therefore asks for NO reduction (every face sequence its own chain), not for the
   // default — set this field.
   int chain_id_symmetry;
+
+  // ADDED v4.32: THIS run's own ray budget, independent of the committed scene's ray_num /
+  // infinite (LUMICE_SceneSetSimParams) and in the same representation: `infinite` 1 means
+  // unlimited (the run ends on LUMICE_StopServer, or on `cone_stop_target` in CONE mode), 0 means
+  // `ray_num` is the total across every wavelength (distributed per wavelength as the scene's own
+  // budget is). LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT ignores `ray_num` and traces the scene's
+  // own budget — the behaviour before v4.32. Any other `infinite` is rejected with
+  // LUMICE_ERR_INVALID_VALUE.
+  int infinite;
+  LUMICE_RayCount ray_num;
 } LUMICE_RaypathAnalysisRequest;
 
 // One scattering layer of a chain: the crystal (its config id) and the reduced face sequence the
