@@ -115,6 +115,20 @@ TEST(SimStateRules, AnalyzeNeedsAServerASceneAnIdleBackendAndAnUnmodifiedPicture
   EXPECT_FALSE(CanStartAnalysis(true, true, GuiState::SimState::kModified, false));
 }
 
+// The "committed scene is this document's" half of the Analyze gate, over every RunIntent: only
+// an intent that a Run of THIS document produced qualifies, and only once an epoch was read back.
+// kNone and kLoaded are the two that reach kIdle / kDone without a Run, which is exactly the case
+// an epoch left over from a previous document would otherwise pass.
+TEST(SimStateRules, CommittedSceneNeedsARunOfThisDocument) {
+  constexpr RunIntent kAll[] = { RunIntent::kNone,     RunIntent::kLoaded,  RunIntent::kRunning,
+                                 RunIntent::kStopping, RunIntent::kStopped, RunIntent::kRunCompleted };
+  for (RunIntent intent : kAll) {
+    EXPECT_FALSE(HasCommittedSceneForThisDocument(intent, 0)) << static_cast<int>(intent);
+    const bool expect = intent != RunIntent::kNone && intent != RunIntent::kLoaded;
+    EXPECT_EQ(HasCommittedSceneForThisDocument(intent, 7), expect) << static_cast<int>(intent);
+  }
+}
+
 // ---- Zero-contribution layer notice (panels.cpp scattering-layer header) ----
 
 // The notice under a scattering layer's header says the layer produces no rays. Three different

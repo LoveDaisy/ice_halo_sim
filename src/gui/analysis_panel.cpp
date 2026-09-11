@@ -430,9 +430,14 @@ void RenderRoiControls(GuiState& state) {
 
 void RenderRunControls(GuiState& state, LUMICE_Server* server) {
   const bool in_progress = state.analysis_run_in_progress;
-  const bool has_scene = state.committed_epoch != 0;
+  const bool has_scene = HasCommittedSceneForThisDocument(state.run_intent, state.committed_epoch);
   const bool needs_centre = state.analysis.roi_mode == LUMICE_RAYPATH_ROI_CONE && !state.analysis.cone_center_valid;
-  const bool can_start = CanStartAnalysis(server != nullptr, has_scene, state.sim_state, in_progress) && !needs_centre;
+  // IN_FRAME is "inside the picture on screen"; with no preview active there is no such frame,
+  // and the radio is disabled — but the mode can still be the one left selected before the
+  // preview went away, so the button gates on it too.
+  const bool needs_frame = state.analysis.roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME && !g_preview_vp.active;
+  const bool can_start =
+      CanStartAnalysis(server != nullptr, has_scene, state.sim_state, in_progress) && !needs_centre && !needs_frame;
 
   if (in_progress) {
     PushDestructiveStyle();
@@ -465,6 +470,8 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
         why = "The configuration changed since the last run. Run first, so the analysis reports on what you see.";
       } else if (needs_centre) {
         why = "Pick the point on the preview first.";
+      } else if (needs_frame) {
+        why = "'In frame' needs a preview on screen.";
       }
       ImGui::SetTooltip("%s", why);
     }
