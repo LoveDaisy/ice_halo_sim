@@ -58,6 +58,12 @@ build() {
         #       - gpu_color_class_overflow (…_surfaces_async_warning): drives a live GPU
         #         sim and waits on wall-clock batch accumulation for the async overflow
         #         tally to appear, which fixed-dt starves.
+        #       - run_after_analysis_renders_gpu: a GPU-constructed server has ONE worker,
+        #         and the analysis it runs is forced to the CPU route, so reaching the
+        #         panel's cone stop target takes seconds of wall-clock — enough frames
+        #         under fixed-dt for the engine's simulated-time watchdog to abort the
+        #         case mid-analysis. Its two CPU siblings (ten workers, well under a
+        #         second) stay in the correctness pool.
         #     These are matched by NAME (the engine's filter tests both name and category),
         #     so renaming any of them means updating this filter and its twin in
         #     scripts/regen_gui_test_refs.py — check_policies.py's gui-test-suite-args-sync
@@ -67,11 +73,11 @@ build() {
         # contract in the diff where a reviewer sees it, and it survives someone changing that
         # default. Keep it AFTER --filter — check_policies.py's gui-test-suite-args-sync reads the
         # filter value with a regex anchored on `--fixed-dt --filter "..."`.
-        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-gpu_color_class_overflow" --no-user-config
+        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-gpu_color_class_overflow,-run_after_analysis_renders_gpu" --no-user-config
         ret=$?
         if [[ $ret == 0 ]]; then
           echo "Running GUI real-timing tests (perf + wall-clock-dependent, isolated)..."
-          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,gpu_color_class_overflow" --no-user-config
+          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,gpu_color_class_overflow,run_after_analysis_renders_gpu" --no-user-config
           ret=$?
         fi
       else

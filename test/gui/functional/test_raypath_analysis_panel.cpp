@@ -57,6 +57,8 @@ struct ScopedServerGuard {
       gui::g_state.analysis.started = false;
       gui::g_state.analysis_run_in_progress = false;
     }
+    gui::g_state.use_gpu_backend = false;
+    gui::ResetServerConstructionTrackers();
   }
 };
 
@@ -73,16 +75,22 @@ bool DriveUntil(ImGuiTestContext* ctx, Pred pred, int timeout_s) {
 }
 
 // Server up, halo scene loaded, one finite render run to completion — the state Analyze needs.
-// `infinite` leaves the render running instead, for the mutual-exclusion case.
-bool BringUpHaloScene(ImGuiTestContext* ctx, bool infinite) {
+// `infinite` leaves the render running instead, for the mutual-exclusion case and for the
+// run-after-analysis cases (an unbounded analysis is the one the cone target ends). `gpu` asks
+// for the GPU backend the way the Settings box does: DoRun reconstructs the server for it
+// (Metal here; where no device is available ResolveGpuBackend falls back to CPU, as in
+// test_color_window.cpp's GPU case), so the CPU server created below is only ever the seed.
+bool BringUpHaloScene(ImGuiTestContext* ctx, bool infinite, bool gpu = false) {
   ResetTestState();
   gui::g_server = LUMICE_CreateServer();
   IM_CHECK_RETV(gui::g_server != nullptr, false);
+  gui::ResetServerConstructionTrackers();  // the seed is a CPU server; make the tracker say so
   LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
   IM_CHECK_RETV(gui::DeserializeFromJson(kHalo22Json, gui::g_state), false);
   gui::g_state.renderer.sim_resolution_index = 0;
   gui::g_state.sim.infinite = infinite;
   gui::g_state.sim.ray_num_millions = 0.1f;
+  gui::g_state.use_gpu_backend = gpu;
   ctx->Yield(2);
   gui::DoRun(/*user_initiated=*/true);
   if (infinite) {
@@ -144,6 +152,82 @@ bool RunPointAnalysisToCompletion(ImGuiTestContext* ctx) {
           ctx, [] { return !gui::g_state.analysis_run_in_progress && gui::g_state.analysis_result.payload != nullptr; },
           60),
       false);
+  return true;
+}
+
+// The owner's own sequence: Run, Analyze, Run again — and the second Run RENDERS. This is the
+// one path through the panel that nothing above drives (every case so far ends on the analysis
+// or on the slider), and the one that went black: a cone-ROI analysis that ends on its stop
+// target leaves the server's early-stop flag up, and a render session that read the flag
+// unconditionally traced nothing — no batch, no frame, a preview stuck on "Simulating" until a
+// backend switch rebuilt the server. The server case that pins the mechanism is
+// ServerAnalysisRun.RenderAfterConeStoppedAnalysisProducesAFrame; this one pins the user's view
+// of it: sim_state reaches kDone and a texture goes up.
+//
+// The precondition is that the analysis ends on its CONE TARGET, not on the ray budget: the
+// panel's target is kAnalysisConeStopTarget rays in the cone, which a 0.1 M-ray budget never
+// reaches, so the render whose scene the analysis inherits is an unbounded one, stopped by hand
+// once it has put a picture up (the pick needs a live preview). The run after the analysis is
+// then made finite so that "it rendered" can be read as kDone rather than as "never ended".
+//
+// `exclude` adds the owner's step in between: select the top chain, press "Exclude this
+// raypath", so the second Run commits a document with a filter in it. The bug does not need it
+// (the server case has none), and it is driven here so the sequence as reported stays covered.
+bool RunAfterAnalysisRenders(ImGuiTestContext* ctx, bool exclude, bool gpu) {
+  IM_CHECK_RETV(BringUpHaloScene(ctx, /*infinite=*/true, gpu), false);
+  IM_CHECK_RETV(
+      DriveUntil(ctx, [] { return gui::g_preview_vp.active && gui::g_state.texture_upload_count > 0; }, 30), false);
+  gui::DoStop();
+  IM_CHECK_RETV(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 20), false);
+  OpenWindow(ctx);
+  IM_CHECK_RETV(RunPointAnalysisToCompletion(ctx), false);
+  // Positive control on the precondition: an unbounded analysis can only have COMPLETED (not
+  // merely stopped) by reaching its cone target, i.e. with the early-stop flag raised.
+  LUMICE_SimLifecycleResult after_analysis{};
+  LUMICE_GetSimLifecycle(gui::g_server, &after_analysis);
+  IM_CHECK_RETV(after_analysis.lifecycle == static_cast<int>(LUMICE_LIFECYCLE_COMPLETED), false);
+  IM_CHECK_RETV(gui::g_state.analysis_result.payload->roi_mode == LUMICE_RAYPATH_ROI_CONE, false);
+
+  if (exclude) {
+    const auto& view_result = gui::g_state.analysis_result;
+    IM_CHECK_RETV(!view_result.display_order.empty(), false);
+    const int top = view_result.display_order[0];
+    ctx->SetRef(kWindowRef);
+    // The row is a Selectable under PushID(original index) inside the results table; the
+    // wildcard finds it by label through the table's and the id's anonymous path segments.
+    const std::string row = std::string("**/") + view_result.payload->entries[static_cast<size_t>(top)].display;
+    ctx->ItemClick(row.c_str());
+    ctx->Yield(1);
+    IM_CHECK_RETV(gui::g_state.analysis.selected_entry.has_value(), false);
+    IM_CHECK_RETV(*gui::g_state.analysis.selected_entry == top, false);
+    IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo(ICON_FA_BAN " Exclude this raypath")), false);
+    ctx->ItemClick(ICON_FA_BAN " Exclude this raypath");
+    ctx->SetRef("");
+    ctx->Yield(1);
+    // The filter is in the document: the same entry is no longer excludable a second time.
+    IM_CHECK_RETV(gui::EvaluateExcludeEligibility(gui::g_state, nullptr) == gui::ExcludeEligibility::kEntryHasFilter,
+                  false);
+  }
+
+  // The second Run, from the top bar, on a finite budget.
+  gui::g_state.sim.infinite = false;
+  gui::g_state.sim.ray_num_millions = 0.1f;
+  const unsigned long long uploads_before = gui::g_state.texture_upload_count;
+  const unsigned long long serial_before = gui::g_state.last_uploaded_texture_serial;
+  ctx->Yield(1);
+  IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo("##TopBar/" ICON_FA_PLAY " Run")), false);
+  ctx->ItemClick("##TopBar/" ICON_FA_PLAY " Run");
+  IM_CHECK_RETV(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kSimulating; }, 10), false);
+  // Both halves of "it rendered": the run ended, and its picture went up. The document is
+  // dirty here (the budget edit above; the Exclude before it), and a dirty document's finished
+  // run reads kModified, not kDone — the real main loop clears dirty on its 70 ms auto-commit
+  // tick while simulating (main.cpp), a tick gui_test's loop only has under --main-loop-commit,
+  // so it is cleared by hand at the same moment the app would.
+  gui::g_state.dirty = false;
+  IM_CHECK_RETV(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 60), false);
+  IM_CHECK_RETV(
+      DriveUntil(ctx, [uploads_before] { return gui::g_state.texture_upload_count > uploads_before; }, 10), false);
+  IM_CHECK_RETV(gui::g_state.last_uploaded_texture_serial != serial_before, false);
   return true;
 }
 
@@ -315,6 +399,33 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(after.lifecycle, before.lifecycle);
       IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
       IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+    };
+  }
+
+  // Run after a cone-stopped analysis renders — see RunAfterAnalysisRenders. Three cases: the
+  // sequence itself on the CPU backend, the same with the owner's Exclude step in between, and
+  // the sequence on the GPU backend (Metal on this tree's reference machine; the analysis is
+  // forced to the CPU route inside the same server, so the render that follows is the GPU's
+  // first session after an analysis — the shape the bug was reported on).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "run_after_analysis_renders");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(RunAfterAnalysisRenders(ctx, /*exclude=*/false, /*gpu=*/false));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "run_after_analysis_with_exclude_renders");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(RunAfterAnalysisRenders(ctx, /*exclude=*/true, /*gpu=*/false));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "run_after_analysis_renders_gpu");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(RunAfterAnalysisRenders(ctx, /*exclude=*/false, /*gpu=*/true));
     };
   }
 }
