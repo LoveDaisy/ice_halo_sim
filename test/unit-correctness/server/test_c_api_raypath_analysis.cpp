@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -30,6 +31,26 @@
 #include "server/server.hpp"
 
 static_assert(LUMICE_API_VERSION >= 429, "the analysis run needs the v4.29 header");
+
+// The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
+// offsets, so a field inserted in the middle (which keeps the size) is caught as well as
+// one appended; the Python side pins the same numbers, so either side moving turns one of
+// the two red before the library writes past a Python buffer.
+static_assert(sizeof(LUMICE_AnnotationView) == 48, "LUMICE_AnnotationView layout changed; update capi_runner.py");
+static_assert(sizeof(LUMICE_RaypathAnalysisRequest) == 88, "LUMICE_RaypathAnalysisRequest layout changed");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, frame_view) == 4, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_center) == 52, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_stop_target) == 72, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, chain_id_symmetry) == 80, "");
+static_assert(sizeof(LUMICE_RaypathChainSegment) == 72, "LUMICE_RaypathChainSegment layout changed");
+static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 1760, "LUMICE_RaypathHistogramEntry layout changed");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, chain_len) == 576, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, display) == 580, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, energy) == 1480, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, count) == 1488, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_energy) == 1496, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_count) == 1752, "");
+static_assert(sizeof(LUMICE_RaypathAnalysisInfo) == 20, "LUMICE_RaypathAnalysisInfo layout changed");
 
 namespace {
 

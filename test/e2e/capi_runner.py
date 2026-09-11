@@ -213,6 +213,128 @@ assert ctypes.sizeof(LUMICE_ServerConfig) == 12, (
 )
 
 
+# ---- Raypath analysis run (lumice.h "Raypath Analysis Run", v4.29) ----
+# Sizes and offsets below are pinned to the C side twice: here against numbers measured
+# from the header, and in test/unit-correctness/server/test_c_api_raypath_analysis.cpp
+# by static_assert on the same numbers, so a field added on either side turns one of the
+# two red before the C library writes past a Python buffer.
+LUMICE_RAYPATH_ROI_FULL_SKY = 0
+LUMICE_RAYPATH_ROI_IN_FRAME = 1
+LUMICE_RAYPATH_ROI_CONE = 2
+LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT = 0xFF
+LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 8
+LUMICE_MAX_RAYPATH_SEGMENT_LEN = 16
+LUMICE_MAX_RAYPATH_CONE_RINGS = 32
+LUMICE_RAYPATH_DISPLAY_MAX = 896
+
+
+# Mirrors LUMICE_AnnotationView (the IN_FRAME request's frame, and LUMICE_UnprojectPixel's view).
+class LUMICE_AnnotationView(ctypes.Structure):
+    _fields_ = [
+        ("width",          ctypes.c_int),
+        ("height",         ctypes.c_int),
+        ("lens_type",      ctypes.c_int),
+        ("lens_fov",       ctypes.c_float),
+        ("lens_shift",     ctypes.c_int * 2),
+        ("overlap",        ctypes.c_float),
+        ("view_azimuth",   ctypes.c_float),
+        ("view_elevation", ctypes.c_float),
+        ("view_roll",      ctypes.c_float),
+        ("visible",        ctypes.c_int),
+        ("front",          ctypes.c_int),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_AnnotationView) == 48, (
+    "LUMICE_AnnotationView size mismatch — verify lumice.h field layout"
+)
+
+
+class LUMICE_RaypathAnalysisRequest(ctypes.Structure):
+    _fields_ = [
+        ("roi_mode",          ctypes.c_int),
+        ("frame_view",        LUMICE_AnnotationView),
+        ("cone_center",       ctypes.c_float * 3),
+        ("cone_radius_rad",   ctypes.c_float),
+        ("cone_ring_count",   ctypes.c_int),
+        ("cone_stop_target",  ctypes.c_ulonglong),
+        ("chain_id_symmetry", ctypes.c_int),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 88, (
+    "LUMICE_RaypathAnalysisRequest size mismatch — verify lumice.h field layout"
+)
+for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("cone_stop_target", 72), ("chain_id_symmetry", 80)):
+    assert getattr(LUMICE_RaypathAnalysisRequest, _name).offset == _offset, (
+        f"LUMICE_RaypathAnalysisRequest.{_name} offset drift — the mirror and lumice.h disagree"
+    )
+
+
+class LUMICE_RaypathChainSegment(ctypes.Structure):
+    _fields_ = [
+        ("crystal_id",  ctypes.c_int),
+        ("segment",     ctypes.c_int * LUMICE_MAX_RAYPATH_SEGMENT_LEN),
+        ("segment_len", ctypes.c_int),
+    ]
+
+
+class LUMICE_RaypathHistogramEntry(ctypes.Structure):
+    _fields_ = [
+        ("chain",       LUMICE_RaypathChainSegment * LUMICE_MAX_RAYPATH_CHAIN_LAYERS),
+        ("chain_len",   ctypes.c_int),
+        ("display",     ctypes.c_char * LUMICE_RAYPATH_DISPLAY_MAX),
+        ("energy",      ctypes.c_double),
+        ("count",       ctypes.c_ulonglong),
+        ("ring_energy", ctypes.c_double * LUMICE_MAX_RAYPATH_CONE_RINGS),
+        ("ring_count",  ctypes.c_int),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_RaypathChainSegment) == 72
+assert ctypes.sizeof(LUMICE_RaypathHistogramEntry) == 1760, (
+    "LUMICE_RaypathHistogramEntry size mismatch — verify lumice.h field layout"
+)
+for _name, _offset in (("chain_len", 576), ("display", 580), ("energy", 1480), ("count", 1488),
+                       ("ring_energy", 1496), ("ring_count", 1752)):
+    assert getattr(LUMICE_RaypathHistogramEntry, _name).offset == _offset, (
+        f"LUMICE_RaypathHistogramEntry.{_name} offset drift — the mirror and lumice.h disagree"
+    )
+
+
+class LUMICE_RaypathAnalysisInfo(ctypes.Structure):
+    _fields_ = [
+        ("present",         ctypes.c_int),
+        ("roi_mode",        ctypes.c_int),
+        ("entry_count",     ctypes.c_int),
+        ("cone_ring_count", ctypes.c_int),
+        ("cone_radius_rad", ctypes.c_float),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_RaypathAnalysisInfo) == 20
+
+
+@dataclass
+class RaypathHistogramEntry:
+    """One chain of an analysis result, copied out of the C entry (no C memory referenced)."""
+
+    display: str
+    chain: List[tuple]  # [(crystal_id, [faces...]), ...] root first
+    energy: float
+    count: int
+    ring_energy: List[float]
+
+
+@dataclass
+class RaypathAnalysisResult:
+    roi_mode: int
+    entries: List[RaypathHistogramEntry]  # energy descending, as the C API orders them
+    active_backend: int                   # LUMICE_GetActiveBackend during the run
+    sim_ray_num: int                      # LUMICE_FrameGetStats on the same frame
+    log_lines: List[str] = field(default_factory=list)
+
+
 # LUMICE_ServerState constants (lumice.h)
 # Drain-wait bounds for _read_sample_counts: how long to wait for the server's drain
 # signal after it reports IDLE (see the comment there). Timeout FAILS the read rather
@@ -466,6 +588,35 @@ def _load_lib() -> ctypes.CDLL:
 
     lib.LUMICE_SetLogCallback.restype = None
     lib.LUMICE_SetLogCallback.argtypes = [_LogCallbackProto]
+
+    lib.LUMICE_StopServer.restype = None
+    lib.LUMICE_StopServer.argtypes = [ctypes.c_void_p]
+
+    # Raypath analysis run (v4.29).
+    lib.LUMICE_StartRaypathAnalysis.restype = ctypes.c_int
+    lib.LUMICE_StartRaypathAnalysis.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RaypathAnalysisRequest)]
+
+    lib.LUMICE_FrameGetRaypathAnalysisInfo.restype = ctypes.c_int
+    lib.LUMICE_FrameGetRaypathAnalysisInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RaypathAnalysisInfo)]
+
+    lib.LUMICE_FrameGetRaypathAnalysis.restype = ctypes.c_int
+    lib.LUMICE_FrameGetRaypathAnalysis.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(LUMICE_RaypathHistogramEntry),
+        ctypes.c_int,
+    ]
+
+    lib.LUMICE_GetActiveBackend.restype = ctypes.c_int
+    lib.LUMICE_GetActiveBackend.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+
+    lib.LUMICE_UnprojectPixel.restype = ctypes.c_int
+    lib.LUMICE_UnprojectPixel.argtypes = [
+        ctypes.POINTER(LUMICE_AnnotationView),
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_float * 3,
+        ctypes.POINTER(ctypes.c_int),
+    ]
 
     _LIB_CACHE = lib
     return lib
@@ -792,6 +943,110 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
 
     finally:
         lib.LUMICE_DestroyServer(server)
+
+
+def _wait_drained(lib, server, timeout_sec: float) -> None:
+    """Block until the current epoch reports drained — the server's own "totals are final"
+    signal (see _read_sample_counts for why IDLE alone is not it). Raises on timeout rather
+    than returning a partial result."""
+    deadline = time.time() + timeout_sec
+    drain = LUMICE_DrainResult()
+    while True:
+        err = lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain))
+        if err != 0:
+            raise RuntimeError(f"GetDrainStatus failed err={err}")
+        if drain.drained_epoch == drain.current_epoch:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"epoch {int(drain.current_epoch)} did not drain within {timeout_sec}s "
+                f"(drained_epoch={int(drain.drained_epoch)})"
+            )
+        time.sleep(_DRAIN_POLL_SEC)
+
+
+def run_raypath_analysis_capi(
+    config_path: str,
+    request: LUMICE_RaypathAnalysisRequest,
+    sim_seed: int = 0,
+    num_workers: int = 0,
+    preferred_backend: int = LUMICE_BACKEND_CPU,
+    timeout_sec: int = 180,
+    max_entries: int = 4096,
+) -> RaypathAnalysisResult:
+    """Run one ANALYSIS run via the C API on a fresh server and copy the histogram out.
+
+    The lifecycle lumice.h describes, verbatim: create → commit `config_path` (which starts
+    the render run every commit starts) → LUMICE_StopServer → LUMICE_StartRaypathAnalysis →
+    wait for the drain signal → read one frame → destroy. The scene's ray_num is the run's
+    budget (an "infinite" config only ends through a cone stop target, else this times out).
+
+    `preferred_backend` goes to LUMICE_CreateServerEx; the analysis run is expected to
+    ignore it (CPU is a session property), and `active_backend` in the result is what
+    LUMICE_GetActiveBackend reported while the run was in progress, for the caller to assert on.
+    Log lines are captured (the forced-CPU INFO line lives there).
+    """
+    lib = _load_lib()
+    _ensure_log_callback_registered(lib)
+
+    cfg = LUMICE_ServerConfig(num_workers=num_workers, sim_seed=sim_seed, preferred_backend=preferred_backend)
+    with _LogCapture() as lines:
+        server = lib.LUMICE_CreateServerEx(ctypes.byref(cfg))
+        if not server:
+            raise RuntimeError("LUMICE_CreateServerEx returned NULL")
+        try:
+            _commit_config(lib, server, str(config_path))
+            lib.LUMICE_StopServer(server)
+            err = lib.LUMICE_StartRaypathAnalysis(server, ctypes.byref(request))
+            if err != 0:
+                raise RuntimeError(f"StartRaypathAnalysis failed err={err}")
+            active = ctypes.c_int(-1)
+            err = lib.LUMICE_GetActiveBackend(server, ctypes.byref(active))
+            if err != 0:
+                raise RuntimeError(f"GetActiveBackend failed err={err}")
+            _wait_drained(lib, server, timeout_sec)
+
+            info = LUMICE_RaypathAnalysisInfo()
+            stats = LUMICE_StatsResult()
+            entries_c = (LUMICE_RaypathHistogramEntry * (max_entries + 1))()
+            with _result_frame(lib, server) as frame:
+                err = lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, ctypes.byref(info))
+                if err != 0:
+                    raise RuntimeError(f"FrameGetRaypathAnalysisInfo failed err={err}")
+                if not info.present:
+                    raise RuntimeError("the frame carries no analysis result")
+                err = lib.LUMICE_FrameGetRaypathAnalysis(frame, entries_c, max_entries)
+                if err != 0:
+                    raise RuntimeError(f"FrameGetRaypathAnalysis failed err={err}")
+                err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(stats))
+                if err != 0:
+                    raise RuntimeError(f"FrameGetStats failed err={err}")
+            # Copied out INSIDE the frame's lifetime by contract; the entries are value
+            # copies already, but reading them here keeps the rule uniform for every getter.
+            n = min(int(info.entry_count), max_entries)
+            entries = []
+            for i in range(n):
+                e = entries_c[i]
+                chain = [
+                    (int(e.chain[l].crystal_id), [int(e.chain[l].segment[f]) for f in range(e.chain[l].segment_len)])
+                    for l in range(e.chain_len)
+                ]
+                entries.append(RaypathHistogramEntry(
+                    display=e.display.decode("utf-8", "replace"),
+                    chain=chain,
+                    energy=float(e.energy),
+                    count=int(e.count),
+                    ring_energy=[float(e.ring_energy[r]) for r in range(e.ring_count)],
+                ))
+            return RaypathAnalysisResult(
+                roi_mode=int(info.roi_mode),
+                entries=entries,
+                active_backend=int(active.value),
+                sim_ray_num=int(stats.sim_ray_num),
+                log_lines=list(lines),
+            )
+        finally:
+            lib.LUMICE_DestroyServer(server)
 
 
 _BACKEND_MODES = ("legacy", "metal", "cpu_backend", "cuda")
