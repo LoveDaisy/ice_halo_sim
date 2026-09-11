@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789131614598,
+  "lastUpdate": 1789131616905,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "fb721d5b41ec6b834ab8f92634398f5a67bb73c2",
-          "message": "Merge pull request #248 from LoveDaisy/explore/visual-regression-layer-value\n\ntest(gui): 退役 auto_ev 视觉回归组，把这一层接进 CI 并给「红了怎么办」写下判据",
-          "timestamp": "2026-08-04T21:05:45+08:00",
-          "tree_id": "07403f81e4fa76b1b60fe18689fd37d91fec211f",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fb721d5b41ec6b834ab8f92634398f5a67bb73c2"
-        },
-        "date": 1785849360452,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "6e95f5c4505cac81d3efb2fbfec80b26926ff77c",
           "message": "Merge pull request #249 from LoveDaisy/explore/gui-test-suite-from-scratch\n\ndocs(testing-architecture): 新增 §4.8 —— GUI 套件形状的机制层诊断与工作规则",
           "timestamp": "2026-08-05T00:54:42+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "142e29e615d7a573006eabf610b33948e5584c98",
+          "message": "Merge pull request #346 from LoveDaisy/feat/hardware-perf-distribution\n\nbuild/release: ship ISA- and GPU-matched binaries behind CPUID launchers (x86-64-v4 Linux, x86-64-v3 clang-cl Windows, sm_120 fatbin)",
+          "timestamp": "2026-09-11T20:51:32+08:00",
+          "tree_id": "f05bd3485353b55d626d7d9fe93091774693bb97",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/142e29e615d7a573006eabf610b33948e5584c98"
+        },
+        "date": 1789131616296,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 94.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.1,
             "unit": "%"
           }
         ]
