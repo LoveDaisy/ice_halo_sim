@@ -49,7 +49,8 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
 2. **「光路」= 从光源到相机的完整链，不是单晶体内的一段。**
    例如 `crystal1(1-3-5)-crystal2(3-2)`；单晶体 MS 或单层退化为链长 1，不特判成另一种数据形状。
    理由（机制约束）：现有数据结构拿不到全链——`ExitRayRecord::path` 只装最后一层的面序列，
-   `RaypathRecorder`（`rp_`）只装当前晶体那一段——要跨层拼出完整链，需要一个**随光线跨 MS 层
+   `RayBuffer::recorders_`（按 index 经 `RayBuffer::RecorderAt(idx)` 访问的并行数组，
+   `src/core/raypath.hpp:138` 附近注释）只装当前晶体那一段——要跨层拼出完整链，需要一个**随光线跨 MS 层
    前向携带的 per-ray 链 id（uint32）**，配合一张 interning 表把 `(父链 id, 本层 crystal_id,
    本层约化后的 segment)` 映射成新的链 id，天然长成一棵 trie；要打印完整链时沿父指针链回溯。
    不携带字节序列本身（太胖，跨层每次拷贝一遍字节数组）、也不携带哈希（丢失打印能力，且有
@@ -97,7 +98,7 @@ interning 表把 `(父链 id, 本层 crystal_id, 本层约化后的 segment) →
 - `Crystal::ReduceRaypath(rp, symmetry)` / `Crystal::ReduceRaypath(rp, symmetry, sigma_a,
   d_applicable)`（`src/core/crystal.hpp:242` / `:252`）——按 (P, B, D) 对称标志约化一段
   face-index 序列。
-- `detail::ReduceBuffer`（`src/core/filter_spec.hpp:141`）——同一套约化规则的原地版本，
+- `detail::ReduceBuffer`（`src/core/filter_spec.hpp:140`）——同一套约化规则的原地版本，
   作用于原始 `uint8_t` 缓冲区，供 inline data 与 arena 拷贝共用。
 
 链 id 只在光线穿过一层晶体、生成本层 raypath 之后，用该层约化后的 segment 去查/建表，
@@ -138,8 +139,9 @@ interning 表把 `(父链 id, 本层 crystal_id, 本层约化后的 segment) →
   （`src/core/exit_seam.hpp:40` 起）——单层出射记录的既有结构，链 id 作为新字段挂在
   同一份记录上。
 - `ProjectExitToPixel`——画幅内判定的既有实现，供「可见区域」ROI 直接调用。
-- `src/core/projection.hpp:28-95` 附近的五族反投影（linear / fisheye 四种变体 /
-  dual-fisheye / rectangular / globe 的 `*Inverse`）——供 GUI 把「用户在预览上点的一个像素」
+- `src/core/projection.hpp:28-131` 附近的五族反投影（`LinearInverse:28` / fisheye 四种变体
+  `Inverse:69-72` / `RectangularInverse:84` / `GlobeInverse:104` / dual-fisheye 的
+  `DualFisheyeToPixel:123` 与 `PixelToDualFisheye:128`）——供 GUI 把「用户在预览上点的一个像素」
   换算成方向空间里的锥中心方向。
 - `RenderConsumer` 的 Y 计算权威（`SpectrumToXyz` / `SpectrumToXyzPerRay`，
   `src/core/color_util.hpp`）——新 consumer 的能量累加必须用同一份权威，见 §3.3。
@@ -189,7 +191,7 @@ interning 表把 `(父链 id, 本层 crystal_id, 本层约化后的 segment) →
   `Simulator`、各自一张 interning 表，consumer 收到的是多张表各自的 id 空间。
   推荐方向是 per-worker 表 + `SimData` 携带本批新增的表增量，consumer 按约化后的
   链字符串（或等价键）跨 worker 合并；备选是分析运行强制 `worker_count=1`
-  （固定 seed 时代码里已有先例，`src/server/server.cpp:552` 附近的
+  （固定 seed 时代码里已有先例，`src/server/server.cpp:553` 附近的
   `worker_count = 1;  // deterministic CPU contract`，但会牺牲多 worker 的吞吐）。
   由子任务 2 的 plan 裁定并写明理由，本文不预判。
 - **反投影走 C API 还是 `src/util/` 未定**（未决问题，非裁决）：GUI 把点击换算成方向
