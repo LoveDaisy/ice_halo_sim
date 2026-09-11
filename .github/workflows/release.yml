@@ -193,7 +193,10 @@ jobs:
       # The launcher comes from the baseline tree on purpose: it carries no -march flag in
       # either tree, but "the file that must run everywhere came from the build that runs
       # everywhere" is the invariant worth keeping obvious. The Package step below tars
-      # install/ unchanged.
+      # install/ unchanged. Only the six executables are copied: the install trees also hold
+      # what CPM dependencies' own install rules drop (GLFW and tl-expected headers, .a and
+      # cmake config files), which the single-build rows still ship because they tar the
+      # whole prefix; that was never product content, and this row no longer carries it.
       - name: Merge ISA variants behind the launcher (linux-x64)
         if: matrix.isa_split
         run: |
