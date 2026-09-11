@@ -107,9 +107,9 @@ flag 经同一个共享 CMake 函数 `lumice_apply_isa_march()` 挂在 `lumice_o
 先确认 OSXSAVE 再执行 XGETBV，否则那条指令是 `#UD`），用 `CreateProcess` 起对应 sidecar、等待、
 把它的退出码当自己的返回（Windows 没有 `exec`；CRT 的 `_execv` 既不保留子进程退出码也不给参数
 加引号，所以这两件事 launcher 自己做）。`--isa=baseline` / `--isa=x86-64-v3` 可强制其一，与 Linux
-同语法。在与 release 等价的 CUDA-on 构建上，v3 变体在 ms1 W=1 下量到基线的
-<TODO: AC4 measured ratio, filled by Step 10.5>（Windows 参照机，Zen 5）——上面那个 CUDA-off
-探针数字是另一条臂，不得拿来代替它。
+同语法。在与 release 等价的 CUDA-on 构建上，v3 变体在 ms1 W=1 下量到基线的 **2.23×**（1.701 vs 0.761 M
+rays/s，CoV 0.72% / 0.33%，5 次交错重复、经 launcher 的 `--isa=` 覆盖；Windows 参照机，Zen 5，
+2026-09-11）——与上面那个 CUDA-off 探针数字相差 1.3%，但那是另一条臂，不得拿来代替它。
 
 **Linux release 拿它做什么。** `linux-x64` 的 tarball 里每个入口都有两份——
 `Lumice.baseline` / `Lumice.x86-64-v4`、`LumiceGUI.baseline` / `LumiceGUI.x86-64-v4`——

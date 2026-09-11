@@ -240,9 +240,10 @@ tarball below: `Lumice.baseline.exe` / `Lumice.x86-64-v3.exe`, `LumiceGUI.baseli
 `#UD` otherwise), starts the matching sidecar with `CreateProcess`, waits, and returns its exit
 code (Windows has no `exec`; the CRT's `_execv` neither preserves the child's exit code nor quotes
 arguments, so the launcher does both itself). `--isa=baseline` / `--isa=x86-64-v3` forces one, as on
-Linux. On the release-equivalent CUDA-on build the v3 variant measures
-<TODO: AC4 measured ratio, filled by Step 10.5> the baseline at ms1 W=1 (Windows reference box,
-Zen 5) — the CUDA-off probe number above is a different arm and must not be quoted for it.
+Linux. On the release-equivalent CUDA-on build the v3 variant measures **2.23×** the baseline at ms1 W=1
+(1.701 vs 0.761 M rays/s, CoV 0.72% / 0.33%, five interleaved repetitions through the launcher's
+`--isa=` override; Windows reference box, Zen 5, 2026-09-11) — within 1.3% of the CUDA-off probe
+figure above, which is a different arm and must not be quoted for it.
 
 **What the Linux release does with it.** The `linux-x64` tarball carries every entry point
 twice — `Lumice.baseline` / `Lumice.x86-64-v4`, `LumiceGUI.baseline` / `LumiceGUI.x86-64-v4` —
