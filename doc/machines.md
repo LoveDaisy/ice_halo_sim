@@ -81,10 +81,15 @@
 1. **CUDA 13 编译不了本仓库。** `nvcc -arch=compute_61` 报
    `nvcc fatal : Unsupported gpu architecture 'compute_61'`，而本仓库的 arch floor 就是
    `61-virtual`（见 `CMakeLists.txt` 的 `CMAKE_CUDA_ARCHITECTURES` 默认表）。
-   ⇒ CUDA 参照机必须装 12.x（12.9 接受 `compute_61`，只报 deprecation warning）。
-   **吞吐 bench 另需显式追加 `120-real`**，否则 sm_120 的卡跑的是驱动 JIT 出来的
-   Pascal PTX 而不是原生 SASS，不够 bench 保真度：
-   `-DCMAKE_CUDA_ARCHITECTURES="61-virtual;75-real;86-real;89-real;120-real"`
+   ⇒ CUDA 参照机必须装 12.x（12.9 接受 `compute_61`，只报 deprecation warning——
+   这条 warning 是保留 Pascal PTX floor 的预期代价，不是要修的问题，`CMakeLists.txt`
+   的 arch 块注释里写明了不要压掉它）。
+   toolkit ≥ 12.8 时 `120-real`（Blackwell 原生 SASS）**已经在 `CMakeLists.txt` 默认
+   arch 表里**（`_lumice_cuda_archs` 构造逻辑按 `CUDAToolkit_VERSION` 门控追加），
+   这两台机器的 12.9 直接 configure 就能拿到，吞吐 bench **不再需要**手动覆盖
+   `CMAKE_CUDA_ARCHITECTURES`。要确认本次构建实际覆盖了哪些 arch，看 configure 打印的
+   `CUDA backend enabled (arch=...)` STATUS 行，或对产物跑 `cuobjdump --list-elf`
+   （⚠️ 它把 `compute_61` 的 PTX 条目列为 `sm_61`，grep 时别按 `compute_` 匹配）。
 2. **WSL 上 GLFW 会选中 Wayland 后端然后段错误**（`_glfwInitWayland` →
    `wl_proxy_get_version` SIGSEGV）。成因是 WSLg 把 wayland socket 放进
    `XDG_RUNTIME_DIR`，于是 `wl_display_connect` 会成功但后续不兼容。
