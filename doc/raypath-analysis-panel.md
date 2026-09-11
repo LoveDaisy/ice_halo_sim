@@ -75,8 +75,11 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
 （`src/config/sim_data.hpp` 里的 `std::unique_ptr<uint64_t[]> components_`，
 raypath-color 基础设施新增的 per-ray component mask）**完全同一套点**——这不是巧合，
 而是硬约束：任何随光线跨层携带的并行状态，必须跟着**所有**同一批 swap/gather/fan-out/续传
-交接点走，漏一个就是静默错位、且现有单元测试测不到（这正是 T3/T4 阶段吃过的教训）。
-需要一并搬的点：
+交接点走，漏一个就是静默错位、且现有单元测试测不到——这是同类跨层并行状态（如
+`components_` 这条 side-car 自身）曾经历过的一般性教训：漏搬一个传播点不会立刻崩溃，
+而是让并行数组与光线静默错位，只有专门针对该点写白盒测试才能测出来。
+以下四点传播点清单是 **assistant 基于现有 `components_` 传播路径梳理**，子任务 2 实现前
+需逐点复核是否有遗漏、行号是否漂移，不当作已核实到字级的地基直接照搬：
 
 - `ComponentFanOut`（`src/core/simulator.cpp:690` 附近）——一次打两半时子段继承父段状态。
 - `EmplaceBack` 的三个重载（`src/config/sim_data.hpp:112-114`）——批量追加时状态跟着搬。
@@ -155,10 +158,11 @@ interning 表把 `(父链 id, 本层 crystal_id, 本层约化后的 segment) →
 列表里的每一行对应一条链；用户可以对某一行点「排除此光路」，生成一个 filter 并触发重跑。
 这不是新机制，是现有「排除后重跑」语义的复用——零新增存储，只是把 filter 的生成源头
 从「用户手写」换成「从分析结果点选」。v1 范围内，这个按钮**只对单段链**（链长 1，即
-单晶体单层）可用：现有 filter 是单层 per-crystal 的物理门，表达不了跨层链的排除语义
-（如「排除 `crystal1(1-3-5)-crystal2(3-2)` 这整条链，但保留 `crystal1(1-3-5)` 与其它
-晶体的组合」）。这个限制在 UI 上要明确说明，不能让按钮在多段链上显示为可用却生成一个
-不达意的 filter。
+单晶体单层）可用：现有 filter 是单层 per-crystal 的物理门——`FilterSpec::Match`
+（`src/core/filter_spec.hpp:34/43`）的签名只接受单个 `RaySeg` + 该层的 `RaypathRecorder`，
+表达不了跨层链的排除语义（如「排除 `crystal1(1-3-5)-crystal2(3-2)` 这整条链，但保留
+`crystal1(1-3-5)` 与其它晶体的组合」）。这个限制在 UI 上要明确说明，不能让按钮在多段链上
+显示为可用却生成一个不达意的 filter。
 
 ## 6. 诚实边界
 
