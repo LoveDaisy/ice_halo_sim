@@ -819,6 +819,52 @@ jobs:
       - name: Build lumice_bench (compile + link only, no run)
         run: cmake --build build --target lumice_bench --parallel
 
+  # x86-64-v4 compile-only. The Linux release ships a second, AVX-512 build of the engine
+  # (release.yml, linux-x64 row: two configures at LUMICE_ISA_LEVEL=baseline and =x86-64-v4,
+  # merged behind a CPUID launcher). Every other job here builds at baseline, so without
+  # this leg the -march=x86-64-v4 codegen path is first compiled on the day a tag is cut.
+  #
+  # Compile only, and BUILD_TEST=OFF — unlike cuda-compile, which turns tests ON. The CUDA
+  # cases self-skip for want of a device; an AVX-512 binary has no such graceful path. A
+  # GH-hosted runner may or may not have AVX-512, so running anything built here is a coin
+  # toss between "passes" and SIGILL, and neither outcome would say anything about the
+  # code. This job's claim stops at "GCC accepts -march=x86-64-v4 and the whole graph
+  # compiles". BUILD_GUI=OFF because the GUI shares lumice_obj with the CLI: whatever v4
+  # breaks, the CLI target already compiles it, and the GUI would only add its apt deps.
+  #
+  # Own cache discriminator, for the reason spelled out on bench-compile above: this
+  # configure's dependency set is the narrow one, and a shared `cpm-ubuntu-x64-` prefix
+  # would let the build job's fallback restore onto this job's small entry.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
+  isa-v4-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: cpm_cache
+          key: cpm-isa-v4-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-isa-v4-ubuntu-x64-
+
+      - name: Configure (x86-64-v4 compile-only)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_ISA_LEVEL=x86-64-v4
+
+      # The whole default graph: the CLI (so lumice_obj is compiled at v4 and linked) and
+      # the launcher (LumiceIsaLauncher, which every Linux x86_64 configure builds).
+      - name: Build (compile + link only, no run)
+        run: cmake --build build --parallel
+
   # Shared + tests + GUI compile-only: the one combination no other job builds.
   # The `build` job builds tests and the GUI but only statically; `e2e-slow` is the
   # only shared-library job and it passes -DBUILD_TEST=OFF -DBUILD_GUI=OFF. That gap

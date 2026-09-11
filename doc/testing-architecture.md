@@ -1556,6 +1556,11 @@ to `push` on `main` because it writes the gh-pages benchmark history.
 | new-refs | 11 | 11 | no — second-scale gate |
 | | **4401s** | 5645s | warm head = 3365s (76%) |
 
+`isa-v4-compile` (the `-march=x86-64-v4` compile-only leg added for the two-variant Linux release)
+post-dates this measurement and has no row yet: it is the same shape as `bench-compile` — narrow
+configure, `BUILD_TEST=OFF`, `BUILD_GUI=OFF`, compile and link only — but its number is to be
+read off a real run, not inferred from that resemblance.
+
 ⚠️ **The `Ubuntu x86_64` row is still settling, and its history is worth more than its number.**
 That leg went 650s uncached → 657s (cold, nothing to restore) → 567s → 479s → 353s across five
 consecutive runs, and its ccache hit rate over the last three was 26.34% → 41.39% → **55.96%**, still
