@@ -233,6 +233,34 @@ TEST_F(ServerAnalysisRun, CommitThenStopThenAnalysisIsAccepted) {
   EXPECT_EQ(frame->stats_result_->sim_ray_num_, 20000u);
 }
 
+// Neither session's first frame carries the other's results — not even flagged stale.
+// Read IMMEDIATELY after each switch: whether the frame is the empty one published at the
+// switch or already the new session's first snapshot, the other session's payload is gone.
+TEST_F(ServerAnalysisRun, FrameRightAfterASessionSwitchCarriesNoResidue) {
+  ASSERT_FALSE(server_.CommitConfig(Halo22Config(20000)));
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  ASSERT_EQ(server_.AcquireResultFrame()->render_results_.size(), 1u) << "positive control: the render's image";
+  const uint64_t generation = server_.AcquireResultFrame()->snapshot_generation_;
+
+  server_.Stop();
+  ASSERT_FALSE(server_.StartRaypathAnalysis(FullSkyRequest()));
+  {
+    auto frame = server_.AcquireResultFrame();
+    EXPECT_TRUE(frame->render_results_.empty()) << "the render's image is gone from the analysis session";
+    EXPECT_TRUE(frame->xyz_results_.empty());
+    EXPECT_TRUE(frame->composite_results_.empty());
+    EXPECT_GE(frame->snapshot_generation_, generation) << "the generation never goes backwards";
+  }
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  ASSERT_TRUE(server_.AcquireResultFrame()->raypath_histogram_result_.has_value()) << "positive control";
+
+  ASSERT_FALSE(server_.CommitConfig(Halo22Config(20000)));
+  {
+    auto frame = server_.AcquireResultFrame();
+    EXPECT_FALSE(frame->raypath_histogram_result_.has_value()) << "the histogram is gone from the render session";
+  }
+}
+
 // Nothing committed yet: there is no scene to analyse.
 TEST_F(ServerAnalysisRun, AnalysisWithoutCommitIsInvalidConfig) {
   const Error err = server_.StartRaypathAnalysis(FullSkyRequest());

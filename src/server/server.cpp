@@ -213,6 +213,17 @@ class ServerImpl {
   // kind of result materialized in one pass is coherent with the others.
   bool DoSnapshot();
 
+  // Publish an EMPTY frame (no results of any kind, has_valid_data_ false, the current epoch
+  // and snapshot generation), for the two session switches. DoSnapshot only publishes when a
+  // batch has dirtied the snapshot, so between Stop() and the new session's first batch the
+  // published frame would still be the previous session's — a render's image under an
+  // analysis session, an analysis histogram under a render session — re-stamped as stale but
+  // readable. Every FrameGet* on the empty frame writes its sentinel instead. Called between
+  // Stop() and Start() only: Stop() has joined the workers, so no DoSnapshot can be
+  // publishing a real frame of the NEW session that this would overwrite; the lock is against
+  // a reader's DoSnapshot still in flight from before the Stop().
+  void PublishEmptyFrame();
+
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
   template <typename F>
   void RunPersistentLoop(F work_fn);
@@ -915,11 +926,17 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // contract) and must get the backend the user asked for back.
   const bool was_analysis = mode_.exchange(SessionMode::kRender, std::memory_order_acq_rel) == SessionMode::kAnalysis;
   if (was_analysis) {
-    std::lock_guard<std::mutex> lock(prod_mutex_);
-    for (auto& s : simulators_) {
-      s.SetAnalysisChainId(false, 0);
-      s.SetAnalysisForceCpu(false);
+    {
+      std::lock_guard<std::mutex> lock(prod_mutex_);
+      for (auto& s : simulators_) {
+        s.SetAnalysisChainId(false, 0);
+        s.SetAnalysisForceCpu(false);
+      }
     }
+    // Symmetric to StartRaypathAnalysis: the analysis histogram must not linger on the
+    // render session's first frame. Gated on was_analysis so a render → render commit keeps
+    // publishing exactly what it always did (the previous image, re-stamped stale).
+    PublishEmptyFrame();
   }
 
   // Check if consumers can be reused (same renderer key set, no layout changes).
@@ -1038,6 +1055,20 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 }
 
 
+void ServerImpl::PublishEmptyFrame() {
+  std::lock_guard<std::mutex> snapshot_pass(do_snapshot_mutex_);
+  auto empty = std::make_shared<ResultFrame>();
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    // The generation is NOT bumped: this is not a new snapshot, it is the absence of one.
+    // A poller comparing generations sees "nothing new", and has_valid_data_ says stale.
+    empty->snapshot_generation_ = snapshot_generation_;
+  }
+  empty->epoch_ = committed_epoch_.load(std::memory_order_acquire);
+  empty->has_valid_data_ = false;
+  StorePublished(std::move(empty));
+}
+
 // The analysis run. Same lifecycle as a render commit — Stop, swap the consumer set,
 // Start — on the scene the last CommitConfig left in config_manager_. What makes it an
 // analysis session is three per-Simulator properties (chain ids on, CPU forced) plus
@@ -1071,6 +1102,9 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
 
   Stop();
   mode_.store(SessionMode::kAnalysis, std::memory_order_release);
+  // The render's image must not be readable off an analysis session's frame, not even
+  // flagged stale: the first frame of this session is empty until its first batch.
+  PublishEmptyFrame();
   // New session, new stop flag: the previous analysis' "target reached" must not end this
   // one before its first batch.
   analysis_roi_target_reached_.store(false, std::memory_order_release);
