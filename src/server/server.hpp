@@ -179,7 +179,45 @@ struct StatsResult {
   size_t orientation_num_;
 };
 
-using Result = std::variant<NoneResult, RenderResult, StatsResult>;
+// =============== Raypath histogram (analysis run) ===============
+// Which exit directions the raypath histogram counts. Lives here rather than in
+// the consumer's own header because RaypathHistogramResult echoes it.
+enum class RaypathRoiMode : uint8_t {
+  kFullSky,  ///< every outgoing ray
+  kInFrame,  ///< rays that land inside the frame a RenderConfig describes (lens, view, visible, front)
+  kCone,     ///< rays within an angular radius of a world-space centre direction, binned by angular distance
+};
+
+// One MS layer of a chain: which crystal, and the face sequence through it
+// after symmetry reduction (Crystal::ReduceRaypath) — the same triple the
+// interning table keys on (core/chain_id_table.hpp), minus the ids.
+struct RaypathChainSegment {
+  IdType crystal_id = kInvalidId;
+  std::vector<IdType> segment;
+};
+
+struct RaypathHistogramEntry {
+  std::vector<RaypathChainSegment> chain_;  ///< root -> leaf, one per MS layer traversed
+  std::string display_;                     ///< ChainIdInterningTable::Format() of the same chain
+  double energy_ = 0.0;                     ///< Σ over counted rays of Y(wavelength) · weight
+  size_t count_ = 0;                        ///< number of counted rays
+  // kCone only: energy_ split by angular-distance ring, ring_energy_.size() ==
+  // cone_ring_count_ and Σ ring_energy_ == energy_ (up to summation order).
+  // Empty in the other two modes.
+  std::vector<double> ring_energy_;
+};
+
+struct RaypathHistogramResult {
+  // Sorted by energy_ descending, ties by display_ ascending — so equal
+  // energies still order the same way on every run.
+  std::vector<RaypathHistogramEntry> entries_;
+  // Echo of the request the entries were counted under.
+  RaypathRoiMode roi_mode_ = RaypathRoiMode::kFullSky;
+  int cone_ring_count_ = 0;
+  float cone_radius_rad_ = 0.0f;
+};
+
+using Result = std::variant<NoneResult, RenderResult, StatsResult, RaypathHistogramResult>;
 
 /**
  * @brief One composited per-raypath colored image.

@@ -93,6 +93,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_scene.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_json_parser_parity.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_raypath_histogram_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_anchor_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"
