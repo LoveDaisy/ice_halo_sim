@@ -223,9 +223,9 @@ LUMICE_RAYPATH_ROI_IN_FRAME = 1
 LUMICE_RAYPATH_ROI_CONE = 2
 LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT = 0xFF
 LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 8
-LUMICE_MAX_RAYPATH_SEGMENT_LEN = 16
+LUMICE_MAX_RAYPATH_SEGMENT_LEN = 64
 LUMICE_MAX_RAYPATH_CONE_RINGS = 32
-LUMICE_RAYPATH_DISPLAY_MAX = 896
+LUMICE_RAYPATH_DISPLAY_MAX = 3200
 
 
 # Mirrors LUMICE_AnnotationView (the IN_FRAME request's frame, and LUMICE_UnprojectPixel's view).
@@ -291,12 +291,12 @@ class LUMICE_RaypathHistogramEntry(ctypes.Structure):
     ]
 
 
-assert ctypes.sizeof(LUMICE_RaypathChainSegment) == 72
-assert ctypes.sizeof(LUMICE_RaypathHistogramEntry) == 1760, (
+assert ctypes.sizeof(LUMICE_RaypathChainSegment) == 264
+assert ctypes.sizeof(LUMICE_RaypathHistogramEntry) == 5600, (
     "LUMICE_RaypathHistogramEntry size mismatch — verify lumice.h field layout"
 )
-for _name, _offset in (("chain_len", 576), ("display", 580), ("energy", 1480), ("count", 1488),
-                       ("ring_energy", 1496), ("ring_count", 1752)):
+for _name, _offset in (("chain_len", 2112), ("display", 2116), ("energy", 5320), ("count", 5328),
+                       ("ring_energy", 5336), ("ring_count", 5592)):
     assert getattr(LUMICE_RaypathHistogramEntry, _name).offset == _offset, (
         f"LUMICE_RaypathHistogramEntry.{_name} offset drift — the mirror and lumice.h disagree"
     )
@@ -972,7 +972,7 @@ def run_raypath_analysis_capi(
     num_workers: int = 0,
     preferred_backend: int = LUMICE_BACKEND_CPU,
     timeout_sec: int = 180,
-    max_entries: int = 4096,
+    max_entries: int = 1024,
 ) -> RaypathAnalysisResult:
     """Run one ANALYSIS run via the C API on a fresh server and copy the histogram out.
 

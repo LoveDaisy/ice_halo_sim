@@ -42,14 +42,14 @@ static_assert(offsetof(LUMICE_RaypathAnalysisRequest, frame_view) == 4, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_center) == 52, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_stop_target) == 72, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, chain_id_symmetry) == 80, "");
-static_assert(sizeof(LUMICE_RaypathChainSegment) == 72, "LUMICE_RaypathChainSegment layout changed");
-static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 1760, "LUMICE_RaypathHistogramEntry layout changed");
-static_assert(offsetof(LUMICE_RaypathHistogramEntry, chain_len) == 576, "");
-static_assert(offsetof(LUMICE_RaypathHistogramEntry, display) == 580, "");
-static_assert(offsetof(LUMICE_RaypathHistogramEntry, energy) == 1480, "");
-static_assert(offsetof(LUMICE_RaypathHistogramEntry, count) == 1488, "");
-static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_energy) == 1496, "");
-static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_count) == 1752, "");
+static_assert(sizeof(LUMICE_RaypathChainSegment) == 264, "LUMICE_RaypathChainSegment layout changed");
+static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 5600, "LUMICE_RaypathHistogramEntry layout changed");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, chain_len) == 2112, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, display) == 2116, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, energy) == 5320, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, count) == 5328, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_energy) == 5336, "");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_count) == 5592, "");
 static_assert(sizeof(LUMICE_RaypathAnalysisInfo) == 20, "LUMICE_RaypathAnalysisInfo layout changed");
 
 namespace {

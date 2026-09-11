@@ -3862,6 +3862,11 @@ static_assert(static_cast<int>(ns::RaypathRoiMode::kCone) == LUMICE_RAYPATH_ROI_
               "LUMICE_RAYPATH_ROI_CONE drifted from RaypathRoiMode");
 static_assert(ns::kChainIdSymmetrySessionDefault == LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT,
               "LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT drifted from kChainIdSymmetrySessionDefault");
+// The entry caps are sized to the data a run can produce (see the header): a segment is at most
+// one crystal's max_hits faces, and the layer cap is the scene's scatter-layer cap by definition.
+static_assert(LUMICE_MAX_RAYPATH_SEGMENT_LEN == ns::kMaxHits,
+              "LUMICE_MAX_RAYPATH_SEGMENT_LEN must equal core's kMaxHits, or a legal chain gets truncated");
+static_assert(LUMICE_MAX_RAYPATH_CHAIN_LAYERS == LUMICE_MAX_CONFIG_SCATTER_LAYERS, "one segment per scattering layer");
 
 namespace {
 

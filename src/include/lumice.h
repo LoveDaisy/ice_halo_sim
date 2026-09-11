@@ -1919,24 +1919,26 @@ LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float
 // default needs a value no combination of those bits can spell.
 #define LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT 0xFF
 
-// Sanity ceilings on what one result entry can hold. Like LUMICE_MAX_ANNOTATION_LINES these guard
-// against malformed data rather than express a design limit: a chain deeper than the layer cap
-// or a face sequence longer than the segment cap is TRUNCATED in the entry (the fields still
-// describe a self-consistent prefix) and the server logs one WARN per frame read. Eight layers is
-// past any multiple-scattering depth a config can ask for today; sixteen faces is past any
-// reduced sequence a crystal in this tree produces.
-#define LUMICE_MAX_RAYPATH_CHAIN_LAYERS 8
-#define LUMICE_MAX_RAYPATH_SEGMENT_LEN 16
+// What one result entry can hold, sized so that NO chain a run can produce is cut: a chain has
+// one segment per scattering layer the ray traversed, and a config has at most
+// LUMICE_MAX_CONFIG_SCATTER_LAYERS of those; a segment is the face sequence through one crystal,
+// at most the scene's max_hits, whose ceiling is core's kMaxHits = 64 (pinned by static_assert
+// at the C boundary, so the two cannot drift apart silently). Symmetry reduction relabels faces
+// and never shortens or lengthens a sequence. A chain past either cap therefore only comes from
+// malformed data; it is TRUNCATED in the entry (the fields still describe a self-consistent
+// prefix) and the server logs one WARN per frame read, rather than overrunning anything.
+#define LUMICE_MAX_RAYPATH_CHAIN_LAYERS LUMICE_MAX_CONFIG_SCATTER_LAYERS
+#define LUMICE_MAX_RAYPATH_SEGMENT_LEN 64
 // Ring cap for the cone ROI. NOT a truncation: a request asking for more rings than this is
 // rejected by LUMICE_StartRaypathAnalysis with LUMICE_ERR_INVALID_VALUE, because a truncated ring
 // split would silently change what the entries mean.
 #define LUMICE_MAX_RAYPATH_CONE_RINGS 32
 // Longest `display` text an untruncated entry can need, including the terminating NUL. Derived
 // from the types rather than from what scenes produce: per layer, "crystal" (7) + a uint16 id
-// (5) + "(" + 16 uint16 faces joined by "-" (16*5 + 15 = 95) + ")" + the joining "-" = 110, times
-// LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 880; rounded up. Longer text (only possible past the layer
-// cap) is truncated with the same WARN as the arrays.
-#define LUMICE_RAYPATH_DISPLAY_MAX 896
+// (5) + "(" + 64 uint16 faces joined by "-" (64*5 + 63 = 383) + ")" + the joining "-" = 398,
+// times LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 3184; rounded up. Longer text (only possible past the
+// caps above) is truncated with the same WARN as the arrays.
+#define LUMICE_RAYPATH_DISPLAY_MAX 3200
 
 typedef struct LUMICE_RaypathAnalysisRequest_ {
   int roi_mode;  // LUMICE_RAYPATH_ROI_*
