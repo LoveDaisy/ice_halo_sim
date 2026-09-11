@@ -498,9 +498,13 @@ jobs:
       # Install only the compiler + cudart dev headers/stubs (~400 MB) rather
       # than the full ~2 GB toolkit. This is enough for nvcc to compile .cu
       # files and for CMake's find_package(CUDAToolkit) / CUDA::cudart link
-      # target to resolve. Pinned to CUDA 12.6 (a recent stable release that
-      # still supports compute_61 PTX); if 12-6 packages drift, bump to a
-      # nearby 12.x or switch to Jimver/cuda-toolkit action.
+      # target to resolve. Pinned to CUDA 12.9 — the last 12.x minor, the same
+      # toolkit both CUDA reference boxes (doc/machines.md) build and validate
+      # with, and the first minor after 12.8 introduced sm_120, so the fatbin
+      # gains native Blackwell SASS (CMakeLists.txt gates `120-real` on
+      # toolkit >= 12.8). apt resolves the newest 12.9 patch on its own. Stay
+      # on the 12 major: CUDA 13 drops compute_61, our PTX floor. Expect one
+      # compute_61 deprecation warning from nvcc (accepted, see CMakeLists.txt).
       - name: Install CUDA toolkit (nvcc + cudart)
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
@@ -510,7 +514,7 @@ jobs:
           sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
           grep -rn 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo 'google source gone'
           sudo apt-get update -qq
-          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          sudo apt-get install -y cuda-nvcc-12-9 cuda-cudart-dev-12-9
           echo "/usr/local/cuda/bin" >> $GITHUB_PATH
 
       # Share the CPM cache with the Ubuntu x64 build job: same OS, same
@@ -579,9 +583,10 @@ jobs:
   #     `windows-2025` image has rolled its ONLY Visual Studio install forward
   #     to VS 2026 (MSVC 14.51, `_MSC_VER` 1951; `vswhere` finds only
   #     `...\Microsoft Visual Studio\18\Enterprise`, no VS 2022 fallback).
-  #     Every current CUDA release rejects MSVC > VS 2022 (CUDA 12.6's
-  #     `crt/host_config.h`: "Only the versions between 2017 and 2022 are
-  #     supported"), so the CUDA job MUST run on an image that still ships a
+  #     Every current CUDA release rejects MSVC > VS 2022 (CUDA 12.9's
+  #     `crt/host_config.h` line 168: `#error` when `_MSC_VER >= 1950`, "Only
+  #     the versions between 2017 and 2022 (inclusive) are supported"; 12.6
+  #     said the same), so the CUDA job MUST run on an image that still ships a
   #     CUDA-compatible MSVC. windows-2022 ships VS 2022 (MSVC 14.4x).
   #     Verified first-hand in CI run 28439410508 (the windows-2025 attempt
   #     that failed at Configure).
@@ -594,16 +599,35 @@ jobs:
   #   - MSVC: windows-2022 runner default (VS 2022; `_MSC_VER` surfaced by the
   #     "Diagnose toolchain versions" step below — kept permanently so future
   #     image drift is debuggable from any run).
-  #   - CUDA: 12.6.3 — latest 12.6 patch, matches the Linux `cuda-compile`
-  #     job above (one CUDA major across all CI legs) and supports VS 2022.
+  #   - CUDA: 12.9.2 — latest 12.x patch (12.9 is the last 12.x minor; 12.9.2
+  #     ships the same nvcc 12.9.86 / cudart 12.9.79 as 12.9.1, the version
+  #     the CUDA reference boxes in doc/machines.md validated compute_61 on),
+  #     matches the Linux `cuda-compile` job above (one CUDA major across all
+  #     CI legs) and supports VS 2022.
   #     Do NOT use CUDA 11.x — its `_MSC_VER` ceiling (~1930) is below recent
   #     VS 2022 17.x (scrum-309 hit exactly this).
+  #   - WHY THE CUDA MAJOR IS 12, and why that fixes the other two pins: the
+  #     chain starts at `compute_61`. The owner keeps the Pascal PTX floor
+  #     (CMakeLists.txt `61-virtual`); CUDA 13 removed compute_61, so the
+  #     major stays at 12. CUDA 12.x's `crt/host_config.h` accepts host MSVC
+  #     up to VS 2022, so the runner must be an image that still ships VS
+  #     2022 — `windows-2022`. Break the first link (drop compute_61) and the
+  #     other two are free to move; until then they are consequences, not
+  #     independent choices.
+  #     The CUDA toolkit VERSION itself is written in three places that move
+  #     as one: this job's `cuda:` input, release.yml's windows-x64 `cuda:`
+  #     input, and the Linux `cuda-compile` job's apt package suffix
+  #     (`cuda-nvcc-12-9` / `cuda-cudart-dev-12-9`). A repo variable was
+  #     considered and not adopted: the apt suffix is `12-9` not `12.9.2`, so
+  #     one value could not feed all three without derivation logic, and a
+  #     drift between them fails loudly at install time rather than silently.
   #   - MAINTENANCE: when GitHub eventually retires windows-2022, either move
   #     to whatever hosted image still carries a CUDA-supported VS, or bump
   #     CUDA to a version that supports the then-current MSVC. Do NOT "fix" a
   #     future break by pinning a stale MSVC toolset onto windows-2025 — that
-  #     image dropped VS 2022 entirely. THREE pins move together or the
-  #     build-mirrors-release property breaks again: this job, the
+  #     image dropped VS 2022 entirely. THREE pins (VS 2022 / windows-2022 /
+  #     CUDA major 12) move together or the build-mirrors-release property
+  #     breaks again, across three places: this job, the
   #     `Windows MSVC x86_64` matrix entry above, and release.yml's
   #     windows-x64 row.
   #
@@ -659,7 +683,7 @@ jobs:
       - name: Install CUDA toolkit (nvcc + cudart_dev)
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: '12.6.3'
+          cuda: '12.9.2'
           method: 'network'
           sub-packages: '["nvcc", "cudart"]'
 

@@ -113,14 +113,16 @@ jobs:
             libgtk-3-dev
 
       # CUDA toolkit for the CUDA-enabled Windows artifact (nvcc + cudart).
-      # Pinned to 12.6.3 to match ci.yml's windows-cuda-compile gate; supports
-      # the windows-2022 VS 2022 host compiler and emits the full multi-arch
-      # fatbin (compute_61 PTX + sm_75/86/89 SASS, see CMakeLists.txt).
+      # Pinned to 12.9.2 to match ci.yml's windows-cuda-compile gate (the pin
+      # rationale — why the CUDA major, VS 2022 and windows-2022 move as one —
+      # lives on that job); supports the windows-2022 VS 2022 host compiler
+      # and emits the full multi-arch fatbin (compute_61 PTX +
+      # sm_75/86/89/120 SASS, see CMakeLists.txt).
       - name: Install CUDA toolkit (Windows CUDA artifact)
         if: matrix.cuda == 'ON'
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: '12.6.3'
+          cuda: '12.9.2'
           method: 'network'
           sub-packages: '["nvcc", "cudart"]'
 
