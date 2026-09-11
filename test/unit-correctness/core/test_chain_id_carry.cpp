@@ -840,106 +840,140 @@ TEST(ChainIdEndToEnd, SymmetrySettingFlowsIntoTheSegments) {
   }
 }
 
-// The AC3 MS=2 claim, per delivered ray: a ray that left from layer 2 carries
-// a depth-2 chain whose leaf is layer 2's reduced segment and whose parent is
-// the reduced segment of THE layer-1 traversal this very ray made. The
-// parent is recovered independently of the chain id: the layer-2 entry
-// segment (root_ray_idx_) still carries the weight the ray left layer 1 with,
-// and that weight identifies the layer-1 continuation segment.
-TEST(ChainIdEndToEnd, TwoLayerChainsMatchTheRaysOwnPerLayerSegments) {
-  auto scene = MakeScene(2);
-  auto out = RunScene(scene, 1024, 1, 2024, AnalysisSetting{ true, kSymAll });
-  ASSERT_EQ(out.batches.size(), 1u);
-  const auto& sd = out.batches[0];
-  const auto& all = out.all_data[0];
+// The AC3 multi-layer claim, per delivered ray: a ray that left from layer L
+// carries a depth-L chain whose k-th node is the reduced segment of THE
+// layer-k traversal this very ray made. The chain id plays no part in the
+// oracle: a layer-k entry segment (reached through root_ray_idx_) still
+// carries the weight the ray crossed the k-1 → k boundary with, and that
+// weight identifies the layer-(k-1) continuation segment, whose recorder is
+// the layer-(k-1) path and whose own root_ray_idx_ leads one layer further
+// back. Walked until the root; a ray whose crossing weight is shared by two
+// continuations at some layer is skipped rather than guessed.
+namespace {
+
+void VerifyChainsAgainstTheRaysOwnSegments(const SimData& sd, const RayBuffer& all, size_t layers, uint8_t symmetry) {
   auto outgoing = OutgoingSegmentIndices(all);
   ASSERT_EQ(outgoing.size(), sd.outgoing_chain_id_.size());
-  // Which layer a segment belongs to is read off crystal_idx_: both layers
-  // carry deterministic shapes, so the batch materialises exactly one Crystal
-  // per layer, in layer order. (RaySeg::crystal_config_id_ is NOT usable for
-  // this — no host path ever assigns Crystal::config_id_, so it reads
-  // kInvalidId on every legacy-path segment.)
-  ASSERT_EQ(sd.crystals_.size(), 2u) << "premise: one crystal instance per layer";
+  // Which layer a segment belongs to is read off crystal_idx_: every layer
+  // carries a deterministic shape, so the batch materialises exactly one
+  // Crystal per layer, in layer order. (RaySeg::crystal_config_id_ is NOT
+  // usable for this — no host path ever assigns Crystal::config_id_, so it
+  // reads kInvalidId on every legacy-path segment.)
+  ASSERT_EQ(sd.crystals_.size(), layers) << "premise: one crystal instance per layer";
   auto layer_of = [](const RaySeg& seg) { return static_cast<size_t>(seg.crystal_idx_); };
+  auto reduce_at = [&](size_t si) {
+    const auto& seg = all[si];
+    return OracleReduce(sd.crystals_[seg.crystal_idx_], sd.crystal_axis_dists_[seg.crystal_idx_], symmetry,
+                        RecorderToVec(all, si));
+  };
 
-  // Layer-1 continuation segments keyed by the weight they crossed with.
-  std::map<float, size_t> continuation_by_w;
-  std::set<float> ambiguous_w;
+  // Per layer: continuation segments keyed by the weight they crossed with.
+  std::vector<std::map<float, size_t>> continuation_by_w(layers);
+  std::vector<std::set<float>> ambiguous_w(layers);
   for (size_t i = 0; i < all.size_; i++) {
     const auto& seg = all[i];
-    if (layer_of(seg) == 0 && seg.IsContinue()) {
-      if (!continuation_by_w.emplace(seg.w_, i).second) {
-        ambiguous_w.insert(seg.w_);
+    if (seg.IsContinue()) {
+      size_t l = layer_of(seg);
+      if (!continuation_by_w[l].emplace(seg.w_, i).second) {
+        ambiguous_w[l].insert(seg.w_);
       }
     }
   }
-  ASSERT_GT(continuation_by_w.size(), 20u) << "not enough continuations for the claim to have teeth";
+  for (size_t l = 0; l + 1 < layers; l++) {
+    if (continuation_by_w[l].size() <= 20u) {
+      ADD_FAILURE() << "layer " << l << ": not enough continuations for the claim to have teeth";
+      return;
+    }
+  }
 
   MergedTrie trie;
   trie.Absorb(0, sd.chain_id_table_delta_);
-  size_t depth1 = 0;
-  size_t depth2_verified = 0;
+  std::vector<size_t> verified_at_depth(layers + 1, 0);
   for (size_t k = 0; k < outgoing.size(); k++) {
-    const size_t si = outgoing[k];
-    const auto& leaf_seg = all[si];
+    const size_t leaf_si = outgoing[k];
     uint32_t id = trie.Resolve(0, sd.outgoing_chain_id_[k]);
     if (id == 0xFFFFFFFFu) {
       ADD_FAILURE() << "ray " << k << ": delivered id " << sd.outgoing_chain_id_[k] << " missing from the delta";
       continue;
     }
-    const auto& leaf = trie.table.EntryAt(id);
-    const Crystal& leaf_crystal = sd.crystals_[leaf_seg.crystal_idx_];
-    const AxisDistribution& leaf_axis = sd.crystal_axis_dists_[leaf_seg.crystal_idx_];
-    // Scene: layer L carries CrystalConfig::id_ == L+1.
-    EXPECT_EQ(leaf.crystal_id, layer_of(leaf_seg) + 1) << "ray " << k;
-    EXPECT_EQ(leaf.segment, OracleReduce(leaf_crystal, leaf_axis, kSymAll, RecorderToVec(all, si))) << "ray " << k;
-
-    if (layer_of(leaf_seg) == 0) {
-      EXPECT_EQ(leaf.parent_id, ChainIdInterningTable::kRootChainId) << "left from layer 1: depth 1, ray " << k;
-      depth1++;
-      continue;
+    const size_t leaf_layer = layer_of(all[leaf_si]);
+    // Walk the chain and the ray's own history in lockstep, leaf to root.
+    uint32_t node_id = id;
+    size_t si = leaf_si;
+    size_t layer = leaf_layer;
+    bool skipped = false;
+    bool broken = false;
+    while (true) {
+      const auto& node = trie.table.EntryAt(node_id);
+      // Scene: layer L carries CrystalConfig::id_ == L+1.
+      if (node.crystal_id != layer + 1 || node.segment != reduce_at(si)) {
+        ADD_FAILURE() << "ray " << k << " (left from layer " << leaf_layer + 1 << "): chain " << trie.table.Format(id)
+                      << " disagrees at layer " << layer + 1 << " with the ray's own path "
+                      << SegmentString(reduce_at(si)) << " on crystal " << layer + 1;
+        broken = true;
+        break;
+      }
+      if (layer == 0) {
+        if (node.parent_id != ChainIdInterningTable::kRootChainId) {
+          ADD_FAILURE() << "ray " << k << ": chain " << trie.table.Format(id) << " is deeper than the ray's path";
+          broken = true;
+        }
+        break;
+      }
+      if (node.parent_id == ChainIdInterningTable::kRootChainId) {
+        ADD_FAILURE() << "ray " << k << ": chain " << trie.table.Format(id) << " ends at layer " << layer + 1
+                      << " but the ray came through layer " << layer;
+        broken = true;
+        break;
+      }
+      // One layer back: this layer's entry segment carries the crossing weight.
+      const auto& entry_seg = all[all[si].root_ray_idx_];
+      if (layer_of(entry_seg) != layer || entry_seg.root_ray_idx_ != all[si].root_ray_idx_) {
+        ADD_FAILURE() << "ray " << k << ": root_ray_idx_ does not point at this ray's layer-" << layer + 1 << " entry";
+        broken = true;
+        break;
+      }
+      const float crossing_w = entry_seg.w_;
+      if (ambiguous_w[layer - 1].count(crossing_w) != 0) {
+        skipped = true;
+        break;
+      }
+      auto it = continuation_by_w[layer - 1].find(crossing_w);
+      if (it == continuation_by_w[layer - 1].end()) {
+        ADD_FAILURE() << "ray " << k << ": no layer-" << layer << " continuation crossed with w=" << crossing_w;
+        broken = true;
+        break;
+      }
+      node_id = node.parent_id;
+      si = it->second;
+      layer--;
     }
-    if (layer_of(leaf_seg) != 1) {
-      ADD_FAILURE() << "ray " << k << ": unexpected crystal_idx_ " << leaf_seg.crystal_idx_;
-      continue;
+    if (!skipped && !broken) {
+      verified_at_depth[leaf_layer + 1]++;
     }
-    if (leaf.parent_id == ChainIdInterningTable::kRootChainId) {
-      ADD_FAILURE() << "left from layer 2: depth must be 2, ray " << k;
-      continue;
-    }
-    const auto& parent = trie.table.EntryAt(leaf.parent_id);
-    EXPECT_EQ(parent.parent_id, ChainIdInterningTable::kRootChainId) << "depth exactly 2, ray " << k;
-    EXPECT_EQ(parent.crystal_id, 1u);
-
-    // Independent linkage back to the layer-1 traversal.
-    if (leaf_seg.root_ray_idx_ >= all.size_) {
-      ADD_FAILURE() << "ray " << k << ": root_ray_idx_ out of range";
-      continue;
-    }
-    const auto& entry_seg = all[leaf_seg.root_ray_idx_];
-    if (layer_of(entry_seg) != 1 || entry_seg.root_ray_idx_ != leaf_seg.root_ray_idx_) {
-      ADD_FAILURE() << "ray " << k << ": root_ray_idx_ must point at this ray's layer-2 entry";
-      continue;
-    }
-    const float crossing_w = entry_seg.w_;
-    if (ambiguous_w.count(crossing_w) != 0) {
-      continue;  // two continuations share this weight: skip rather than guess
-    }
-    auto it = continuation_by_w.find(crossing_w);
-    if (it == continuation_by_w.end()) {
-      ADD_FAILURE() << "ray " << k << ": no layer-1 continuation crossed with w=" << crossing_w;
-      continue;
-    }
-    const auto& l1_seg = all[it->second];
-    auto expected_parent = OracleReduce(sd.crystals_[l1_seg.crystal_idx_], sd.crystal_axis_dists_[l1_seg.crystal_idx_],
-                                        kSymAll, RecorderToVec(all, it->second));
-    EXPECT_EQ(parent.segment, expected_parent)
-        << "ray " << k << ": chain " << trie.table.Format(id) << " but its own layer-1 path reduces to "
-        << SegmentString(expected_parent);
-    depth2_verified++;
   }
-  EXPECT_GT(depth1, 0u);
-  EXPECT_GT(depth2_verified, 20u) << "too few depth-2 chains were independently verified";
+  for (size_t d = 1; d <= layers; d++) {
+    EXPECT_GT(verified_at_depth[d], 20u) << "too few depth-" << d << " chains were independently verified";
+  }
+}
+
+}  // namespace
+
+TEST(ChainIdEndToEnd, TwoLayerChainsMatchTheRaysOwnPerLayerSegments) {
+  auto scene = MakeScene(2);
+  auto out = RunScene(scene, 1024, 1, 2024, AnalysisSetting{ true, kSymAll });
+  ASSERT_EQ(out.batches.size(), 1u);
+  VerifyChainsAgainstTheRaysOwnSegments(out.batches[0], out.all_data[0], 2, kSymAll);
+}
+
+// Three layers is where the continuation hand-off carries a NON-root parent
+// for the first time (layer 2 → 3): with two layers every continuation leaves
+// layer 1 with the root id, so an omitted hand-off is invisible there.
+TEST(ChainIdEndToEnd, ThreeLayerChainsMatchTheRaysOwnPerLayerSegments) {
+  auto scene = MakeScene(3);
+  auto out = RunScene(scene, 4096, 1, 3033, AnalysisSetting{ true, kSymAll });
+  ASSERT_EQ(out.batches.size(), 1u);
+  VerifyChainsAgainstTheRaysOwnSegments(out.batches[0], out.all_data[0], 3, kSymAll);
 }
 
 TEST(ChainIdEndToEnd, DeltasComposeIncrementallyAcrossBatches) {
