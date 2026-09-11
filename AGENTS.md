@@ -105,8 +105,15 @@ before downloading into it).
   `src/util/fatal.hpp`, the single owner of the pre-abort trap, where unbuffered stderr is the whole
   point — a per-message-unflushed file sink can lose the line precisely when it matters. For an
   unrecoverable invariant call `lumice::FatalAbort(...)` instead of hand-rolling print-then-`abort()`.
-  Enforced by the `no-bare-print` rule in `scripts/check_policies.py`, which also scans `.cu` / `.metal`
-  so a GPU backend cannot reopen the side channel. `test/` is deliberately out of scope: test binaries
+  A third place sits outside the rule by construction rather than by name: `src/launcher/`, the
+  release CPUID launchers (`isa_launcher.c` for Linux, `isa_launcher_win.c` for Windows), link
+  nothing from the engine (no `lumice_obj`, so no `ILOG_*` exists for them to bypass) and their few
+  error lines go to stderr because there is no other sink in that process. The checker never sees
+  them — its scan covers C++/CUDA/Metal suffixes, not `.c` — which is consistent with what the rule
+  guards (the engine's unified sinks), not a loophole to reuse: a `.c` file that *does* link the
+  engine would still be wrong. Enforced by the `no-bare-print` rule
+  in `scripts/check_policies.py`, which also scans `.cu` / `.metal` so a GPU backend cannot reopen
+  the side channel. `test/` is deliberately out of scope: test binaries
   are their own harness with no app logger to bypass, and some of their output is a parsed contract
   (the regen driver reads gui_test's `PSNR=` line). Device-side `printf` in a CUDA kernel stays a
   legitimate debugging tool — the gate does not stop you adding one while working, only from landing it.

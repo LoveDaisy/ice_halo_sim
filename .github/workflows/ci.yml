@@ -291,7 +291,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TEST=ON
           -DBUILD_GUI=${{ matrix.build_gui }}
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
           ${{ env.LUMICE_PYTHON_ARGS }}
           ${{ env.LUMICE_COMPILER_LAUNCHER_ARGS }}
 
@@ -498,9 +498,13 @@ jobs:
       # Install only the compiler + cudart dev headers/stubs (~400 MB) rather
       # than the full ~2 GB toolkit. This is enough for nvcc to compile .cu
       # files and for CMake's find_package(CUDAToolkit) / CUDA::cudart link
-      # target to resolve. Pinned to CUDA 12.6 (a recent stable release that
-      # still supports compute_61 PTX); if 12-6 packages drift, bump to a
-      # nearby 12.x or switch to Jimver/cuda-toolkit action.
+      # target to resolve. Pinned to CUDA 12.9 — the last 12.x minor, the same
+      # toolkit both CUDA reference boxes (doc/machines.md) build and validate
+      # with, and the first minor after 12.8 introduced sm_120, so the fatbin
+      # gains native Blackwell SASS (CMakeLists.txt gates `120-real` on
+      # toolkit >= 12.8). apt resolves the newest 12.9 patch on its own. Stay
+      # on the 12 major: CUDA 13 drops compute_61, our PTX floor. Expect one
+      # compute_61 deprecation warning from nvcc (accepted, see CMakeLists.txt).
       - name: Install CUDA toolkit (nvcc + cudart)
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
@@ -510,7 +514,7 @@ jobs:
           sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
           grep -rn 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || echo 'google source gone'
           sudo apt-get update -qq
-          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          sudo apt-get install -y cuda-nvcc-12-9 cuda-cudart-dev-12-9
           echo "/usr/local/cuda/bin" >> $GITHUB_PATH
 
       # Share the CPM cache with the Ubuntu x64 build job: same OS, same
@@ -524,7 +528,7 @@ jobs:
           key: cpm-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-ubuntu-x64-
 
-      # BUILD_GUI=OFF avoids OpenGL/X11 deps. LUMICE_NATIVE_ARCH=OFF matches the
+      # BUILD_GUI=OFF avoids OpenGL/X11 deps. LUMICE_ISA_LEVEL=baseline matches the
       # rest of CI.
       #
       # BUILD_TEST=ON, not OFF, and the reason is not "more coverage is nicer".
@@ -553,7 +557,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=OFF
           -DLUMICE_CUDA_ENABLED=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       # Builds the Lumice CLI plus the test binaries; this drives nvcc through
       # cuda_trace_backend.cu and links CUDA::cudart, exercising both compile and
@@ -579,9 +583,10 @@ jobs:
   #     `windows-2025` image has rolled its ONLY Visual Studio install forward
   #     to VS 2026 (MSVC 14.51, `_MSC_VER` 1951; `vswhere` finds only
   #     `...\Microsoft Visual Studio\18\Enterprise`, no VS 2022 fallback).
-  #     Every current CUDA release rejects MSVC > VS 2022 (CUDA 12.6's
-  #     `crt/host_config.h`: "Only the versions between 2017 and 2022 are
-  #     supported"), so the CUDA job MUST run on an image that still ships a
+  #     Every current CUDA release rejects MSVC > VS 2022 (CUDA 12.9's
+  #     `crt/host_config.h` line 168: `#error` when `_MSC_VER >= 1950`, "Only
+  #     the versions between 2017 and 2022 (inclusive) are supported"; 12.6
+  #     said the same), so the CUDA job MUST run on an image that still ships a
   #     CUDA-compatible MSVC. windows-2022 ships VS 2022 (MSVC 14.4x).
   #     Verified first-hand in CI run 28439410508 (the windows-2025 attempt
   #     that failed at Configure).
@@ -594,16 +599,35 @@ jobs:
   #   - MSVC: windows-2022 runner default (VS 2022; `_MSC_VER` surfaced by the
   #     "Diagnose toolchain versions" step below — kept permanently so future
   #     image drift is debuggable from any run).
-  #   - CUDA: 12.6.3 — latest 12.6 patch, matches the Linux `cuda-compile`
-  #     job above (one CUDA major across all CI legs) and supports VS 2022.
+  #   - CUDA: 12.9.2 — latest 12.x patch (12.9 is the last 12.x minor; 12.9.2
+  #     ships the same nvcc 12.9.86 / cudart 12.9.79 as 12.9.1, the version
+  #     the CUDA reference boxes in doc/machines.md validated compute_61 on),
+  #     matches the Linux `cuda-compile` job above (one CUDA major across all
+  #     CI legs) and supports VS 2022.
   #     Do NOT use CUDA 11.x — its `_MSC_VER` ceiling (~1930) is below recent
   #     VS 2022 17.x (scrum-309 hit exactly this).
+  #   - WHY THE CUDA MAJOR IS 12, and why that fixes the other two pins: the
+  #     chain starts at `compute_61`. The owner keeps the Pascal PTX floor
+  #     (CMakeLists.txt `61-virtual`); CUDA 13 removed compute_61, so the
+  #     major stays at 12. CUDA 12.x's `crt/host_config.h` accepts host MSVC
+  #     up to VS 2022, so the runner must be an image that still ships VS
+  #     2022 — `windows-2022`. Break the first link (drop compute_61) and the
+  #     other two are free to move; until then they are consequences, not
+  #     independent choices.
+  #     The CUDA toolkit VERSION itself is written in three places that move
+  #     as one: this job's `cuda:` input, release.yml's windows-x64 `cuda:`
+  #     input, and the Linux `cuda-compile` job's apt package suffix
+  #     (`cuda-nvcc-12-9` / `cuda-cudart-dev-12-9`). A repo variable was
+  #     considered and not adopted: the apt suffix is `12-9` not `12.9.2`, so
+  #     one value could not feed all three without derivation logic, and a
+  #     drift between them fails loudly at install time rather than silently.
   #   - MAINTENANCE: when GitHub eventually retires windows-2022, either move
   #     to whatever hosted image still carries a CUDA-supported VS, or bump
   #     CUDA to a version that supports the then-current MSVC. Do NOT "fix" a
   #     future break by pinning a stale MSVC toolset onto windows-2025 — that
-  #     image dropped VS 2022 entirely. THREE pins move together or the
-  #     build-mirrors-release property breaks again: this job, the
+  #     image dropped VS 2022 entirely. THREE pins (VS 2022 / windows-2022 /
+  #     CUDA major 12) move together or the build-mirrors-release property
+  #     breaks again, across three places: this job, the
   #     `Windows MSVC x86_64` matrix entry above, and release.yml's
   #     windows-x64 row.
   #
@@ -659,7 +683,7 @@ jobs:
       - name: Install CUDA toolkit (nvcc + cudart_dev)
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: '12.6.3'
+          cuda: '12.9.2'
           method: 'network'
           sub-packages: '["nvcc", "cudart"]'
 
@@ -709,7 +733,7 @@ jobs:
       # This leg is the one that matters most for that gap: the historical
       # escapes it would have caught were MSVC-only source incompatibilities
       # (POSIX setenv/unsetenv, M_PI) in test code, which no other job compiles
-      # with CUDA on. LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
+      # with CUDA on. LUMICE_ISA_LEVEL=baseline matches the rest of CI.
       - name: Configure (CUDA compile-only)
         run: >
           cmake -S . -B build -G Ninja
@@ -717,7 +741,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=OFF
           -DLUMICE_CUDA_ENABLED=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       # Build the Lumice CLI plus the test binaries; this drives nvcc through
       # cuda_trace_backend.cu and links CUDA::cudart, exercising both compile and
@@ -778,7 +802,7 @@ jobs:
 
       # BUILD_TEST=OFF + BUILD_GUI=OFF keep this job narrow: the build job above
       # already covers those targets, and skipping them avoids the OpenGL/X11
-      # deps and the GLAD2 Python generator. LUMICE_NATIVE_ARCH=OFF matches the
+      # deps and the GLAD2 Python generator. LUMICE_ISA_LEVEL=baseline matches the
       # rest of CI.
       - name: Configure (bench compile-only)
         run: >
@@ -787,13 +811,148 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DBUILD_BENCH=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       # Target-scoped on purpose: `lumice_bench` pulls in lumice_obj, so this
       # compiles every bench translation unit plus the core it links against,
       # without building the CLI/install artifacts the build job already covers.
       - name: Build lumice_bench (compile + link only, no run)
         run: cmake --build build --target lumice_bench --parallel
+
+  # x86-64-v4 compile-only. The Linux release ships a second, AVX-512 build of the engine
+  # (release.yml, linux-x64 row: two configures at LUMICE_ISA_LEVEL=baseline and =x86-64-v4,
+  # merged behind a CPUID launcher). Every other job here builds at baseline, so without
+  # this leg the -march=x86-64-v4 codegen path is first compiled on the day a tag is cut.
+  #
+  # Compile only, and BUILD_TEST=OFF — unlike cuda-compile, which turns tests ON. The CUDA
+  # cases self-skip for want of a device; an AVX-512 binary has no such graceful path. A
+  # GH-hosted runner may or may not have AVX-512, so running anything built here is a coin
+  # toss between "passes" and SIGILL, and neither outcome would say anything about the
+  # code. This job's claim stops at "GCC accepts -march=x86-64-v4 and the whole graph
+  # compiles". BUILD_GUI=OFF because the GUI shares lumice_obj with the CLI: whatever v4
+  # breaks, the CLI target already compiles it, and the GUI would only add its apt deps.
+  #
+  # Own cache discriminator, for the reason spelled out on bench-compile above: this
+  # configure's dependency set is the narrow one, and a shared `cpm-ubuntu-x64-` prefix
+  # would let the build job's fallback restore onto this job's small entry.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
+  isa-v4-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: cpm_cache
+          key: cpm-isa-v4-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-isa-v4-ubuntu-x64-
+
+      - name: Configure (x86-64-v4 compile-only)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_ISA_LEVEL=x86-64-v4
+
+      # The whole default graph: the CLI (so lumice_obj is compiled at v4 and linked) and
+      # the launcher (LumiceIsaLauncher, which every Linux x86_64 configure builds).
+      - name: Build (compile + link only, no run)
+        run: cmake --build build --parallel
+
+  # x86-64-v3 under clang-cl, with CUDA on. The Windows release ships a second build of the
+  # engine compiled by clang-cl at -march=x86-64-v3 (release.yml, windows-x64 row: two
+  # configures, baseline on cl.exe and x86-64-v3 on clang-cl, merged behind a CPUID launcher).
+  # No other job here uses clang-cl at all, so without this leg the clang-cl (C/C++) x nvcc
+  # (.cu, cl.exe host) mixed compile — the one thing the Windows split gambles on that the Linux
+  # split did not — is first exercised on the day a tag is cut.
+  #
+  # Unlike isa-v4-compile this job also RUNS the binary, once, for --benchmark: v3 is AVX2,
+  # which every hosted x64 runner has, so there is no SIGILL coin toss, and the assertion it
+  # buys is the regression this whole path once had — CMake reports MSVC=TRUE for clang-cl,
+  # and a macro gated on if(MSVC) alone left every clang-cl build reporting "baseline" while
+  # -march was in fact applied. A green compile cannot see that; the isa key can.
+  # BUILD_TEST=OFF keeps the claim narrow (does the mixed toolchain build the engine, and does
+  # the tier reach the binary); BUILD_GUI=OFF for the reason isa-v4-compile gives.
+  #
+  # Own cache discriminator, before the platform name, for the reason spelled out on
+  # windows-cuda-compile above. The LLVM pin mirrors release.yml's — a compile gate for a
+  # toolchain the release does not use would be checking the wrong thing.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
+  windows-isa-v3-compile:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Before the CUDA step, as on windows-cuda-compile: nvcc needs cl.exe on PATH as its
+      # host compiler, and so does this job's .cu translation unit even though every other
+      # TU goes through clang-cl.
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Not put on PATH, same as release.yml: the compiler is named by full path below, so
+      # nothing else in this job can pick LLVM up by accident.
+      - name: Install clang-cl (LLVM, pinned)
+        shell: pwsh
+        run: |
+          choco install llvm --version=20.1.0 -y --no-progress --allow-downgrade
+          & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
+
+      - name: Install CUDA toolkit (nvcc + cudart_dev)
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.9.2'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart"]'
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: cpm_cache
+          key: cpm-isa-v3-windows-x64-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-isa-v3-windows-x64-
+
+      - name: Configure (x86-64-v3, clang-cl + nvcc/cl.exe, compile-only)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=OFF
+          -DBUILD_GUI=OFF
+          -DLUMICE_ISA_LEVEL=x86-64-v3
+          -DLUMICE_CUDA_ENABLED=ON
+          -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe"
+          -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe"
+          -DCMAKE_CUDA_HOST_COMPILER=cl
+
+      # The whole default graph: the CLI (lumice_obj at v3 under clang-cl, the .cu TU under
+      # nvcc + cl.exe, linked by lld-link) and the Windows launcher (LumiceIsaLauncher, which
+      # every Windows x86_64 configure builds — here under clang-cl, which must accept it too).
+      - name: Build (compile + link only)
+        run: cmake --build build --parallel
+
+      # The one run this job makes. The output directory is the top-level CMakeLists.txt's
+      # CMAKE_RUNTIME_OUTPUT_DIRECTORY (anchored on the source dir, not on -B). Runs the
+      # legacy CPU backend: the CUDA-linked binary starts without a GPU (cudart is on PATH
+      # from the toolkit step, the device probe finds nothing and routes to CPU), which is
+      # the same thing windows-cuda-compile's test binaries already rely on.
+      - name: Assert the isa key reports x86-64-v3 under clang-cl
+        shell: pwsh
+        run: |
+          $out = & "build\Release\static\bin\Lumice.exe" --benchmark -f examples\bench_config.json 2>&1 | Out-String
+          if ($out -notmatch '"isa"\s*:\s*"x86-64-v3"') {
+            Write-Error "isa key did not report x86-64-v3 under clang-cl; output:`n$out"
+            exit 1
+          }
+          Write-Host "isa key reports x86-64-v3 (clang-cl, -march applied)."
 
   # Shared + tests + GUI compile-only: the one combination no other job builds.
   # The `build` job builds tests and the GUI but only statically; `e2e-slow` is the
@@ -899,7 +1058,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=ON
           -DBUILD_SHARED_LIBS=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -936,7 +1095,7 @@ jobs:
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install/static
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       - name: Build
         run: cmake --build build --parallel
@@ -1112,7 +1271,7 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DBUILD_SHARED_LIBS=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       - name: Build
         run: cmake --build build --parallel

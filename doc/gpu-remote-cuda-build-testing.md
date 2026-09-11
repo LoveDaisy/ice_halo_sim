@@ -36,8 +36,10 @@
   要么 `set -o pipefail`。
 - **arch 表**：本仓库默认 `CMAKE_CUDA_ARCHITECTURES` 以 `61-virtual` 为 PTX floor。
   ⚠️ **CUDA 13 已移除 `compute_61`**，用它构建会直接 `nvcc fatal`，与你改的东西无关。
-  参照机须装 CUDA 12.x。做吞吐 bench 时还要追加与卡匹配的 `-real` arch，否则跑的是
-  驱动 JIT 出来的 PTX 而非原生 SASS（详见 [`machines.md`](machines.md) 的「已知坑」）。
+  参照机须装 CUDA 12.x。默认表在 floor 之上按 toolkit 版本门控追加原生 SASS（12.9 上是
+  `sm_75/86/89/120`，两台参照机的 RTX 5090 已在其中）；只有卡的 sm 不在默认表里时，做吞吐
+  bench 才需要显式追加与卡匹配的 `-real` arch，否则跑的是驱动 JIT 出来的 PTX 而非原生 SASS
+  （详见 [`machines.md`](machines.md) 的「已知坑」）。
 
 ## 2. CUDA 参照机（Linux）
 

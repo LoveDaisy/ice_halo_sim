@@ -568,23 +568,26 @@ class TestAxisSlotTypeRequired(LumiceTestCase):
 class TestBenchmarkIsaField(LumiceTestCase):
     """`--benchmark`'s JSON must say which ISA tier the binary was compiled for.
 
-    Why the key exists at all: a Release build takes `-march=native` unless
-    `-DLUMICE_NATIVE_ARCH=OFF` is passed, local `scripts/build.sh` does not pass it,
-    every release and CI job does, and MSVC has no equivalent flag wired up. So a
-    throughput number recorded off a local build is not the shipped binary's number,
-    and a Windows-vs-other comparison of two local builds is ISA-asymmetric by
-    default. The `isa` key makes an already-recorded number answer that on its own.
+    Why the key exists at all: a Release build's ISA tier is `LUMICE_ISA_LEVEL`
+    (`baseline` | `x86-64-v3` | `x86-64-v4` | `native`); local `scripts/build.sh` takes
+    the `native` default, every CI job passes `baseline`, the Linux release builds
+    `baseline` and `x86-64-v4` side by side, the Windows release builds `baseline`
+    (MSVC cl.exe) and `x86-64-v3` (clang-cl) side by side, and real MSVC cl.exe has no
+    equivalent flag wired up. So a throughput number recorded off a local build is not
+    the shipped binary's number, and a Windows-vs-other comparison of two local builds
+    is ISA-asymmetric by default. The `isa` key makes an already-recorded number answer
+    that on its own.
 
     Why this test is not "run it and read the output": the cross-check below reads
     `CMakeCache.txt`, which CMake writes at configure time. That is a different
-    producer from the `LUMICE_NATIVE_ARCH_ACTIVE` macro → `#if` → JSON path being
+    producer from the `LUMICE_ISA_LEVEL_STR` macro → `#if` → JSON path being
     checked, so the two do not share a failure mode: if the generator expression
-    gating the macro were written wrong (inverted, or missing one of its two
+    resolving the macro were written wrong (inverted, or missing one of its two
     conjuncts), the cache would still hold what CMake actually consumed and this
     would go red.
     """
 
-    _ISA_VALUES = {"native", "baseline"}
+    _ISA_VALUES = {"native", "baseline", "x86-64-v3", "x86-64-v4"}
 
     def _run_benchmark(self):
         """Run `--benchmark` on the shared bench config with a ray budget small
@@ -655,14 +658,16 @@ class TestBenchmarkIsaField(LumiceTestCase):
     def test_isa_key_matches_the_configure_time_record(self):
         """Cross-check layer — the `isa` value against CMake's own configure record.
 
-        Stated assumption: the oracle below treats `compiler_id == "MSVC"` as
-        equivalent to CMake's `MSVC` boolean, which is what CMakeLists.txt actually
-        gates the macro on. Those two decouple under clang-cl (`MSVC` is true, but
-        the compiler id is "Clang"), which would make this oracle expect "native"
-        against a binary correctly reporting "baseline". No clang-cl build exists in
-        this repo's toolchain matrix today; if one is introduced, persist the `MSVC`
-        boolean itself as a second cache snapshot rather than inferring it from the
-        compiler id.
+        The oracle below keys on `compiler_id == "MSVC"`, and that is exactly the
+        right key even though CMake's `MSVC` boolean is also true for clang-cl: under
+        clang-cl `LUMICE_COMPILER_ID_SNAPSHOT` reads "Clang", and CMakeLists.txt
+        defines the macro for clang-cl too (`lumice_apply_isa_march()` runs in both the
+        GCC/Clang and the clang-cl branch; only real cl.exe never defines it). So a
+        clang-cl Release build at `x86-64-v3` is expected to report "x86-64-v3", which
+        is what the Windows release's second variant is measured to do. The one way
+        for this oracle to go wrong is the failure it exists to catch: gating the macro
+        on `if(MSVC)` alone, which would leave a clang-cl binary reporting "baseline"
+        while this test expects the tier.
         """
         cache_path = self._find_cmake_cache()
         if cache_path is None:
@@ -672,13 +677,13 @@ class TestBenchmarkIsaField(LumiceTestCase):
             )
         cache_text = cache_path.read_text()
 
-        native_arch = self._read_cache_entry(cache_text, "LUMICE_NATIVE_ARCH")
+        isa_level = self._read_cache_entry(cache_text, "LUMICE_ISA_LEVEL")
         build_type = self._read_cache_entry(cache_text, "CMAKE_BUILD_TYPE")
         compiler_id = self._read_cache_entry(cache_text, "LUMICE_COMPILER_ID_SNAPSHOT")
         missing = [
             name
             for name, value in (
-                ("LUMICE_NATIVE_ARCH", native_arch),
+                ("LUMICE_ISA_LEVEL", isa_level),
                 ("CMAKE_BUILD_TYPE", build_type),
                 ("LUMICE_COMPILER_ID_SNAPSHOT", compiler_id),
             )
@@ -690,10 +695,12 @@ class TestBenchmarkIsaField(LumiceTestCase):
             # than raising KeyError or inventing an expectation.
             self.skipTest(f"{cache_path} lacks {', '.join(missing)} — cross-check skipped")
 
-        native_on = native_arch.upper() in ("ON", "1", "TRUE", "YES", "Y")
+        # The tier name is reported only when its -march flag was actually applied:
+        # Release config on a non-MSVC compiler. Everything else (Debug, MinSizeRel,
+        # MSVC, or the baseline tier itself) compiles without a flag and must say so.
         expected = (
-            "native"
-            if (native_on and build_type == "Release" and compiler_id != "MSVC")
+            isa_level
+            if (build_type == "Release" and compiler_id != "MSVC")
             else "baseline"
         )
         for row in self._run_benchmark():
@@ -701,6 +708,6 @@ class TestBenchmarkIsaField(LumiceTestCase):
                 row["isa"],
                 expected,
                 f"isa={row['isa']!r} but {cache_path} records "
-                f"LUMICE_NATIVE_ARCH={native_arch}, CMAKE_BUILD_TYPE={build_type}, "
+                f"LUMICE_ISA_LEVEL={isa_level}, CMAKE_BUILD_TYPE={build_type}, "
                 f"LUMICE_COMPILER_ID_SNAPSHOT={compiler_id} (expected {expected!r})",
             )

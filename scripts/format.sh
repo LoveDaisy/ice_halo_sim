@@ -39,7 +39,7 @@ function format_dir() {
   echo "Directory ${working_dir} ..."
   pushd "`pwd`" >/dev/null
   cd "${working_dir}"
-  for f in $(find . | grep -E "[^/]*\.(cpp|cc|h|hpp|inl|mm|m|java)\$"); do
+  for f in $(find . | grep -E "[^/]*\.(c|cpp|cc|h|hpp|inl|mm|m|java)\$"); do
     format_file "$f"
   done
   popd >/dev/null

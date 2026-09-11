@@ -591,13 +591,17 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       // ISA tier this binary was actually compiled for, so a recorded [BENCHMARK] line
       // answers "which build was this measured on?" without anyone having to still have
       // the configure log. "native" means -march=native was compiled in (local default);
-      // "baseline" is what release and CI ship, and is the only tier comparable across
-      // platforms — MSVC has no equivalent flag, so a Windows-vs-other A/B taken on
-      // "native" numbers is not measuring what it looks like it is measuring. The macro
-      // is defined by CMakeLists.txt's LUMICE_NATIVE_ARCH_ACTIVE_COND, which gates the
-      // -march=native flag itself; see doc/performance-testing.md.
-#if defined(LUMICE_NATIVE_ARCH_ACTIVE)
-      result["isa"] = "native";
+      // "x86-64-v4" is the AVX-512 variant the Linux release ships beside the baseline;
+      // "x86-64-v3" is the AVX2 variant the Windows release ships beside it (clang-cl);
+      // "baseline" is what CI tests and every other release build ships, and is the only
+      // tier comparable across platforms — real MSVC cl.exe has no equivalent flag, so a
+      // Windows-vs-other A/B taken on "native" numbers is not measuring what it looks like
+      // it is measuring. The string is CMakeLists.txt's LUMICE_ISA_LEVEL_STR, resolved in
+      // lumice_apply_isa_march() by the same condition that gates the -march flag itself,
+      // so it reads "baseline" whenever no flag was applied (any non-Release config
+      // included); see doc/performance-testing.md. cl.exe never defines it.
+#if defined(LUMICE_ISA_LEVEL_STR)
+      result["isa"] = LUMICE_ISA_LEVEL_STR;
 #else
       result["isa"] = "baseline";
 #endif

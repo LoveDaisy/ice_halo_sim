@@ -130,9 +130,14 @@ section, so a "cut only" commit on `main` with the notes written some other time
 occur.
 
 The release produces platform-specific packages:
-- **Linux x64/ARM64**: `.tar.gz` with CLI executable (ARM64 excludes GUI due to runner GPU limitations)
+- **Linux x64**: `.tar.gz` with CLI and GUI executables, each shipped twice (`<name>.baseline`,
+  `<name>.x86-64-v4`) behind a CPUID launcher installed as `Lumice` / `LumiceGUI` — see
+  `doc/performance-testing.md`, "A local build is not the shipped binary"
+- **Linux ARM64**: `.tar.gz` with CLI executable (excludes GUI due to runner GPU limitations)
 - **macOS ARM64**: `.tar.gz` with CLI executable and `LumiceGUI.app` bundle
-- **Windows x64**: `.zip` with CLI and GUI executables (`.exe` with embedded icon)
+- **Windows x64**: `.zip` with CLI and GUI executables, each shipped twice (`<name>.baseline.exe`
+  built by MSVC cl.exe, `<name>.x86-64-v3.exe` built by clang-cl) behind a CPUID launcher installed
+  as `Lumice.exe` / `LumiceGUI.exe` — the same shape as Linux x64, see the same doc section
 
 The release page's body is that version's `CHANGELOG.md` section; GitHub's auto-generated pull-request list follows it as an appendix.
 

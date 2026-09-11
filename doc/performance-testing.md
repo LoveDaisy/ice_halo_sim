@@ -208,41 +208,82 @@ This one is not about *which* number `--benchmark` reports; it is about *which b
 it. It has already cost one cross-platform conclusion, which was written down and acted on
 before the cause was found.
 
-**Mechanism.** `option(LUMICE_NATIVE_ARCH ... ON)` (`CMakeLists.txt:43`) expands to
-`-march=native` for Release builds on GCC/Clang (`CMakeLists.txt:733`). Three facts about who
-passes it:
+**Mechanism.** `LUMICE_ISA_LEVEL` (`CMakeLists.txt:50`) is the one variable that says which ISA
+tier a Release build is compiled for, and it has four values:
 
-- **Local**: `scripts/build.sh` does not pass the option at all, so every local build takes the
-  `ON` default. That default is deliberate — a developer machine should build for itself.
-- **Shipped**: `.github/workflows/release.yml:135` and all seven configure steps in
-  `.github/workflows/ci.yml` pass `-DLUMICE_NATIVE_ARCH=OFF` explicitly. What ships, and what CI
-  measures, is the baseline ISA.
-- **MSVC**: the option is only read inside the `if(NOT MSVC)` branch, so a Windows/MSVC build has
-  no equivalent to turn on. It is *structurally* incapable of being on the local side of this gap.
+| `LUMICE_ISA_LEVEL` | flag on GCC/Clang/clang-cl Release | who builds it |
+|---|---|---|
+| `native` | `-march=native` | **local default** — `scripts/build.sh` passes nothing, so every local build takes it; a developer machine should build for itself |
+| `baseline` | none (x86-64-v1, the floor every x86_64 CPU runs) | every configure step in `.github/workflows/ci.yml`, and every release package except the two second variants below |
+| `x86-64-v3` | `-march=x86-64-v3` (AVX2+FMA) | the Windows x64 release's second variant, compiled by **clang-cl**: `release.yml` builds that row twice (baseline on MSVC cl.exe, v3 on clang-cl) and packages both |
+| `x86-64-v4` | `-march=x86-64-v4` (AVX-512) | the Linux x64 release's second variant: `release.yml` builds that row twice and packages both |
+
+The flag is applied on `lumice_obj` through one shared CMake function, `lumice_apply_isa_march()`,
+so the CLI and the GUI are the same tier. Real MSVC cl.exe reads none of this — the function is
+called only from the GCC/Clang branch and from the clang-cl branch — so a Windows build made with
+cl.exe (the local `win_build.cmd` default, and CI's every Windows job) has no equivalent to turn on
+and is *structurally* always the baseline. **clang-cl is the exception**, and the reason the
+Windows release has a second variant at all: CMake reports `MSVC=TRUE` for it (it drives the MSVC
+ABI and `/`-style flags), but it is a Clang frontend that honors `-march`, which `CMakeLists.txt`
+detects once as `LUMICE_CLANG_CL` and routes into the same function. Measured on the Windows
+reference box (Zen 5, clang-cl 20.1.0, CUDA-off arm), clang-cl at `x86-64-v3` is **2.26× (W=1) /
+2.28× (W=4)** real MSVC's release build, `x86-64-v4` and `-mprefer-vector-width=512` add nothing on
+top (2.25×/2.29×), and clang-cl with no `-march` is 1.01× — the gain is the flag, not the compiler,
+and LLVM takes all of it at AVX2 where GCC (below) takes none of it before AVX-512. That is why the
+two platforms' second variants are different tiers.
+
+**What the Windows release does with it.** The `windows-x64` zip has the same shape as the Linux
+tarball below: `Lumice.baseline.exe` / `Lumice.x86-64-v3.exe`, `LumiceGUI.baseline.exe` /
+`LumiceGUI.x86-64-v3.exe`, and the launcher (`src/launcher/isa_launcher_win.c`) installed as
+`Lumice.exe` / `LumiceGUI.exe`. It reads CPUID for the whole x86-64-v3 feature level plus XGETBV
+(the OS must save YMM state — the launcher checks OSXSAVE before it executes XGETBV, which is
+`#UD` otherwise), starts the matching sidecar with `CreateProcess`, waits, and returns its exit
+code (Windows has no `exec`; the CRT's `_execv` neither preserves the child's exit code nor quotes
+arguments, so the launcher does both itself). `--isa=baseline` / `--isa=x86-64-v3` forces one, as on
+Linux. On the release-equivalent CUDA-on build the v3 variant measures **2.23×** the baseline at ms1 W=1
+(1.701 vs 0.761 M rays/s, CoV 0.72% / 0.33%, five interleaved repetitions through the launcher's
+`--isa=` override; Windows reference box, Zen 5, 2026-09-11) — within 1.3% of the CUDA-off probe
+figure above, which is a different arm and must not be quoted for it.
+
+**What the Linux release does with it.** The `linux-x64` tarball carries every entry point
+twice — `Lumice.baseline` / `Lumice.x86-64-v4`, `LumiceGUI.baseline` / `LumiceGUI.x86-64-v4` —
+and installs a small launcher (`src/launcher/isa_launcher.c`) under the plain names `Lumice` /
+`LumiceGUI`. The launcher reads CPUID (`__builtin_cpu_supports("x86-64-v4")`) and `execv`s the
+matching sidecar; a `--isa=baseline` / `--isa=x86-64-v4` token anywhere on the command line
+forces one and is consumed before the real binary sees its arguments. Nothing else changes for
+the user: one download, the same two names. Measured on this codebase (Zen 5 / GCC 13.3), the v4
+variant is 1.9–2.3× the baseline at 1–4 workers and the whole gain is AVX-512 — `x86-64-v2` and
+`-v3` measure 1.00× — which is why there are exactly two variants and not a ladder.
 
 **Consequence.** A throughput number taken from a local non-MSVC build is systematically
-optimistic relative to the binary that ships (measured on this codebase, Zen 5 / GCC 13.3:
-1.9–2.3×). Worse, a Windows-vs-anything A/B run on two default local builds compares a
-native-ISA binary against a baseline-ISA one, and nothing anywhere warns you: both builds
-succeed, both print plausible numbers, and the ratio between them is partly an artifact of a
-compiler flag rather than of whatever you were trying to measure.
+optimistic relative to the baseline binary that ships (the same 1.9–2.3×). Worse, a
+Windows-vs-anything A/B run on two default local builds compares a native-ISA binary against a
+baseline-ISA one, and nothing anywhere warns you: both builds succeed, both print plausible
+numbers, and the ratio between them is partly an artifact of a compiler flag rather than of
+whatever you were trying to measure.
 
 **Rules.**
 
 1. **Any number that leaves your machine — a cross-platform comparison, a figure quoted in an
-   issue, a doc, or a review — must be taken with `-DLUMICE_NATIVE_ARCH=OFF`.** That is the
-   configuration release and CI use, and the only one comparable across platforms.
-2. **Day-to-day local iteration can keep the `ON` default.** This is not a rule against
+   issue, a doc, or a review — must be taken with `-DLUMICE_ISA_LEVEL=baseline`.** That is the
+   configuration CI uses, and the only one comparable across platforms. A number taken at
+   `x86-64-v4` is a legitimate number about the Linux v4 variant, and must say so; the same for
+   `x86-64-v3` and the Windows clang-cl variant, which additionally must say it was clang-cl (a
+   cl.exe build cannot produce that tier, so the key alone already implies the compiler).
+2. **Day-to-day local iteration can keep the `native` default.** This is not a rule against
    `-march=native`; it is a rule about where the resulting number is allowed to travel. A
    before/after A/B of your own change, taken on the same machine with the same setting on both
    arms, is unaffected.
 3. **Read the `isa` key rather than trying to remember.** Every `[BENCHMARK]` line carries
-   `"isa": "native"` or `"isa": "baseline"` (`src/main.cpp`, `RunBenchmarkPass`, gated by the
-   `LUMICE_NATIVE_ARCH_ACTIVE` macro that `CMakeLists.txt`'s `LUMICE_NATIVE_ARCH_ACTIVE_COND`
-   defines from the same condition as the `-march=native` flag itself). An old log therefore
-   answers "which build was this?" on its own, with no configure log needed. `baseline` is the
-   comparable tier; two rows may only be compared with each other when their `isa` values match.
-4. **Watch the configure line.** Every `cmake` configure prints one `-- LUMICE_NATIVE_ARCH=...`
+   `"isa": "native"`, `"isa": "baseline"`, `"isa": "x86-64-v3"` or `"isa": "x86-64-v4"`
+   (`src/main.cpp`, `RunBenchmarkPass`, from the `LUMICE_ISA_LEVEL_STR` macro that
+   `lumice_apply_isa_march()` resolves with the same condition that gates the `-march` flag
+   itself, so the key reads `baseline` whenever no flag was actually applied — a Debug build
+   included, and every cl.exe build). An old
+   log therefore answers "which build was this?" on its own, with no configure log needed.
+   `baseline` is the comparable tier; two rows may only be compared with each other when their
+   `isa` values match.
+4. **Watch the configure line.** Every `cmake` configure prints one `-- LUMICE_ISA_LEVEL=...`
    status line saying which tier this build tree is on.
 
 

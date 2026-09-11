@@ -40,7 +40,40 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
 set(CMAKE_C_STANDARD 11)              # C11...
 
-option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" ON)
+# ISA tier a Release build is compiled for (compilers that honor -march: GCC, Clang and
+# clang-cl; real MSVC cl.exe has no equivalent flag wired up and is always the baseline). One
+# four-valued variable, not a boolean plus a second knob: the Linux and Windows releases each
+# ship TWO builds of this tree behind a CPUID launcher, and "which tier is this?" must have
+# exactly one answer per configure.
+#   baseline   no -march flag: the x86-64-v1 floor every x86_64 CPU runs; what CI tests
+#   x86-64-v3  -march=x86-64-v3 (AVX2+FMA): the second Windows release variant (clang-cl —
+#              LLVM takes its whole ~2.26x at v3, where GCC takes none of it; see
+#              doc/performance-testing.md)
+#   x86-64-v4  -march=x86-64-v4 (AVX-512): the second Linux release variant
+#   native     -march=native: local default, a developer machine builds for itself
+set(LUMICE_ISA_LEVEL "native" CACHE STRING
+    "ISA tier for Release builds: baseline | x86-64-v3 | x86-64-v4 | native (GCC/Clang/clang-cl only)")
+set_property(CACHE LUMICE_ISA_LEVEL PROPERTY STRINGS baseline x86-64-v3 x86-64-v4 native)
+if(NOT LUMICE_ISA_LEVEL MATCHES "^(baseline|x86-64-v3|x86-64-v4|native)$")
+  message(FATAL_ERROR "LUMICE_ISA_LEVEL=\"${LUMICE_ISA_LEVEL}\" is not one of: baseline, x86-64-v3, x86-64-v4, native")
+endif()
+if(LUMICE_ISA_LEVEL MATCHES "^x86-64-v[34]$" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  # Fail here, in words, rather than a few hundred lines into the build with a compiler
+  # error about an unknown -march value on an arm64 host.
+  message(FATAL_ERROR "LUMICE_ISA_LEVEL=${LUMICE_ISA_LEVEL} is an x86_64 tier; CMAKE_SYSTEM_PROCESSOR is "
+                      "\"${CMAKE_SYSTEM_PROCESSOR}\"")
+endif()
+
+# clang-cl: CMake reports MSVC=TRUE for it (it drives the MSVC ABI, CRT and /-style flags), yet
+# it is a Clang frontend that honors -march. That one fact is why the Windows release's
+# x86-64-v3 variant exists at all (the ISA-tier STATUS message and lumice_apply_isa_march()
+# below both branch on it), so it is computed once, here, and nowhere else. Not a cache
+# entry: it is derived from the chosen compiler every configure and must never go stale.
+set(LUMICE_CLANG_CL FALSE)
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set(LUMICE_CLANG_CL TRUE)
+endif()
 
 # CUDA backend (off by default; turn on for dev49 docker CUDA 11.6+ environments).
 # scrum-cuda-backend-mvp subtask 3: enables CudaTraceBackend + lumice_trace.cu.
@@ -60,26 +93,39 @@ if(MSVC)
 endif()
 
 # Make the local-build-vs-shipped-binary ISA gap visible at configure time. Local
-# scripts/build.sh does not pass LUMICE_NATIVE_ARCH and therefore takes the ON default,
-# while release.yml and every ci.yml job pass -DLUMICE_NATIVE_ARCH=OFF explicitly. That
-# default is deliberate (a developer machine should build for itself and run fast); what
-# it must not do is stay invisible at the point where someone reads a throughput number
-# off this build and compares it with another platform. See doc/performance-testing.md,
-# section "Local builds are not the shipped binary".
+# scripts/build.sh does not pass LUMICE_ISA_LEVEL and therefore takes the "native" default,
+# while every ci.yml job passes -DLUMICE_ISA_LEVEL=baseline explicitly and release.yml builds
+# the Linux x64 package once at baseline and once at x86-64-v4. That default is deliberate
+# (a developer machine should build for itself and run fast); what it must not do is stay
+# invisible at the point where someone reads a throughput number off this build and
+# compares it with another platform. See doc/performance-testing.md, section "Local builds
+# are not the shipped binary".
 # Deliberately conditional wording ("would apply"): this message runs once at configure
-# time, whereas the -march=native gate below adds $<CONFIG:Release> and is only resolved
+# time, whereas the -march gate below adds $<CONFIG:Release> and is only resolved
 # per-configuration at generate/build time, so an assertive phrasing would be wrong for a
-# Debug build with the option ON.
-if(MSVC)
-  message(STATUS "LUMICE_NATIVE_ARCH: not applicable to MSVC (no equivalent flag is wired "
-                 "up); this build already matches the release ISA baseline.")
-elseif(LUMICE_NATIVE_ARCH)
-  message(STATUS "LUMICE_NATIVE_ARCH=ON (local default): a Release build would apply "
-                 "-march=native, so its binary is NOT the one release ships. Fine for local "
+# Debug build with a non-baseline tier selected.
+if(MSVC AND NOT LUMICE_CLANG_CL)
+  message(STATUS "LUMICE_ISA_LEVEL: not applicable to MSVC cl.exe (no equivalent flag is "
+                 "wired up); this build is the release ISA baseline.")
+elseif(LUMICE_ISA_LEVEL STREQUAL "native")
+  message(STATUS "LUMICE_ISA_LEVEL=native (local default): a Release build would apply "
+                 "-march=native, so its binary is NOT one release ships. Fine for local "
                  "iteration; take any cross-platform or externally quoted throughput number "
-                 "with -DLUMICE_NATIVE_ARCH=OFF instead. See doc/performance-testing.md.")
+                 "with -DLUMICE_ISA_LEVEL=baseline instead. See doc/performance-testing.md.")
+elseif(LUMICE_ISA_LEVEL STREQUAL "x86-64-v3")
+  message(STATUS "LUMICE_ISA_LEVEL=x86-64-v3: a Release build would apply -march=x86-64-v3 "
+                 "(AVX2+FMA); this is the Windows release's second variant (clang-cl) and "
+                 "runs only on CPUs the ISA launcher selects it for.")
+elseif(LUMICE_ISA_LEVEL STREQUAL "x86-64-v4")
+  message(STATUS "LUMICE_ISA_LEVEL=x86-64-v4: a Release build would apply -march=x86-64-v4 "
+                 "(AVX-512); this is the Linux release's second variant and runs only on "
+                 "CPUs the ISA launcher selects it for.")
 else()
-  message(STATUS "LUMICE_NATIVE_ARCH=OFF: this build matches the release ISA baseline.")
+  message(STATUS "LUMICE_ISA_LEVEL=baseline: this build matches the release ISA baseline.")
+endif()
+if(LUMICE_CLANG_CL)
+  message(STATUS "clang-cl detected (MSVC=TRUE, Clang frontend): the -march tier above applies "
+                 "through lumice_apply_isa_march(); the MSVC-only flag set does not.")
 endif()
 
 # Persist the compiler id into CMakeCache.txt for test tooling that has to answer "was
@@ -584,8 +630,9 @@ endif()
 # - PTX floor = compute_61 (Pascal, 2016+); driver JITs to native sm on any
 #   GPU >= sm_61, including future cards.
 # - Multi-arch fatbin (scrum-310.2): on top of the compute_61 PTX floor, emit
-#   native SASS for the common modern cards so they skip first-launch JIT and
-#   the dev49 RTX 4060 (sm_89) bench runs native (not PTX-JIT'd) for fidelity.
+#   native SASS for the common modern cards (Turing through Blackwell, i.e.
+#   RTX 20/30/40/50) so they skip first-launch JIT and the CUDA reference box
+#   bench runs native (not PTX-JIT'd) for fidelity.
 # - Mac/Windows host builds without nvcc keep BUILD_GUI/perf paths intact when
 #   LUMICE_CUDA_ENABLED is OFF (no enable_language(CUDA) at all).
 if(LUMICE_CUDA_ENABLED)
@@ -603,10 +650,18 @@ if(LUMICE_CUDA_ENABLED)
     set(_lumice_cuda_archs "61-virtual")
     # Opportunistic native SASS for common cards: skips first-launch JIT and
     # gives bench fidelity. Each real arch is gated on the toolkit version that
-    # introduced that sm, so older toolchains (dev49 docker 11.6, win-builder
-    # 11.7) still build — they just emit fewer `-real` archs and fall back to
-    # PTX JIT. Distribution/CI builds use a modern toolkit (CI: 12.6) and get
-    # the full fatbin. The PTX floor guarantees universal compat regardless.
+    # introduced that sm, so older toolchains (e.g. an 11.6 / 11.7 docker
+    # image) still build — they just emit fewer `-real` archs and fall back to
+    # PTX JIT. Distribution/CI builds use a modern toolkit (CI: 12.9, the last
+    # 12.x minor) and get the full fatbin. The PTX floor guarantees universal
+    # compat regardless.
+    # Toolkit >= 12.8 prints a deprecation warning for compute_61 (the PTX
+    # floor). That is the expected, accepted cost of keeping the Pascal floor
+    # — not a defect: do not silence it with -Wno-deprecated-gpu-targets and
+    # do not drop 61-virtual over it. It is not promoted to an error by any
+    # flag in this tree (-Werror=switch is CXX-only; there is no /WX).
+    # CUDA 13 removes compute_61 outright, which is why the CUDA major stays
+    # pinned at 12 in ci.yml / release.yml.
     if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "10.0")
       list(APPEND _lumice_cuda_archs "75-real")  # Turing (RTX 20 / GTX 16)
     endif()
@@ -614,7 +669,10 @@ if(LUMICE_CUDA_ENABLED)
       list(APPEND _lumice_cuda_archs "86-real")  # Ampere (RTX 30)
     endif()
     if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-      list(APPEND _lumice_cuda_archs "89-real")  # Ada Lovelace (RTX 40, dev49)
+      list(APPEND _lumice_cuda_archs "89-real")  # Ada Lovelace (RTX 40)
+    endif()
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
+      list(APPEND _lumice_cuda_archs "120-real")  # Blackwell (RTX 50)
     endif()
     set(CMAKE_CUDA_ARCHITECTURES "${_lumice_cuda_archs}" CACHE STRING "CUDA archs")
   endif()
@@ -721,6 +779,40 @@ if(LUMICE_CUDA_ENABLED)
   endif()
 endif()
 
+# Single source of truth for "this compile actually applies a -march flag", shared by the
+# GCC/Clang path (the if(NOT MSVC) block below) and the clang-cl path (the if(LUMICE_CLANG_CL)
+# block after it). One function rather than two inline copies: every future ISA-tier change
+# would otherwise be a two-site edit, and the site that gets missed is the one whose `isa`
+# key then quietly reports the wrong tier on one platform — the same failure shape as the
+# probe that found clang-cl at all, where every arm reported "baseline" because the macro was
+# gated on if(MSVC). Both the compile-option gate and the LUMICE_ISA_LEVEL_STR macro that
+# reports the tier in --benchmark output reference the one _active_cond expression, so the
+# flag and the number's provenance cannot independently drift out of sync. (Its inner
+# $<CONFIG:Release> is redundant with the outer $<$<CONFIG:Release>:...> wrapper; that
+# redundancy is the price of the two gates being literally the same expression.)
+# Scoped to `target`'s own compile: the -march flag is PRIVATE (each object file is compiled
+# for one tier), the macro is PUBLIC (see the comment at that call).
+function(lumice_apply_isa_march target)
+  if(LUMICE_ISA_LEVEL STREQUAL "baseline")
+    set(_march_flag "")
+  else()
+    set(_march_flag "-march=${LUMICE_ISA_LEVEL}")
+  endif()
+  set(_active_cond "$<AND:$<CONFIG:Release>,$<BOOL:${_march_flag}>>")
+  target_compile_options(${target} PRIVATE
+    $<$<CONFIG:Release>:$<${_active_cond}:${_march_flag}>>)
+  # PUBLIC, not PRIVATE: src/main.cpp is not part of lumice_obj — it reaches this macro
+  # through Lumice --PRIVATE--> lumice --PUBLIC--> lumice_obj, the same two-hop usage
+  # requirement chain LUMICE_CUDA_ENABLED already relies on above. The value is the tier
+  # name when the -march flag above is actually applied and "baseline" otherwise (Debug,
+  # MinSizeRel, or the baseline tier itself), so what the binary reports is what it was
+  # compiled with, never what was merely asked for. No counterpart for real MSVC cl.exe:
+  # neither block below runs there, the macro is never defined, and main.cpp's #else falls
+  # back to "baseline".
+  target_compile_definitions(${target} PUBLIC
+    "LUMICE_ISA_LEVEL_STR=\"$<IF:${_active_cond},${LUMICE_ISA_LEVEL},baseline>\"")
+endfunction()
+
 if(NOT MSVC)
   # -Werror=switch is a GCC/Clang host flag; nvcc parses -Werror itself (does
   # NOT forward it) and rejects "switch" as an invalid value. Scope it to CXX so
@@ -734,25 +826,24 @@ if(NOT MSVC)
   # Debug 构建不设置此标志，所有符号均可见，便于调试。
   # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
   # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
-  # Single source of truth for "this compile actually applies -march=native". Both the
-  # compile-option gate below and the LUMICE_NATIVE_ARCH_ACTIVE macro that reports the ISA
-  # tier in --benchmark output reference this one variable, so the flag and the number's
-  # provenance cannot independently drift out of sync. (Its inner $<CONFIG:Release> is
-  # redundant with the outer $<$<CONFIG:Release>:...> wrapper below; that redundancy is the
-  # price of the two gates being literally the same expression.)
-  set(LUMICE_NATIVE_ARCH_ACTIVE_COND "$<AND:$<CONFIG:Release>,$<BOOL:${LUMICE_NATIVE_ARCH}>>")
-
   target_compile_options(lumice_obj PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
-    $<$<CONFIG:Release>:$<${LUMICE_NATIVE_ARCH_ACTIVE_COND}:-march=native> -ffunction-sections -fdata-sections -fvisibility=hidden>
+    $<$<CONFIG:Release>:-ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
+  lumice_apply_isa_march(lumice_obj)
+endif()
 
-  # PUBLIC, not PRIVATE: src/main.cpp is not part of lumice_obj — it reaches this macro
-  # through Lumice --PRIVATE--> lumice --PUBLIC--> lumice_obj, the same two-hop usage
-  # requirement chain LUMICE_CUDA_ENABLED already relies on above. No MSVC counterpart is
-  # needed: the macro should never be defined there, and #if defined() gives that for free.
-  target_compile_definitions(lumice_obj PUBLIC
-    $<${LUMICE_NATIVE_ARCH_ACTIVE_COND}:LUMICE_NATIVE_ARCH_ACTIVE=1>)
+if(LUMICE_CLANG_CL)
+  # clang-cl reports MSVC=TRUE but IS a Clang frontend that honors -march: measured on the
+  # Windows reference box, -march=x86-64-v3 is ~2.26x real MSVC's release build at W=1, where
+  # cl.exe's own /arch flags move nothing (doc/performance-testing.md). Deliberately NOT folded
+  # into the if(NOT MSVC) block above: that block also turns on -Wall/-Werror=switch,
+  # SPDLOG_ACTIVE_LEVEL=TRACE and -fvisibility=hidden, none of which the Windows release needs
+  # or has been validated under clang-cl. The march-flag mapping itself is the shared
+  # lumice_apply_isa_march() above, not a second copy here. Nothing else: clang-cl otherwise
+  # takes the MSVC platform defaults (/EHsc, /GR, the static CRT chosen in the MSVC block),
+  # which is what makes it a drop-in for the .cu host side that still goes through cl.exe.
+  lumice_apply_isa_march(lumice_obj)
 endif()
 
 # Library target — static or shared per BUILD_SHARED_LIBS; reuses lumice_obj objects.
