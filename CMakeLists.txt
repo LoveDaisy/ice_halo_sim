@@ -40,7 +40,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)   #...is required...
 set(CMAKE_CXX_EXTENSIONS OFF)         #...without compiler extensions like gnu++11
 set(CMAKE_C_STANDARD 11)              # C11...
 
-option(LUMICE_NATIVE_ARCH "Enable -march=native for release builds (GCC/Clang)" ON)
+# ISA tier a Release build is compiled for (GCC/Clang only; MSVC has no equivalent flag and
+# is always the baseline). One three-valued variable, not a boolean plus a second knob: the
+# Linux release ships TWO builds of this tree (baseline + x86-64-v4) behind a CPUID launcher,
+# and "which tier is this?" must have exactly one answer per configure.
+#   baseline   no -march flag: the x86-64-v1 floor every x86_64 CPU runs; what CI tests
+#   x86-64-v4  -march=x86-64-v4 (AVX-512): the second Linux release variant
+#   native     -march=native: local default, a developer machine builds for itself
+set(LUMICE_ISA_LEVEL "native" CACHE STRING
+    "ISA tier for Release builds: baseline | x86-64-v4 | native (GCC/Clang only)")
+set_property(CACHE LUMICE_ISA_LEVEL PROPERTY STRINGS baseline x86-64-v4 native)
+if(NOT LUMICE_ISA_LEVEL MATCHES "^(baseline|x86-64-v4|native)$")
+  message(FATAL_ERROR "LUMICE_ISA_LEVEL=\"${LUMICE_ISA_LEVEL}\" is not one of: baseline, x86-64-v4, native")
+endif()
+if(LUMICE_ISA_LEVEL STREQUAL "x86-64-v4" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  # Fail here, in words, rather than a few hundred lines into the build with a compiler
+  # error about an unknown -march value on an arm64 host.
+  message(FATAL_ERROR "LUMICE_ISA_LEVEL=x86-64-v4 is an x86_64 tier; CMAKE_SYSTEM_PROCESSOR is "
+                      "\"${CMAKE_SYSTEM_PROCESSOR}\"")
+endif()
 
 # CUDA backend (off by default; turn on for dev49 docker CUDA 11.6+ environments).
 # scrum-cuda-backend-mvp subtask 3: enables CudaTraceBackend + lumice_trace.cu.
@@ -60,26 +78,31 @@ if(MSVC)
 endif()
 
 # Make the local-build-vs-shipped-binary ISA gap visible at configure time. Local
-# scripts/build.sh does not pass LUMICE_NATIVE_ARCH and therefore takes the ON default,
-# while release.yml and every ci.yml job pass -DLUMICE_NATIVE_ARCH=OFF explicitly. That
-# default is deliberate (a developer machine should build for itself and run fast); what
-# it must not do is stay invisible at the point where someone reads a throughput number
-# off this build and compares it with another platform. See doc/performance-testing.md,
-# section "Local builds are not the shipped binary".
+# scripts/build.sh does not pass LUMICE_ISA_LEVEL and therefore takes the "native" default,
+# while every ci.yml job passes -DLUMICE_ISA_LEVEL=baseline explicitly and release.yml builds
+# the Linux x64 package once at baseline and once at x86-64-v4. That default is deliberate
+# (a developer machine should build for itself and run fast); what it must not do is stay
+# invisible at the point where someone reads a throughput number off this build and
+# compares it with another platform. See doc/performance-testing.md, section "Local builds
+# are not the shipped binary".
 # Deliberately conditional wording ("would apply"): this message runs once at configure
-# time, whereas the -march=native gate below adds $<CONFIG:Release> and is only resolved
+# time, whereas the -march gate below adds $<CONFIG:Release> and is only resolved
 # per-configuration at generate/build time, so an assertive phrasing would be wrong for a
-# Debug build with the option ON.
+# Debug build with a non-baseline tier selected.
 if(MSVC)
-  message(STATUS "LUMICE_NATIVE_ARCH: not applicable to MSVC (no equivalent flag is wired "
-                 "up); this build already matches the release ISA baseline.")
-elseif(LUMICE_NATIVE_ARCH)
-  message(STATUS "LUMICE_NATIVE_ARCH=ON (local default): a Release build would apply "
-                 "-march=native, so its binary is NOT the one release ships. Fine for local "
+  message(STATUS "LUMICE_ISA_LEVEL: not applicable to MSVC (no equivalent flag is wired "
+                 "up); this build is the release ISA baseline.")
+elseif(LUMICE_ISA_LEVEL STREQUAL "native")
+  message(STATUS "LUMICE_ISA_LEVEL=native (local default): a Release build would apply "
+                 "-march=native, so its binary is NOT one release ships. Fine for local "
                  "iteration; take any cross-platform or externally quoted throughput number "
-                 "with -DLUMICE_NATIVE_ARCH=OFF instead. See doc/performance-testing.md.")
+                 "with -DLUMICE_ISA_LEVEL=baseline instead. See doc/performance-testing.md.")
+elseif(LUMICE_ISA_LEVEL STREQUAL "x86-64-v4")
+  message(STATUS "LUMICE_ISA_LEVEL=x86-64-v4: a Release build would apply -march=x86-64-v4 "
+                 "(AVX-512); this is the Linux release's second variant and runs only on "
+                 "CPUs the ISA launcher selects it for.")
 else()
-  message(STATUS "LUMICE_NATIVE_ARCH=OFF: this build matches the release ISA baseline.")
+  message(STATUS "LUMICE_ISA_LEVEL=baseline: this build matches the release ISA baseline.")
 endif()
 
 # Persist the compiler id into CMakeCache.txt for test tooling that has to answer "was
@@ -746,25 +769,33 @@ if(NOT MSVC)
   # Debug 构建不设置此标志，所有符号均可见，便于调试。
   # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
   # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
-  # Single source of truth for "this compile actually applies -march=native". Both the
-  # compile-option gate below and the LUMICE_NATIVE_ARCH_ACTIVE macro that reports the ISA
-  # tier in --benchmark output reference this one variable, so the flag and the number's
+  # Single source of truth for "this compile actually applies a -march flag". Both the
+  # compile-option gate below and the LUMICE_ISA_LEVEL_STR macro that reports the ISA tier
+  # in --benchmark output reference this one condition, so the flag and the number's
   # provenance cannot independently drift out of sync. (Its inner $<CONFIG:Release> is
   # redundant with the outer $<$<CONFIG:Release>:...> wrapper below; that redundancy is the
   # price of the two gates being literally the same expression.)
-  set(LUMICE_NATIVE_ARCH_ACTIVE_COND "$<AND:$<CONFIG:Release>,$<BOOL:${LUMICE_NATIVE_ARCH}>>")
+  if(LUMICE_ISA_LEVEL STREQUAL "baseline")
+    set(LUMICE_ISA_MARCH_FLAG "")
+  else()
+    set(LUMICE_ISA_MARCH_FLAG "-march=${LUMICE_ISA_LEVEL}")
+  endif()
+  set(LUMICE_ISA_LEVEL_ACTIVE_COND "$<AND:$<CONFIG:Release>,$<BOOL:${LUMICE_ISA_MARCH_FLAG}>>")
 
   target_compile_options(lumice_obj PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
-    $<$<CONFIG:Release>:$<${LUMICE_NATIVE_ARCH_ACTIVE_COND}:-march=native> -ffunction-sections -fdata-sections -fvisibility=hidden>
+    $<$<CONFIG:Release>:$<${LUMICE_ISA_LEVEL_ACTIVE_COND}:${LUMICE_ISA_MARCH_FLAG}> -ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
 
   # PUBLIC, not PRIVATE: src/main.cpp is not part of lumice_obj — it reaches this macro
   # through Lumice --PRIVATE--> lumice --PUBLIC--> lumice_obj, the same two-hop usage
-  # requirement chain LUMICE_CUDA_ENABLED already relies on above. No MSVC counterpart is
-  # needed: the macro should never be defined there, and #if defined() gives that for free.
+  # requirement chain LUMICE_CUDA_ENABLED already relies on above. The value is the tier
+  # name when the -march flag above is actually applied and "baseline" otherwise (Debug,
+  # MinSizeRel, or the baseline tier itself), so what the binary reports is what it was
+  # compiled with, never what was merely asked for. No MSVC counterpart is needed: the macro
+  # is never defined there, and main.cpp's #else falls back to "baseline".
   target_compile_definitions(lumice_obj PUBLIC
-    $<${LUMICE_NATIVE_ARCH_ACTIVE_COND}:LUMICE_NATIVE_ARCH_ACTIVE=1>)
+    "LUMICE_ISA_LEVEL_STR=\"$<IF:${LUMICE_ISA_LEVEL_ACTIVE_COND},${LUMICE_ISA_LEVEL},baseline>\"")
 endif()
 
 # Library target — static or shared per BUILD_SHARED_LIBS; reuses lumice_obj objects.

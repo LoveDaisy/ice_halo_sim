@@ -208,41 +208,55 @@ This one is not about *which* number `--benchmark` reports; it is about *which b
 it. It has already cost one cross-platform conclusion, which was written down and acted on
 before the cause was found.
 
-**Mechanism.** `option(LUMICE_NATIVE_ARCH ... ON)` (`CMakeLists.txt:43`) expands to
-`-march=native` for Release builds on GCC/Clang (`CMakeLists.txt:733`). Three facts about who
-passes it:
+**Mechanism.** `LUMICE_ISA_LEVEL` (`CMakeLists.txt:50`) is the one variable that says which ISA
+tier a Release build is compiled for, and it has three values:
 
-- **Local**: `scripts/build.sh` does not pass the option at all, so every local build takes the
-  `ON` default. That default is deliberate — a developer machine should build for itself.
-- **Shipped**: `.github/workflows/release.yml:135` and all seven configure steps in
-  `.github/workflows/ci.yml` pass `-DLUMICE_NATIVE_ARCH=OFF` explicitly. What ships, and what CI
-  measures, is the baseline ISA.
-- **MSVC**: the option is only read inside the `if(NOT MSVC)` branch, so a Windows/MSVC build has
-  no equivalent to turn on. It is *structurally* incapable of being on the local side of this gap.
+| `LUMICE_ISA_LEVEL` | flag on GCC/Clang Release | who builds it |
+|---|---|---|
+| `native` | `-march=native` | **local default** — `scripts/build.sh` passes nothing, so every local build takes it; a developer machine should build for itself |
+| `baseline` | none (x86-64-v1, the floor every x86_64 CPU runs) | every configure step in `.github/workflows/ci.yml`, and every release package except the Linux x64 v4 variant below |
+| `x86-64-v4` | `-march=x86-64-v4` (AVX-512) | the Linux x64 release's second variant: `release.yml` builds that row twice and packages both |
+
+The flag is applied on `lumice_obj` (`CMakeLists.txt:783`), so the CLI and the GUI are the same
+tier. MSVC reads none of this — the variable is only consumed inside the `if(NOT MSVC)` branch,
+so a Windows/MSVC build has no equivalent to turn on and is *structurally* always the baseline.
+
+**What the Linux release does with it.** The `linux-x64` tarball carries every entry point
+twice — `Lumice.baseline` / `Lumice.x86-64-v4`, `LumiceGUI.baseline` / `LumiceGUI.x86-64-v4` —
+and installs a small launcher (`src/launcher/isa_launcher.c`) under the plain names `Lumice` /
+`LumiceGUI`. The launcher reads CPUID (`__builtin_cpu_supports("x86-64-v4")`) and `execv`s the
+matching sidecar; a `--isa=baseline` / `--isa=x86-64-v4` token anywhere on the command line
+forces one and is consumed before the real binary sees its arguments. Nothing else changes for
+the user: one download, the same two names. Measured on this codebase (Zen 5 / GCC 13.3), the v4
+variant is 1.9–2.3× the baseline at 1–4 workers and the whole gain is AVX-512 — `x86-64-v2` and
+`-v3` measure 1.00× — which is why there are exactly two variants and not a ladder.
 
 **Consequence.** A throughput number taken from a local non-MSVC build is systematically
-optimistic relative to the binary that ships (measured on this codebase, Zen 5 / GCC 13.3:
-1.9–2.3×). Worse, a Windows-vs-anything A/B run on two default local builds compares a
-native-ISA binary against a baseline-ISA one, and nothing anywhere warns you: both builds
-succeed, both print plausible numbers, and the ratio between them is partly an artifact of a
-compiler flag rather than of whatever you were trying to measure.
+optimistic relative to the baseline binary that ships (the same 1.9–2.3×). Worse, a
+Windows-vs-anything A/B run on two default local builds compares a native-ISA binary against a
+baseline-ISA one, and nothing anywhere warns you: both builds succeed, both print plausible
+numbers, and the ratio between them is partly an artifact of a compiler flag rather than of
+whatever you were trying to measure.
 
 **Rules.**
 
 1. **Any number that leaves your machine — a cross-platform comparison, a figure quoted in an
-   issue, a doc, or a review — must be taken with `-DLUMICE_NATIVE_ARCH=OFF`.** That is the
-   configuration release and CI use, and the only one comparable across platforms.
-2. **Day-to-day local iteration can keep the `ON` default.** This is not a rule against
+   issue, a doc, or a review — must be taken with `-DLUMICE_ISA_LEVEL=baseline`.** That is the
+   configuration CI uses, and the only one comparable across platforms. A number taken at
+   `x86-64-v4` is a legitimate number about the Linux v4 variant, and must say so.
+2. **Day-to-day local iteration can keep the `native` default.** This is not a rule against
    `-march=native`; it is a rule about where the resulting number is allowed to travel. A
    before/after A/B of your own change, taken on the same machine with the same setting on both
    arms, is unaffected.
 3. **Read the `isa` key rather than trying to remember.** Every `[BENCHMARK]` line carries
-   `"isa": "native"` or `"isa": "baseline"` (`src/main.cpp`, `RunBenchmarkPass`, gated by the
-   `LUMICE_NATIVE_ARCH_ACTIVE` macro that `CMakeLists.txt`'s `LUMICE_NATIVE_ARCH_ACTIVE_COND`
-   defines from the same condition as the `-march=native` flag itself). An old log therefore
-   answers "which build was this?" on its own, with no configure log needed. `baseline` is the
-   comparable tier; two rows may only be compared with each other when their `isa` values match.
-4. **Watch the configure line.** Every `cmake` configure prints one `-- LUMICE_NATIVE_ARCH=...`
+   `"isa": "native"`, `"isa": "baseline"` or `"isa": "x86-64-v4"` (`src/main.cpp`,
+   `RunBenchmarkPass`, from the `LUMICE_ISA_LEVEL_STR` macro that `CMakeLists.txt` resolves with
+   the same `LUMICE_ISA_LEVEL_ACTIVE_COND` that gates the `-march` flag itself, so the key
+   reads `baseline` whenever no flag was actually applied — a Debug build included). An old
+   log therefore answers "which build was this?" on its own, with no configure log needed.
+   `baseline` is the comparable tier; two rows may only be compared with each other when their
+   `isa` values match.
+4. **Watch the configure line.** Every `cmake` configure prints one `-- LUMICE_ISA_LEVEL=...`
    status line saying which tier this build tree is on.
 
 

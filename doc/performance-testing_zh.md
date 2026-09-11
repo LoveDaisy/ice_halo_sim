@@ -79,35 +79,48 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 这一条讲的不是 `--benchmark` 报的是*哪个*数字，而是这个数字出自*哪个二进制*。它已经害过一次
 跨平台结论——那条结论被写下来、被当作待办流传了一段时间，才查出成因。
 
-**机制。** `option(LUMICE_NATIVE_ARCH ... ON)`（`CMakeLists.txt:43`）在 GCC/Clang 的 Release
-构建上展开为 `-march=native`（`CMakeLists.txt:733`）。关于谁传这个开关，有三件事：
+**机制。** `LUMICE_ISA_LEVEL`（`CMakeLists.txt:50`）是唯一一个说明「Release 构建编译到哪一档
+ISA」的变量，取三个值：
 
-- **本地**：`scripts/build.sh` 根本不传这个选项，所以每一次本地构建吃的都是 `ON` 默认值。
-  这个默认是**有意的**——开发机就该为自己编译。
-- **出货**：`.github/workflows/release.yml:135` 与 `.github/workflows/ci.yml` 里全部 7 处
-  configure 步骤都显式传 `-DLUMICE_NATIVE_ARCH=OFF`。出货的、以及 CI 测的，都是基线 ISA。
-- **MSVC**：这个选项只在 `if(NOT MSVC)` 分支里被读取，所以 Windows/MSVC 构建**结构上**就没有
-  等价物可开，永远待在这条缝的另一侧。
+| `LUMICE_ISA_LEVEL` | GCC/Clang Release 下的 flag | 谁在用 |
+|---|---|---|
+| `native` | `-march=native` | **本地默认**——`scripts/build.sh` 什么都不传，所以每次本地构建吃的都是它；开发机就该为自己编译 |
+| `baseline` | 无（x86-64-v1，任何 x86_64 CPU 都能跑的地板） | `.github/workflows/ci.yml` 里每一处 configure，以及除下面那个 Linux x64 v4 变体之外的每一个 release 包 |
+| `x86-64-v4` | `-march=x86-64-v4`（AVX-512） | Linux x64 release 的第二个变体：`release.yml` 把那一行构建两遍、两份都打进包 |
 
-**后果。** 从本地非 MSVC 构建取的吞吐数字，相对出货二进制系统性偏乐观（本仓库实测，
-Zen 5 / GCC 13.3：1.9–2.3×）。更糟的是：拿两个默认设置的本地构建做 Windows vs 非 Windows 的
+flag 挂在 `lumice_obj` 上（`CMakeLists.txt:783`），所以 CLI 和 GUI 永远同一档。MSVC 完全不读
+这个变量——它只在 `if(NOT MSVC)` 分支里被消费，所以 Windows/MSVC 构建**结构上**没有等价物可开，
+永远是基线。
+
+**Linux release 拿它做什么。** `linux-x64` 的 tarball 里每个入口都有两份——
+`Lumice.baseline` / `Lumice.x86-64-v4`、`LumiceGUI.baseline` / `LumiceGUI.x86-64-v4`——
+并在原名 `Lumice` / `LumiceGUI` 下装一个小 launcher（`src/launcher/isa_launcher.c`）。launcher
+读 CPUID（`__builtin_cpu_supports("x86-64-v4")`）然后 `execv` 对应的 sidecar；命令行里任何位置
+的 `--isa=baseline` / `--isa=x86-64-v4` 可强制其一，且在真正的二进制看到参数之前就被吃掉。
+对用户什么都没变：一个下载、同样的两个名字。本仓库实测（Zen 5 / GCC 13.3），v4 变体在 1–4
+worker 下是基线的 1.9–2.3×，且**收益全部来自 AVX-512**——`x86-64-v2` 与 `-v3` 都量到 1.00×——
+所以恰好是两个变体而不是一个阶梯。
+
+**后果。** 从本地非 MSVC 构建取的吞吐数字，相对出货的基线二进制系统性偏乐观（就是上面那个
+1.9–2.3×）。更糟的是：拿两个默认设置的本地构建做 Windows vs 非 Windows 的
 A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方都不会给你任何警告**——两边都构建
 成功、都打印出看起来合理的数字，而两者之比里有一部分只是编译开关的产物，与你想量的东西无关。
 
 **规则。**
 
 1. **任何要离开你这台机器的数字**——跨平台对照、写进 issue / 文档 / 评审里的数字——
-   **必须用 `-DLUMICE_NATIVE_ARCH=OFF` 取**。那才是 release 与 CI 用的配置，也是唯一跨平台
-   可比的那一档。
-2. **日常本机迭代可以继续吃 `ON` 默认值。** 这不是在禁止 `-march=native`，而是在划清「这个数字
+   **必须用 `-DLUMICE_ISA_LEVEL=baseline` 取**。那才是 CI 用的配置，也是唯一跨平台可比的那一档。
+   在 `x86-64-v4` 上取的数字是关于 Linux v4 变体的合法数字，但必须写明。
+2. **日常本机迭代可以继续吃 `native` 默认值。** 这不是在禁止 `-march=native`，而是在划清「这个数字
    能走多远」这条线。自己改动的前后 A/B，只要两臂在同一台机器、同一档设置上取，不受影响。
-3. **读 `isa` 键，别指望记得住。** 每一行 `[BENCHMARK]` 都带 `"isa": "native"` 或
-   `"isa": "baseline"`（`src/main.cpp` 的 `RunBenchmarkPass`，由 `LUMICE_NATIVE_ARCH_ACTIVE` 宏
-   门控；该宏与 `-march=native` 标志本身共用 `CMakeLists.txt` 里同一个
-   `LUMICE_NATIVE_ARCH_ACTIVE_COND` 条件）。于是一份旧 log 自己就能回答「这是哪个构建取的」，
+3. **读 `isa` 键，别指望记得住。** 每一行 `[BENCHMARK]` 都带 `"isa": "native"`、
+   `"isa": "baseline"` 或 `"isa": "x86-64-v4"`（`src/main.cpp` 的 `RunBenchmarkPass`，取自
+   `LUMICE_ISA_LEVEL_STR` 宏；`CMakeLists.txt` 用与 `-march` flag 本身相同的
+   `LUMICE_ISA_LEVEL_ACTIVE_COND` 条件解析该宏，所以只要没有真正应用 flag——包括 Debug 构建——
+   这个键就读 `baseline`）。于是一份旧 log 自己就能回答「这是哪个构建取的」，
    不需要还留着当时的 configure 输出。`baseline` 是可比的那一档；两行数字只有在 `isa` 相同时
    才允许互相比较。
-4. **留意 configure 那一行。** 每次 `cmake` configure 都会打印一行 `-- LUMICE_NATIVE_ARCH=...`
+4. **留意 configure 那一行。** 每次 `cmake` configure 都会打印一行 `-- LUMICE_ISA_LEVEL=...`
    状态，说明这棵构建树在哪一档。
 
 

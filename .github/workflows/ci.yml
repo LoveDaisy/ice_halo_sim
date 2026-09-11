@@ -291,7 +291,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TEST=ON
           -DBUILD_GUI=${{ matrix.build_gui }}
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
           ${{ env.LUMICE_PYTHON_ARGS }}
           ${{ env.LUMICE_COMPILER_LAUNCHER_ARGS }}
 
@@ -528,7 +528,7 @@ jobs:
           key: cpm-ubuntu-x64-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: cpm-ubuntu-x64-
 
-      # BUILD_GUI=OFF avoids OpenGL/X11 deps. LUMICE_NATIVE_ARCH=OFF matches the
+      # BUILD_GUI=OFF avoids OpenGL/X11 deps. LUMICE_ISA_LEVEL=baseline matches the
       # rest of CI.
       #
       # BUILD_TEST=ON, not OFF, and the reason is not "more coverage is nicer".
@@ -557,7 +557,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=OFF
           -DLUMICE_CUDA_ENABLED=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       # Builds the Lumice CLI plus the test binaries; this drives nvcc through
       # cuda_trace_backend.cu and links CUDA::cudart, exercising both compile and
@@ -733,7 +733,7 @@ jobs:
       # This leg is the one that matters most for that gap: the historical
       # escapes it would have caught were MSVC-only source incompatibilities
       # (POSIX setenv/unsetenv, M_PI) in test code, which no other job compiles
-      # with CUDA on. LUMICE_NATIVE_ARCH=OFF matches the rest of CI.
+      # with CUDA on. LUMICE_ISA_LEVEL=baseline matches the rest of CI.
       - name: Configure (CUDA compile-only)
         run: >
           cmake -S . -B build -G Ninja
@@ -741,7 +741,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=OFF
           -DLUMICE_CUDA_ENABLED=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       # Build the Lumice CLI plus the test binaries; this drives nvcc through
       # cuda_trace_backend.cu and links CUDA::cudart, exercising both compile and
@@ -802,7 +802,7 @@ jobs:
 
       # BUILD_TEST=OFF + BUILD_GUI=OFF keep this job narrow: the build job above
       # already covers those targets, and skipping them avoids the OpenGL/X11
-      # deps and the GLAD2 Python generator. LUMICE_NATIVE_ARCH=OFF matches the
+      # deps and the GLAD2 Python generator. LUMICE_ISA_LEVEL=baseline matches the
       # rest of CI.
       - name: Configure (bench compile-only)
         run: >
@@ -811,7 +811,7 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DBUILD_BENCH=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       # Target-scoped on purpose: `lumice_bench` pulls in lumice_obj, so this
       # compiles every bench translation unit plus the core it links against,
@@ -923,7 +923,7 @@ jobs:
           -DBUILD_TEST=ON
           -DBUILD_GUI=ON
           -DBUILD_SHARED_LIBS=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -960,7 +960,7 @@ jobs:
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install/static
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       - name: Build
         run: cmake --build build --parallel
@@ -1136,7 +1136,7 @@ jobs:
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DBUILD_SHARED_LIBS=ON
-          -DLUMICE_NATIVE_ARCH=OFF
+          -DLUMICE_ISA_LEVEL=baseline
 
       - name: Build
         run: cmake --build build --parallel
