@@ -763,6 +763,58 @@ void LUMICE_StopServer(LUMICE_Server* server);
 - After stopping, you can still submit new configurations
 - Stopping does not release server resources; call `LUMICE_DestroyServer()` to release them
 
+### Raypath Analysis Run
+
+The other kind of run a server can carry (v4.29; design in `raypath-analysis-panel.md`): no
+image, a histogram of complete raypath chains with the energy each delivered into a region of
+interest, sorted by energy. It shares the render run's lifecycle — the same
+`LUMICE_GetSimLifecycle` / `LUMICE_GetDrainStatus` / `LUMICE_AcquireResultFrame` — and the two
+exclude each other.
+
+```c
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request);
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, LUMICE_RaypathAnalysisInfo* out);
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, LUMICE_RaypathHistogramEntry* out, int max_count);
+LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3], int* out_valid);
+LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend);
+```
+
+**Lifecycle**:
+1. `LUMICE_CommitScene` the scene (this starts a render run, as it always does).
+2. `LUMICE_StopServer`, or wait for the render to complete. An analysis cannot start over a
+   render in progress and a commit cannot start over an analysis in progress: both return
+   `LUMICE_ERR_SERVER` and interrupt nothing.
+3. `LUMICE_StartRaypathAnalysis` with a request: `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
+   `_IN_FRAME` (membership in `frame_view`, a `LUMICE_AnnotationView`) or `_CONE` (`cone_center`,
+   `cone_radius_rad`, `cone_ring_count`, and `cone_stop_target` — the number of in-cone rays after
+   which the run ends on its own; 0 = the scene's `ray_num` alone). Set `chain_id_symmetry` to
+   `LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT` unless you want an explicit P/B/D bit set (a
+   zero-initialized request asks for **no** reduction). Calling it while an analysis is already
+   in progress restarts the analysis with the new request.
+4. Poll as for a render; read through a frame. `LUMICE_FrameGetRaypathAnalysisInfo` says whether
+   the frame is an analysis frame (`present`) and how many entries it holds; the entries follow the
+   `(out, max_count)` sentinel contract of `LUMICE_FrameGetRawXyz` with `count == 0` as the sentinel,
+   and are copied (they outlive the frame). On an analysis frame the render / raw-XYZ getters write
+   their sentinel at `out[0]`; on a render frame `present` is 0.
+5. The next `LUMICE_CommitScene` is a render run again.
+
+**CPU, always**: the chain ids exist on the legacy CPU path only, so the analysis run forces that
+route ahead of both `LUMICE_SetPreferredBackend` and `LUMICE_TRACE_BACKEND`, as a session property
+(the preference is untouched and the next render honours it; `LUMICE_GetBackendFallbackFlag` stays
+0). `LUMICE_GetActiveBackend` reads what the simulation actually runs on — `LUMICE_BACKEND_CPU`
+for the whole analysis session — as opposed to what was asked for.
+
+**Chain text**: `LUMICE_RaypathHistogramEntry::display` is a byte copy of core's one chain
+formatter (`raypath-analysis-panel.md` §7.1): root layer first, each layer
+`crystal<id>(<face>-<face>-...)`, layers joined by `-`. Print this field rather than re-assembling
+it from `chain[]`.
+
+**Pixel → direction**: `LUMICE_UnprojectPixel` turns a pixel index of a `LUMICE_AnnotationView`
+canvas into the world direction it images (unit vector, the direction light travels), through the
+same inverse the render-domain mask and the IN_FRAME test are built from; `*out_valid` is 0 for a
+pixel outside the canvas, outside the lens's image domain, or clipped by `visible` / `front`. It is
+how a click becomes a cone centre.
+
 ## Usage Examples
 
 ### Basic Example

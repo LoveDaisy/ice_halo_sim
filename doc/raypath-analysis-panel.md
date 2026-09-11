@@ -217,6 +217,27 @@ interning 表把 `(父链 id, 本层 crystal_id, 本层约化后的 segment) →
 - 子任务 5：反投影走 C API 还是 `src/util/`（§6）；ROI 圈的预览层绘制与既有 overlay
   绘制管线的关系；单段链判定在 GUI 侧如何呈现（禁用态说明文案）。
 
+### 7.1 结果条目的可打印字符串（子任务 4 已裁定，唯一权威）
+
+GUI 与 CLI 若都要打印一条链，打印的是**同一个字符串**，而不是各自从分段结构拼一遍。
+权威实现只有一处：`ChainIdInterningTable::Format(uint32_t id)`（`src/core/chain_id_table.cpp`），
+`RaypathHistogramConsumer::PrepareSnapshot` 用它给 `RaypathHistogramEntry::display_` 赋值，
+C API 的 `LUMICE_RaypathHistogramEntry::display` 是这个字符串的**逐字节拷贝**（`c_api.cpp` 只做
+截断，不重拼）。格式规则（由该实现定义，此处只是复述）：
+
+- 逐层 root-first：先写光线进入的第一层，最后写出射层；
+- 每层写作 `crystal<id>(<face>-<face>-…)`，`<id>` 是 config 里的晶体 id，括号内是**对称约化后**
+  的面序列（`Crystal::ReduceRaypath`，约化对称由请求的 `chain_id_symmetry` 决定，默认 P|B|D），
+  面号之间用 `-` 连接；
+- 多层之间也用 `-` 连接。
+
+例：单层 22° 晕 `crystal1(3-5)`；两层 `crystal1(3-5)-crystal2(1-3)`。
+
+C 结构体里的 `chain[]`/`segment[]` 与 `display` 描述同一条链，前者供程序判定（例如「是否单段链」
+决定「排除此光路」按钮可用），后者供显示；两者不一致只可能来自截断（超过
+`LUMICE_MAX_RAYPATH_CHAIN_LAYERS` / `LUMICE_MAX_RAYPATH_SEGMENT_LEN` / `LUMICE_RAYPATH_DISPLAY_MAX`
+的病态链，每次读帧时 WARN 一次），正常场景下两者互为镜像。
+
 ## 8. 与 (ii)（剥离）的关系
 
 (ii)「每桶真实辐射量、随实时开关变化」这个原始需求形态，其五条实现路线**仍然挂起**，

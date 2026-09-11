@@ -97,6 +97,9 @@ add_executable(unit_correctness_test
   # The analysis run as a lifecycle of the live Server: render/analysis mutual exclusion,
   # the forced CPU route, the cone stop target's natural completion, the frame's histogram.
   "${PROJ_TEST_DIR}/unit-correctness/server/test_server_analysis_run.cpp"
+  # Its C API surface: request validation, both error codes, the frame getters end to end, the
+  # truncation branch, and the pixel -> direction inverse against the forward projection.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_raypath_analysis.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_anchor_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"

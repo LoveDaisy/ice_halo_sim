@@ -258,7 +258,24 @@ extern "C" {
 // LUMICE_AnnotationMarkerPoint, LUMICE_AnnotationView, the LUMICE_ANNOTATION_* constants and the
 // error contract are unchanged. `zenith_nadir` goes because `marker_ids` superseded it in v4.24 and
 // nothing in this tree set it; `want_labels` goes because the anchors are all this call computes.
-#define LUMICE_API_VERSION 428
+//
+// BREAKING (v4.29): the analysis run reaches the C API. ADDED, nothing removed or reordered:
+// the "Raypath Analysis Run" section (LUMICE_RaypathAnalysisRequest, LUMICE_RaypathChainSegment,
+// LUMICE_RaypathHistogramEntry, LUMICE_RaypathAnalysisInfo, their LUMICE_RAYPATH_* / LUMICE_MAX_RAYPATH_*
+// constants, LUMICE_StartRaypathAnalysis, LUMICE_FrameGetRaypathAnalysisInfo,
+// LUMICE_FrameGetRaypathAnalysis, LUMICE_UnprojectPixel) and LUMICE_GetActiveBackend beside
+// LUMICE_SetPreferredBackend. A caller compiled against v4.28 keeps every offset it holds; the bump
+// records that the exported symbol set grew, per the rule at the top of this block.
+// Behaviour that comes with it, and has no ABI half: a server has TWO kinds of run now. A render
+// run (LUMICE_CommitScene) and an analysis run (LUMICE_StartRaypathAnalysis) share one lifecycle —
+// the same LUMICE_GetSimLifecycle / LUMICE_GetDrainStatus / LUMICE_AcquireResultFrame — and
+// exclude each other: starting one while the other is in progress returns LUMICE_ERR_SERVER
+// rather than interrupting it. An analysis run always traces on the CPU, whatever
+// LUMICE_SetPreferredBackend or LUMICE_TRACE_BACKEND says; LUMICE_GetActiveBackend is the readable
+// form of that. A frame acquired during an analysis run has no render / raw-XYZ rows (their getters
+// write their sentinel at out[0]) and carries the histogram instead; the next LUMICE_CommitScene
+// switches back, and its frames carry no histogram.
+#define LUMICE_API_VERSION 429
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1860,6 +1877,177 @@ LUMICE_ErrorCode LUMICE_ResolveAnnotationMarkerDirection(int marker_id, const fl
 // Returns LUMICE_ERR_NULL_ARG if `sun_dir` or `out_dir` is NULL. `*out_dir` is untouched on failure.
 LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float out_dir[3]);
 
+// =============== Raypath Analysis Run ===============
+// The other kind of run a server can carry (doc/raypath-analysis-panel.md): no image, a
+// histogram of COMPLETE raypath chains — which crystal, and which face sequence through it,
+// on every scattering layer a ray traversed — with the energy each chain delivered into a
+// region of interest, sorted by that energy. Same lifecycle as a render run, one request
+// structure in, one result kind out of the same LUMICE_ResultFrame.
+//
+// Lifecycle, stated once here:
+//   1. LUMICE_CommitScene the scene to analyse (that starts a render run, as it always does).
+//   2. LUMICE_StopServer, or wait for the render to complete — an analysis cannot start over a
+//      render in progress (LUMICE_ERR_SERVER), and a render commit cannot start over an
+//      analysis in progress (LUMICE_ERR_SERVER). Neither silently interrupts the other.
+//   3. LUMICE_StartRaypathAnalysis with a request. The run traces the committed scene on the
+//      CPU (see below), to the scene's ray_num budget — an "infinite" budget runs until
+//      LUMICE_StopServer, exactly as a render would — or, for a cone ROI with a stop target,
+//      until that many rays have landed in the cone, whichever comes first.
+//   4. Poll LUMICE_GetSimLifecycle / LUMICE_GetDrainStatus as for a render; read the result
+//      through LUMICE_AcquireResultFrame + LUMICE_FrameGetRaypathAnalysisInfo /
+//      LUMICE_FrameGetRaypathAnalysis. Partial results are readable while the run is in
+//      progress, like a render's, and are final once the epoch reports drained.
+//   5. The next LUMICE_CommitScene is a render run again: the analysis-session properties
+//      below are withdrawn, and its frames carry no histogram.
+//
+// CPU, always. The chain ids the histogram is built from exist on the legacy CPU path only
+// (v1 — doc/raypath-analysis-panel.md §2 ruling 1), so the analysis run forces that route
+// for its duration, ahead of BOTH LUMICE_SetPreferredBackend and the LUMICE_TRACE_BACKEND
+// environment override. It is a session property, not a fallback: the preference is left
+// as it was and the next render honours it; LUMICE_GetBackendFallbackFlag stays 0; and
+// LUMICE_GetActiveBackend reads LUMICE_BACKEND_CPU for as long as the session lasts. The
+// server logs one INFO line saying so when the run starts.
+
+// Which rays count.
+#define LUMICE_RAYPATH_ROI_FULL_SKY 0  // every outgoing ray
+#define LUMICE_RAYPATH_ROI_IN_FRAME 1  // rays that land inside `frame_view` (lens, view, visible, front)
+#define LUMICE_RAYPATH_ROI_CONE 2      // rays within `cone_radius_rad` of `cone_center`, binned by angular distance
+
+// `chain_id_symmetry` value meaning "reduce under the session default" (P|B|D, the same
+// FilterConfig symmetry the filter grammar uses). The legal explicit values are the bit sets
+// 0..7 (P = 1, B = 2, D = 4), and 0 — no reduction at all — is one of them, which is why the
+// default needs a value no combination of those bits can spell.
+#define LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT 0xFF
+
+// Sanity ceilings on what one result entry can hold. Like LUMICE_MAX_ANNOTATION_LINES these guard
+// against malformed data rather than express a design limit: a chain deeper than the layer cap
+// or a face sequence longer than the segment cap is TRUNCATED in the entry (the fields still
+// describe a self-consistent prefix) and the server logs one WARN per frame read. Eight layers is
+// past any multiple-scattering depth a config can ask for today; sixteen faces is past any
+// reduced sequence a crystal in this tree produces.
+#define LUMICE_MAX_RAYPATH_CHAIN_LAYERS 8
+#define LUMICE_MAX_RAYPATH_SEGMENT_LEN 16
+// Ring cap for the cone ROI. NOT a truncation: a request asking for more rings than this is
+// rejected by LUMICE_StartRaypathAnalysis with LUMICE_ERR_INVALID_VALUE, because a truncated ring
+// split would silently change what the entries mean.
+#define LUMICE_MAX_RAYPATH_CONE_RINGS 32
+// Longest `display` text an untruncated entry can need, including the terminating NUL. Derived
+// from the types rather than from what scenes produce: per layer, "crystal" (7) + a uint16 id
+// (5) + "(" + 16 uint16 faces joined by "-" (16*5 + 15 = 95) + ")" + the joining "-" = 110, times
+// LUMICE_MAX_RAYPATH_CHAIN_LAYERS = 880; rounded up. Longer text (only possible past the layer
+// cap) is truncated with the same WARN as the arrays.
+#define LUMICE_RAYPATH_DISPLAY_MAX 896
+
+typedef struct LUMICE_RaypathAnalysisRequest_ {
+  int roi_mode;  // LUMICE_RAYPATH_ROI_*
+
+  // LUMICE_RAYPATH_ROI_IN_FRAME only: the frame whose lens / view / visible / front decide
+  // membership — the same struct the annotation anchors take, so a GUI panel passes the view it
+  // is already drawing. `width`/`height` are the canvas the membership test is made on.
+  LUMICE_AnnotationView frame_view;
+
+  // LUMICE_RAYPATH_ROI_CONE only. `cone_center` is a world direction in the convention every
+  // direction in this API uses (the direction light TRAVELS: altitude = asin(-z), the zenith is
+  // z = -1 — LUMICE_UnprojectPixel below returns one). Need not be normalized; a zero vector is
+  // rejected. `cone_radius_rad` must be positive. `cone_ring_count` splits [0, radius] into
+  // that many equal angular-distance rings, 1..LUMICE_MAX_RAYPATH_CONE_RINGS. `cone_stop_target`
+  // ends the run once that many rays have landed in the cone; 0 = no early stop (the scene's
+  // ray_num budget alone decides).
+  float cone_center[3];
+  float cone_radius_rad;
+  int cone_ring_count;
+  LUMICE_RayCount cone_stop_target;
+
+  // The symmetry each layer's face sequence is reduced under before chains are compared: a
+  // FilterConfig-style bit set 0..7, or LUMICE_RAYPATH_SYMMETRY_SESSION_DEFAULT. A zero-initialized
+  // request therefore asks for NO reduction (every face sequence its own chain), not for the
+  // default — set this field.
+  int chain_id_symmetry;
+} LUMICE_RaypathAnalysisRequest;
+
+// One scattering layer of a chain: the crystal (its config id) and the reduced face sequence the
+// ray took through it, root-first in the entry's `chain` array.
+typedef struct LUMICE_RaypathChainSegment_ {
+  int crystal_id;
+  int segment[LUMICE_MAX_RAYPATH_SEGMENT_LEN];
+  int segment_len;  // faces actually written into `segment` (<= the cap; see the truncation note)
+} LUMICE_RaypathChainSegment;
+
+// One chain and what it delivered. The sentinel of LUMICE_FrameGetRaypathAnalysis is
+// `count == 0`: every real entry counted at least one ray.
+typedef struct LUMICE_RaypathHistogramEntry_ {
+  LUMICE_RaypathChainSegment chain[LUMICE_MAX_RAYPATH_CHAIN_LAYERS];
+  int chain_len;  // layers actually written into `chain` (>= 1 for a real entry)
+
+  // The chain as text, e.g. "crystal1(3-5)" or "crystal1(3-5)-crystal2(1-3)": root layer first,
+  // each layer "crystal<id>(<face>-<face>-...)", layers joined by "-". This is a byte copy of the
+  // ONE implementation of that format (core's ChainIdInterningTable::Format); a consumer that
+  // needs the same text prints this field rather than re-assembling it from `chain`, so the CLI
+  // and every GUI agree on it by construction. NUL-terminated.
+  char display[LUMICE_RAYPATH_DISPLAY_MAX];
+
+  double energy;          // sum over counted rays of Y(wavelength) * weight
+  LUMICE_RayCount count;  // number of counted rays
+
+  // LUMICE_RAYPATH_ROI_CONE only: `energy` split by angular-distance ring from the cone centre,
+  // `ring_count` == the request's cone_ring_count and sum(ring_energy) == energy. ring_count is 0
+  // in the other modes.
+  double ring_energy[LUMICE_MAX_RAYPATH_CONE_RINGS];
+  int ring_count;
+} LUMICE_RaypathHistogramEntry;
+
+// What a frame says about its analysis result as a whole, before any entry is read.
+typedef struct LUMICE_RaypathAnalysisInfo_ {
+  int present;            // 1 iff this frame is an analysis frame; every other field is 0 when it is not
+  int roi_mode;           // echo of the request's LUMICE_RAYPATH_ROI_*
+  int entry_count;        // total entries in the frame — what a full read of LUMICE_FrameGetRaypathAnalysis returns
+  int cone_ring_count;    // echo of the request (CONE), else 0
+  float cone_radius_rad;  // echo of the request (CONE), else 0
+} LUMICE_RaypathAnalysisInfo;
+
+// Start an analysis run on the committed scene (lifecycle above). Returns LUMICE_ERR_NULL_ARG for a
+// NULL server / request; LUMICE_ERR_INVALID_VALUE for an unknown roi_mode, a CONE request with a
+// non-positive radius, a zero centre, a ring count outside 1..LUMICE_MAX_RAYPATH_CONE_RINGS, an
+// IN_FRAME request whose frame_view has an unknown lens_type / visible, or a chain_id_symmetry
+// outside 0..7 that is not the session default; LUMICE_ERR_INVALID_CONFIG when no scene has been
+// committed; LUMICE_ERR_SERVER when a render run is in progress (AC1 — stop it first). Calling it
+// while an ANALYSIS run is in progress restarts the analysis with the new request.
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request);
+
+// Frame-level view of the analysis result. Writes present = 0 (and zeros) for a frame that is not
+// an analysis frame — a render frame, or a frame acquired before the first snapshot. Returns
+// LUMICE_ERR_NULL_ARG on a NULL frame / out.
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, LUMICE_RaypathAnalysisInfo* out);
+
+// The entries, energy descending (ties by `display` ascending, so two runs order equal energies
+// alike). Same (out, max_count) array shape and sentinel contract as LUMICE_FrameGetRawXyz, the
+// sentinel being an entry with `count == 0` — written at out[count] only when count < max_count,
+// so an array of max_count + 1 value-initialized entries is the shape for sentinel iteration.
+// LUMICE_FrameGetRaypathAnalysisInfo's entry_count says how many there are in total. The entries
+// are COPIED into `out` (no pointer into the frame), so they outlive the frame; the frame still has
+// to be held for the duration of this call. Returns LUMICE_ERR_NULL_ARG on a NULL frame / out.
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, LUMICE_RaypathHistogramEntry* out,
+                                                int max_count);
+
+// Pixel -> world direction, the inverse of the projection LUMICE_ComputeAnnotationAnchors and the
+// IN_FRAME membership test project with — for turning a click on a rendered canvas into a cone
+// centre. Pure computation, no Server or Scene lifetime, like the annotation anchors.
+//
+// `px`/`py` are a PIXEL INDEX on the `view`'s width x height canvas (the direction returned is that
+// pixel's centre — the same "+0.5" convention the renderer's own masks are built with). Integer on
+// purpose: core has exactly one pixel-to-direction inverse, it takes a pixel, and a float overload
+// here would be a second implementation of the lens math with its own rounding — the divergence
+// the single inverse exists to prevent. Round a sub-pixel position down before calling.
+//
+// `*out_valid` is 1 iff the pixel images sky: inside the canvas, inside the lens's image domain
+// (a fisheye's circle, a dual fisheye's two discs), and not clipped away by `visible` / `front`.
+// `out_dir` is written only then, as a unit vector in the direction light TRAVELS (see the
+// convention at LUMICE_ResolveAnnotationMarkerDirection); on 0 it is untouched. Returns
+// LUMICE_ERR_NULL_ARG for a NULL view / out_dir / out_valid, LUMICE_ERR_INVALID_VALUE for an
+// unknown lens_type / visible or a non-positive width / height.
+LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3],
+                                       int* out_valid);
+
 // =============== Config ID Range ===============
 // Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).
 // GUI code should clamp user-editable IDs to [0, LUMICE_MAX_ID].
@@ -2131,6 +2319,16 @@ void LUMICE_SetPreferredBackend(LUMICE_Server* server, int backend);
 // To add a new backend (e.g. CUDA): append LUMICE_BACKEND_CUDA above and add a
 // matching branch here; CPU / Metal semantics are unchanged.
 int LUMICE_IsBackendAvailable(int backend);
+
+// The backend this server's simulation ACTUALLY runs on, as opposed to the one
+// LUMICE_SetPreferredBackend asked for. Writes LUMICE_BACKEND_CPU / _METAL / _CUDA. The two differ in
+// exactly two situations, and this call is what makes both observable: during an analysis run
+// (LUMICE_StartRaypathAnalysis — always CPU, the session forces it, and the answer is CPU from the
+// moment the run starts rather than from its first batch), and on a GPU route whose backend was
+// lost or never obtained (LUMICE_GetBackendFallbackFlag says which). Otherwise it is what the last
+// LUMICE_CommitScene resolved to, and LUMICE_BACKEND_CPU before any run. Cheap; safe to poll.
+// Returns LUMICE_ERR_NULL_ARG if server or out_backend is NULL.
+LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend);
 
 // Query whether a server built with `preferred_backend` would take the GPU
 // single-engine route (worker_count=1) on this machine. Unlike
