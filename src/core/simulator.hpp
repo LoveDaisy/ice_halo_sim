@@ -98,6 +98,25 @@ class Simulator {
   // WARN per entry saying so. Same thread contract as SetPreferredBackend:
   // written by the server thread, snapshotted at the top of Run().
   void SetAnalysisChainId(bool enabled, uint8_t symmetry);
+  // The session-level symmetry an analysis run reduces under unless the request names
+  // one (server.hpp kChainIdSymmetrySessionDefault): full P|B|D.
+  static constexpr uint8_t kDefaultChainIdSymmetry = FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD;
+
+  // The analysis run's other session property: force the legacy CPU path for
+  // the next Run(), ahead of BOTH the LUMICE_TRACE_BACKEND override and the
+  // SetPreferredBackend preference (neither is consulted, and neither is
+  // modified — the preference is still there for the next render session).
+  // Same thread contract as SetAnalysisChainId: written by the server thread,
+  // snapshotted at the top of Run().
+  void SetAnalysisForceCpu(bool enabled);
+
+  // The backend kind the most recent Run() entry actually resolved to — kCpu
+  // for the legacy path (whether by preference, by force, by an unavailable
+  // GPU, or by the mid-run BackendUnavailableError fallback, which re-publishes
+  // it), kMetal / kCuda while that backend is live. kCpu before the first Run().
+  // Written at the same two points as backend_active_ and read by the server
+  // (Server::GetActiveBackend) — the observable answer to "did the force take".
+  BackendKind ActiveBackend() const { return active_backend_.load(std::memory_order_acquire); }
 
   // Returns the seed actually handed to the trace backend (task 260.6).
   // When `seed_ != 0` this equals `seed_`; when `seed_ == 0` this is a
@@ -277,9 +296,11 @@ class Simulator {
     bool enabled = false;
     uint8_t symmetry = 0;
   };
-  static constexpr uint8_t kDefaultChainIdSymmetry = FilterConfig::kSymP | FilterConfig::kSymB | FilterConfig::kSymD;
   std::atomic<ChainIdSession> analysis_chain_id_{ ChainIdSession{ false, kDefaultChainIdSymmetry } };
   ChainIdSession chain_id_session_{};
+  // See SetAnalysisForceCpu / ActiveBackend.
+  std::atomic_bool analysis_force_cpu_{ false };
+  std::atomic<BackendKind> active_backend_{ BackendKind::kCpu };
   // Per-worker interning table (see chain_id_table.hpp for why per-worker is
   // enough). Only ever touched from inside Run() on the simulator thread.
   ChainIdInterningTable chain_id_table_;

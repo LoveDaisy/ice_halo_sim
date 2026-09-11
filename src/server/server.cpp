@@ -29,6 +29,7 @@
 #include "server/component_compositor.hpp"
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
+#include "server/raypath_histogram_consumer.hpp"
 #include "server/render.hpp"
 #include "server/scene_batch_publish.hpp"
 #include "server/server.hpp"
@@ -73,6 +74,12 @@ class ServerImpl {
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
+  // The analysis run (see Server::StartRaypathAnalysis for the contract). Same
+  // Stop → rebuild consumers → Start shape as CommitConfig, on the committed scene.
+  Error StartRaypathAnalysis(const RaypathAnalysisRequest& request);
+  // See Server::GetActiveBackend. Structural kCpu in an analysis session; the
+  // Simulator's own published answer otherwise.
+  BackendKind GetActiveBackend() const;
   size_t GetLiveSimRayCount();
 
   // THE result entry point. Materializes a snapshot if one is pending, then
@@ -142,7 +149,10 @@ class ServerImpl {
   // this is an ASYNCHRONOUS fact discovered by the worker mid-run, so the GUI polls
   // it (LUMICE_GetBackendFallbackFlag) instead of the fallback living only as a core
   // WARN line no GUI user ever sees. Cheap: one atomic load under a short mutex.
-  bool BackendFellBack() const { return gpu_route_ && !ReadBackendActive(); }
+  // An analysis session is not a fallback: its CPU route is asked for, not fallen to.
+  bool BackendFellBack() const {
+    return gpu_route_ && mode_.load(std::memory_order_acquire) != SessionMode::kAnalysis && !ReadBackendActive();
+  }
 
  private:
   // task-268.7: single-engine orchestration — server now runs exactly one
@@ -377,6 +387,27 @@ class ServerImpl {
   // SetPreferredBackend(). Default is CPU.
   std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
 
+  // Which kind of run the current session is. Written by the two entry points that
+  // (re)start a run — CommitConfig (→ kRender) and StartRaypathAnalysis (→ kAnalysis) —
+  // after their Stop() has joined the previous run's workers; read by GenerateScene
+  // (the CPU-forcing half of the route decision) and ConsumeData (the cone stop
+  // target), and by the mutual-exclusion guards at both entry points. Atomic for the
+  // same reason analysis_roi_target_reached_ below is: control thread writes, worker
+  // threads read, and a plain member would rest on Stop()'s join being a
+  // happens-before that every future edit of this file preserves.
+  enum class SessionMode { kRender, kAnalysis };
+  std::atomic<SessionMode> mode_{ SessionMode::kRender };
+
+  // The cone ROI's early stop (RaypathHistogramConsumer::RoiTargetReached), carried from
+  // ConsumeData (which observes it after a batch is counted) to GenerateScene (whose loop
+  // condition reads it). This is the WHOLE mechanism, and it is deliberately not Stop():
+  // the natural-completion path — the producer stops enqueueing, the consumer drains, and
+  // GetStatus() infers kIdle from its four predicates while has_ever_consumed_ stays true —
+  // is what makes the run read as kCompleted with a valid frame. Stop() resets
+  // has_ever_consumed_ and would make the same run read as kIdle with no data.
+  // Cleared by StartRaypathAnalysis for each new analysis session.
+  std::atomic_bool analysis_roi_target_reached_{ false };
+
   // ResolveGpuRoute's verdict at CONSTRUCTION time — the route this
   // server was actually sized for (worker_count, and hence simulators_.size()).
   // GenerateScene re-derives its own kGpuRoute from the live preferred_backend_
@@ -486,7 +517,13 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
 // degrades to CPU via task-282, the accepted edge case).
 // (296.6: generalized from the former Metal-only ResolveMetalRoute so CUDA also
 // takes the single-engine route — see doc/seam-design.md §5.)
-bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger, bool force_cpu) {
+  // The analysis run's forced CPU route sits ABOVE the env override, as it does in
+  // CreateBackend — the two must agree, and "CPU regardless of the environment" is the
+  // contract being kept (see the declaration in server.hpp).
+  if (force_cpu) {
+    return false;
+  }
   // Env override wins, mirroring CreateBackend's TraceBackendOverride handling.
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
@@ -774,6 +811,16 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
 
+  // Mutual exclusion with the analysis run, this direction. "In progress" is
+  // GetSimLifecycle() == kRunning at THIS moment, not "an analysis was ever started": a
+  // completed (or stopped) analysis session is exactly the state a new render commit is
+  // expected to replace. Checked before the parse so a rejected commit leaves the server
+  // — config_manager_ included — untouched.
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis && GetSimLifecycle() == SimLifecycle::kRunning) {
+    ILOG_WARN(logger_, "CommitConfig: rejected — an analysis run is in progress; Stop() it first");
+    return Error::ServerError("analysis run in progress; stop it before committing a render config");
+  }
+
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
   ConfigManager new_config;
   // task-339.3: runtime color-class table (default = empty → no raypath_color,
@@ -860,8 +907,27 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto stop_end = std::chrono::steady_clock::now();
   auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
+  // A successful commit is a RENDER session, whatever the previous one was. Written
+  // unconditionally (also when already kRender) so that no early-return path above can be
+  // the one that forgot to switch back. Stop() has joined the workers, so the three
+  // per-Simulator analysis properties can be withdrawn here without racing a Run(): a
+  // render session must not pay the chain-id cost (non-analysis mode is zero-cost by
+  // contract) and must get the backend the user asked for back.
+  const bool was_analysis = mode_.exchange(SessionMode::kRender, std::memory_order_acq_rel) == SessionMode::kAnalysis;
+  if (was_analysis) {
+    std::lock_guard<std::mutex> lock(prod_mutex_);
+    for (auto& s : simulators_) {
+      s.SetAnalysisChainId(false, 0);
+      s.SetAnalysisForceCpu(false);
+    }
+  }
+
   // Check if consumers can be reused (same renderer key set, no layout changes).
   // See doc/accumulator-consumer-architecture.md §5.4 (reuse eligibility).
+  // An analysis session's consumer set (histogram + stats) is never reusable for a
+  // render: it holds no RenderConsumer. `was_analysis` says so explicitly below rather
+  // than leaning on the renderer-count comparison, which would let a zero-renderer
+  // config (whose render set is also two consumers) reuse the histogram set by accident.
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
@@ -882,8 +948,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // concurrent DoSnapshot here.
   active_composite_mode_ = composite_mode;
 
-  bool can_reuse =
-      !consumers_.empty() && !class_table_changed && (old_renderers.size() == config_manager_.renderers_.size());
+  bool can_reuse = !consumers_.empty() && !was_analysis && !class_table_changed &&
+                   (old_renderers.size() == config_manager_.renderers_.size());
   if (can_reuse) {
     auto old_it = old_renderers.begin();
     auto new_it = config_manager_.renderers_.begin();
@@ -969,6 +1035,89 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
             start_ms);
 
   return Error::Success();
+}
+
+
+// The analysis run. Same lifecycle as a render commit — Stop, swap the consumer set,
+// Start — on the scene the last CommitConfig left in config_manager_. What makes it an
+// analysis session is three per-Simulator properties (chain ids on, CPU forced) plus
+// mode_, which GenerateScene / ConsumeData / the two entry guards read. Everything
+// else — queues, threads, epoch, the drain signal, AcquireResultFrame — is the one
+// lifecycle this server has, unchanged.
+Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
+  ILOG_DEBUG(logger_, "StartRaypathAnalysis: entry");
+
+  // Mutual exclusion with the render run, this direction. Deliberately NOT "Stop the
+  // render and go ahead": a caller that wants that says so by calling Stop() first. A
+  // running ANALYSIS is not refused — the same call with a new ROI restarts it, which is
+  // how a caller changes the cone without a Stop() round-trip.
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kRender && GetSimLifecycle() == SimLifecycle::kRunning) {
+    ILOG_WARN(logger_, "StartRaypathAnalysis: rejected — a render run is in progress; Stop() it first");
+    return Error::ServerError("render run in progress; stop it before starting analysis");
+  }
+  // The one check the consumer cannot make for us: is there a scene at all? Every
+  // successful CommitConfig bumps committed_epoch_ under scene_mutex_ alongside
+  // active_scene_, so "epoch 0" is "nothing committed". ROI validation (zero centre,
+  // non-positive radius, ring count < 1) is the consumer constructor's, and it degrades
+  // with a log line rather than failing — the request still names a well-defined ROI.
+  if (committed_epoch_.load(std::memory_order_acquire) == 0) {
+    ILOG_ERROR(logger_, "StartRaypathAnalysis: no scene committed");
+    return Error::InvalidConfig("no scene committed; commit a config before starting analysis");
+  }
+
+  const uint8_t symmetry = request.chain_id_symmetry_ == kChainIdSymmetrySessionDefault ?
+                               Simulator::kDefaultChainIdSymmetry :
+                               request.chain_id_symmetry_;
+
+  Stop();
+  mode_.store(SessionMode::kAnalysis, std::memory_order_release);
+  // New session, new stop flag: the previous analysis' "target reached" must not end this
+  // one before its first batch.
+  analysis_roi_target_reached_.store(false, std::memory_order_release);
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    consumers_.clear();
+    consumers_.emplace_back(std::make_shared<RaypathHistogramConsumer>(request.roi_));
+    // StatsConsumer for the live ray count (GetLiveSimRayCount reads it by dynamic_cast)
+    // — the run's only progress signal, since there is no image to watch grow. No
+    // AnchorConsumer: it measures an exposure anchor, and nothing here is exposed.
+    consumers_.emplace_back(std::make_shared<StatsConsumer>());
+  }
+  {
+    std::lock_guard<std::mutex> lock(prod_mutex_);
+    for (auto& s : simulators_) {
+      s.SetAnalysisChainId(true, symmetry);
+      s.SetAnalysisForceCpu(true);
+    }
+  }
+  // Said once, here, and not in ResolveGpuRoute / CreateBackend, which run on every
+  // render batch: the analysis run overrides both the preference and the environment,
+  // and the preference itself is untouched (GetActiveBackend is the readable form).
+  ILOG_INFO(logger_,
+            "StartRaypathAnalysis: forcing CPU route (analysis run session property; overrides "
+            "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified); roi_mode={} symmetry=0x{:x}",
+            static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), static_cast<int>(request.roi_.mode_),
+            symmetry);
+  // The scene is unchanged, so scene_generation_ / committed_epoch_ / active_scene_ stay as
+  // the last commit left them: GenerateScene will trace the same scene, and the batches it
+  // queues carry the current generation. NOT bumping the epoch is deliberate — the epoch
+  // names the committed CONFIG (an accumulator-reset key readers compare against), and
+  // that has not changed; a reader's "is this the frame of my commit" test keeps its answer.
+  Start();
+  return Error::Success();
+}
+
+BackendKind ServerImpl::GetActiveBackend() const {
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis) {
+    return BackendKind::kCpu;  // structural: SetAnalysisForceCpu(true) on every Simulator
+  }
+  std::lock_guard<std::mutex> lock(prod_mutex_);
+  if (simulators_.empty()) {
+    return BackendKind::kCpu;
+  }
+  // Every worker of a multi-worker CPU server resolves the same way; the GPU route has
+  // exactly one. Reading the first is reading the session.
+  return simulators_[0].ActiveBackend();
 }
 
 
@@ -1095,6 +1244,11 @@ bool ServerImpl::DoSnapshot() {
         frame->render_storage_.push_back(rc != nullptr ? rc->SnapshotImageStorage() : nullptr);
       } else if (auto* s = std::get_if<StatsResult>(&result)) {
         frame->stats_result_ = *s;
+      } else if (auto* h = std::get_if<RaypathHistogramResult>(&result)) {
+        // Copied out of the consumer's snapshot into this frame, like the stats above:
+        // no cache between snapshots, so a render session's frame (whose consumer set
+        // has no histogram) keeps the nullopt default rather than a previous analysis.
+        frame->raypath_histogram_result_ = *h;
       }
     }
     // Raw XYZ views + their storage anchors, same treatment as the mono images above.
@@ -1709,6 +1863,24 @@ void ServerImpl::ConsumeData() {
             emitted += chunk_count;
           } while (emitted < exit_count);
         }
+        // Analysis session: the cone ROI's stop target. Observed here, after the batch
+        // has been counted and under the same consumer_mutex_ the counter is written
+        // under; GenerateScene's loop reads the flag. Both consume paths above land here,
+        // so the check is path-independent (a forced-CPU session only ever takes the
+        // whole-batch path, but nothing here needs to know that).
+        if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis &&
+            !analysis_roi_target_reached_.load(std::memory_order_acquire)) {
+          for (const auto& c : consumers_) {
+            if (const auto* hc = dynamic_cast<const RaypathHistogramConsumer*>(c.get())) {
+              if (hc->RoiTargetReached()) {
+                ILOG_INFO(logger_, "ConsumeData: cone ROI stop target reached ({} rays in cone); producer will stop",
+                          hc->LiveRoiHitCount());
+                analysis_roi_target_reached_.store(true, std::memory_order_release);
+              }
+              break;
+            }
+          }
+        }
         auto t_consume = std::chrono::steady_clock::now();
         snapshot_dirty_ = true;
         has_ever_consumed_ = true;
@@ -1849,7 +2021,11 @@ void ServerImpl::GenerateScene() {
   // misses the --benchmark/CLI env path). Metal is Apple-only; CUDA is the only
   // GPU route on a non-Apple CUDA build — so there a true GPU route IS CUDA.
   const BackendKind kPref = preferred_backend_.load(std::memory_order_acquire);
-  const bool kGpuRoute = ResolveGpuRoute(kPref, logger_);
+  // The analysis session forces the CPU route here AND in the Simulator's CreateBackend
+  // (through the same session flag) — the two halves of one routing decision, kept in
+  // step by passing the same fact to both.
+  const bool kAnalysis = mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis;
+  const bool kGpuRoute = ResolveGpuRoute(kPref, logger_, /*force_cpu=*/kAnalysis);
 #if defined(LUMICE_CUDA_ENABLED) && !defined(__APPLE__)
   const bool kIsCudaRoute = kGpuRoute;
 #else
@@ -1864,7 +2040,9 @@ void ServerImpl::GenerateScene() {
   // questions off the same ResolveGpuRoute (see gpu_route_'s declaration). They
   // cannot disagree today; say so out loud if they ever do, rather than letting one
   // silently size the batches while the other decides whether a fallback happened.
-  if (kGpuRoute != gpu_route_) {
+  if (kGpuRoute != gpu_route_ && !kAnalysis) {
+    // (An analysis session on a GPU-built server differs by design, not by drift: it is
+    // still sized single-worker, and the forced CPU route is exactly the point.)
     ILOG_WARN(logger_,
               "GenerateScene: live gpu_route ({}) disagrees with the construction-time route ({}); this server was "
               "sized for the latter, so dispatch grain and the fallback signal are now keyed off different routes",
@@ -1916,7 +2094,10 @@ void ServerImpl::GenerateScene() {
   // seen gone, and never again. Re-armed here rather than in Start() because this is the
   // only writer, and this is the entry point of the Run() the flag describes.
   fallback_queue_invalidated_.store(false, std::memory_order_release);
-  while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
+  // The cone stop target ends the loop the same way a finite budget does: this producer
+  // simply stops enqueueing, and completion is inferred downstream — see the flag.
+  while ((per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) &&
+         !analysis_roi_target_reached_.load(std::memory_order_acquire)) {
     const bool backend_active = ReadBackendActive();
     // Shrinking the grain only sizes the batches queued FROM HERE ON, and by the time a
     // fallback is noticed the queue is already full of batches sized for the GPU
@@ -2184,6 +2365,20 @@ Error Server::CommitConfig(const std::string& config_str) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfig: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
+}
+
+Error Server::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
+  if (!impl_) {
+    return Error::ServerNotReady();
+  }
+  return impl_->StartRaypathAnalysis(request);
+}
+
+BackendKind Server::GetActiveBackend() const {
+  if (!impl_) {
+    return BackendKind::kCpu;
+  }
+  return impl_->GetActiveBackend();
 }
 
 size_t Server::GetLiveSimRayCount() {

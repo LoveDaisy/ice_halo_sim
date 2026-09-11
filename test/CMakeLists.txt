@@ -94,6 +94,9 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_json_parser_parity.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_raypath_histogram_consumer.cpp"
+  # The analysis run as a lifecycle of the live Server: render/analysis mutual exclusion,
+  # the forced CPU route, the cone stop target's natural completion, the frame's histogram.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_server_analysis_run.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_anchor_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"

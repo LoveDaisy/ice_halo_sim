@@ -932,6 +932,8 @@ Simulator::Simulator(Simulator&& other) noexcept
       preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)),
       analysis_chain_id_(other.analysis_chain_id_.load(std::memory_order_acquire)),
       chain_id_session_(other.chain_id_session_), chain_id_table_(std::move(other.chain_id_table_)),
+      analysis_force_cpu_(other.analysis_force_cpu_.load(std::memory_order_acquire)),
+      active_backend_(other.active_backend_.load(std::memory_order_acquire)),
       backend_active_(other.backend_active_.load(std::memory_order_acquire)) {
   // The observer is a raw function pointer plus a context that the test owns (typically a stack
   // object in the test body). Leaving it live on the moved-from object would let a later Run() on
@@ -961,6 +963,8 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   analysis_chain_id_.store(other.analysis_chain_id_.load(std::memory_order_acquire), std::memory_order_release);
   chain_id_session_ = other.chain_id_session_;
   chain_id_table_ = std::move(other.chain_id_table_);
+  analysis_force_cpu_.store(other.analysis_force_cpu_.load(std::memory_order_acquire), std::memory_order_release);
+  active_backend_.store(other.active_backend_.load(std::memory_order_acquire), std::memory_order_release);
   backend_active_.store(other.backend_active_.load(std::memory_order_acquire), std::memory_order_release);
   return *this;
 }
@@ -971,6 +975,10 @@ void Simulator::SetPreferredBackend(BackendKind backend) {
 
 void Simulator::SetAnalysisChainId(bool enabled, uint8_t symmetry) {
   analysis_chain_id_.store(ChainIdSession{ enabled, symmetry }, std::memory_order_release);
+}
+
+void Simulator::SetAnalysisForceCpu(bool enabled) {
+  analysis_force_cpu_.store(enabled, std::memory_order_release);
 }
 
 namespace {
@@ -991,8 +999,22 @@ namespace {
 //                                       (>= sm_61) is present, else legacy CPU;
 //                                       runtime probe logged one-shot on both paths
 //      - kCuda (no LUMICE_CUDA_ENABLED) -> nullptr (legacy CPU)
+//   0) force_cpu (the analysis run's session property, Simulator::SetAnalysisForceCpu)
+//      short-circuits BOTH steps: legacy CPU, and neither the env override nor the
+//      preference is read. It sits above the env override on purpose — the analysis
+//      run's contract is "CPU regardless of what the environment says", and an
+//      override that outranked it would make that contract false on exactly the
+//      machines (CI, --benchmark) where the variable is set.
 // Returns nullptr to keep the legacy CPU path (Simulator::SimulateOneWavelength).
-std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logger& logger) {
+// `*out_kind` (never null) receives the kind of what was returned: kCpu for nullptr AND
+// for CpuTraceBackend — the question it answers is "which route", and both are the CPU
+// one; the GPU kinds only for a live GPU backend.
+std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logger& logger, bool force_cpu,
+                                            BackendKind* out_kind) {
+  *out_kind = BackendKind::kCpu;
+  if (force_cpu) {
+    return nullptr;
+  }
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
     if (name.empty() || name == "legacy") {
@@ -1003,6 +1025,7 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
     } else if (name == "metal") {
 #if defined(__APPLE__)
       ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=metal → routing via MetalTraceBackend");
+      *out_kind = BackendKind::kMetal;
       return std::make_unique<MetalTraceBackend>(&logger);
 #else
       ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=metal requested on non-Apple platform; falling back to legacy CPU");
@@ -1013,6 +1036,7 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
       ILOG_INFO(logger, "CUDA availability probe: {}", CudaDeviceDiagnostics());
       if (CudaDeviceAvailable()) {
         ILOG_INFO(logger, "LUMICE_TRACE_BACKEND=cuda → routing via CudaTraceBackend");
+        *out_kind = BackendKind::kCuda;
         return std::make_unique<CudaTraceBackend>(&logger);
       }
       ILOG_WARN(logger, "LUMICE_TRACE_BACKEND=cuda requested but no eligible CUDA device; falling back to legacy CPU");
@@ -1035,6 +1059,7 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
     case BackendKind::kMetal:
 #if defined(__APPLE__)
       ILOG_INFO(logger, "preferred_backend=metal → routing via MetalTraceBackend");
+      *out_kind = BackendKind::kMetal;
       return std::make_unique<MetalTraceBackend>(&logger);
 #else
       return nullptr;  // non-Apple: silent no-op (CPU)
@@ -1044,6 +1069,7 @@ std::unique_ptr<TraceBackend> CreateBackend(BackendKind preferred_backend, Logge
       ILOG_INFO(logger, "CUDA availability probe: {}", CudaDeviceDiagnostics());
       if (CudaDeviceAvailable()) {
         ILOG_INFO(logger, "preferred_backend=cuda → routing via CudaTraceBackend");
+        *out_kind = BackendKind::kCuda;
         return std::make_unique<CudaTraceBackend>(&logger);
       }
       ILOG_WARN(logger, "preferred_backend=cuda but no eligible CUDA device; falling back to legacy CPU");
@@ -1117,13 +1143,16 @@ void Simulator::Run() {
   // and root_ray_count exactly once per Run() — if a future refactor introduces
   // a backend pool, that gate's semantics must be revisited (cross-Run() PCG
   // determinism + counter rollover both depend on the per-Run() lifecycle here).
-  auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_);
+  BackendKind backend_kind = BackendKind::kCpu;
+  auto backend = CreateBackend(preferred_backend_.load(std::memory_order_acquire), logger_,
+                               analysis_force_cpu_.load(std::memory_order_acquire), &backend_kind);
   // Publish this Run()'s starting backend state. Covers both "GPU
   // preference honoured" (true, overwriting the ctor default) and "no backend at
   // all" (false — CPU preference, or a GPU preference CreateBackend could not
   // honour). The server's producer reads this to decide whether its per-batch
   // dispatch grain is still the right one; see Simulator::BackendActive().
   backend_active_.store(backend != nullptr, std::memory_order_release);
+  active_backend_.store(backend_kind, std::memory_order_release);
   // Raypath-analysis session snapshot (see SetAnalysisChainId). One Run() is
   // one session: the interning table restarts from id 1 here, so a consumer
   // never sees ids from a previous session's table.
@@ -1229,6 +1258,7 @@ void Simulator::Run() {
         // has to be seen eventually, which narrows the mis-sized window rather than
         // closing it (batches already queued keep their size).
         backend_active_.store(false, std::memory_order_release);
+        active_backend_.store(BackendKind::kCpu, std::memory_order_release);
         SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
                               crystal_cache, workspace, generation, ray_alloc_carry);
         return false;

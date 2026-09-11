@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "config/render_config.hpp"  // RaypathRoiSpec::frame_config_
 #include "core/backend/backend_kind.hpp"
 #include "core/def.hpp"  // ColorDegradeCounts (task-color-degrade-gui-surfacing)
 #include "server/component_compositor.hpp"
@@ -188,6 +189,36 @@ enum class RaypathRoiMode : uint8_t {
   kCone,     ///< rays within an angular radius of a world-space centre direction, binned by angular distance
 };
 
+// The request: which rays count. Only the fields of the chosen mode are read.
+// Lives here rather than in raypath_histogram_consumer.hpp because it is also
+// the ROI half of RaypathAnalysisRequest, the argument Server::StartRaypathAnalysis
+// takes — and that header includes this one, not the other way round.
+struct RaypathRoiSpec {
+  RaypathRoiMode mode_ = RaypathRoiMode::kFullSky;
+  // kInFrame: the frame whose lens / view / visible / front decide membership.
+  RenderConfig frame_config_;
+  // kCone: world-space centre direction (normalised at construction; a zero
+  // vector is rejected), angular radius, ring count, and the number of
+  // in-cone rays after which RoiTargetReached() turns true (0 = never).
+  float cone_center_[3]{ 0.0f, 0.0f, 1.0f };
+  float cone_radius_rad_ = 0.0f;
+  int cone_ring_count_ = 1;
+  size_t cone_stop_target_ = 0;
+};
+
+// What Server::StartRaypathAnalysis takes: the ROI, plus the symmetry the
+// per-layer face sequences are reduced under before chains are compared.
+// `chain_id_symmetry_` is a FilterConfig::kSym* bit set (P=1, B=2, D=4; the
+// legal combinations are 0..7, and 0 is a legal request for NO reduction), so
+// "use the session default" needs a value outside that range: 0xFF, which no
+// combination of the three bits can produce. The session default is
+// Simulator::kDefaultChainIdSymmetry (P|B|D).
+constexpr uint8_t kChainIdSymmetrySessionDefault = 0xFF;
+struct RaypathAnalysisRequest {
+  RaypathRoiSpec roi_;
+  uint8_t chain_id_symmetry_ = kChainIdSymmetrySessionDefault;
+};
+
 // One MS layer of a chain: which crystal, and the face sequence through it
 // after symmetry reduction (Crystal::ReduceRaypath) — the same triple the
 // interning table keys on (core/chain_id_table.hpp), minus the ids.
@@ -282,6 +313,12 @@ struct ResultFrame {
   std::vector<RawXyzResult> xyz_results_;
   std::vector<CompositeResult> composite_results_;
   std::optional<StatsResult> stats_result_;
+  // The analysis run's result (Server::StartRaypathAnalysis). Set only when the
+  // consumer set that produced this snapshot held a RaypathHistogramConsumer,
+  // i.e. only for frames of an analysis session; a render session's frame has no
+  // such consumer and leaves it nullopt — there is no cross-snapshot cache that a
+  // stale value could survive in.
+  std::optional<RaypathHistogramResult> raypath_histogram_result_;
 
   // Lifetime anchors, parallel to render_results_ / xyz_results_.
   std::vector<std::shared_ptr<const uint8_t[]>> render_storage_;
@@ -310,7 +347,10 @@ struct ResultFrame {
  *          `--benchmark` dual-pass, which must skip the meaningless "single" warmup pass for
  *          the single-engine GPU route) should query this rather than re-deriving the logic.
  */
-bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger);
+// `force_cpu` is the analysis run's session property (Server::StartRaypathAnalysis): when
+// true the answer is CPU before the env override or the preference is even consulted,
+// mirroring CreateBackend's `force_cpu` so the two routing decisions cannot split.
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger, bool force_cpu = false);
 
 /**
  * @brief per-batch dispatch grain `GenerateScene` should actually use.
@@ -416,6 +456,46 @@ class Server {
    * @return Error object indicating success or failure
    */
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
+
+  /**
+   * @brief Start an ANALYSIS run — the other kind of run this server's one lifecycle
+   *        carries (doc/raypath-analysis-panel.md §3): no image, a histogram of
+   *        complete raypath chains over the committed scene.
+   * @details Same Stop → rebuild consumers → Start sequence as CommitConfig, on the
+   *          scene already committed; only the consumer set differs (a
+   *          RaypathHistogramConsumer + a StatsConsumer). Three session properties
+   *          follow from it and hold until the next successful CommitConfig, which
+   *          switches the server back to a render session:
+   *          - every Simulator carries chain ids (SetAnalysisChainId);
+   *          - the trace backend is forced to the legacy CPU path regardless of
+   *            SetPreferredBackend and LUMICE_TRACE_BACKEND (SetAnalysisForceCpu); the
+   *            preference itself is left untouched, so a later render session still
+   *            honours it;
+   *          - a cone ROI with a non-zero stop target ends the run early, through the same
+   *            natural-completion path a finite ray_num takes (never through Stop(), which
+   *            would read the result as "no data").
+   *          The result is read through AcquireResultFrame():
+   *          ResultFrame::raypath_histogram_result_.
+   * @return Error::ServerError when a RENDER run is in progress (GetSimLifecycle() ==
+   *         kRunning in a render session): AC1 of the analysis run — the caller must Stop()
+   *         first or wait for the render to complete; this call never interrupts it silently.
+   *         Calling it while an ANALYSIS run is in progress is allowed and restarts the
+   *         analysis with the new request. Error::InvalidConfig when nothing has been
+   *         committed yet (there is no scene to trace).
+   */
+  Error StartRaypathAnalysis(const RaypathAnalysisRequest& request);
+
+  /**
+   * @brief The trace backend this server's Simulator ACTUALLY runs on, as opposed to the
+   *        one SetPreferredBackend asked for.
+   * @details The two differ in exactly two situations, and this is the read that makes
+   *          both observable: an analysis session (always kCpu — the session forces it,
+   *          structurally, so the answer does not wait for Run() to re-enter), and a GPU
+   *          route whose backend was lost or never obtained (see BackendFellBack). In a
+   *          render session it is the value the Simulator published at its last Run()
+   *          entry, kCpu before any run. Cheap; safe to poll.
+   */
+  BackendKind GetActiveBackend() const;
 
   /**
    * @brief Acquire a share of the most recent result frame.

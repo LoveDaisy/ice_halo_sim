@@ -18,7 +18,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "config/render_config.hpp"
 #include "core/chain_id_table.hpp"
 #include "core/geo3d.hpp"
 #include "core/shared/projection_shared.h"
@@ -28,19 +27,8 @@
 
 namespace lumice {
 
-// The request: which rays count. Only the fields of the chosen mode are read.
-struct RaypathRoiSpec {
-  RaypathRoiMode mode_ = RaypathRoiMode::kFullSky;
-  // kInFrame: the frame whose lens / view / visible / front decide membership.
-  RenderConfig frame_config_;
-  // kCone: world-space centre direction (normalised at construction; a zero
-  // vector is rejected), angular radius, ring count, and the number of
-  // in-cone rays after which RoiTargetReached() turns true (0 = never).
-  float cone_center_[3]{ 0.0f, 0.0f, 1.0f };
-  float cone_radius_rad_ = 0.0f;
-  int cone_ring_count_ = 1;
-  size_t cone_stop_target_ = 0;
-};
+// RaypathRoiSpec (the request) is declared in server/server.hpp, next to
+// RaypathRoiMode: it is also half of RaypathAnalysisRequest, which Server takes.
 
 class RaypathHistogramConsumer : public IConsume {
  public:
