@@ -367,7 +367,13 @@ extern "C" {
 // term — it could only keep a shadow flag of its own, a second copy of the server's judgement.
 // This field is the server's copy, read back. Read it BEFORE the commit whose decision you
 // are predicting: the commit itself is what flips it back to RENDER.
-#define LUMICE_API_VERSION 437
+//
+// ADDED (v4.38): LUMICE_SceneSetRayAllocation, a pure append. scene.ray_allocation ("proportional"
+// | "adaptive") used to reach a scene handle only through LUMICE_SceneFromJson / FromJsonFile; a
+// programmatic author (the GUI's Simulation panel) now sets it with LUMICE_RAY_ALLOCATION_* the
+// way LUMICE_SceneSetColorMode takes LUMICE_COLOR_MODE_*. Nothing else moved; a handle that never
+// calls it still omits the key and still round-trips a document's spelling verbatim.
+#define LUMICE_API_VERSION 438
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1033,6 +1039,13 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_COLOR_MODE_ADDITIVE 1
 #define LUMICE_COLOR_MODE_PAINTER 2
 
+// Per-crystal ray allocation modes (mirrors the JSON scene.ray_allocation field:
+// "proportional" | "adaptive", doc/configuration.md). Proportional deals each crystal its
+// population share of the rays; adaptive deals by the crystals' measured per-ray energy variance
+// (online Neyman allocation) — same expected image, noise made more even across crystals.
+#define LUMICE_RAY_ALLOCATION_PROPORTIONAL 0
+#define LUMICE_RAY_ALLOCATION_ADAPTIVE 1
+
 // Lens projection kinds. Values mirror the declaration order of core LensParam::LensType, but the
 // C API<->core mapping is an explicit switch, so a future reorder on either side cannot silently
 // alias one projection onto another.
@@ -1371,12 +1384,14 @@ LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene* scene, float sun_altit
                                             float sun_diameter, const char* spectrum);
 LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene* scene, const LUMICE_SpectrumEntry* entries, int count);
 // scene.ray_allocation ("proportional" | "adaptive", doc/configuration.md) is deliberately NOT a
-// parameter here: today it reaches a scene only through LUMICE_SceneFromJson / FromJsonFile and
-// round-trips through LUMICE_SceneToJson verbatim. No programmatic caller needs it yet (the GUI
-// does not expose it); when one does, add it as a pure append (API version bump), not by hand-
-// editing the JSON around this setter.
+// parameter of LUMICE_SceneSetSimParams (positional; adding one would break every caller). It has
+// its own setter below, LUMICE_SceneSetRayAllocation (v4.38); a handle that never calls it omits
+// the key, and LUMICE_SceneFromJson / ToJson still carry a document's spelling verbatim.
 LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUMICE_RayCount ray_num, int max_hits,
                                           int geom_clock);
+// mode: LUMICE_RAY_ALLOCATION_PROPORTIONAL / _ADAPTIVE. Any other value is rejected with
+// LUMICE_ERR_INVALID_CONFIG and leaves the scene untouched.
+LUMICE_ErrorCode LUMICE_SceneSetRayAllocation(LUMICE_Scene* scene, int mode);
 LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene* scene, int raypath_color_mode);
 
 // ---------- Serialization: decoupled from commit ----------

@@ -782,6 +782,18 @@ static const char* ColorModeToString(int mode) {
   }
 }
 
+// Map LUMICE_RAY_ALLOCATION_* to its wire string. Throws std::invalid_argument on an invalid mode.
+static const char* RayAllocationModeToString(int mode) {
+  switch (mode) {
+    case LUMICE_RAY_ALLOCATION_PROPORTIONAL:
+      return "proportional";
+    case LUMICE_RAY_ALLOCATION_ADAPTIVE:
+      return "adaptive";
+    default:
+      throw std::invalid_argument("ray_allocation mode is invalid: " + std::to_string(mode));
+  }
+}
+
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
 // emitted filter JSON shape field by field. See that header for rationale.
 nlohmann::json ConfigToJson(const ConfigScratch& c) {
@@ -1217,6 +1229,22 @@ LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUM
   } else {
     scene_j.erase("geom_clock");
   }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneSetRayAllocation(LUMICE_Scene* scene, int mode) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  const char* mode_str = nullptr;
+  try {
+    mode_str = RayAllocationModeToString(mode);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneSetRayAllocation: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  scene->root["scene"]["ray_allocation"] = mode_str;
   return LUMICE_OK;
 }
 

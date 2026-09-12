@@ -29,7 +29,7 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 ### 常量
 
 ```c
-#define LUMICE_API_VERSION 437        // ABI 版本，编码为 major*100 + minor（v4.37）
+#define LUMICE_API_VERSION 438        // ABI 版本，编码为 major*100 + minor（v4.38）
 #define LUMICE_MAX_RENDER_RESULTS 16  // 渲染结果数组最大容量
 #define LUMICE_MAX_STATS_RESULTS 1    // 统计结果数组最大容量
 ```
@@ -37,7 +37,7 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 `LUMICE_API_VERSION` 让调用方把编译时依赖的 ABI 钉死，在不匹配时编译期报错，而不是撞上结构体布局漂移导致的静默 UB：
 
 ```c
-static_assert(LUMICE_API_VERSION >= 437, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 438, "Lumice header too old for this integration");
 ```
 
 公开符号集或结构体布局每发生一次 BREAKING 变更就 bump 一次。
@@ -293,10 +293,13 @@ LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene*, float sun_altitude, f
 LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene*, const LUMICE_SpectrumEntry*, int count);
 LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene*, int infinite, LUMICE_RayCount ray_num,
                                           int max_hits, int geom_clock);
+LUMICE_ErrorCode LUMICE_SceneSetRayAllocation(LUMICE_Scene*, int mode);
 LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene*, int raypath_color_mode);
 ```
 
 每个 `Set*` 都是幂等的（后写覆盖先写）且可以任意顺序调用。`scene` 为 `NULL` 返回 `LUMICE_ERR_NULL_ARG`，值非法返回 `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_INVALID_VALUE`。
+
+`LUMICE_SceneSetRayAllocation`（v4.38）设置 `scene.ray_allocation`——`doc/configuration.md` 里的逐晶体光线分配模式。`mode` 取 `LUMICE_RAY_ALLOCATION_PROPORTIONAL`（0，落盘字符串 `"proportional"`：每个晶体按人口占比分到光线）或 `LUMICE_RAY_ALLOCATION_ADAPTIVE`（1，`"adaptive"`：按各晶体实测的逐光线能量方差分配——期望画面不变，噪声在晶体之间更均匀）。它有意不做成位置参数的 `LUMICE_SceneSetSimParams` 的一个参数。从不调用它的句柄不写这个键，commit 时由 core 默认值决定；`LUMICE_SceneFromJson` / `ToJson` 仍逐字保留文档自己的拼写。
 
 光源与光谱存在交互，且设计上与调用顺序无关：离散光谱（`SetCustomSpectrum` 且 `count > 0`）优先于 `spectrum` 字符串，因此 `SetLightSource` **不会**覆盖已设置的离散光谱，两种调用顺序收敛到同一结果。`SetCustomSpectrum` 传 `count == 0` 清除离散光谱，回退到字符串（默认 `"D65"`）。
 

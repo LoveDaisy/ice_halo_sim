@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 437        // ABI version, encoded major*100 + minor (v4.37)
+#define LUMICE_API_VERSION 438        // ABI version, encoded major*100 + minor (v4.38)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -38,7 +38,7 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 437, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 438, "Lumice header too old for this integration");
 ```
 
 It is bumped on every BREAKING change to the public symbol set or struct layout.
@@ -394,12 +394,22 @@ LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene*, float sun_altitude, f
 LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene*, const LUMICE_SpectrumEntry*, int count);
 LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene*, int infinite, LUMICE_RayCount ray_num,
                                           int max_hits, int geom_clock);
+LUMICE_ErrorCode LUMICE_SceneSetRayAllocation(LUMICE_Scene*, int mode);
 LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene*, int raypath_color_mode);
 ```
 
 Each `Set*` is idempotent (last write wins) and callable in any order. Returns
 `LUMICE_ERR_NULL_ARG` for a `NULL` scene, `LUMICE_ERR_INVALID_CONFIG` / `LUMICE_ERR_INVALID_VALUE`
 for an invalid value.
+
+`LUMICE_SceneSetRayAllocation` (v4.38) sets `scene.ray_allocation` — the per-crystal ray
+allocation mode of `doc/configuration.md`. `mode` is `LUMICE_RAY_ALLOCATION_PROPORTIONAL` (0,
+wire string `"proportional"`: each crystal gets its population share of the rays) or
+`LUMICE_RAY_ALLOCATION_ADAPTIVE` (1, `"adaptive"`: rays are dealt by each crystal's measured
+per-ray energy variance — same expected image, noise made more even across crystals). It is
+deliberately not a parameter of the positional `LUMICE_SceneSetSimParams`. A handle that never
+calls it omits the key, so the core default applies at commit; `LUMICE_SceneFromJson` / `ToJson`
+still carry a document's own spelling verbatim.
 
 Light source and spectrum interact, and the interaction is order-independent by design: a discrete
 spectrum (`SetCustomSpectrum` with `count > 0`) takes precedence over the `spectrum` string, so
