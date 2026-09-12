@@ -1370,6 +1370,11 @@ LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene* scene, const LUMICE_Col
 LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene* scene, float sun_altitude, float sun_azimuth,
                                             float sun_diameter, const char* spectrum);
 LUMICE_ErrorCode LUMICE_SceneSetCustomSpectrum(LUMICE_Scene* scene, const LUMICE_SpectrumEntry* entries, int count);
+// scene.ray_allocation ("proportional" | "adaptive", doc/configuration.md) is deliberately NOT a
+// parameter here: today it reaches a scene only through LUMICE_SceneFromJson / FromJsonFile and
+// round-trips through LUMICE_SceneToJson verbatim. No programmatic caller needs it yet (the GUI
+// does not expose it); when one does, add it as a pure append (API version bump), not by hand-
+// editing the JSON around this setter.
 LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUMICE_RayCount ray_num, int max_hits,
                                           int geom_clock);
 LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene* scene, int raypath_color_mode);
