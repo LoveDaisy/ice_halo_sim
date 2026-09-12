@@ -9,6 +9,13 @@
 > 为独立顶层小节，原「开放设计点清单」相应后移为 §8）；被下游子任务证伪的 assistant 推断保留
 > 原文并标注「已证伪：实际 …」。
 > 改「光路分析面板」（raypath-analysis-panel）相关的任何一层前先读本文。
+>
+> **2026-09-12 更新（commit `6de5fd54`..`7ef41dfa`）**：owner 上手本文档描述的交付物后，提出 9 条
+> 交互问题与 bug，按根因归五组修复（排除→Run 黑屏 / ROI 标记随视角+可拖 / 对称性即时切换+标签格式
+> / 半径与光线数请求参数 UI / Out filter 上继续排除），C API 从 v4.30 推进到 v4.33（新增
+> `LUMICE_ProjectDirection` v4.31、请求携带自己的光线预算 v4.32、symmetry 从请求移到读取 v4.33）。
+> 五组修复没有单独成节复述，而是就地回写进 §2 第 2/3 条、§5、§7、§8——行文中用「2026-09-12 更新」
+> 标出落地版本，原设计阶段文字保留在旁边作对照。
 
 ## 1. 问题与形态
 
@@ -81,6 +88,25 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    **as-built**：见 §3.4；GUI 侧滑杆 display-time 语义由专门测试钉住
    （`test/gui/functional/test_raypath_analysis_panel.cpp` 的 `radius_slider_is_display_time`
    用例：拖滑杆后 payload 指针/epoch/lifecycle/upload 计数均不变）。
+
+   **2026-09-12 更新（commit `c59e9ec3`/`04ba4c5d`/`cfb1c022`，光线预算部分见 `512396a2`/`57daf50a`）**：
+   锥中心从「点击时缓存的画布像素坐标」（`GuiState::analysis`
+   原先的一个像素缓存字段，`gui_state.hpp` 注释曾自称「已知限制」；该字段本次已删除）改为**每帧从
+   方向正投影的 marker**——新增 C API
+   `LUMICE_ProjectDirection`（v4.31，`ProjectDirectionOnView`，`src/core/annotation_overlay.{hpp,cpp}`）
+   与 6 个具名 marker（`LUMICE_ComputeAnnotationAnchors`）共用同一采样器（投影 + 画布钳制 + 半度容差）。
+   marker 因此随视角移动而不是钉在屏幕位置上；悬停命中半径（`kAnalysisConeMarkerHitRadiusPt=12pt`）
+   内变手形光标、可直接拖动，方向即时更新；切到 Point 模式且当前无有效中心、且有预览可投影时默认
+   置于视口中心（level-triggered，不覆盖已有的中心）。Pick 的反馈从「一瞬红框」换成持久提示条
+   （`RenderPickBanner`：十字光标图标 + "Click on the preview to set the centre — Esc to cancel"，
+   面板不隐藏）。`ArbitrateConeInput`（`analysis_panel.{hpp,cpp}`）是「marker 拖动 / pick 点击 /
+   视角拖动」三者互斥的单一裁决入口，供 `app_panels.cpp` 调用。
+   半径滑杆同轮改为**分析前即可拖动**、驱动预览圈半径（`RenderRadiusSlider` 对无结果/有结果两种
+   状态取不同的锥角上限来源，见该函数注释）；分析后维持本条已有的 display-time 语义不变。光线预算
+   （`infinite`/`ray_num`，v4.32，哨兵 `LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` 保留 v4.32 之前的
+   「用文档自己的 `ray_num`」行为）与锥落线目标（原常量 `kAnalysisConeStopTarget`，现改名面板可调的
+   `cone_stop_target`）也从常量变为请求参数；三者与 marker 状态一样归 `RaypathAnalysisSession`
+   session tier，不进文档 / `.lmc`。用户可见行为见 `doc/user-manual/06-raypath-analysis.md` §2/§3。
 4. **总能量降序排序必有；其它排序方式可以有，但「能量 / 覆盖立体角」这种密度量 v1 不做。**
    理由：每个链 id 对应的累加器只需要是标量（Σ(Y·w)、计数），代价很低；密度排序需要给
    **每个** key 都配一张粗天球栅格才能算出「这条链覆盖了多大立体角」，存储与实现复杂度都
@@ -263,28 +289,45 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 `crystal1(1-3-5)` 与其它晶体的组合」）。这个限制在 UI 上要明确说明，不能让按钮在多段链上
 显示为可用却生成一个不达意的 filter。
 
-**as-built**：GUI 侧「Exclude this raypath」按钮（`ICON_FA_BAN`，`src/gui/analysis_panel.cpp:573`）
-的可用性由 `EvaluateExcludeEligibility`（`analysis_panel.cpp:277`，声明
-`src/gui/analysis_panel.hpp:129`）判定，五类结果之一：
+**as-built**：GUI 侧「Exclude this raypath」按钮（`ICON_FA_BAN`）的可用性由
+`EvaluateExcludeEligibility`（`analysis_panel.cpp:547`，声明 `analysis_panel.hpp:229`）判定：
 
 | 判据 | 结果 | 提示文案（原文） |
 |---|---|---|
 | 未选中任何行 | `kNoSelection` | "Select a raypath in the list first." |
 | `chain_len != 1`（多段链） | `kMultiSegment` | "This chain crosses scattering layers. A filter belongs to one crystal, so the current filter model cannot express excluding a multi-layer chain." |
 | 该链对应的晶体不在当前文档里 | `kCrystalNotInScene` | "The crystal this chain went through is not in the current document (the crystal list changed since the analysis). Run and analyze again." |
-| 该晶体已有 entry 挂了 filter | `kEntryHasFilter` | "An entry using this crystal already has a filter. Excluding on top of an existing filter is not merged automatically; edit that filter instead." |
-| 以上皆非 | `kOk`（按钮可点） | — |
+| 该晶体任一 entry 已有 **In** filter | `kEntryHasInFilter` | "An entry using this crystal already has an In filter (filter_in). Exclude can only add to an existing Out filter; edit that filter directly, or change its action to Out, to continue." |
+| 以上皆非（无 filter，或已有 **Out** filter） | `kOk`（按钮可点） | — |
 
-点击后 `ApplyExcludeSelectedRaypath`（`analysis_panel.cpp:332`）生成一个
-`action = filter_out`、`sym_p/sym_b/sym_d` 全开的 `FilterConfig`（与分析会话的 P|B|D 约化口径
-一致，否则排除 `3-5` 会漏掉同一条链的其它取向等价变体），通过既有的
+点击后 `ApplyExcludeSelectedRaypath`（`analysis_panel.cpp:632`）通过既有的
 `WriteFilterToPool` / `PropagateFilterIdToLinked`（从 `edit_modals.cpp` 的局部 lambda 提升为
 自由函数，`src/gui/edit_modals.hpp:27/32`）写入——与手工编辑弹窗共用同一条写入原语，
 不是重新发明一条。文档随之标为 `Modified`；用户需按 Run 重跑才能看到排除后的画面。
 
-`kEntryHasFilter` 这条判据比设计阶段预想得更保守：只要该晶体**任一** entry 已有 filter 就整体
-禁用，而不是「已有同 action filter 时追加一行 OR」。这是实施期的范围收窄，尚待 owner 复核；
-撤销成本低（只需在该分支前加一段追加逻辑）。
+**2026-09-12 更新（commit `aca179b2`/`7ef41dfa`）——`kOk` 覆盖两条写入路径，原「任一 entry 有 filter 即整体
+禁用」的旧判据（设计阶段遗留、当时标注「尚待 owner 复核」）已被取代**：`CensusForPoolCrystal`
+（`analysis_panel.cpp` 匿名命名空间）一次遍历该 pool crystal 的全部 entry，分类出「哪些 distinct
+Out 槽位」「是否含 In」「多少 entry 尚无 filter」，`EvaluateExcludeEligibility` / `ExcludeAppendNotice`
+/ `ApplyExcludeSelectedRaypath` 三处共享同一份分类结果：
+
+- 该晶体**每一个已有 Out** 的 filter 槽位都追加一条 OR 行（用的是**该 filter 自己的**
+  action/symmetry，不是列表当前显示的 symmetry——一个 OR 行没有自己独立的对称位，加入一个已经在
+  别的 symmetry 下约束别的行的 filter，只能沿用它的口径），同一条链重复 Exclude 不产生重复行；
+  一个 filter 被多个 entry 共享（linked entry）时改动对所有共享者可见。
+- 该晶体**没有 filter** 的那部分 entry 新建一个 filter，此时对称位取
+  `state.analysis_result.entries_symmetry`（列表当时实际显示所用的约化粒度，而非 checkbox
+  当前值——两者只在「DoRun 之后、列表还留着旧结果」这一种情形分叉），使新 filter 排除的恰好是
+  这一行合并进来的那些取向，不多不少。
+- 只有该晶体**任一** entry 已有 **In** filter 时才整体禁用（`kEntryHasInFilter`）——排除与
+  「只保留这些路径」在语义上冲突，无法自动合并。
+
+`ExcludeAppendNotice`（`analysis_panel.cpp:588`）拼出对应提示文案：单个 Out 槽位（含被几个
+entry 共享）/ 多个 Out 槽位 / 还有未筛选子组分别措辞。实施期的一处偏离：plan 阶段假设「同一
+`crystal_id` 的所有 entry 共享同一个 `filter_id`」，可以挑一个「代表 entry」读/写；实现时首次
+跑单元测试即发现既有 fixture 存在混合态（同一 pool crystal 下部分 entry 有 filter、部分没有），
+代表 entry 法与旧语义（任一 entry 有 filter 即拒绝）相悖，遂改为上述「整组遍历 + 一次性分类」。
+用户可见文案见 `doc/user-manual/06-raypath-analysis.md` §5。
 
 ## 6. 诚实边界
 
@@ -327,40 +370,58 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 ## 7. 结果条目的可打印字符串（唯一权威）
 
 GUI 与 CLI 若都要打印一条链，打印的是**同一个字符串**，而不是各自从分段结构拼一遍。
-权威实现只有一处：`ChainIdInterningTable::Format(uint32_t id)`（`src/core/chain_id_table.cpp:80`），
-`RaypathHistogramConsumer::PrepareSnapshot` 用它给 `RaypathHistogramEntry::display_` 赋值，
-C API 的 `LUMICE_RaypathHistogramEntry::display` 是这个字符串的**逐字节拷贝**（`c_api.cpp` 只做
-截断，不重拼）。格式规则（由该实现定义，此处只是复述）：
 
-- 逐层 root-first：先写光线进入的第一层，最后写出射层；
-- 每层写作 `crystal<id>(<face>-<face>-…)`，`<id>` 是 config 里的晶体 id，括号内是**对称约化后**
-  的面序列（`Crystal::ReduceRaypath`，约化对称由请求的 `chain_id_symmetry` 决定，默认
-  `FilterConfig::kSymP | kSymB | kSymD`，`Simulator::kDefaultChainIdSymmetry`，
-  `src/core/simulator.hpp:103`），面号之间用 `-` 连接；
-- 多层之间也用 `-` 连接。
+**2026-09-12 更新（commit `9efc4779`/`39557d8b`/`c8e271f5`/`b12da83a`）——权威实现搬家、格式改版**：
+权威实现从 `ChainIdInterningTable::Format` 搬到了 `FormatRaypathChainDisplay`
+（`src/server/raypath_histogram_consumer.cpp:249`，声明于同目录 `.hpp`）；
+`ChainIdInterningTable::Format`（`src/core/chain_id_table.cpp:80`）不再对外可见——它是记录侧内部
+的诊断格式，从不离开 core（`crystal1(3-5)` 这种写法是它的输出，仅供 core 内部调试用）。
+`RaypathHistogramConsumer::PrepareSnapshot` / `ReduceRaypathHistogram` 用 `FormatRaypathChainDisplay`
+给 `RaypathHistogramEntry::display_` 赋值，C API 的 `LUMICE_RaypathHistogramEntry::display` 是这个
+字符串的**逐字节拷贝**（`c_api.cpp` 只做截断，不重拼）。
 
-例：单层 22° 晕 `crystal1(3-5)`；两层 `crystal1(3-5)-crystal2(1-3)`。
+当前格式规则（`FormatRaypathChainDisplay` 定义，此处只是复述）：
+
+- 逐层 root-first：先写光线进入的第一层，最后写出射层，层与层之间用 ` -> ` 连接；
+- 一层只有一种晶体时，直接写这一层**约化后**的面序列，面号之间用 `-` 连接（如 `3-5`），不带
+  括号、不带晶体号；
+- 一层有多种晶体时，面序列前面加 `C<id>`（`<id>` 是 config 里的晶体 id）；只要一层带了 `C<id>`，
+  或者链本身有一层以上，该层的面序列就用括号包起来——因此只有「单晶体、单层」的链完全没有括号。
+
+约化对称不再是记录时固定的一个值，而是下一段所述的**读取参数**（v4.33）：同一条链的 `display`
+随调用方在读取时传入的 `chain_id_symmetry` 变化，而不是像旧格式那样固定用
+`FilterConfig::kSymP|kSymB|kSymD` 约化一次、写死进记录。
+
+例：单晶体单层 22° 晕 `3-5`；单晶体两层 `(3-5) -> (1-3)`；多晶体单层 `C1(3-5)`；多晶体两层
+`C1(1-3) -> C4(3-5)`。
 
 C 结构体里的 `chain[]`/`segment[]` 与 `display` 描述同一条链，前者供程序判定（例如「是否单段链」
 决定「排除此光路」按钮可用），后者供显示；两者不一致只可能来自截断（超过
 `LUMICE_MAX_RAYPATH_CHAIN_LAYERS` / `LUMICE_MAX_RAYPATH_SEGMENT_LEN`(=64) /
 `LUMICE_RAYPATH_DISPLAY_MAX`(=3200) 的病态链，每次读帧时 WARN 一次），正常场景下两者互为镜像。
 
-**symmetry 来源：候选 B 已落地，owner 尚未显式签字**。设计阶段 §2 第 2 条留了一个开放决策
-（默认候选 A：复用晶体上恰好一条 symmetry 的 filter；候选 B：会话级统一标志）。子任务 2 实施期在
-owner 不在场的情况下按 auto 模式落地候选 B——`Simulator::SetAnalysisChainId(bool enabled,
-uint8_t symmetry)`（`src/core/simulator.cpp:976`）接受一个会话级统一的对称标志，默认
-`kDefaultChainIdSymmetry = kSymP|kSymB|kSymD`（理由：避免默认场景下 6 旋转变体拆行、避免隐式
-依赖某个 filter 的配置）。**这是本次收尾时仍然开放的唯一产品级决策**：若 owner 后续裁定候选
-A，改动范围仅限 `ChainIdLayerContext` 的 symmetry 取值来源一处（`MakeChainIdLayerContext` 的
-调用点，`src/core/simulator.cpp:1504`）。子任务 4（C API）与子任务 5（GUI）的 symmetry 字段设计都
-继承了候选 B 这条基线（GUI 侧目前也不暴露 symmetry 为可调 UI，直接用默认值）。
+**symmetry 来源：「方案 A vs 方案 B」的问题已随对称性改为显示态而结构性消失（2026-09-12更新，
+commit `9efc4779`/`39557d8b`/`c8e271f5`/`b12da83a`）**。设计阶段 §2 第 2 条留了一个开放决策——默认
+方案 A：复用晶体上恰好一条 symmetry 的 filter；方案 B：会话级统一标志。子任务 2 实施期在 owner
+不在场的情况下按 auto 模式落地方案 B 作为**记录侧**的临时基线（`Simulator::SetAnalysisChainId(bool
+enabled, uint8_t symmetry)`，`src/core/simulator.cpp:976`，默认 `kDefaultChainIdSymmetry =
+kSymP|kSymB|kSymD`），当时判定为「仍然开放的唯一产品级决策」。上述 2026-09-12 的改动把 symmetry
+**从记录侧搬到了读取侧**：记录阶段恒用 `kSymNone`（finest，不约化），symmetry
+变成 `LUMICE_FrameGetRaypathAnalysisInfo` / `LUMICE_FrameGetRaypathAnalysis`（v4.33）各自的一个
+读参数，服务端在读取时逐段用 `Crystal::ReduceRaypath(seg, symmetry, sigma_a, d_applicable)`
+按需合并——同一帧可以在任意 symmetry 下反复读、和值守恒，GUI 的 P/B/D 三个 checkbox 因此能
+「切换即重排、不重跑」（见 §2 第 4 条 as-built 与用户手册）。方案 A/方案 B 争的是「记录时用哪个 symmetry」，而这个问题现在没有可争的对象了——
+`Simulator::SetAnalysisChainId` 的签名仍保留 `symmetry` 参数（机制本身可以接受任意 P/B/D
+位组合，其它调用方/测试仍在用它练测约化逻辑），但**服务端发起分析会话时恒传
+`FilterConfig::kSymNone`**（`src/core/simulator.hpp:293` 附近注释）：方案 A/B 原本争论的
+「用哪条 filter 的 symmetry，还是用会话级统一标志」这个决策点，在「记录侧统一不约化」之后
+不再有任何一支被选中的必要。
 
 ## 8. 开放设计点清单（as-built 后的状态）
 
-设计阶段留下的开放设计点均已在子任务 plan 阶段裁定并落地：**symmetry 来源**（候选 A vs 候选
-B——落地了候选 B，owner 尚未显式签字，完整记录见 §7 末尾）、锥形分环参数（见 §3.4）、反投影落点
-（见 §6）。以下是**明确未做、留作后续升级**的项，各附触发条件：
+设计阶段留下的开放设计点均已在子任务 plan 阶段裁定并落地：**symmetry 来源**（方案 A vs 方案
+B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整记录见 §7 末尾）、
+锥形分环参数（见 §3.4）、反投影落点（见 §6）。以下是**明确未做、留作后续升级**的项，各附触发条件：
 
 - **GPU 直方图 kernel**（对应 §2 第 1 条的「GPU 不覆盖」）：触发条件——用户反馈 CPU-only 的
   分析等待时间在大 `ray_num` / 多晶体场景下不可接受，且 Metal/CUDA 补上 per-ray 记录回传

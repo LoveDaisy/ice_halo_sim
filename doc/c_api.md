@@ -776,6 +776,8 @@ LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE
 LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathAnalysisInfo* out);
 LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathHistogramEntry* out, int max_count);
 LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3], int* out_valid);
+LUMICE_ErrorCode LUMICE_ProjectDirection(const LUMICE_AnnotationView* view, const float dir[3], float* out_px,
+                                         float* out_py, int* out_valid);
 LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend);
 ```
 
@@ -831,6 +833,16 @@ canvas into the world direction it images (unit vector, the direction light trav
 same inverse the render-domain mask and the IN_FRAME test are built from; `*out_valid` is 0 for a
 pixel outside the canvas, outside the lens's image domain, or clipped by `visible` / `front`. It is
 how a click becomes a cone centre.
+
+**Direction → pixel** (v4.31): `LUMICE_ProjectDirection` is the forward half `LUMICE_UnprojectPixel`
+is the inverse of, on a direction the caller already holds rather than one of the six named marker
+ids `LUMICE_ComputeAnnotationAnchors` projects. It is the same sampler those markers use
+(projection, canvas clamp, half-degree hemisphere slack — deliberately not `LUMICE_UnprojectPixel`'s
+exact render-domain verdict, since a marker should appear and disappear the way the other markers
+do), so a caller that keeps a direction of its own — the analysis panel keeps its cone centre as
+one — can place it on the picture every frame and have it move with the view exactly as the zenith
+or the sun marker does. `*out_px`/`*out_py` are written only when `*out_valid` is 1; zero
+allocation, no storage handle, designed to be called per frame from a hover test.
 
 ## Usage Examples
 

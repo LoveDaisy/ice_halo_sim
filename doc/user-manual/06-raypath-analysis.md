@@ -18,11 +18,15 @@ The **Region** row offers three modes:
 |------|-------------------|
 | **Whole sky** | Every ray that leaves the scene, in any direction. No spatial filtering. |
 | **In frame** | Only rays that land inside the picture as currently framed (same lens / view / visible / front settings the preview uses). Disabled when there is no preview on screen to define "the frame". |
-| **Point** | A cone around a direction you pick. Click **Pick on preview**, then click a point in the Render Preview; the crosshair direction becomes the cone's centre. |
+| **Point** | A cone around a direction, shown on the preview as a marker. |
 
-In **Point** mode, once you have a result, a **Radius** slider appears. Dragging it changes how far from the centre the report sums energy — but it does **not** re-run the analysis. The underlying pass always records the full cone split into fine angular rings; the slider only decides, at display time, how many of those rings to add up. This means you can sweep the radius back and forth instantly after a single Analyze click.
+**The Point marker**: switching to Point mode places the marker at the centre of the current view by default (if there is a preview to place it on, and no earlier pick to keep). It moves with the view every frame — projected from the direction it represents, not fixed to a screen position — so rotating or panning the view never leaves it behind. Hover over the marker for a hand cursor and drag it to a new spot to set the centre directly; the altitude/azimuth reading next to **Pick on preview** updates as you drag. Press **Pick on preview** instead for a banner across the top of the window ("Click on the preview to set the centre — Esc to cancel") and a crosshair cursor: click anywhere on the preview to move the marker there, or press Esc to cancel.
+
+A **Radius** slider is available as soon as there is a centre — even before you press Analyze — and drives the ROI ring drawn on the preview. Before a result exists, dragging it only changes that ring's size; once a result exists, it instead changes how far from the centre the report sums energy, still without re-running the analysis: the underlying pass always records the full cone split into fine angular rings, and the slider only decides, at display time, how many of those rings to add up. This means you can sweep the radius back and forth instantly after a single Analyze click.
 
 ## 3. Running the analysis
+
+Above the Analyze button, **Infinite rays** and **Rays(M)** set how many rays the analysis traces — its own budget, independent of the document's **Rays** setting (it starts from that value the first time you open the window). Turn off **Infinite rays** and drag **Rays(M)** to trace a fixed total, in millions, across every wavelength; turn it on to trace until you press Stop. In **Point** mode, a **Stop at** field also appears: it ends the run early once that many rays have landed in the cone, regardless of the ray budget — 0 disables the early stop and leaves the ray budget as the only limit.
 
 Press **Analyze**. A dedicated pass traces the scene and groups rays by raypath; while it runs you can press **Stop** to end it early with whatever has accumulated so far. When it finishes (or is stopped), the result list below fills in.
 
@@ -54,11 +58,9 @@ The button is disabled, with a tooltip explaining why, when:
 - no row is selected;
 - **the raypath crosses more than one crystal** (multiple scattering across layers) — a filter attaches to a single crystal, so there is no way to express "exclude this exact multi-crystal sequence" today. Only single-crystal, single-layer raypaths can be excluded this way;
 - the crystal the raypath went through is no longer in the current document (e.g. you edited the crystal list after analyzing — run and analyze again);
-- an entry using that crystal already has a filter attached (excluding on top of it is not merged automatically — edit that filter by hand instead).
+- **an entry using that crystal already has an In filter** — Exclude can only add to an existing Out filter, so it stays disabled here; edit the In filter by hand, or change its action to Out, to continue.
 
-## 6. Known limitation: the region ring can drift after you rotate the view
-
-In **Point** mode, the ring drawn on the preview to show the analyzed cone is placed using the picture as it looked at the moment you clicked. If you rotate or pan the view afterwards, the ring stays at the same screen position while the picture moves under it — the *direction* the analysis used is still correct, but the *ring's on-screen circle* no longer lines up with it. Re-pick the point (or avoid rotating the view) if you need the ring to track the current picture.
+If the crystal already has an **Out** filter instead, the button does not disable: pressing it appends this raypath to that filter as one more excluded alternative — the tooltip says which filter and how many other entries share it — rather than being refused. Excluding the same raypath twice does not add a duplicate.
 
 ## Further reading
 
