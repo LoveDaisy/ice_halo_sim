@@ -910,7 +910,8 @@ formatter (v4.33 format): faces joined by `-`; a layer that holds more than one 
 scene names its crystal as `C<id>`, a layer with one crystal does not; with more than one layer
 every layer is parenthesised and layers are joined by ` -> `, root first — `3-5`, `C1(3-5)`,
 `(3-5) -> (1-3)`, `C1(1-3) -> C4(3-5)`. Print this field rather than re-assembling it from
-`chain[]`.
+`chain[]`. The joiner is ASCII in every consumer; the GUI's list redraws it as an arrow icon at
+render time only, and that presentation never reaches this field.
 
 **Pixel → direction**: `LUMICE_UnprojectPixel` turns a pixel index of a `LUMICE_AnnotationView`
 canvas into the world direction it images (unit vector, the direction light travels), through the

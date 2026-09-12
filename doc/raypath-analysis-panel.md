@@ -509,6 +509,20 @@ C 结构体里的 `chain[]`/`segment[]` 与 `display` 描述同一条链，前�
 `LUMICE_MAX_RAYPATH_CHAIN_LAYERS` / `LUMICE_MAX_RAYPATH_SEGMENT_LEN`(=64) /
 `LUMICE_RAYPATH_DISPLAY_MAX`(=3200) 的病态链，每次读帧时 WARN 一次），正常场景下两者互为镜像。
 
+**连接符的分工：core 给 ASCII，GUI 只在绘制时做呈现映射。** 层间连接符在 `display` 里是 ASCII
+` -> `，这是 C API 契约（`lumice.h` 在 `LUMICE_RaypathHistogramEntry` 处写明）、CLI 打印的原样、
+也是 Exclude 生成的 filter 名称（`"Exclude " + display`）里的字节——不放 U+2192，因为内嵌 body
+字体 Roboto Medium 的 cmap 没有这个字形（Arrows 块整块缺失，fontTools 一手核过），放了在 GUI 上
+只会渲染成 `?`。GUI 结果列表的行标签则经 `JoinerForDisplay`（`src/gui/analysis_panel.cpp`）把
+每个 ` -> ` 换成 FontAwesome 的 `ICON_FA_ARROW_RIGHT` 字形（前后各一个空格）再交给
+`ImGui::Selectable`；这是一个纯字符串重写（连接符是链文本里唯一含空格的位置，不需要解析链语法），
+**只有这一处调用**，`selected_entry` 的比较与写入、Exclude filter 名、CLI 都仍读原始 `display`。
+要换成 Roboto 自带的 `›`（U+203A），只改这个函数里的替换串。与此配套，body 字体的 glyph range 显式
+覆盖了 General Punctuation 块（`src/gui/theme.cpp`，`AddBodyFont`），所以面板文案里的 em-dash /
+`›` / `»` 不再是 `?`；`test/gui/functional/test_body_font_glyph_coverage.cpp` 直接问图集这些码点
+在不在，`test_raypath_analysis_panel.cpp` 的 `chain_label_shows_arrow_glyph_not_qmark` 在双层
+场景上验证屏幕上的行标签就是这个重写、点击后选中的仍是原始 ASCII。
+
 **symmetry 来源：「方案 A vs 方案 B」的问题已随对称性改为显示态而结构性消失（2026-09-12更新，
 commit `9efc4779`/`39557d8b`/`c8e271f5`/`b12da83a`）**。设计阶段 §2 第 2 条留了一个开放决策——默认
 方案 A：复用晶体上恰好一条 symmetry 的 filter；方案 B：会话级统一标志。子任务 2 实施期在 owner
