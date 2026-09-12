@@ -29,6 +29,7 @@
 #include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
 #include "util/color_space.hpp"
+#include "util/lens_focal.hpp"
 #include "util/lens_fov_default.hpp"
 #include "util/path_utils.hpp"
 
@@ -3069,21 +3070,69 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       }
       if (jlens.contains("fov")) {
         r.fov = jlens.at("fov").get<float>();
+      } else if (jlens.contains("f")) {
+        // `f` (focal length, mm) is the author's other way of stating the angle, and core reads it
+        // in this same position — after `fov`, before the default. The formulas live in
+        // util/lens_focal.hpp, the one function core's LensParam::from_json also calls; this switch
+        // only names which of its six families each GUI LensType belongs to, and mirrors the switch
+        // core keeps over its own enum in src/config/render_config.cpp — a new LensType must be
+        // added to both, and neither writes a `default:` so the compiler points at the one missed.
+        //
+        // A converted `f` is silent, like a stated `fov`: the author wrote how wide the lens is.
+        // Only the two families with a domain edge (equal-area below 6mm, orthographic below 12mm)
+        // have nothing to convert to; core rejects such a document, and the GUI's import contract
+        // is to keep what it can and say what it could not, so that case warns and lands on the
+        // same default the no-`fov`-no-`f` branch below uses.
+        const float f = jlens.at("f").get<float>();
+        LensFocalFormula formula = LensFocalFormula::kLinear;
+        switch (r.lens_type) {
+          case kLensTypeLinear:
+          case kLensTypeGlobe:
+            formula = LensFocalFormula::kLinear;
+            break;
+          case kLensTypeFisheyeEqualArea:
+          case kLensTypeDualFisheyeEqualArea:
+            formula = LensFocalFormula::kFisheyeEqualArea;
+            break;
+          case kLensTypeFisheyeEquidist:
+          case kLensTypeDualFisheyeEquidist:
+            formula = LensFocalFormula::kFisheyeEquidistant;
+            break;
+          case kLensTypeFisheyeStereographic:
+          case kLensTypeDualFisheyeStereographic:
+            formula = LensFocalFormula::kFisheyeStereographic;
+            break;
+          case kLensTypeFisheyeOrthographic:
+          case kLensTypeDualFisheyeOrthographic:
+            formula = LensFocalFormula::kFisheyeOrthographic;
+            break;
+          case kLensTypeRectangular:
+            formula = LensFocalFormula::kRectangular;
+            break;
+        }
+        const std::optional<float> fov = LensFocalLengthToFovDegrees(formula, f);
+        if (fov.has_value()) {
+          r.fov = *fov;
+        } else {
+          r.fov = LensDefaultFovDegrees(r.lens_type == kLensTypeGlobe);
+          char f_text[32];
+          std::snprintf(f_text, sizeof(f_text), "%g", static_cast<double>(f));
+          const std::string msg = std::string("render[0].lens states \"f\"=") + f_text +
+                                  "mm, too short for this lens type to convert to a fov; loaded as " +
+                                  std::to_string(static_cast<int>(r.fov)) +
+                                  " degrees (core's default for this lens type; core rejects this document outright).";
+          GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+          SetImportComplexFilterWarning(msg);
+        }
       } else {
         // The default is the one core's LensParam::from_json also takes, from the one function both
         // readers share (util/lens_fov_default.hpp) — so the CLI and the GUI load this document at
         // the same angle, 30 for `globe` and 90 for everything else. This is the value core
         // documents and warns about, not the GUI's own RenderConfig{}.fov, which is a flat 90 that
         // knows nothing about `globe`.
-        //
-        // Hand-over boundary: this decoder does not read `f` (focal length) yet, so a document that
-        // states `f` and not `fov` also lands here and is told "no fov" even though it did say how
-        // wide the lens is. That is the status quo (`f` was silently ignored before, now the author
-        // at least hears a default was used); when `f` is read, the "stated f" case splits off into
-        // its own path and this wording should be narrowed to the genuinely-empty lens object.
         r.fov = LensDefaultFovDegrees(r.lens_type == kLensTypeGlobe);
         // Both defaults are whole degrees, so the truncating cast prints them exactly.
-        const std::string msg = std::string("render[0].lens states no \"fov\"; loaded as ") +
+        const std::string msg = std::string("render[0].lens states neither \"fov\" nor \"f\"; loaded as ") +
                                 std::to_string(static_cast<int>(r.fov)) +
                                 " degrees (core's default for this lens type, and what the CLI renders it at).";
         GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
