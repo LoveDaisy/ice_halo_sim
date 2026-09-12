@@ -20,6 +20,9 @@ AC2 through ctypes: under a Metal preference the run reports the CPU and logs th
 The read-time symmetry (v4.33): the same run read under none / P / P|B / P|B|D conserves the
 sums, never gains rows as bits are added, and the 22° path's ORBIT — the whole of it at the
 finest, one row under P|B|D — carries the same energy at every one of them.
+The fixed-seed contract across sessions: ten analyses back to back on ONE server (the GUI's
+shape) reproduce each other row for row, on the 22° scene and on a plate+column two-layer
+scene (``raypath_analysis_pc_two_layer.json``).
 
 Requires the shared-lib build (``./scripts/build.sh -sj release``); run with
 ``pytest -v -m slow``.
@@ -36,6 +39,11 @@ from test.e2e import capi_runner as cr
 from test.e2e.runner import get_project_root
 
 _CONFIG = str(get_project_root() / "test" / "e2e" / "configs" / "raypath_analysis_halo_22.json")
+# Plate + column, two scattering layers each holding both crystals, ms_prob 0.3, the same 200k
+# budget: the multi-layer scene the fixed-seed determinism contract is checked on beside the
+# single-layer halo above (its finest table is several thousand rows and its chains cross layers,
+# so a session-to-session drift that the 22° scene's rows happened to hide would show here).
+_CONFIG_PC_TWO_LAYER = str(get_project_root() / "test" / "e2e" / "configs" / "raypath_analysis_pc_two_layer.json")
 
 # The direction light travels for a sun at (altitude, azimuth) is the antipode of where the
 # sun sits — the convention every direction in the C API uses (lumice.h, the marker family).
@@ -127,6 +135,48 @@ def _is_undeviated_pass(chain) -> bool:
     if len(faces) != 2 or not all(3 <= f <= 8 for f in faces):
         return False
     return (faces[0] - faces[1]) % 6 == 3
+
+
+def _fingerprint(r: cr.RaypathAnalysisResult):
+    """Everything the fixed-seed contract promises to reproduce: the total, the row count, every
+    row's identity/energy/count, the unrecorded remainder, and the budget the stats saw."""
+    return (
+        sum(e.energy for e in r.entries) + r.other_energy,
+        len(r.entries),
+        tuple((e.display, e.energy, e.count) for e in r.entries),
+        (r.other_energy, r.other_count),
+        r.sim_ray_num,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("config", [_CONFIG, _CONFIG_PC_TWO_LAYER], ids=["halo_22", "pc_two_layer"])
+def test_fixed_seed_analysis_is_bit_identical_across_ten_sessions_of_one_server(config):
+    """Ten analyses of one scene on ONE server under a fixed seed are the same analysis, ten times.
+
+    The seed contract (a non-zero sim_seed sizes the server to one worker so the run is
+    deterministic) is stated per run, and the GUI keeps one server for the life of the window —
+    so it has to hold for the tenth session as much as for the first. Compared with ``==`` on
+    the doubles, no tolerance: determinism, not precision. Read at the finest (symmetry 0) so
+    a drift in any single chain is visible, not folded into an orbit with its neighbours.
+
+    The defect this pins was deterministic — the worker's RNG was seeded at construction only,
+    so every session after the first continued the stream from where the previous one had
+    left it and every one of the ten totals differed — which is why ten sessions is coverage
+    of the GUI's shape rather than a sample size. `sim_seed=0` (several workers) is out of
+    the contract and not asserted on.
+    """
+    results = cr.run_raypath_analysis_capi_sessions(
+        config, _full_sky_request(), sessions=10, sim_seed=_SEED, max_entries=None, chain_id_symmetry=0)
+    assert len(results) == 10
+    first = _fingerprint(results[0])
+    assert first[4] == 200000, "the scene's own budget"
+    assert first[1] > 0
+    for i, r in enumerate(results[1:], start=2):
+        fp = _fingerprint(r)
+        assert fp[0] == first[0], f"session {i}: total energy {fp[0]!r} != session 1's {first[0]!r}"
+        assert fp[1] == first[1], f"session {i}: {fp[1]} rows != session 1's {first[1]}"
+        assert fp == first, f"session {i}: rows differ from session 1's"
 
 
 @pytest.mark.slow
