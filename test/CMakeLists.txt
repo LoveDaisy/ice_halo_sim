@@ -50,6 +50,8 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter_spec.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_component_gate.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_crosslayer_component.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_chain_id_carry.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_chain_id_merger.cpp"
   # scrum-color-predicate-symmetry: color pass symmetry (per-ref P/B/D)
   "${PROJ_TEST_DIR}/unit-correctness/core/test_color_spec_groups.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_collect_data_symmetry_groups.cpp"
@@ -91,6 +93,13 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_scene.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_json_parser_parity.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_stats_consumer.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_raypath_histogram_consumer.cpp"
+  # The analysis run as a lifecycle of the live Server: render/analysis mutual exclusion,
+  # the forced CPU route, the cone stop target's natural completion, the frame's histogram.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_server_analysis_run.cpp"
+  # Its C API surface: request validation, both error codes, the frame getters end to end, the
+  # truncation branch, and the pixel -> direction inverse against the forward projection.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_raypath_analysis.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_anchor_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"
@@ -344,7 +353,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_edit_modal_delete_binding.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_view_look_at.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_wedge_presets.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_custom_wedge_input.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_custom_wedge_input.cpp"
+    # The Raypath Analysis panel's logic: adoption gate, ring sums, click arithmetic, the exclude
+    # closure — every proposition the panel makes that is not an ImGui call.
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_analysis_panel_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
@@ -433,7 +445,10 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_field_editor_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_edit_modal_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_preview_projection_chain.cpp"
-    "${PROJ_TEST_DIR}/composition-correctness/gui/test_absolute_ev_additivity_chain.cpp")
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_absolute_ev_additivity_chain.cpp"
+    # Analysis result -> Exclude -> filter pool -> exported core JSON: the closure the Raypath
+    # Analysis panel promises the CLI, asserted on the JSON the export hands over.
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_analysis_filter_exclude_chain.cpp")
   target_include_directories(composition_correctness_test
     PRIVATE ${PROJ_TEST_DIR})
   # Same three definitions gui_unit_test carries, for the same reasons (see its block above):

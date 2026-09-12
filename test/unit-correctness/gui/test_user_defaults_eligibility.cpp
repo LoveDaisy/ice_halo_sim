@@ -58,7 +58,11 @@ namespace {
 // texture, added so the Sky Color eyedropper can sample the exact bytes that were uploaded. All
 // three are derived — decoded from whatever file bg_path names — so they carry no default of
 // their own; bg_path, the field that does, was already governed and is untouched.
-constexpr std::size_t kExpectedGovernedFieldCount = 76;
+// 79 with the raypath analysis panel: `analysis` (session — the tool's window / ROI / selection /
+// intent, none of it document state), `analysis_result` and `analysis_run_in_progress` (both
+// derived, poller-fed). A personal default for "which ROI mode the panel opens in" is the kind of
+// thing a user might one day ask for; it would be a tier change on that one row, not a new channel.
+constexpr std::size_t kExpectedGovernedFieldCount = 79;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;

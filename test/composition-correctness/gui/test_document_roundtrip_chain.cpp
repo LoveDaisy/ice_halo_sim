@@ -385,6 +385,33 @@ TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
   }
 }
 
+// The analysis panel's request parameters (ray_num_millions / infinite, and the
+// ray_budget_initialized latch) are session-tier tool state — gui_state_tiers.hpp registers
+// the whole `analysis` struct as kSession — and must not be in the document. Not a row in the
+// probe table above, whose proposition is the opposite one (the field survives). The readout is
+// against a FRESH GuiState's defaults, not against `before`'s values: a serializer that wrote the
+// fields and a deserializer that read them back would fail this, and so would a deserializer that
+// read them and happened to clamp them to a default — the deserializer must never have touched
+// them, which "after equals the default-constructed session" is the only way to say.
+TEST(DocumentRoundtripChain, AnalysisRequestParamsAreSessionOnlyNotInTheDocument) {
+  GuiState before = MinimalDocument();
+  before.analysis.ray_num_millions = 42.5f;
+  before.analysis.infinite = true;
+  before.analysis.ray_budget_initialized = true;
+  const GuiState::RaypathAnalysisSession fresh{};
+  ASSERT_NE(before.analysis.ray_num_millions, fresh.ray_num_millions) << "the probe must move off the default";
+  ASSERT_NE(before.analysis.infinite, fresh.infinite);
+
+  const std::string json = SerializeGuiStateJson(before);
+  EXPECT_EQ(json.find("ray_budget"), std::string::npos) << "the session field's name is in the document text";
+
+  GuiState after = MinimalDocument();
+  ASSERT_TRUE(DeserializeGuiStateJson(json, after));
+  EXPECT_FLOAT_EQ(after.analysis.ray_num_millions, fresh.ray_num_millions);
+  EXPECT_EQ(after.analysis.infinite, fresh.infinite);
+  EXPECT_EQ(after.analysis.ray_budget_initialized, fresh.ray_budget_initialized);
+}
+
 // E1 — the aspect preset is spelled on disk the way files already on disk spell it, for every
 // preset and both orientations.
 //

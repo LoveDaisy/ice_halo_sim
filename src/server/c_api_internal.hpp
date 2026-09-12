@@ -5,10 +5,12 @@
 // tests need to exercise directly. This is NOT part of the public C API surface
 // (include/lumice.h): do not include it from src/gui/ or ship it to consumers.
 
+#include <memory>
 #include <nlohmann/json.hpp>
 
 #include "core/annotation_overlay.hpp"
 #include "include/lumice.h"
+#include "server/server.hpp"  // ResultFrame (WrapResultFrameForTest)
 
 // Test-only exposure of a LUMICE_Scene handle's internal JSON representation. NOT part of the
 // public C API — do not include from src/gui/ or ship to consumers. Lets unit tests assert the
@@ -163,5 +165,11 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr);
 // the test-only lumice_test_api.cpp LUMICE_TEST_ComputeRenderDomainMask hook, which otherwise
 // carried a hand-copied second translation of the same struct.
 lumice::annotation::ViewSnapshot ToAnnotationViewSnapshot(const LUMICE_AnnotationView& v);
+
+// Test-only: wrap a C++ result frame in the handle the LUMICE_FrameGet* family reads, so a test can
+// feed those getters a frame with contents no real run produces (a chain past the C struct's layer
+// / segment caps, for the truncation branch). Same ownership as LUMICE_AcquireResultFrame's handle:
+// release with LUMICE_ReleaseResultFrame. NOT part of the public C API.
+LUMICE_ResultFrame* WrapResultFrameForTest(std::shared_ptr<const lumice::ResultFrame> frame);
 
 #endif  // SERVER_C_API_INTERNAL_H_

@@ -23,6 +23,7 @@
 #include <string>
 
 #include "gui/app.hpp"
+#include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
 #include "lumice.h"
@@ -203,6 +204,41 @@ TEST(RunWarningChain, ADegradedColourSetCommitsAndReportsHowMuchItLost) {
   LUMICE_ColorOverflowInfo info{};
   ASSERT_EQ(LUMICE_GetColorOverflowInfo(g_server, &info), LUMICE_OK);
   EXPECT_EQ(info.component_overflow_count, kColourClasses * kRefsPerClass - kBitBudget);
+}
+
+// The refusal is the emitter's, not the button's: Run and Analyze hand the same document to the
+// same BuildCommitSceneOrWarn, so a document too large for the ABI is refused by both, with one
+// message, naming the filter reference that tripped the bound — and neither submits anything.
+// The locator is asserted, not just "some warning": a warning that named nothing would pass a
+// weaker check just as well, and the locator is what tells the user which filter to simplify.
+// This is the observable half of "one emitter": a second BuildScene call in DoAnalyze that
+// skipped the overflow report would either analyse a truncated document or refuse it silently.
+TEST(RunWarningChain, RunAndAnalyzeRefuseAnOverflowingDocumentTheSameWay) {
+  ScopedAppServer server;
+  ASSERT_TRUE(server.ok());
+  SeedClauseOverflowFilter();
+
+  // The locator the emitter is expected to name, from the same BuildScene call it makes.
+  FilterOverflowInfo overflow;
+  ASSERT_EQ(BuildScene(g_state, SceneIntent::kSimCommit, &overflow, nullptr), nullptr) << "positive control";
+  const std::string locator = FormatOverflowLocator(overflow);
+  ASSERT_FALSE(locator.empty());
+
+  DoRun(/*user_initiated=*/true);
+  const std::string run_warning = PeekGuiWarning();
+  EXPECT_NE(run_warning.find(locator), std::string::npos) << "Run's warning does not name the filter: " << run_warning;
+  EXPECT_EQ(g_state.run_intent, RunIntent::kNone) << "a refused Run commits nothing";
+  internal_test::ConsumeGuiWarningPending();
+  ClearGuiWarning();
+
+  g_state.analysis.started = false;  // the assertion below is on THIS call's doing
+  EXPECT_FALSE(DoAnalyze()) << "a document the emitter refuses is not analysed";
+  EXPECT_EQ(PeekGuiWarning(), run_warning) << "Analyze's refusal is Run's, word for word";
+  EXPECT_TRUE(IsGuiWarningPending()) << "an Analyze is a deliberate click: the modal opens";
+  EXPECT_FALSE(g_state.analysis.started) << "no analysis intent was raised";
+  LUMICE_SimLifecycleResult lc{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(g_server, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.epoch, 0u) << "nothing reached the server from either button";
 }
 
 // The edit flag itself: something the user changed marks the document, and starting a new one

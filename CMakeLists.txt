@@ -520,6 +520,7 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/annotation_font.cpp"
   "${PROJ_SRC_DIR}/core/annotation_overlay.cpp"
   "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
+  "${PROJ_SRC_DIR}/core/chain_id_table.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
   "${PROJ_SRC_DIR}/core/filter_spec.cpp"
@@ -687,7 +688,8 @@ set(lumice_server_src
   "${PROJ_SRC_DIR}/server/component_compositor.cpp"
   "${PROJ_SRC_DIR}/server/render.cpp"
   "${PROJ_SRC_DIR}/server/server.cpp"
-  "${PROJ_SRC_DIR}/server/stats.cpp")
+  "${PROJ_SRC_DIR}/server/stats.cpp"
+  "${PROJ_SRC_DIR}/server/raypath_histogram_consumer.cpp")
 
 set(lumice_util_src
   "${PROJ_SRC_DIR}/util/color_space.cpp"

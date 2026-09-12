@@ -9,6 +9,7 @@
 #include <string>
 
 #include "IconsFontAwesome6.h"
+#include "gui/analysis_panel.hpp"
 #include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/aspect_ratio_rules.hpp"
@@ -367,7 +368,9 @@ void RenderTopBar(float window_width) {
   // the backend is still draining an async Stop (kStopping), not just while simulating.
   bool simulating = IsSimulating(g_state.sim_state);
   bool stopping = IsStopping(g_state.sim_state);
-  bool busy = IsBusy(g_state.sim_state);
+  // Counts the analysis run: while one is tracing, a render commit would be refused by the server
+  // and New / Open would tear down the backend under it, so all three stay shut until it ends.
+  bool busy = IsBackendBusy(g_state.sim_state, g_state.analysis_run_in_progress);
   const auto& style = ImGui::GetStyle();
   const char* kRunLabel = ICON_FA_PLAY " Run";
   const char* kStopLabel = ICON_FA_STOP " Stop";
@@ -390,11 +393,18 @@ void RenderTopBar(float window_width) {
     ImGui::Button(kStoppingLabel, ImVec2(run_stop_width, 0));
     ImGui::EndDisabled();
   } else {
+    // The analysis run does not change the picture, so sim_state stays where the last render
+    // left it and this branch is the one drawn; the button itself is what says "not now".
+    ImGui::BeginDisabled(g_state.analysis_run_in_progress);
     PushGoodButtonStyle();
     if (ImGui::Button(kRunLabel, ImVec2(run_stop_width, 0))) {
       DoRun(/*user_initiated=*/true);
     }
     PopGoodButtonStyle();
+    ImGui::EndDisabled();
+    if (g_state.analysis_run_in_progress && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("A raypath analysis is running. Wait for it, or stop it from the Raypath Analysis window.");
+    }
   }
 
   // Revert area — always rendered for stable layout, hidden when not modified.
@@ -528,6 +538,16 @@ void RenderTopBar(float window_width) {
   }
   if (tint_colors_button) {
     ImGui::PopStyleColor(3);
+  }
+  // The second occupant of the feature-button group: the Raypath Analysis window
+  // (analysis_panel.cpp). A plain toggle — the window has no "default on open" rule the way
+  // Colors does; what it shows is decided by its own controls once open.
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_ROUTE " Analysis")) {
+    g_state.analysis.window_open = !g_state.analysis.window_open;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Which raypaths make the light in a region of the sky. Opens the Raypath Analysis window.");
   }
 
   // task-colored-toggle-to-topbar (346.3): colored/full-spectrum display-time
@@ -689,6 +709,8 @@ constexpr float kCollapseBtnSize = 20.0f;
 // glyph does not sit on top of the colour it is reporting.
 constexpr float kBgPickSwatchOffsetPt = 16.0f;
 constexpr float kBgPickSwatchSizePt = 24.0f;
+// The analysis pick's crosshair at the cursor: half-length of each arm, in ImGui points.
+constexpr float kAnalysisPickCrosshairArmPt = 10.0f;
 
 // Draw a collapse/expand button as a foreground overlay using ImGui theme colors.
 // Returns true if clicked. Coordinates are viewport-local; under multi-viewport
@@ -1839,6 +1861,20 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   if (g_bg_pick.swallow_drag_until_release && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
     g_bg_pick.swallow_drag_until_release = false;
   }
+  // The analysis panel's "pick a point" mode has the same two ways out, for the same reasons:
+  // Esc, read here ahead of any widget; and the preview going away under it (a document switch,
+  // a texture cleared), which would otherwise leave a click armed over nothing to click on. The
+  // window being closed counts as the latter — its button is the only way to arm it.
+  if (g_state.analysis.pick_armed && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || !g_state.analysis.window_open)) {
+    g_state.analysis.pick_armed = false;
+  }
+  // A marker drag ends with the button, wherever the release happens (off the preview, over
+  // another window): the same latch shape as the eyedropper's swallow above. The window closing
+  // ends it too, for the reason it disarms the pick.
+  if (g_state.analysis.cone_marker_dragging &&
+      (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !g_state.analysis.window_open)) {
+    g_state.analysis.cone_marker_dragging = false;
+  }
 
   float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
   float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
@@ -2161,7 +2197,34 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // branches too, which is wider than the defect requires — a wheel notch carries no leftover
       // motion from the press that took the colour. Conservative on purpose; not a condition the
       // bug imposes, so it can be narrowed without reopening that defect.
-      const bool gestures_locked = g_bg_pick.active || g_bg_pick.swallow_drag_until_release;
+      // The analysis window in Point mode is a third owner of the click, locking the camera the
+      // way the eyedropper does: the press that picks a point, or that takes hold of the cone
+      // marker, must not also orbit by a pixel. Which of ITS gestures runs — grab the marker,
+      // set the centre, or neither — is decided once here by ArbitrateConeInput from the hover
+      // test on this frame's projection of the marker, and every branch below reads that one
+      // verdict. Outside Point mode (window closed, other ROI) the verdict is kCamera and nothing
+      // here changes.
+      const ImVec2 vp_origin = ImGui::GetWindowPos();
+      const bool cone_mode = g_state.analysis.window_open && g_state.analysis.roi_mode == LUMICE_RAYPATH_ROI_CONE;
+      bool marker_hover = false;
+      if (cone_mode && is_hovered) {
+        const std::optional<CanvasPixel> marker =
+            ProjectConeCenterMarker(g_state, PreviewAnnotationView(g_state, g_preview_vp.vp_w, g_preview_vp.vp_h));
+        if (marker.has_value()) {
+          float mx = 0.0f;
+          float my = 0.0f;
+          CanvasPixelToPreviewPoint(marker->px, marker->py, dpi_scale_x, dpi_scale_y, &mx, &my);
+          const float dx = io.MousePos.x - vp_origin.x - mx;
+          const float dy = io.MousePos.y - vp_origin.y - my;
+          marker_hover = dx * dx + dy * dy <= kAnalysisConeMarkerHitRadiusPt * kAnalysisConeMarkerHitRadiusPt;
+        }
+      }
+      const ConeInputOwner cone_owner =
+          cone_mode ?
+              ArbitrateConeInput(marker_hover || g_state.analysis.cone_marker_dragging, g_state.analysis.pick_armed) :
+              ConeInputOwner::kCamera;
+      const bool gestures_locked =
+          g_bg_pick.active || g_bg_pick.swallow_drag_until_release || cone_owner != ConeInputOwner::kCamera;
       // Same predicate the eyedropper button is enabled by, and deliberately not a second copy of
       // the expression: "there is a photo on screen to act on" is one question, whether the act is
       // dragging it or sampling it.
@@ -2247,8 +2310,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
 
       // The eyedropper's own branch, gated on the flag the four above are gated on the negation of:
-      // exactly one of the five can run in a frame, and while picking, the click that would have
-      // orbited the camera samples a colour instead.
+      // exactly one of the seven (the analysis window's two below included) can run in a frame, and while picking, the
+      // click that would have orbited the camera samples a colour instead.
       if (g_bg_pick.active && is_hovered) {
         BgSampleGeometry geom;
         geom.dpi_scale_x = dpi_scale_x;
@@ -2268,7 +2331,6 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // button would shift every sample by that much: small enough to read as the photo being
         // slightly off rather than as a bug. It is also the origin the overlay label anchors are
         // built against, for the same reason.
-        const ImVec2 vp_origin = ImGui::GetWindowPos();
         const std::optional<std::array<float, 3>> sampled =
             SampleBgColorAtScreenPos(io.MousePos.x - vp_origin.x, io.MousePos.y - vp_origin.y, geom, g_state.bg_pixels);
 
@@ -2300,6 +2362,73 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // A click on the letterbox is deliberately inert — not a cancel: the user aimed at the
         // photo and missed its edge, and dropping them out of the mode would make the miss cost a
         // second trip to the button.
+      }
+
+      // The analysis window's two gestures: the sixth and seventh branches, exclusive with the
+      // five above through gestures_locked and with each other through cone_owner. Both take the
+      // cursor through the same window-origin / DPI path the eyedropper's does, then through
+      // LUMICE_UnprojectPixel under the view the picture on screen was drawn with
+      // (PreviewAnnotationView) — so the direction the server judges by is the direction under
+      // the cursor, on this lens, at this DPI.
+      //
+      // Marker drag: a press on the marker takes hold of it; while held, every frame's cursor
+      // position becomes the centre (a drag off the picture keeps the last direction that was
+      // sky — DragAnalysisConeCenter); the release lets go. The hand cursor says "this can be
+      // grabbed" on hover and stays for the drag.
+      //
+      // The press also consumes an armed pick. The arbiter gives the marker the click when the
+      // two overlap, but the click still SETS the centre (the press frame below writes the
+      // pressed pixel's direction), and a pick is "disarmed by the click that consumes it"
+      // (gui_state.hpp) — whichever gesture that click ran as. Left armed, the user would have
+      // clicked, watched the marker move, and still be in pick mode; the overlap is not rare,
+      // either, since the default centre sits at the viewport's middle, which is where a pick
+      // tends to land.
+      if (cone_owner == ConeInputOwner::kMarkerDrag && !g_bg_pick.active) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+          g_state.analysis.cone_marker_dragging = true;
+          g_state.analysis.pick_armed = false;
+        }
+        if (g_state.analysis.cone_marker_dragging && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+          const std::optional<CanvasPixel> px =
+              PreviewPointToCanvasPixel(io.MousePos.x - vp_origin.x, io.MousePos.y - vp_origin.y, dpi_scale_x,
+                                        dpi_scale_y, g_preview_vp.vp_w, g_preview_vp.vp_h);
+          if (px.has_value()) {
+            const LUMICE_AnnotationView view = PreviewAnnotationView(g_state, g_preview_vp.vp_w, g_preview_vp.vp_h);
+            DragAnalysisConeCenter(g_state, view, px->px, px->py);
+          }
+        }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+          g_state.analysis.cone_marker_dragging = false;
+        }
+      }
+      // Pick: the armed click sets the centre. While armed and over the preview a crosshair is
+      // drawn at the cursor (ImGui has no crosshair among its system cursors, so it is drawn the
+      // way the eyedropper draws its swatch: on the foreground list, the OS cursor untouched) —
+      // the mode's on-preview half of the indication, the window's banner being the other.
+      if (cone_owner == ConeInputOwner::kPickClick && !g_bg_pick.active && is_hovered) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        const ImU32 colour = ImGui::ColorConvertFloat4ToU32(AccentColor());
+        const ImVec2 m = io.MousePos;
+        fg->AddLine(ImVec2(m.x - kAnalysisPickCrosshairArmPt, m.y), ImVec2(m.x + kAnalysisPickCrosshairArmPt, m.y),
+                    colour, 1.5f);
+        fg->AddLine(ImVec2(m.x, m.y - kAnalysisPickCrosshairArmPt), ImVec2(m.x, m.y + kAnalysisPickCrosshairArmPt),
+                    colour, 1.5f);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+          const std::optional<CanvasPixel> px =
+              PreviewPointToCanvasPixel(io.MousePos.x - vp_origin.x, io.MousePos.y - vp_origin.y, dpi_scale_x,
+                                        dpi_scale_y, g_preview_vp.vp_w, g_preview_vp.vp_h);
+          if (px.has_value()) {
+            const LUMICE_AnnotationView view = PreviewAnnotationView(g_state, g_preview_vp.vp_w, g_preview_vp.vp_h);
+            PickAnalysisConeCenter(g_state, view, px->px, px->py);
+          }
+        }
+      }
+      // The ROI marker and ring, placed from the direction on THIS frame's view; nothing when the
+      // window is closed, the mode is not Point, or the direction is off the picture.
+      if (cone_mode) {
+        DrawAnalysisRoiRing(g_state, PreviewAnnotationView(g_state, g_preview_vp.vp_w, g_preview_vp.vp_h), vp_origin,
+                            dpi_scale_x, dpi_scale_y);
       }
     }
   } else {
@@ -2696,7 +2825,7 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
     // used to sit at this line ("single-source would be nicer but the top bar's enable predicate
     // is inlined and not exported") asked for. The two gates are still distinct predicates: this
     // one additionally requires a live server.
-    const bool can_run = CanRunFromModal(g_server != nullptr, g_state.sim_state);
+    const bool can_run = CanRunFromModal(g_server != nullptr, g_state.sim_state, g_state.analysis_run_in_progress);
     ImGui::BeginDisabled(!can_run);
     if (ImGui::Button("Run first", ImVec2(100, 0))) {
       DoRun(/*user_initiated=*/true);

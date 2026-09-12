@@ -12,6 +12,7 @@
 #include "gui/annotation_anchors.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
+#include "gui/file_io.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/log_sink.hpp"
@@ -346,6 +347,23 @@ void CalibrateQualityThreshold();
 // wrong dedup semantics.
 bool DoRun(bool user_initiated);
 void DoStop();
+// The scene a run submits, built from `state` under SceneIntent::kSimCommit — the ONE emitter
+// DoRun and DoAnalyze both go through, so an analysis reports on byte-for-byte the document a
+// Run would render. Returns null when the document exceeds the ABI bounds; the warning modal
+// and the log line are raised here (with DoRun's `user_initiated` reopen rule), and the caller
+// submits nothing. Exposed so the composition layer can pin that the two callers share it.
+ScenePtr BuildCommitSceneOrWarn(const GuiState& state, bool user_initiated);
+// Start a raypath analysis run on the document on the panels (doc/raypath-analysis-panel.md),
+// with the ROI GuiState::analysis describes: the scene BuildCommitSceneOrWarn builds — the same
+// one DoRun would commit — is handed to LUMICE_StartRaypathAnalysis, so no Run has to precede
+// it and an edited document analyses as edited. Same poller, same lifecycle as a render run;
+// what it writes is the analysis INTENT (analysis.started) and an empty result view — the
+// render's intent, committed_epoch and last_committed_state are untouched, so sim_state and the
+// picture on screen stay what they were (ReconcileSimState keys on the GUI's own epoch, which
+// only DoRun advances; the server's epoch moving under the analysis does not reach it). Returns
+// whether the server accepted the request; the caller has already gated on CanStartAnalysis, so
+// a refusal here is logged as the surprise it is rather than shown as a modal.
+bool DoAnalyze();
 void DoRevert();
 void DoLoadBackground(GLFWwindow* window);
 void DoClearBackground();

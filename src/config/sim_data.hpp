@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "core/chain_id_table.hpp"
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/exit_seam.hpp"
@@ -88,6 +89,32 @@ struct RayBuffer {
   // to pre-331.3 (rendering unchanged).
   void SwapRay(size_t i, size_t j);
 
+  // ---- Per-ray raypath chain id (raypath-analysis foundation) ----
+  // A second cross-MS-layer per-ray column beside components_, carrying the
+  // uint32 id of the interned raypath chain the ray has accumulated so far
+  // (0 = root, i.e. "no layer traversed yet"; see core/chain_id_table.hpp).
+  // Unlike components_ it is allocated ON DEMAND: Reset(capacity, true) is the
+  // only thing that allocates it and Reset(capacity, false) releases it, so a
+  // buffer that never enters analysis mode pays neither the memory nor any of
+  // the copies below (every transport helper is a no-op while HasChainIds() is
+  // false). It is a separate column rather than a struct shared with
+  // components_ precisely because components_ is allocated unconditionally
+  // and this one must not be.
+  //
+  // Transport points mirror components_ one for one — ChainIdFanOut beside
+  // ComponentFanOut, the batch EmplaceBack, SwapRay, and the four special
+  // members. The single-ray EmplaceBack overloads deliberately do NOT touch it
+  // (same reason as components_: CollectData hands it over explicitly). The
+  // hand-off at a layer boundary is where the VALUE changes: the value carried
+  // out of layer k is the id interned for (value carried in, layer-k segment),
+  // which is simulator.cpp's job, not this buffer's.
+  bool HasChainIds() const { return chain_ids_ != nullptr; }
+  uint32_t ChainIdAt(size_t idx) const;
+  void SetChainId(size_t idx, uint32_t v);
+  // Copy src.chain_ids_[src_idx] into chain_ids_[dst0] and chain_ids_[dst1].
+  // No-op unless BOTH buffers carry the column.
+  void ChainIdFanOut(const RayBuffer& src, size_t src_idx, size_t dst0, size_t dst1);
+
   // Read-only pointer to the overflow arena base for downstream consumers
   // (e.g. FilterSpec::Match needs it to resolve recorder data). Returns
   // nullptr when no overflow slot has been allocated yet.
@@ -96,7 +123,15 @@ struct RayBuffer {
   uint16_t OverflowUsed() const { return overflow_used_; }
   uint16_t OverflowCap() const { return overflow_cap_; }
 
-  void Reset(size_t capacity);
+  // `chain_id_enabled` decides whether the chain-id column exists after this
+  // call: true allocates it (fresh, zero-filled, sized to the post-grow
+  // capacity_) unless it is already present at a sufficient size; false
+  // releases it. Applied on EVERY call, not only on growth, because Reset is
+  // grow-never-shrink and the pools are recycled across batches — a workspace
+  // that ran a normal batch and then an analysis batch would otherwise keep a
+  // stale nullptr (or, the other way round, a stale allocation) at the same
+  // capacity. Default false keeps every existing call site unchanged.
+  void Reset(size_t capacity, bool chain_id_enabled = false);
   bool Empty() const;
   // Single-RaySeg entry point. Asserts RaySeg::IsValidComplete() at entry
   // to gate the N4 construction-time invariants (Debug only; noop in Release).
@@ -124,6 +159,9 @@ struct RayBuffer {
   // Per-ray component mask (raypath-color foundation, task-331.1). Zero-initialised
   // on allocation; propagated by ComponentFanOut and buffer-batch EmplaceBack.
   std::unique_ptr<uint64_t[]> components_;
+  // Per-ray raypath chain id (raypath-analysis foundation). nullptr unless the
+  // last Reset asked for it — see HasChainIds() above.
+  std::unique_ptr<uint32_t[]> chain_ids_;
 
  private:
   // Bump-allocated arena holding overflow hit buffers (each slot is kMaxHits
@@ -197,6 +235,32 @@ struct SimData {
   // yet. Metal/CUDA leave it empty for now — see scrum-331 T5/T6 for the
   // device-side delivery path.
   std::vector<uint64_t> outgoing_component_;
+  // Raypath-analysis foundation: per-outgoing-ray chain id, parallel to
+  // outgoing_w_, plus the interning-table entries this batch added — the two
+  // things a consumer needs to turn ids back into printable chains and to
+  // merge chains across workers (see core/chain_id_table.hpp). Populated ONLY
+  // by the legacy CPU path (SimulateOneWavelength) and ONLY while the
+  // Simulator's analysis mode is on; every other path and the default leave
+  // both empty, which is the "not populated" signal.
+  std::vector<uint32_t> outgoing_chain_id_;
+  std::vector<ChainIdTableEntry> chain_id_table_delta_;
+  // Which Simulator produced the two fields above: its effective seed, copied
+  // here under the same condition (analysis on, legacy CPU path) and left 0
+  // otherwise. Chain ids are worker-local, so a consumer merging batches from
+  // several workers keys its per-producer id remap on this
+  // (core/chain_id_table.hpp, ChainIdMerger). Distinct per worker by
+  // construction: ServerImpl runs a single worker whenever the seed is fixed,
+  // and seed 0 derives a process-unique value per Simulator.
+  uint32_t producer_effective_seed_ = 0;
+  // How many times the producer's interning table turned a chain away for
+  // want of room while tracing this batch (ChainIdInterningTable::
+  // ConsumeOverflowCount, read at the same point as chain_id_table_delta_) —
+  // arrivals, not distinct chains, since a turned-away chain is not
+  // remembered. The rays of those chains carry ChainIdInterningTable::
+  // kOverflowChainId in outgoing_chain_id_. 0 whenever the pair above is
+  // empty. Sits in the 4 bytes of padding producer_effective_seed_ left before
+  // the next 8-aligned member, so sizeof(SimData) does not move.
+  uint32_t chain_id_overflow_count_ = 0;
 
   // Rich exit records (scrum-258.2+) parallel to outgoing_d_/w_. Produced by
   // the trace backend via ReadbackExitRays; consumed by 258.3 (filter +

@@ -39,6 +39,18 @@ inline bool IsBusy(GuiState::SimState state) {
   return IsSimulating(state) || IsStopping(state);
 }
 
+// The backend is unavailable for a document-level command OR for a render commit, counting the
+// analysis run beside the render run. The two runs share one server and exclude each other at the
+// C API (LUMICE_StartRaypathAnalysis / LUMICE_CommitScene each return LUMICE_ERR_SERVER while the
+// other is in progress), and an analysis run is deliberately NOT a SimState value: sim_state
+// answers "what does the picture on screen reflect", and an analysis changes nothing about the
+// picture. So the top bar's Run / New / Open, and the modal's "Run first", take the analysis flag
+// as a second argument rather than reading it off a sixth enum value. `analysis_in_progress` is
+// GuiState::analysis_run_in_progress, derived each frame by SyncFromPoller.
+inline bool IsBackendBusy(GuiState::SimState state, bool analysis_in_progress) {
+  return IsBusy(state) || analysis_in_progress;
+}
+
 // The config has changed since the last run, so the on-screen preview no longer reflects it.
 // Drives both the ⚠ + Revert affordance and the Save-Modified popup.
 inline bool IsModified(GuiState::SimState state) {
@@ -46,9 +58,36 @@ inline bool IsModified(GuiState::SimState state) {
 }
 
 // "Run first" in the Save-Modified popup: meaningful only when there is a live server to run on
-// AND no run is already in flight.
-inline bool CanRunFromModal(bool has_server, GuiState::SimState state) {
-  return has_server && !IsBusy(state);
+// AND no run — render or analysis — is already in flight.
+inline bool CanRunFromModal(bool has_server, GuiState::SimState state, bool analysis_in_progress) {
+  return has_server && !IsBackendBusy(state, analysis_in_progress);
+}
+
+// The panel's Analyze button. An analysis submits the document on the panels itself
+// (DoAnalyze builds the scene the way DoRun does and hands it to LUMICE_StartRaypathAnalysis), so
+// it needs no run before it and no picture that matches: a fresh document, a loaded .lmc that was
+// never run, and an edited (kModified) document all analyse — what the list describes is always
+// the configured scene, and the panel says so in a status line when the picture on screen is
+// not of it. The one thing it does need is a backend with nothing in flight (the C API's mutual
+// exclusion, surfaced as a disabled button rather than as an error line after the click).
+inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool analysis_in_progress) {
+  return has_server && !IsBackendBusy(state, analysis_in_progress);
+}
+
+// The panel's notice that the picture on screen is not of the document the list describes —
+// the text to show, or nullptr when there is nothing to say. Two cases and they cannot both
+// hold: an intent of kNone (fresh / New / a JSON import / an .lmc with no baked picture) means no
+// picture of this document was ever made, and it reconciles to kIdle, which dirty never lifts
+// to kModified; kModified means there is a picture, of the configuration before the edit. A
+// notice, not a refusal: CanStartAnalysis does not read either.
+inline const char* AnalysisPictureNotice(RunIntent intent, GuiState::SimState state) {
+  if (intent == RunIntent::kNone) {
+    return "No rendered image for this document yet \xe2\x80\x94 the list describes the configured scene.";
+  }
+  if (IsModified(state)) {
+    return "Image is from a previous configuration \xe2\x80\x94 the list describes the current one.";
+  }
+  return nullptr;
 }
 
 }  // namespace lumice::gui

@@ -162,6 +162,31 @@ constexpr float kDefaultCrystalZoom = 1.4f;
 // world coordinates while the camera position stays put.
 constexpr float kCameraTiltDeg = 15.0f;
 
+// Raypath analysis panel (analysis_panel.cpp, doc/raypath-analysis-panel.md). The CONE request
+// the panel sends is always the FULL cone below, split into kAnalysisConeRingCount equal rings;
+// the angular-radius slider then decides, at display time, how many of those rings the list sums
+// over — so dragging it never starts a run. Its default is the panel's opening radius and its
+// range is [one ring, the whole cone]. Engineering values, not rulings: a wider or finer cone is a
+// change to these three numbers and nothing else.
+constexpr float kAnalysisConeMaxRadiusDeg = 15.0f;
+constexpr int kAnalysisConeRingCount = 30;  // 0.5 degrees per ring
+constexpr float kAnalysisConeDefaultRadiusDeg = 2.0f;
+// The panel's own Rays(M) input bounds — the same domain as sim.ray_num_millions's
+// (field_editor_registry.cpp), repeated here because this field is session-tier, not a document
+// field the registry governs. Two constants, one meaning: a budget the document may ask for, the
+// analysis may ask for too.
+constexpr float kAnalysisRayNumMinMillions = 0.1f;
+constexpr float kAnalysisRayNumMaxMillions = 100.0f;
+static_assert(kAnalysisConeRingCount >= 1 && kAnalysisConeRingCount <= LUMICE_MAX_RAYPATH_CONE_RINGS,
+              "the cone ring count must be a request the C API accepts (it rejects, not truncates)");
+static_assert(kAnalysisConeDefaultRadiusDeg > 0.0f && kAnalysisConeDefaultRadiusDeg <= kAnalysisConeMaxRadiusDeg,
+              "the default radius must lie inside the cone the request asks for");
+// The cone-centre marker's grab radius on the preview, in logical points around the projected
+// centre: inside it the cursor is a hand and a press drags the marker instead of orbiting the
+// camera. A feel value, not a ruling — there is no proxy to measure it by, so it is one number in
+// one place.
+constexpr float kAnalysisConeMarkerHitRadiusPt = 12.0f;
+
 // Auxiliary line overlay
 constexpr int kMaxSunCircles = 16;
 // AnnotationAnchors::Compute() (annotation_anchors.cpp) clamps the angular-distance-circle list to

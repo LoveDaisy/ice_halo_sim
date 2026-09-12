@@ -75,11 +75,73 @@ TEST(SimStateRules, ModifiedIsExactlyOneState) {
 
 TEST(SimStateRules, RunFirstNeedsAServerAndAnIdleBackend) {
   for (GuiState::SimState s : kAllSimStates) {
-    // No server ⇒ never runnable, whatever the lifecycle state says.
-    EXPECT_FALSE(CanRunFromModal(/*has_server=*/false, s)) << "SimState=" << static_cast<int>(s);
-    // With a server, the gate is exactly the top bar's busy notion — this is the shared-owner
-    // claim in sim_state_rules.hpp's header, asserted rather than asserted-in-prose.
-    EXPECT_EQ(CanRunFromModal(/*has_server=*/true, s), !IsBusy(s)) << "SimState=" << static_cast<int>(s);
+    for (bool analysis : { false, true }) {
+      // No server ⇒ never runnable, whatever the lifecycle state says.
+      EXPECT_FALSE(CanRunFromModal(/*has_server=*/false, s, analysis)) << "SimState=" << static_cast<int>(s);
+      // With a server, the gate is exactly the top bar's busy notion — this is the shared-owner
+      // claim in sim_state_rules.hpp's header, asserted rather than asserted-in-prose.
+      EXPECT_EQ(CanRunFromModal(/*has_server=*/true, s, analysis), !IsBackendBusy(s, analysis))
+          << "SimState=" << static_cast<int>(s) << " analysis=" << analysis;
+    }
+  }
+}
+
+// The analysis run widens "busy" without touching SimState: over every one of the five values,
+// the flag off reproduces IsBusy exactly (the pre-analysis gate, byte for byte), and the flag on
+// is busy unconditionally. Total over both axes, so a sixth SimState value or a third run kind
+// would have to be argued into this table rather than slip past it.
+TEST(SimStateRules, BackendBusyIsBusyOrAnalysisInProgress) {
+  for (GuiState::SimState s : kAllSimStates) {
+    EXPECT_EQ(IsBackendBusy(s, false), IsBusy(s)) << "SimState=" << static_cast<int>(s);
+    EXPECT_TRUE(IsBackendBusy(s, true)) << "SimState=" << static_cast<int>(s);
+  }
+}
+
+// Analyze: a server + nothing in flight, and nothing else — the analysis submits the document
+// itself, so neither a prior run nor an unedited picture is a condition. Each of the two denials
+// is shown to deny on its own, and the row that satisfies both is enabled per SimState exactly
+// when the backend is not busy, kModified included — the row the old rule refused.
+TEST(SimStateRules, AnalyzeNeedsAServerAndAnIdleBackendOnly) {
+  for (GuiState::SimState s : kAllSimStates) {
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/false, s, false));
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, s, true));
+    EXPECT_EQ(CanStartAnalysis(/*has_server=*/true, s, false), !IsBusy(s)) << "SimState=" << static_cast<int>(s);
+  }
+  // Spelled out for the rows that matter: a fresh document (kIdle) and an edited one (kModified)
+  // both analyse; a run in flight does not.
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kIdle, false));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kDone, false));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kModified, false));
+  EXPECT_FALSE(CanStartAnalysis(true, GuiState::SimState::kSimulating, false));
+}
+
+// The picture notice beside it: said for a document that never had a picture (kNone, whatever
+// sim_state reconciles to) and for a picture of an earlier configuration (kModified under any
+// other intent); silent otherwise — and it never enters the button's verdict.
+TEST(SimStateRules, AnalysisPictureNoticeNamesTheTwoCasesAndNoOther) {
+  constexpr RunIntent kAll[] = { RunIntent::kNone,     RunIntent::kLoaded,  RunIntent::kRunning,
+                                 RunIntent::kStopping, RunIntent::kStopped, RunIntent::kRunCompleted };
+  for (RunIntent intent : kAll) {
+    for (GuiState::SimState s : kAllSimStates) {
+      const char* notice = AnalysisPictureNotice(intent, s);
+      if (intent == RunIntent::kNone) {
+        if (notice == nullptr) {
+          ADD_FAILURE() << "no notice for kNone, SimState=" << static_cast<int>(s);
+          continue;
+        }
+        EXPECT_NE(std::string(notice).find("No rendered image"), std::string::npos);
+      } else if (IsModified(s)) {
+        if (notice == nullptr) {
+          ADD_FAILURE() << "no notice for kModified, intent=" << static_cast<int>(intent);
+          continue;
+        }
+        EXPECT_NE(std::string(notice).find("previous configuration"), std::string::npos);
+      } else {
+        EXPECT_EQ(notice, nullptr) << "intent=" << static_cast<int>(intent) << " SimState=" << static_cast<int>(s);
+      }
+      // Whatever the notice says, the button's verdict is the backend's alone.
+      EXPECT_EQ(CanStartAnalysis(true, s, false), !IsBusy(s));
+    }
   }
 }
 

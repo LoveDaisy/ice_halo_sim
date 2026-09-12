@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -20,8 +21,10 @@
 #include "core/crystal.hpp"
 #include "core/ev_anchor.hpp"
 #include "core/geo3d.hpp"
+#include "core/lens_proj_build.hpp"  // mask_detail::PixelToWorld + the display clips (LUMICE_UnprojectPixel)
 #include "core/miller_wedge.hpp"
-#include "core/trace_ops.hpp"  // ns::MakeCrystal (core single-source crystal sampler)
+#include "core/scatter_accum.hpp"  // MakeCameraRotation (LUMICE_UnprojectPixel)
+#include "core/trace_ops.hpp"      // ns::MakeCrystal (core single-source crystal sampler)
 #if defined(__APPLE__)
 #include "core/backend/metal_trace_backend.hpp"
 #endif
@@ -30,6 +33,7 @@
 #endif
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"
+#include "server/raypath_histogram_consumer.hpp"  // ReduceRaypathHistogram (the analysis reads)
 #include "server/server.hpp"
 #include "util/callback_sink.hpp"
 #include "util/color_space.hpp"
@@ -3085,6 +3089,11 @@ void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame) {
 }
 
 
+LUMICE_ResultFrame* WrapResultFrameForTest(std::shared_ptr<const ns::ResultFrame> frame) {
+  return new LUMICE_ResultFrame_{ std::move(frame) };
+}
+
+
 LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count) {
   if (!frame || !out) {
     return LUMICE_ERR_NULL_ARG;
@@ -3301,6 +3310,21 @@ LUMICE_ErrorCode LUMICE_GetBackendFallbackFlag(LUMICE_Server* server, int* out_f
     return LUMICE_ERR_NULL_ARG;
   }
   *out_fell_back = server->server_->BackendFellBack() ? 1 : 0;
+  return LUMICE_OK;
+}
+
+
+static_assert(static_cast<int>(ns::BackendKind::kCpu) == LUMICE_BACKEND_CPU &&
+                  static_cast<int>(ns::BackendKind::kMetal) == LUMICE_BACKEND_METAL &&
+                  static_cast<int>(ns::BackendKind::kCuda) == LUMICE_BACKEND_CUDA,
+              "LUMICE_BACKEND_* drifted from BackendKind; the casts at this boundary rely on equality");
+LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend) {
+  if (!server || !out_backend) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  // The inverse of LUMICE_SetPreferredBackend's cast: BackendKind's values ARE the
+  // LUMICE_BACKEND_* constants (backend_kind.hpp).
+  *out_backend = static_cast<int>(server->server_->GetActiveBackend());
   return LUMICE_OK;
 }
 
@@ -3825,6 +3849,269 @@ LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float
   float unit[3];
   NormalizeSunDir(sun_dir, unit);
   lumice::annotation::SunHorizonDir(unit, out_dir);
+  return LUMICE_OK;
+}
+
+
+// =============== Raypath Analysis Run ===============
+// The C-side ROI modes and core's RaypathRoiMode are pinned to each other at the one place that
+// converts between them, like the annotation marker ids above.
+static_assert(static_cast<int>(ns::RaypathRoiMode::kFullSky) == LUMICE_RAYPATH_ROI_FULL_SKY,
+              "LUMICE_RAYPATH_ROI_FULL_SKY drifted from RaypathRoiMode");
+static_assert(static_cast<int>(ns::RaypathRoiMode::kInFrame) == LUMICE_RAYPATH_ROI_IN_FRAME,
+              "LUMICE_RAYPATH_ROI_IN_FRAME drifted from RaypathRoiMode");
+static_assert(static_cast<int>(ns::RaypathRoiMode::kCone) == LUMICE_RAYPATH_ROI_CONE,
+              "LUMICE_RAYPATH_ROI_CONE drifted from RaypathRoiMode");
+// The read-time symmetry bits are FilterConfig's, so a C caller's bit set is core's bit set.
+static_assert(ns::FilterConfig::kSymP == LUMICE_RAYPATH_SYMMETRY_P, "LUMICE_RAYPATH_SYMMETRY_P drifted");
+static_assert(ns::FilterConfig::kSymB == LUMICE_RAYPATH_SYMMETRY_B, "LUMICE_RAYPATH_SYMMETRY_B drifted");
+static_assert(ns::FilterConfig::kSymD == LUMICE_RAYPATH_SYMMETRY_D, "LUMICE_RAYPATH_SYMMETRY_D drifted");
+// The entry caps are sized to the data a run can produce (see the header): a segment is at most
+// one crystal's max_hits faces, and the layer cap is the scene's scatter-layer cap by definition.
+static_assert(LUMICE_MAX_RAYPATH_SEGMENT_LEN == ns::kMaxHits,
+              "LUMICE_MAX_RAYPATH_SEGMENT_LEN must equal core's kMaxHits, or a legal chain gets truncated");
+static_assert(LUMICE_MAX_RAYPATH_CHAIN_LAYERS == LUMICE_MAX_CONFIG_SCATTER_LAYERS, "one segment per scattering layer");
+
+namespace {
+
+// The view validation LUMICE_ComputeAnnotationAnchors applies, for the two other takers of a
+// LUMICE_AnnotationView here (the IN_FRAME request and LUMICE_UnprojectPixel).
+bool AnnotationViewEnumsValid(const LUMICE_AnnotationView& v) {
+  if (v.lens_type < 0 || v.lens_type > LUMICE_LENS_TYPE_GLOBE) {
+    return false;
+  }
+  return v.visible == LUMICE_VISIBLE_UPPER || v.visible == LUMICE_VISIBLE_LOWER || v.visible == LUMICE_VISIBLE_FULL;
+}
+
+}  // namespace
+
+
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                             const LUMICE_RaypathAnalysisRequest* request) {
+  if (!server || !scene || !request) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  ns::RaypathAnalysisRequest req;
+  switch (request->roi_mode) {
+    case LUMICE_RAYPATH_ROI_FULL_SKY:
+      req.roi_.mode_ = ns::RaypathRoiMode::kFullSky;
+      break;
+    case LUMICE_RAYPATH_ROI_IN_FRAME:
+      if (!AnnotationViewEnumsValid(request->frame_view) || request->frame_view.width <= 0 ||
+          request->frame_view.height <= 0) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      req.roi_.mode_ = ns::RaypathRoiMode::kInFrame;
+      // The same view -> RenderConfig translation the annotation anchors use, so the frame the
+      // consumer tests membership against is the frame the anchors were computed for.
+      req.roi_.frame_config_ = ns::annotation::ToRenderConfig(ToAnnotationViewSnapshot(request->frame_view));
+      break;
+    case LUMICE_RAYPATH_ROI_CONE: {
+      // Rejected here rather than degraded inside the consumer (which logs and counts nothing
+      // for a bad radius, or recentres a zero vector on +z): a C caller gets a return code.
+      const float* c = request->cone_center;
+      const float len2 = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
+      if (!(len2 > 0.0f) || !std::isfinite(len2) || !(request->cone_radius_rad > 0.0f) ||
+          !std::isfinite(request->cone_radius_rad) || request->cone_ring_count < 1 ||
+          request->cone_ring_count > LUMICE_MAX_RAYPATH_CONE_RINGS) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      req.roi_.mode_ = ns::RaypathRoiMode::kCone;
+      req.roi_.cone_center_[0] = c[0];
+      req.roi_.cone_center_[1] = c[1];
+      req.roi_.cone_center_[2] = c[2];
+      req.roi_.cone_radius_rad_ = request->cone_radius_rad;
+      req.roi_.cone_ring_count_ = request->cone_ring_count;
+      break;
+    }
+    default:
+      return LUMICE_ERR_INVALID_VALUE;
+  }
+  // The budget's three legal spellings; anything else is a return code, not a guess. The
+  // sentinel is checked first so the boolean reading below never sees it.
+  if (request->infinite == LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT) {
+    req.ray_num_ = std::nullopt;
+  } else if (request->infinite == 0) {
+    req.ray_num_ = static_cast<size_t>(request->ray_num);
+  } else if (request->infinite == 1) {
+    req.ray_num_ = ns::kInfSize;
+  } else {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  // The same document LUMICE_CommitScene hands the server (scene->root): the two entry
+  // points share one grammar and one parser, so a scene that commits analyses, and vice versa.
+  const ns::Error err = server->server_->StartRaypathAnalysis(scene->root, req);
+  return MapErrorCode(err.code);
+}
+
+
+namespace {
+
+// The legal read-time symmetry values are the bit sets of the three flags, and nothing else.
+bool ChainIdSymmetryValid(int chain_id_symmetry) {
+  constexpr int kAll = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
+  return chain_id_symmetry >= 0 && chain_id_symmetry <= kAll;
+}
+
+}  // namespace
+
+
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry,
+                                                    LUMICE_RaypathAnalysisInfo* out) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (!ChainIdSymmetryValid(chain_id_symmetry)) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  std::memset(out, 0, sizeof(LUMICE_RaypathAnalysisInfo));
+  const auto& result = frame->frame_->raypath_histogram_result_;
+  if (!result.has_value()) {
+    return LUMICE_OK;
+  }
+  out->present = 1;
+  out->roi_mode = static_cast<int>(result->roi_mode_);
+  // The merged row count under this symmetry — the same reduction the entry read performs
+  // (and, through the frame's cache, the same instance of it), so the two agree by construction.
+  const auto reduced = ns::ReducedRaypathHistogramOf(*frame->frame_, static_cast<uint8_t>(chain_id_symmetry));
+  out->entry_count = static_cast<int>(reduced->entries_.size());
+  out->cone_ring_count = result->cone_ring_count_;
+  out->cone_radius_rad = result->cone_radius_rad_;
+  out->snapshot_generation = frame->frame_->snapshot_generation_;
+  // The bounded record's own account (v4.35), read off the reduction like entry_count: the
+  // bucket and the truncation count are the same at every symmetry, the max row error is that
+  // symmetry's (merging rows adds their errors).
+  out->other_energy = reduced->other_energy_;
+  out->other_count = static_cast<LUMICE_RayCount>(reduced->other_count_);
+  out->truncated_chain_count = static_cast<int>(std::min<size_t>(reduced->truncated_chain_count_, INT_MAX));
+  out->max_row_error = reduced->max_row_error_;
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry,
+                                                LUMICE_RaypathHistogramEntry* out, int max_count) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (!ChainIdSymmetryValid(chain_id_symmetry)) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  const auto& result = frame->frame_->raypath_histogram_result_;
+  int count = 0;
+  bool truncated = false;
+  if (result.has_value()) {
+    // The frame holds the run's finest chains; what the caller reads is the reduction under the
+    // symmetry it named, made here (raypath_histogram_consumer.hpp says how) — the frame itself
+    // is never rewritten, so the next read under another symmetry starts from the same record.
+    const auto reduced = ns::ReducedRaypathHistogramOf(*frame->frame_, static_cast<uint8_t>(chain_id_symmetry));
+    const auto& entries = reduced->entries_;
+    count = static_cast<int>(std::min<size_t>(entries.size(), static_cast<size_t>(std::max(max_count, 0))));
+    for (int i = 0; i < count; i++) {
+      const ns::RaypathHistogramEntry& src = entries[static_cast<size_t>(i)];
+      LUMICE_RaypathHistogramEntry& dst = out[i];
+      std::memset(&dst, 0, sizeof(dst));
+      const size_t layers = std::min<size_t>(src.chain_.size(), LUMICE_MAX_RAYPATH_CHAIN_LAYERS);
+      truncated = truncated || layers < src.chain_.size();
+      for (size_t l = 0; l < layers; l++) {
+        const ns::RaypathChainSegment& seg = src.chain_[l];
+        dst.chain[l].crystal_id = static_cast<int>(seg.crystal_id);
+        const size_t faces = std::min<size_t>(seg.segment.size(), LUMICE_MAX_RAYPATH_SEGMENT_LEN);
+        truncated = truncated || faces < seg.segment.size();
+        for (size_t f = 0; f < faces; f++) {
+          dst.chain[l].segment[f] = static_cast<int>(seg.segment[f]);
+        }
+        dst.chain[l].segment_len = static_cast<int>(faces);
+      }
+      dst.chain_len = static_cast<int>(layers);
+      // A byte copy of the server's one FormatRaypathChainDisplay() output, never re-assembled here
+      // (lumice.h says why).
+      const size_t n = std::min(src.display_.size(), sizeof(dst.display) - 1);
+      truncated = truncated || n < src.display_.size();
+      std::memcpy(dst.display, src.display_.data(), n);
+      dst.display[n] = '\0';
+      dst.energy = src.energy_;
+      dst.count = static_cast<LUMICE_RayCount>(src.count_);
+      dst.error_bound = src.error_bound_;
+      const size_t rings = std::min<size_t>(src.ring_energy_.size(), LUMICE_MAX_RAYPATH_CONE_RINGS);
+      // Cannot truncate: the request's ring count was capped at LUMICE_StartRaypathAnalysis.
+      for (size_t r = 0; r < rings; r++) {
+        dst.ring_energy[r] = src.ring_energy_[r];
+      }
+      dst.ring_count = static_cast<int>(rings);
+    }
+  }
+  if (truncated) {
+    // Once per read, not per entry: the caller sees a shorter chain than the run recorded, and
+    // the record of that lives here rather than in a field the caller would have to know to check.
+    ns::Logger logger("CAPI");
+    ILOG_WARN(logger,
+              "LUMICE_FrameGetRaypathAnalysis: at least one entry exceeded LUMICE_MAX_RAYPATH_CHAIN_LAYERS ({}) / "
+              "LUMICE_MAX_RAYPATH_SEGMENT_LEN ({}) / LUMICE_RAYPATH_DISPLAY_MAX ({}) and was truncated",
+              LUMICE_MAX_RAYPATH_CHAIN_LAYERS, LUMICE_MAX_RAYPATH_SEGMENT_LEN, LUMICE_RAYPATH_DISPLAY_MAX);
+  }
+  // Sentinel: written only when the array has room past the last entry (the unified contract).
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RaypathHistogramEntry));
+  }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3],
+                                       int* out_valid) {
+  if (!view || !out_dir || !out_valid) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (!AnnotationViewEnumsValid(*view) || view->width <= 0 || view->height <= 0) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  *out_valid = 0;
+  if (px < 0 || py < 0 || px >= view->width || py >= view->height) {
+    return LUMICE_OK;  // not a pixel of this canvas
+  }
+  // The same three steps every mask and every annotation anchor of a view are built from —
+  // ToRenderConfig, MakeCameraRotation, BuildProjParams — and then core's ONE per-pixel inverse.
+  const ns::RenderConfig cfg = ns::annotation::ToRenderConfig(ToAnnotationViewSnapshot(*view));
+  const ns::Rotation rot = ns::MakeCameraRotation(cfg);
+  const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+  const lm_proj::ProjParams params = ns::BuildProjParams(cfg, rot, short_pix);
+  const ns::mask_detail::MaskDir dir = ns::mask_detail::PixelToWorld(cfg, params, rot, px, py);
+  if (!dir.valid) {
+    return LUMICE_OK;
+  }
+  // Both display clips, exactly as the IN_FRAME membership test and the render-domain mask apply
+  // them: a pixel the view does not show images no sky, so it is not a direction to point at.
+  float forward[3];
+  ns::mask_detail::CameraForward(rot, forward);
+  if (!ns::mask_detail::VisibleByRange(cfg.visible_, dir.z) ||
+      !ns::mask_detail::FrontVisible(cfg.front_, forward, dir.x, dir.y, dir.z)) {
+    return LUMICE_OK;
+  }
+  out_dir[0] = dir.x;
+  out_dir[1] = dir.y;
+  out_dir[2] = dir.z;
+  *out_valid = 1;
+  return LUMICE_OK;
+}
+
+LUMICE_ErrorCode LUMICE_ProjectDirection(const LUMICE_AnnotationView* view, const float dir[3], float* out_px,
+                                         float* out_py, int* out_valid) {
+  if (!view || !dir || !out_px || !out_py || !out_valid) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  if (!AnnotationViewEnumsValid(*view) || view->width <= 0 || view->height <= 0) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  // Core's marker sampler on a caller-supplied direction: the projection, the canvas clamp and
+  // the hemisphere slack are the ones LUMICE_ComputeAnnotationAnchors' marker points get.
+  const ns::annotation::CanvasPoint p = ns::annotation::ProjectDirectionOnView(ToAnnotationViewSnapshot(*view), dir);
+  *out_valid = p.valid ? 1 : 0;
+  if (!p.valid) {
+    return LUMICE_OK;
+  }
+  *out_px = p.px;
+  *out_py = p.py;
   return LUMICE_OK;
 }
 

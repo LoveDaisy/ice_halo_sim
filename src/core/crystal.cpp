@@ -510,7 +510,12 @@ IdType Crystal::GetFn(IdType poly_idx) const {
   return poly_face_fn_[poly_idx];
 }
 
-std::vector<IdType> Crystal::PCanonicalShift(const std::vector<IdType>& rp) const {
+namespace {
+
+// Shift prism/pyramid faces so the first non-basal pri index becomes 0 (the P-canonical form).
+// Basal faces (x < 3) pass through unchanged; the input is returned verbatim when no non-basal
+// face is present.
+std::vector<IdType> PCanonicalShiftByPeriod(const std::vector<IdType>& rp, int fn_period) {
   std::vector<IdType> result = rp;
   IdType first_pri = kInvalidId;
   for (auto& x : result) {
@@ -522,32 +527,30 @@ std::vector<IdType> Crystal::PCanonicalShift(const std::vector<IdType>& rp) cons
     if (first_pri == kInvalidId) {
       first_pri = pri;
     }
-    pri += fn_period_ - first_pri;
-    pri %= fn_period_;
+    pri += fn_period - first_pri;
+    pri %= fn_period;
     pri += 3;
     x = pyr * 10 + pri;
   }
   return result;
 }
 
-std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
-  return ReduceRaypath(rp, symmetry, 0, false);
-}
+}  // namespace
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
-                                           bool d_applicable) const {
-  if (symmetry == FilterConfig::kSymNone || fn_period_ < 0) {
+std::vector<IdType> ReduceRaypathByPeriod(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                          bool d_applicable, int fn_period) {
+  if (symmetry == FilterConfig::kSymNone || fn_period < 0) {
     return rp;
   }
 
   std::vector<IdType> reduced_rp = rp;
   if (symmetry & FilterConfig::kSymP) {
-    reduced_rp = PCanonicalShift(reduced_rp);
+    reduced_rp = PCanonicalShiftByPeriod(reduced_rp, fn_period);
   }
 
   if ((symmetry & FilterConfig::kSymD) && d_applicable) {
-    // σ-clean: reflect every prism face using formula face_id_new = (sigma_a - (face_id-3) + fn_period_) % fn_period_ +
+    // σ-clean: reflect every prism face using formula face_id_new = (sigma_a - (face_id-3) + fn_period) % fn_period +
     // 3
     std::vector<IdType> rp_reflected = reduced_rp;
     for (auto& x : rp_reflected) {
@@ -556,14 +559,14 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
       }
       IdType pyr = x / 10;
       IdType pri = x % 10 - 3;
-      pri = (sigma_a - pri + fn_period_) % fn_period_;
+      pri = (sigma_a - pri + fn_period) % fn_period;
       x = pyr * 10 + pri + 3;
     }
     // When kSymP is also enabled, the D-image may no longer be P-canonical
     // (first pri shifted by sigma_a); re-canonicalize before lex comparison
     // so same orbit always reduces to the same representative.
     if (symmetry & FilterConfig::kSymP) {
-      rp_reflected = PCanonicalShift(rp_reflected);
+      rp_reflected = PCanonicalShiftByPeriod(rp_reflected, fn_period);
     }
     if (rp_reflected < reduced_rp) {
       reduced_rp = rp_reflected;
@@ -593,6 +596,15 @@ std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_
   }
 
   return reduced_rp;
+}
+
+std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {
+  return ReduceRaypath(rp, symmetry, 0, false);
+}
+
+std::vector<IdType> Crystal::ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                           bool d_applicable) const {
+  return ReduceRaypathByPeriod(rp, symmetry, sigma_a, d_applicable, fn_period_);
 }
 
 std::vector<std::vector<IdType>> Crystal::ExpandRaypath(const std::vector<IdType>& rp, uint8_t symmetry) const {

@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 413        // ABI version, encoded major*100 + minor (v4.13)
+#define LUMICE_API_VERSION 436        // ABI version, encoded major*100 + minor (v4.36)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -762,6 +762,114 @@ void LUMICE_StopServer(LUMICE_Server* server);
 **Notes**:
 - After stopping, you can still submit new configurations
 - Stopping does not release server resources; call `LUMICE_DestroyServer()` to release them
+
+### Raypath Analysis Run
+
+The other kind of run a server can carry (v4.29; design in `raypath-analysis-panel.md`): no
+image, a histogram of complete raypath chains with the energy each delivered into a region of
+interest, sorted by energy. It shares the render run's lifecycle — the same
+`LUMICE_GetSimLifecycle` / `LUMICE_GetDrainStatus` / `LUMICE_AcquireResultFrame` — and the two
+exclude each other.
+
+```c
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                             const LUMICE_RaypathAnalysisRequest* request);
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathAnalysisInfo* out);
+LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathHistogramEntry* out, int max_count);
+LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3], int* out_valid);
+LUMICE_ErrorCode LUMICE_ProjectDirection(const LUMICE_AnnotationView* view, const float dir[3], float* out_px,
+                                         float* out_py, int* out_valid);
+LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend);
+```
+
+**Lifecycle**:
+1. Build the scene to analyse (`LUMICE_SceneFromJson` / `_FromJsonFile`, or the scratch route),
+   exactly as for `LUMICE_CommitScene`. No commit is needed first (v4.36): the analysis is a
+   submission of its own, and a server that has never committed anything analyses just the same.
+2. If a render is in progress, `LUMICE_StopServer` or wait for it to complete. An analysis
+   cannot start over a render in progress and a commit cannot start over an analysis in
+   progress: both return `LUMICE_ERR_SERVER` and interrupt nothing.
+3. `LUMICE_StartRaypathAnalysis` with the scene and a request. The scene is read at the call and
+   deep-copied (the handle stays the caller's); a scene the server cannot use is rejected with
+   the code `LUMICE_CommitScene` would give it, with nothing stopped or replaced. The run
+   advances the lifecycle epoch like a commit does — a frame of it is never mistaken for the
+   last render's — and leaves the render's committed config alone, so the `LUMICE_CommitScene`
+   after it judges consumer reuse against the last render, as if no analysis had happened.
+   `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
+   `_IN_FRAME` (membership in `frame_view`, a `LUMICE_AnnotationView`) or `_CONE` (`cone_center`,
+   `cone_radius_rad`, `cone_ring_count`). A cone has no stop of its own (v4.34): in every mode
+   the run ends on its ray budget or on `LUMICE_StopServer`. The request names no
+   symmetry (v4.33): the run records every chain unreduced, and the P/B/D reduction is a
+   parameter of the read (step 4). The run's ray budget is the request's
+   own (v4.32): `infinite = 1` traces until stopped — and a run ended by `LUMICE_StopServer`
+   keeps what it accumulated: the frame acquired after the stop returns carries the histogram
+   consumed up to it (v4.34), so a partial result is readable — `infinite = 0` traces `ray_num` rays in total across every wavelength, and
+   `infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` traces the submitted scene's own
+   `ray_num` / `infinite` — the behaviour before v4.32. A zero-initialized request asks for
+   **zero** rays, not for the scene's budget; set the field. Any other `infinite` is
+   `LUMICE_ERR_INVALID_VALUE`. The scene is never edited by the run: the next
+   `LUMICE_CommitScene` traces the document's own budget. Calling it while an analysis is
+   already in progress restarts the analysis with the new scene and request.
+4. Poll as for a render; read through a frame. Both getters take `chain_id_symmetry`, a bit set
+   of `LUMICE_RAYPATH_SYMMETRY_P` / `_B` / `_D` (0..7, else `LUMICE_ERR_INVALID_VALUE`; 0 is
+   "no reduction"): the frame's recorded chains are reduced per layer under it — with that
+   layer's crystal's D parameters, the same rule a filter on that crystal canonicalises by — and
+   chains that meet on one reduced form are merged into one row whose `energy`, `count` and
+   `ring_energy` are the sums. This happens on the read, from the frame's unreduced record, so
+   one frame can be read under several symmetries and the sums are the same at every one; the
+   two calls must be given the same value, since `entry_count` is the merged row count.
+   `LUMICE_FrameGetRaypathAnalysisInfo` says whether the frame is an analysis frame (`present`)
+   and how many rows it holds under that symmetry; the entries follow the `(out, max_count)`
+   sentinel contract of `LUMICE_FrameGetRawXyz` with `count == 0` as the sentinel, and are
+   copied (they outlive the frame). On an analysis frame the render / raw-XYZ getters write
+   their sentinel at `out[0]`; on a render frame `present` is 0.
+5. The next `LUMICE_CommitScene` is a render run again.
+
+**CPU, always**: the chain ids exist on the legacy CPU path only, so the analysis run forces that
+route ahead of both `LUMICE_SetPreferredBackend` and `LUMICE_TRACE_BACKEND`, as a session property
+(the preference is untouched and the next render honours it; `LUMICE_GetBackendFallbackFlag` stays
+0). `LUMICE_GetActiveBackend` reads what the simulation actually runs on — `LUMICE_BACKEND_CPU`
+for the whole analysis session — as opposed to what was asked for.
+
+**Bounded record** (v4.35): the run keeps a fixed number of rows, whatever the ray count or the
+number of scattering layers — per worker at most `ChainIdInterningTable::kDefaultCapacity` distinct
+chains are interned, and the server keeps at most `kRaypathHistogramCapacity` rows (Space-Saving:
+a chain arriving with no row while every row is taken takes over the lowest-energy row and records
+the energy it took over as its uncertainty). What that costs is reported, not hidden.
+`LUMICE_RaypathHistogramEntry::error_bound` is how much of a row's `energy` may belong to another
+chain — the true energy lies within `[energy - error_bound, energy]`, 0 for a row that never took
+a slot over, and under a symmetry the sum over the merged rows. `LUMICE_RaypathAnalysisInfo`
+carries the record-level account: `other_energy` / `other_count` are the rays whose chain the
+producer had no room for, as one bucket that is never an entry (so Σ entries + other is every
+counted ray, under every symmetry — a consumer shows it as one more line so the percentages add
+up); `truncated_chain_count` is how many times a ray's chain hit the full record (arrivals, not
+distinct chains — a turned-away chain is not remembered, so it counts again when it comes back);
+`max_row_error` is the largest `error_bound` over the entries under the read's symmetry, 0 when
+no row was ever taken over and every entry is exact — the shape of every run that fits, which
+reads exactly as it did before v4.35.
+
+**Chain text**: `LUMICE_RaypathHistogramEntry::display` is a byte copy of the server's one chain
+formatter (v4.33 format): faces joined by `-`; a layer that holds more than one crystal in the
+scene names its crystal as `C<id>`, a layer with one crystal does not; with more than one layer
+every layer is parenthesised and layers are joined by ` -> `, root first — `3-5`, `C1(3-5)`,
+`(3-5) -> (1-3)`, `C1(1-3) -> C4(3-5)`. Print this field rather than re-assembling it from
+`chain[]`.
+
+**Pixel → direction**: `LUMICE_UnprojectPixel` turns a pixel index of a `LUMICE_AnnotationView`
+canvas into the world direction it images (unit vector, the direction light travels), through the
+same inverse the render-domain mask and the IN_FRAME test are built from; `*out_valid` is 0 for a
+pixel outside the canvas, outside the lens's image domain, or clipped by `visible` / `front`. It is
+how a click becomes a cone centre.
+
+**Direction → pixel** (v4.31): `LUMICE_ProjectDirection` is the forward half `LUMICE_UnprojectPixel`
+is the inverse of, on a direction the caller already holds rather than one of the six named marker
+ids `LUMICE_ComputeAnnotationAnchors` projects. It is the same sampler those markers use
+(projection, canvas clamp, half-degree hemisphere slack — deliberately not `LUMICE_UnprojectPixel`'s
+exact render-domain verdict, since a marker should appear and disappear the way the other markers
+do), so a caller that keeps a direction of its own — the analysis panel keeps its cone centre as
+one — can place it on the picture every frame and have it move with the view exactly as the zenith
+or the sun marker does. `*out_px`/`*out_py` are written only when `*out_valid` is 1; zero
+allocation, no storage handle, designed to be called per frame from a hover test.
 
 ## Usage Examples
 

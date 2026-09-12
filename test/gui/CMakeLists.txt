@@ -39,6 +39,7 @@ add_executable(gui_test
     functional/test_preview_texture.cpp
     functional/test_view_display_controls.cpp
     functional/test_gui_sim_smoke.cpp
+    functional/test_raypath_analysis_panel.cpp
     visual/test_preview_pixels.cpp
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp

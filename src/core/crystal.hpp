@@ -251,6 +251,8 @@ class Crystal {
    */
   std::vector<IdType> ReduceRaypath(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
                                     bool d_applicable) const;
+  // The reduction rule itself lives in the free function ReduceRaypathByPeriod below; this
+  // member supplies the crystal's fn_period_ and nothing else.
 
   /**
    * @brief Expand raypath using symmetry
@@ -310,11 +312,6 @@ class Crystal {
   static Crystal MakePyramidClosedForm(float upper_alpha, float lower_alpha, float h1, float h2, float h3,
                                        const float dist[6], const char* factory);
 
-  // Shift prism/pyramid faces so the first non-basal pri index becomes 0.
-  // Basal faces (x < 3) are passed through unchanged. Returns the input
-  // verbatim when no non-basal face is present.
-  std::vector<IdType> PCanonicalShift(const std::vector<IdType>& rp) const;
-
   int fn_period_ = -1;  // for raypath symmetry
 
   // Polygon face data for per-plane intersection
@@ -337,6 +334,22 @@ class Crystal {
   CrystalGeom cf_geom_{};
 };
 
+
+// The raypath symmetry reduction — the ONE authority for the canonical form of a face sequence
+// under a P/B/D bit set (FilterConfig::kSym*), stated over the face-number period rather than
+// over a Crystal so a caller holding only the period can reduce without constructing one. The
+// server's read-time histogram merge is that caller (server/raypath_histogram_consumer.hpp): it
+// reduces recorded finest chains under whatever symmetry the reader asks for, long after the
+// crystals of the run are gone. Crystal::ReduceRaypath forwards here with its own fn_period_.
+//
+// `fn_period` is the number of prism faces (6 for every crystal family the engine builds today
+// — the same constant filter_spec.cpp's GPU descriptor path pins as kFnPeriodHex); a negative
+// period means "no symmetry defined" and the input is returned as is, as is the input under
+// symmetry == FilterConfig::kSymNone. `sigma_a` and `d_applicable` are the axis-derived D
+// parameters (detail::ComputeSigmaA / detail::IsDApplicable); D is applied only when both the D
+// bit is set and d_applicable is true.
+std::vector<IdType> ReduceRaypathByPeriod(const std::vector<IdType>& rp, uint8_t symmetry, int sigma_a,
+                                          bool d_applicable, int fn_period);
 
 namespace detail {
 // Internal — not part of public API.

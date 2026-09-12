@@ -782,6 +782,43 @@ TEST(SceneCommitChain, TheDocumentsEvModeReachesBothIntents) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The two runs: one document, one emitter.
+
+// The scene an analysis reports on is the scene a Run of the same document would render, to the
+// byte. Both DoRun and DoAnalyze go through BuildCommitSceneOrWarn and nothing else, so this
+// pins the emitter they share against the run intent's own serialization — the document is
+// given non-default values across the crystal, the filter, the sun, the budget and the view, so
+// that a field the shared emitter dropped or the intent encoded differently shows as a
+// difference rather than as two defaults agreeing. What this locks is the future: a second
+// BuildScene call site in DoAnalyze, with its own intent or its own overflow handling, is the
+// drift this case exists to make visible (its refusal half is RunWarningChain's
+// RunAndAnalyzeRefuseAnOverflowingDocumentTheSameWay).
+TEST(SceneCommitChain, TheAnalysisSubmitsTheSceneTheRunWouldCommit) {
+  SeedOneEntryDocument();
+  CrystalConfig& cr = g_state.crystals[0];
+  cr.type = CrystalType::kPyramid;
+  cr.height = ShapeDist{ ShapeDistType::kGauss, 1.7f, 0.2f };
+  cr.zenith = AxisDist{ AxisDistType::kGauss, 12.0f, 3.0f };
+  g_state.filters[0] = SopFilter({ "3-5", "1-3-2" });
+  g_state.sun.altitude = 31.0f;
+  g_state.sim.ray_num_millions = 0.25f;
+  g_state.sim.max_hits = 9;
+  g_state.renderer.ev_mode = 1;
+  g_state.renderer.sim_resolution_index = 1;
+
+  const nlohmann::json from_run_intent = CommitSceneJson(g_state);
+  ASSERT_FALSE(from_run_intent.is_null()) << "positive control: the document commits";
+  const nlohmann::json from_emitter = SceneJson(BuildCommitSceneOrWarn(g_state, /*user_initiated=*/true).get());
+  ASSERT_FALSE(from_emitter.is_null());
+  EXPECT_EQ(from_emitter.dump(), from_run_intent.dump());
+  // And the values are the document's, not defaults that happened to agree twice.
+  EXPECT_EQ(from_emitter["crystal"][0]["type"].get<std::string>(), "pyramid");
+  EXPECT_EQ(from_emitter["scene"]["light_source"]["altitude"].get<float>(), 31.0f);
+  EXPECT_EQ(from_emitter["scene"]["max_hits"].get<int>(), 9);
+  EXPECT_EQ(from_emitter["scene"]["ray_num"].get<int>(), 250000);
+}
+
+// ---------------------------------------------------------------------------------------------
 // The crystal side: what the user shaped is what gets simulated.
 
 // A configured randomization must arrive at the simulator as a distribution, not as its mean. The

@@ -39,6 +39,12 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // first new snapshot, preventing visible flicker during slider scrubbing.
   PublishValidReset();
   ResetPerResumeState();
+  // A (possibly new) server's snapshot counter starts over, so the analysis cursor must too —
+  // otherwise its first analysis result could carry a generation the old server already used and
+  // be skipped as "seen". Not part of ResetPerResumeState on purpose: a wake on the SAME server
+  // has nothing to re-read (the consumer dedups on the payload's own generation anyway).
+  last_analysis_generation_ = 0;
+  InvalidateAnalysisResult();
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -168,6 +174,17 @@ void ServerPoller::InvalidateStagedTexture() {
   auto next = std::make_shared<PreviewSnapshot>(*prev);
   next->payload.reset();
   next->has_new_texture = false;
+  StorePublished(std::move(next));
+}
+
+void ServerPoller::InvalidateAnalysisResult() {
+  std::lock_guard<std::mutex> lk(publish_mutex_);
+  auto prev = LoadPublished();
+  if (!prev || !prev->analysis) {
+    return;
+  }
+  auto next = std::make_shared<PreviewSnapshot>(*prev);
+  next->analysis.reset();
   StorePublished(std::move(next));
 }
 
@@ -531,6 +548,31 @@ void ServerPoller::PollOnce() {
     }
   }
 
+  // ---- Raypath analysis result (lumice.h "Raypath Analysis Run"), off the same frame. An
+  // analysis frame carries no xyz buffer, so it never enters the texture branch above; this is
+  // its own branch with its own generation cursor. `present` is a property of the frame and holds
+  // on every poll of the session, so it is NOT the "new result" test — snapshot_generation is
+  // (the v4.30 field, exported for exactly this). Identity and echo fields only: the ENTRIES are
+  // read by the main thread under the symmetry the panel's checkboxes name (v4.33 — the
+  // reduction is a read parameter, and a display-time choice the poller does not hold), so the
+  // payload published here carries none. The symmetry passed to the Info call is irrelevant to
+  // every field read below (only entry_count depends on it, and it is not read).
+  std::shared_ptr<const AnalysisPayload> new_analysis;
+  {
+    LUMICE_RaypathAnalysisInfo info{};
+    if (LUMICE_FrameGetRaypathAnalysisInfo(frame.get(), 0, &info) == LUMICE_OK && info.present != 0 &&
+        info.snapshot_generation != last_analysis_generation_) {
+      auto payload = std::make_shared<AnalysisPayload>();
+      payload->snapshot_generation = info.snapshot_generation;
+      payload->roi_mode = info.roi_mode;
+      payload->cone_ring_count = info.cone_ring_count;
+      payload->cone_radius_rad = info.cone_radius_rad;
+      last_analysis_generation_ = info.snapshot_generation;
+      new_analysis = std::move(payload);
+      GUI_LOG_VERBOSE("[Poller] analysis result: roi_mode={}, gen={}", info.roi_mode, info.snapshot_generation);
+    }
+  }
+
   // ---- Publish: whole RMW (load prev → decide carry-forward → store) inside publish_mutex_.
   // Critical section is pointer/refcount-level only.
   {
@@ -573,6 +615,9 @@ void ServerPoller::PollOnce() {
       next->texture_serial = prev->texture_serial;
       next->has_new_texture = false;
     }
+    // Analysis result: fresh when this poll read a new generation, else carried forward (the
+    // consumer dedups on the payload's own generation, so a carry-forward is not a re-adoption).
+    next->analysis = new_analysis ? std::move(new_analysis) : (prev ? prev->analysis : nullptr);
     StorePublished(std::move(next));
   }
 

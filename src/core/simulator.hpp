@@ -13,6 +13,7 @@
 #include "config/sim_data.hpp"
 #include "core/backend/backend_kind.hpp"
 #include "core/backend/trace_backend.hpp"
+#include "core/chain_id_table.hpp"
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
@@ -83,6 +84,36 @@ class Simulator {
   // preferred_backend_ above. Defaults to true so the window between the ctor
   // and the worker thread reaching CreateBackend does not read as "fell back".
   bool BackendActive() const { return backend_active_.load(std::memory_order_acquire); }
+
+  // Raypath-analysis mode for the next Run() entry (doc/raypath-analysis-panel.md
+  // §3). While `enabled`, the legacy CPU path allocates the per-ray chain-id
+  // column, interns every layer traversal into this Simulator's own
+  // ChainIdInterningTable (cleared at Run() entry — one Run() is one analysis
+  // session, and ids restart from 1) under `symmetry` (FilterConfig::kSym*
+  // flags, applied uniformly to every layer; sigma_a / d_applicable are still
+  // derived per layer from that layer's axis distribution exactly as
+  // FilterSpec::Create does), and delivers SimData::outgoing_chain_id_ +
+  // chain_id_table_delta_. The backend-routed paths (CpuTraceBackend, Metal,
+  // CUDA) do not implement it: they leave both fields empty and Run() logs one
+  // WARN per entry saying so. Same thread contract as SetPreferredBackend:
+  // written by the server thread, snapshotted at the top of Run().
+  void SetAnalysisChainId(bool enabled, uint8_t symmetry);
+
+  // The analysis run's other session property: force the legacy CPU path for
+  // the next Run(), ahead of BOTH the LUMICE_TRACE_BACKEND override and the
+  // SetPreferredBackend preference (neither is consulted, and neither is
+  // modified — the preference is still there for the next render session).
+  // Same thread contract as SetAnalysisChainId: written by the server thread,
+  // snapshotted at the top of Run().
+  void SetAnalysisForceCpu(bool enabled);
+
+  // The backend kind the most recent Run() entry actually resolved to — kCpu
+  // for the legacy path (whether by preference, by force, by an unavailable
+  // GPU, or by the mid-run BackendUnavailableError fallback, which re-publishes
+  // it), kMetal / kCuda while that backend is live. kCpu before the first Run().
+  // Written at the same two points as backend_active_ and read by the server
+  // (Server::GetActiveBackend) — the observable answer to "did the force take".
+  BackendKind ActiveBackend() const { return active_backend_.load(std::memory_order_acquire); }
 
   // Returns the seed actually handed to the trace backend (task 260.6).
   // When `seed_ != 0` this equals `seed_`; when `seed_ == 0` this is a
@@ -254,6 +285,27 @@ class Simulator {
   // acquire-read at Run() entry. env-var LUMICE_TRACE_BACKEND still wins.
   std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
 
+  // Raypath-analysis session settings: the atomic is what SetAnalysisChainId
+  // writes (one 2-byte trivially-copyable value, so enabled and symmetry can
+  // never be observed torn), the plain copy is Run()'s snapshot of it, read on
+  // the simulator thread only. Default: off; the symmetry only means anything
+  // once SetAnalysisChainId turns it on, and that call always sets both. The
+  // server's analysis run passes FilterConfig::kSymNone (chains recorded at
+  // their finest, reduced when read — server.hpp RaypathAnalysisRequest); the
+  // mechanism itself takes any P/B/D bit set, and tests exercise the others.
+  struct ChainIdSession {
+    bool enabled = false;
+    uint8_t symmetry = FilterConfig::kSymNone;
+  };
+  std::atomic<ChainIdSession> analysis_chain_id_{ ChainIdSession{ false, FilterConfig::kSymNone } };
+  ChainIdSession chain_id_session_{};
+  // See SetAnalysisForceCpu / ActiveBackend.
+  std::atomic_bool analysis_force_cpu_{ false };
+  std::atomic<BackendKind> active_backend_{ BackendKind::kCpu };
+  // Per-worker interning table (see chain_id_table.hpp for why per-worker is
+  // enough). Only ever touched from inside Run() on the simulator thread.
+  ChainIdInterningTable chain_id_table_;
+
   // Backing store for BackendActive() (see its declaration above for
   // the contract and the default's rationale). Written by the simulator thread at
   // exactly two points inside Run() — right after CreateBackend, and in the
@@ -276,8 +328,11 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // hold. Sizing the two separately is what let a fan-out write past the end of
 // buffer_data[1] — see the definition in simulator.cpp for the full mechanism.
 //
+// `chain_id_enabled` is forwarded to both RayBuffer::Reset calls — the
+// per-ray chain-id column exists on both halves of the pair or on neither.
+//
 // Internal: exposed for unit testing; not part of the public C API.
-void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num);
+void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num, bool chain_id_enabled = false);
 
 // Per-batch ray dispatcher: classifies each ray via derived predicates
 // (IsNormal() / IsOutgoing() / IsContinue() / IsTir()) and routes

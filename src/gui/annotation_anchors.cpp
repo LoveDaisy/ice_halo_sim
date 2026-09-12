@@ -72,6 +72,23 @@ void CanvasPointToShaderScreenPos(const AnnotationAnchors::Point& p, int lens_ty
   out[1] = LensIsFullSky(lens_type) ? centred_y : -centred_y;
 }
 
+LUMICE_AnnotationView BuildAnnotationView(const AnnotationAnchors::ViewKey& key) {
+  LUMICE_AnnotationView view{};
+  view.width = key.width;
+  view.height = key.height;
+  view.lens_type = key.lens_type;
+  view.lens_fov = key.fov;
+  view.view_azimuth = key.azimuth;
+  view.view_elevation = key.elevation;
+  view.view_roll = key.roll;
+  view.visible = key.visible;
+  view.overlap = key.overlap;
+  view.front = key.front ? 1 : 0;
+  // lens_shift stays 0: the preview has no shift control (doc/gui-state-governance.md §9 names it
+  // among the fields the GUI does not expose), and the anchors were always placed with 0.
+  return view;
+}
+
 void AnnotationAnchors::Compute(const ViewKey& key) {
   has_result_ = false;
   width_ = 0;
@@ -92,16 +109,7 @@ void AnnotationAnchors::Compute(const ViewKey& key) {
   }
 
   LUMICE_AnnotationRequest req{};
-  req.view.width = key.width;
-  req.view.height = key.height;
-  req.view.lens_type = key.lens_type;
-  req.view.lens_fov = key.fov;
-  req.view.view_azimuth = key.azimuth;
-  req.view.view_elevation = key.elevation;
-  req.view.view_roll = key.roll;
-  req.view.visible = key.visible;
-  req.view.overlap = key.overlap;
-  req.view.front = key.front ? 1 : 0;
+  req.view = BuildAnnotationView(key);
   req.angular_dist_deg = key.angular_dist_deg.data();
   req.angular_dist_count = static_cast<int>(key.angular_dist_deg.size());
   req.elevation_deg = key.elevation_deg.data();

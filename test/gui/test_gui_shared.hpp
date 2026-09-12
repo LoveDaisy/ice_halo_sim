@@ -642,6 +642,7 @@ void RegisterStatusBarTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);
+void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
 void RegisterModalLayoutTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);

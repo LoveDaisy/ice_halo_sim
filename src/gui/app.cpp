@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 
+#include "gui/analysis_panel.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
@@ -731,6 +732,19 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
     g_server_poller.InvalidateStagedTexture();
   }
 
+  // The analysis tool's state is about the scene that was on screen: its picked centre, its
+  // selection and its list mean nothing for another document. The window stays open — which
+  // panels are open is not document state. Revert keeps all of it: the scene is the same one.
+  if (reason != FrontendResetReason::kRevert) {
+    const bool window_open = state.analysis.window_open;
+    state.analysis = GuiState::RaypathAnalysisSession{};
+    state.analysis.window_open = window_open;
+    state.analysis_result = GuiState::AnalysisResultView{};
+    state.analysis_run_in_progress = false;
+    // And the poller's carried copy, or the cleared view would adopt it back next frame.
+    g_server_poller.InvalidateAnalysisResult();
+  }
+
   // crystal_mesh_hash reset — as-built: only DoNew clears it (Open branches don't touch it;
   // edit_modals writes -1 as a distinct "force re-upload" signal, not a "no mesh" reset).
   if (reason == FrontendResetReason::kNewDocument) {
@@ -1106,6 +1120,65 @@ bool MaybeReconstructServerForConstructionProperties() {
   return true;
 }
 
+// The one emitter of the document a run is given, for BOTH kinds of run. DoRun and DoAnalyze
+// call this and nothing else to turn g_state into the LUMICE_Scene they submit, so the scene an
+// analysis reports on is byte-for-byte the scene a Run of the same document would render — a
+// second BuildScene call site would be a second place for the two to drift apart, and nothing
+// downstream could tell (doc/gui-state-governance.md §9: one encoder per intent). The overflow
+// report is part of the emitter for the same reason: a document too large for the ABI is refused
+// the same way, with the same message, whichever button asked.
+ScenePtr BuildCommitSceneOrWarn(const GuiState& state, bool user_initiated) {
+  FilterOverflowInfo overflow;
+  ColorClassOverflowInfo color_overflow;
+  ScenePtr scene = BuildScene(state, SceneIntent::kSimCommit, &overflow, &color_overflow);
+  if (scene) {
+    return scene;
+  }
+  // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
+  // (which runs strictly after the filter walk), rather than a physical-filter overflow.
+  // Reusing the filter-overflow wording/limit for a color overflow would misattribute the
+  // resource type and print the wrong cap number to the user.
+  std::string warning_msg;
+  std::string log_locator;
+  if (color_overflow.class_index >= 0) {
+    log_locator = FormatColorOverflowLocator(color_overflow);
+    // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply
+    // and the previous configuration was kept, so the user knows why nothing changed.
+    warning_msg = "This raypath color configuration exceeds its limits (" + log_locator +
+                  ").\nThe previous configuration was kept. Simplify the color configuration and try again.";
+  } else {
+    // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
+    // identifying which filter reference tripped the ABI bounds, captured inside
+    // BuildScene. Built by FormatOverflowLocator so the format is unit-testable
+    // (test/composition-correctness/gui/test_filter_reconstruct_chain.cpp) rather than only
+    // exercised through on-screen GUI.
+    log_locator = FormatOverflowLocator(overflow);
+    warning_msg = "This filter has too many OR segments / values to apply (limit " +
+                  std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + log_locator +
+                  ").\nThe previous configuration was kept. Simplify the filter and try again.";
+  }
+  // Log-panel dedup: gate the Log write on the SAME state SetGuiWarning uses for modal dedup
+  // (in-flight message equals the new one). Sharing the key intentionally couples the two
+  // channels — a wording change (e.g. new Layer/Entry after the user switches which filter
+  // triggers the overflow) counts as a fresh event and re-logs. A separate static holding the
+  // last logged message would be a second dedup key that could disagree with the modal's.
+  if (PeekGuiWarning() != warning_msg) {
+    GUI_LOG_WARNING("[GUI] BuildCommitSceneOrWarn: {} exceeds ABI limits ({}); keeping the previous configuration.",
+                    color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
+  }
+  // A user-clicked Run (or Analyze) always opens the warning modal, even when the previous
+  // OK dismissed it and the overflow condition is unchanged. SetGuiWarning's identity-dedup
+  // would otherwise silently swallow the second click. The auto-commit (70ms) path sets
+  // user_initiated=false so a stuck-overflow slider drag does not reopen the modal every
+  // tick and freeze the UI (app_panels.cpp's warning modal records why "OK to clear" alone
+  // is wrong).
+  if (user_initiated) {
+    ClearGuiWarning();
+  }
+  SetGuiWarning(warning_msg);
+  return nullptr;
+}
+
 bool DoRun(bool user_initiated) {
   if (!g_server) {
     return true;
@@ -1210,53 +1283,9 @@ bool DoRun(bool user_initiated) {
   // Build the scene BEFORE stopping the poller: if a filter exceeds the ABI bounds
   // (clause / term / filter capacity), keep the previously committed state (graceful
   // degradation) — poller untouched, buffer not torn — rather than commit a truncated config.
-  FilterOverflowInfo overflow;
-  ColorClassOverflowInfo color_overflow;
-  ScenePtr scene = BuildScene(g_state, SceneIntent::kSimCommit, &overflow, &color_overflow);
+  // The build and the overflow report are BuildCommitSceneOrWarn's, shared with DoAnalyze.
+  ScenePtr scene = BuildCommitSceneOrWarn(g_state, user_initiated);
   if (!scene) {
-    // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
-    // (which runs strictly after the filter walk), rather than a physical-filter overflow.
-    // Reusing the filter-overflow wording/limit for a color overflow would misattribute the
-    // resource type and print the wrong cap number to the user (code-review-01 Major 1).
-    std::string warning_msg;
-    std::string log_locator;
-    if (color_overflow.class_index >= 0) {
-      log_locator = FormatColorOverflowLocator(color_overflow);
-      // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply
-      // and the previous configuration was kept, so the user knows why nothing changed.
-      warning_msg = "This raypath color configuration exceeds its limits (" + log_locator +
-                    ").\nThe previous configuration was kept. Simplify the color configuration and try again.";
-    } else {
-      // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
-      // identifying which filter reference tripped the ABI bounds, captured inside
-      // BuildScene. Built by FormatOverflowLocator so the format is unit-testable
-      // (test/composition-correctness/gui/test_filter_reconstruct_chain.cpp) rather than only
-      // exercised through on-screen GUI.
-      log_locator = FormatOverflowLocator(overflow);
-      warning_msg = "This filter has too many OR segments / values to apply (limit " +
-                    std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + log_locator +
-                    ").\nThe previous configuration was kept. Simplify the filter and try again.";
-    }
-    // Log-panel dedup: gate the Log write on the SAME state SetGuiWarning uses for modal dedup
-    // (in-flight message equals the new one). Sharing the key intentionally couples the two
-    // channels — a wording change (e.g. new Layer/Entry after the user switches which filter
-    // triggers the overflow) counts as a fresh event and re-logs. See plan.md §7 risk 1 for
-    // why we did NOT introduce a separate `g_last_overlimit_log_msg` static variable.
-    if (PeekGuiWarning() != warning_msg) {
-      GUI_LOG_WARNING("[GUI] DoRun: {} exceeds ABI limits ({}); keeping the previous configuration.",
-                      color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
-    }
-    // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
-    // opens the warning modal, even when the previous OK dismissed it and the
-    // overflow condition is unchanged. SetGuiWarning's identity-dedup would
-    // otherwise silently swallow the second Run. The auto-commit (70ms) path
-    // sets user_initiated=false so a stuck-overflow slider drag does not
-    // reopen the modal every tick and freeze the UI (app_panels.cpp:1315-1320
-    // records why "OK to clear" alone is wrong).
-    if (user_initiated) {
-      ClearGuiWarning();
-    }
-    SetGuiWarning(warning_msg);
     return true;
   }
 
@@ -1341,6 +1370,10 @@ bool DoRun(bool user_initiated) {
     LUMICE_GetSimLifecycle(g_server, &lc);
     g_state.committed_epoch = lc.epoch;
     g_state.run_intent = RunIntent::kRunning;
+    // The server is a render session again (a commit withdraws the analysis session, server.cpp
+    // CommitConfig), so the analysis intent is over; the result on show is deliberately kept — the
+    // user is most often re-running the scene they just edited FROM that list.
+    g_state.analysis.started = false;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
     g_state.stats_crystal_num = 0;
@@ -1405,6 +1438,11 @@ void DoStop() {
   // drains (server.cpp active_workers_==0); doing it off the UI thread keeps the toolbar live.
   // This writes the INTENT only — sim_state stays single-owner (ReconcileSimState in SyncFromPoller).
   g_state.run_intent = RunIntent::kStopping;
+  // A Stop ends whichever run is in flight. For an analysis the intent is withdrawn here, at the
+  // command, rather than waited for from the poller: Stop() pauses the poller, so the last
+  // observation it published (RUNNING) would otherwise stand until the next wake and keep the
+  // in-progress flag up over a run that is over. The result adopted so far stays on show.
+  g_state.analysis.started = false;
   g_stop_inflight.store(true);
   g_stop_future = std::async(std::launch::async, [srv = g_server] {
     g_server_poller.Stop();  // fast: wait out one readback poll (reuses the validated stop order)
@@ -1412,6 +1450,56 @@ void DoStop() {
     g_stop_inflight.store(false);
   });
   GUI_LOG_INFO("[GUI] DoStop: stopping (async)");
+}
+
+bool DoAnalyze() {
+  if (!g_server) {
+    return false;
+  }
+  // Same reason DoRun joins first: a Stop may still be draining on the background thread, and the
+  // server call below must not race it.
+  JoinPendingStop();
+  // The document on the panels, through the same emitter DoRun uses (its comment says why it
+  // must be the same one). An analysis is always a deliberate click, so a document too large for
+  // the ABI reopens the warning the way an explicit Run does, and nothing is analysed — not a
+  // truncated document, and not the previous one.
+  ScenePtr scene = BuildCommitSceneOrWarn(g_state, /*user_initiated=*/true);
+  if (!scene) {
+    return false;
+  }
+  // The IN_FRAME canvas is the preview's own when there is one — the frame on screen is what
+  // "in frame" means. Without a preview the frame is still the document's own view, sized at
+  // the resolution the document would render at: PreviewAnnotationView reads only the state
+  // and the canvas size, so this is the same frame a preview of that size would show. (The
+  // other two modes never read the canvas.)
+  const int doc_res = kSimResolutions[g_state.renderer.sim_resolution_index];
+  const int canvas_w = g_preview_vp.active ? g_preview_vp.vp_w : doc_res;
+  const int canvas_h = g_preview_vp.active ? g_preview_vp.vp_h : doc_res;
+  const LUMICE_RaypathAnalysisRequest req = BuildAnalysisRequest(g_state, canvas_w, canvas_h);
+  const LUMICE_ErrorCode err = LUMICE_StartRaypathAnalysis(g_server, scene.get(), &req);
+  if (err != LUMICE_OK) {
+    GUI_LOG_WARNING("[GUI] DoAnalyze: LUMICE_StartRaypathAnalysis failed with error code {} (roi_mode={})",
+                    static_cast<int>(err), req.roi_mode);
+    return false;
+  }
+  // Intent + an empty view: the previous result must not sit under this run's list, and the
+  // held generation stays as it was — the run's first snapshot carries a larger one (the
+  // counter only grows), so the first result is adopted without any reset of the cursor.
+  g_state.analysis.started = true;
+  g_state.analysis.selected_entry.reset();
+  // What this run was asked about, for the "centre has moved" hint: the request's own copy, so
+  // it is the value the server received and not a re-read of the session field.
+  std::copy(req.cone_center, req.cone_center + 3, g_state.analysis.analyzed_cone_center_dir);
+  g_state.analysis_result = GuiState::AnalysisResultView{};
+  // The poller's snapshot still carries the previous result forward, and with the view just
+  // cleared (held generation 0) the next SyncFromPoller would adopt it as new. Drop it there too.
+  g_server_poller.InvalidateAnalysisResult();
+  // Same wake as a fresh commit: the poller publishes valid=false across the edge, so the first
+  // observation SyncFromPoller derives the in-progress flag from is this run's, not the last
+  // render's COMPLETED.
+  g_server_poller.WakeForRestart(g_server);
+  GUI_LOG_INFO("[GUI] DoAnalyze: analysis run started (roi_mode={})", req.roi_mode);
+  return true;
 }
 
 void DoRevert() {
@@ -1669,6 +1757,28 @@ void SyncFromPoller() {
   g_state.sim_state = ReconcileSimState(g_state.run_intent, g_state.committed_epoch, snap.get(), g_state.dirty);
   if (prev_state != SimState::kDone && g_state.sim_state == SimState::kDone) {
     GUI_LOG_INFO("[GUI] Simulation done");
+  }
+
+  // The analysis run's display state, derived the same way and beside it: intent + observation,
+  // every frame, one writer. A render commit does not bump the lifecycle epoch for an analysis
+  // (server.cpp StartRaypathAnalysis: same scene, same epoch), so nothing above changes while one
+  // runs — the picture is still the render's, and sim_state says so.
+  {
+    const bool prev_in_progress = g_state.analysis_run_in_progress;
+    g_state.analysis_run_in_progress = DeriveAnalysisInProgress(g_state.analysis.started, snap.get());
+    if (prev_in_progress && !g_state.analysis_run_in_progress) {
+      GUI_LOG_INFO("[GUI] Raypath analysis finished");
+    }
+    // The result: adopted when its generation is new, ignored otherwise (a carry-forward of the
+    // result already on show is what every poll after the last snapshot carries).
+    // The poller's payload names the result; its entries are read here, on this thread, under
+    // the panel's symmetry — in the same frame as the adoption, so the list is never a frame late.
+    if (snap && AdoptAnalysisPayloadIfNew(g_state, snap->analysis)) {
+      RefreshAnalysisEntries(g_state, g_server);
+      GUI_LOG_VERBOSE("[GUI] SyncFromPoller: analysis result adopted ({} entries, gen={})",
+                      g_state.analysis_result.payload->entries.size(),
+                      g_state.analysis_result.payload->snapshot_generation);
+    }
   }
 
   // Mealy next-intent advance for the async Stop (blueprint §5/§8): once the background stop thread

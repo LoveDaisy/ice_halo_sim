@@ -55,7 +55,13 @@ namespace lumice {
 // into SimData every batch, and no consumer ever read the segments' content.
 // RayBuffer is 56B (2 size_t + 4 pointers + 2 uint16 + 4B tail padding), so the
 // field shrinks 56B → 8B, shrinking 408 → 360.
-static_assert(sizeof(SimData) == 360, "SimData size changed — update copy/move ctors and operators");
+// The raypath-analysis foundation adds outgoing_chain_id_ (vector<uint32_t>,
+// 24B) and chain_id_table_delta_ (vector<ChainIdTableEntry>, 24B), bumping
+// 360 → 408. Its histogram consumer adds producer_effective_seed_ (uint32_t,
+// 4B) between two 8-aligned vectors, so it lands as 8B: 408 → 416. The bounded
+// chain record adds chain_id_overflow_count_ (uint32_t) into those 4B of
+// padding: still 416.
+static_assert(sizeof(SimData) == 416, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -230,6 +236,35 @@ void RayBuffer::ComponentFanOut(const RayBuffer& src, size_t src_idx, size_t dst
   components_[dst1] = v;
 }
 
+// Raypath chain id column (raypath-analysis foundation). Same shape as the
+// components_ helpers above; every one of them is a no-op while the column is
+// absent, which is how the disabled path stays free of both memory and copies.
+uint32_t RayBuffer::ChainIdAt(size_t idx) const {
+  assert(idx < capacity_);
+  assert(chain_ids_ != nullptr);
+  return chain_ids_[idx];
+}
+
+void RayBuffer::SetChainId(size_t idx, uint32_t v) {
+  assert(idx < capacity_);
+  assert(chain_ids_ != nullptr);
+  chain_ids_[idx] = v;
+}
+
+void RayBuffer::ChainIdFanOut(const RayBuffer& src, size_t src_idx, size_t dst0, size_t dst1) {
+  assert(&src != this);
+  assert(dst0 != dst1);
+  assert(src_idx < src.capacity_);
+  assert(dst0 < capacity_);
+  assert(dst1 < capacity_);
+  if (chain_ids_ == nullptr || src.chain_ids_ == nullptr) {
+    return;
+  }
+  uint32_t v = src.chain_ids_[src_idx];
+  chain_ids_[dst0] = v;
+  chain_ids_[dst1] = v;
+}
+
 void RayBuffer::SwapRay(size_t i, size_t j) {
   // Deliberately `capacity_`, not `size_` — adjudicated by task 490.2 rather
   // than left as an accident. Every physical-array accessor on this class
@@ -259,9 +294,17 @@ void RayBuffer::SwapRay(size_t i, size_t j) {
   // note. recorders_ intentionally excluded (cleared at layer entry).
   std::swap(rays_[i], rays_[j]);
   std::swap(components_[i], components_[j]);
+  // The chain id is cross-layer-surviving per-ray state exactly like the
+  // component mask, and decorrelates under the shuffle in exactly the same way
+  // if left behind — this is the AC2 reorder point the whitebox test breaks
+  // on purpose.
+  if (chain_ids_ != nullptr) {
+    std::swap(chain_ids_[i], chain_ids_[j]);
+  }
 }
 
-void RayBuffer::Reset(size_t capacity) {
+void RayBuffer::Reset(size_t capacity, bool chain_id_enabled) {
+  bool grew = false;
   if (capacity > capacity_) {
     rays_ = std::make_unique<RaySeg[]>(capacity);
     recorders_ = std::make_unique<RaypathRecorder[]>(capacity);
@@ -273,6 +316,17 @@ void RayBuffer::Reset(size_t capacity) {
     // doc/raypath-rayseg-architecture.md §3 "Reset Points Summary".
     components_ = std::make_unique<uint64_t[]>(capacity);
     capacity_ = capacity;
+    grew = true;
+  }
+  // The chain-id column follows the flag, not the growth: see the header. It
+  // is sized to capacity_ (the post-grow value) so it stays parallel to the
+  // other three arrays whether or not this call grew them.
+  if (chain_id_enabled) {
+    if (grew || chain_ids_ == nullptr) {
+      chain_ids_ = std::make_unique<uint32_t[]>(capacity_);
+    }
+  } else {
+    chain_ids_.reset();
   }
   size_ = 0;
   // Bump-allocator semantics: hand all arena slots back at once. The buffer
@@ -318,6 +372,9 @@ void RayBuffer::EmplaceBack(const RayBuffer& buffer, size_t start, size_t len) {
   // single-ray version uses `size_ + 1 < capacity_` (always leaves one empty).
   // The asymmetry is intentional (contract-locked by test_sim_data tests).
   size_t src_end = std::min(start + len, buffer.size_);
+  // Hoisted out of the loop: the column's presence is a per-buffer constant
+  // for the whole call, and the disabled path must not pay a per-ray branch.
+  const bool carry_chain_ids = chain_ids_ != nullptr;
   for (size_t i = start; i < src_end && size_ < capacity_; i++) {
     rays_[size_] = buffer.rays_[i];
     recorders_[size_] = buffer.recorders_[i];
@@ -328,6 +385,11 @@ void RayBuffer::EmplaceBack(const RayBuffer& buffer, size_t start, size_t len) {
     // components_ — their callers (CollectData) SetComponent explicitly to
     // avoid changing the two-arg / three-arg signatures.
     components_[size_] = buffer.components_[i];
+    if (carry_chain_ids) {
+      // A source without the column contributes the root id rather than
+      // leaving whatever the recycled destination slot held.
+      chain_ids_[size_] = buffer.chain_ids_ != nullptr ? buffer.chain_ids_[i] : 0u;
+    }
     DupOverflowSlot(buffer, size_);
     size_++;
   }
@@ -356,6 +418,8 @@ RayBuffer::RayBuffer(const RayBuffer& other)
       rays_(other.capacity_ > 0 ? std::make_unique<RaySeg[]>(other.capacity_) : nullptr),
       recorders_(other.capacity_ > 0 ? std::make_unique<RaypathRecorder[]>(other.capacity_) : nullptr),
       components_(other.capacity_ > 0 ? std::make_unique<uint64_t[]>(other.capacity_) : nullptr),
+      chain_ids_(other.chain_ids_ != nullptr && other.capacity_ > 0 ? std::make_unique<uint32_t[]>(other.capacity_) :
+                                                                      nullptr),
       overflow_cap_(other.overflow_cap_), overflow_used_(other.overflow_used_) {
   if (other.capacity_ > 0) {
     std::memcpy(rays_.get(), other.rays_.get(), sizeof(RaySeg) * other.capacity_);
@@ -366,6 +430,9 @@ RayBuffer::RayBuffer(const RayBuffer& other)
     // capacity_ slice to mirror the rays_/recorders_ deep-copy semantics
     // (SimData::operator= convention: trailing slots preserved).
     std::memcpy(components_.get(), other.components_.get(), sizeof(uint64_t) * other.capacity_);
+    if (chain_ids_ != nullptr) {
+      std::memcpy(chain_ids_.get(), other.chain_ids_.get(), sizeof(uint32_t) * other.capacity_);
+    }
   }
   if (other.overflow_cap_ > 0) {
     overflow_arena_ = std::make_unique<uint8_t[]>(static_cast<size_t>(other.overflow_cap_) * kMaxHits);
@@ -379,8 +446,8 @@ RayBuffer::RayBuffer(const RayBuffer& other)
 RayBuffer::RayBuffer(RayBuffer&& other) noexcept
     : capacity_(other.capacity_), size_(other.size_), rays_(std::move(other.rays_)),
       recorders_(std::move(other.recorders_)), components_(std::move(other.components_)),
-      overflow_arena_(std::move(other.overflow_arena_)), overflow_cap_(other.overflow_cap_),
-      overflow_used_(other.overflow_used_) {
+      chain_ids_(std::move(other.chain_ids_)), overflow_arena_(std::move(other.overflow_arena_)),
+      overflow_cap_(other.overflow_cap_), overflow_used_(other.overflow_used_) {
   other.capacity_ = 0;
   other.size_ = 0;
   other.overflow_cap_ = 0;
@@ -396,11 +463,16 @@ RayBuffer& RayBuffer::operator=(const RayBuffer& other) {
   rays_ = other.capacity_ > 0 ? std::make_unique<RaySeg[]>(other.capacity_) : nullptr;
   recorders_ = other.capacity_ > 0 ? std::make_unique<RaypathRecorder[]>(other.capacity_) : nullptr;
   components_ = other.capacity_ > 0 ? std::make_unique<uint64_t[]>(other.capacity_) : nullptr;
+  chain_ids_ =
+      other.chain_ids_ != nullptr && other.capacity_ > 0 ? std::make_unique<uint32_t[]>(other.capacity_) : nullptr;
   if (other.capacity_ > 0) {
     std::memcpy(rays_.get(), other.rays_.get(), sizeof(RaySeg) * other.capacity_);
     std::memcpy(recorders_.get(), other.recorders_.get(), sizeof(RaypathRecorder) * other.capacity_);
     // task-331.1: mirror rays_/recorders_ deep-copy semantics for components_.
     std::memcpy(components_.get(), other.components_.get(), sizeof(uint64_t) * other.capacity_);
+    if (chain_ids_ != nullptr) {
+      std::memcpy(chain_ids_.get(), other.chain_ids_.get(), sizeof(uint32_t) * other.capacity_);
+    }
   }
   overflow_cap_ = other.overflow_cap_;
   overflow_used_ = other.overflow_used_;
@@ -428,6 +500,7 @@ RayBuffer& RayBuffer::operator=(RayBuffer&& other) noexcept {
   // Omitting this on move-assign would leak the mask exactly like the
   // scrum-268.8 outgoing_wl_ move-assign miss — see the note below on SimData.
   components_ = std::move(other.components_);
+  chain_ids_ = std::move(other.chain_ids_);
   overflow_arena_ = std::move(other.overflow_arena_);
   overflow_cap_ = other.overflow_cap_;
   overflow_used_ = other.overflow_used_;
@@ -445,11 +518,13 @@ SimData::SimData(const SimData& other)
     : curr_wl_(other.curr_wl_), generation_(other.generation_), ray_seg_count_(other.ray_seg_count_),
       crystals_(other.crystals_), crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_),
       outgoing_w_(other.outgoing_w_), outgoing_wl_(other.outgoing_wl_), outgoing_component_(other.outgoing_component_),
-      exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
-      xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
-      lane_class_count_(other.lane_class_count_), anchor_y_pixel_data_(other.anchor_y_pixel_data_),
-      root_ray_count_(other.root_ray_count_), emitted_energy_(other.emitted_energy_),
-      stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
+      outgoing_chain_id_(other.outgoing_chain_id_), chain_id_table_delta_(other.chain_id_table_delta_),
+      producer_effective_seed_(other.producer_effective_seed_),
+      chain_id_overflow_count_(other.chain_id_overflow_count_), exit_records_(other.exit_records_),
+      xyz_pixel_data_(other.xyz_pixel_data_), xyz_landed_weight_(other.xyz_landed_weight_),
+      lane_pixel_data_(other.lane_pixel_data_), lane_class_count_(other.lane_class_count_),
+      anchor_y_pixel_data_(other.anchor_y_pixel_data_), root_ray_count_(other.root_ray_count_),
+      emitted_energy_(other.emitted_energy_), stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
       deterministic_crystal_count_(other.deterministic_crystal_count_),
       stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
       deterministic_orientation_count_(other.deterministic_orientation_count_),
@@ -460,11 +535,14 @@ SimData::SimData(SimData&& other) noexcept
       crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
       outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
       outgoing_wl_(std::move(other.outgoing_wl_)), outgoing_component_(std::move(other.outgoing_component_)),
-      exit_records_(std::move(other.exit_records_)), xyz_pixel_data_(std::move(other.xyz_pixel_data_)),
-      xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(std::move(other.lane_pixel_data_)),
-      lane_class_count_(other.lane_class_count_), anchor_y_pixel_data_(std::move(other.anchor_y_pixel_data_)),
-      root_ray_count_(other.root_ray_count_), emitted_energy_(other.emitted_energy_),
-      stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
+      outgoing_chain_id_(std::move(other.outgoing_chain_id_)),
+      chain_id_table_delta_(std::move(other.chain_id_table_delta_)),
+      producer_effective_seed_(other.producer_effective_seed_),
+      chain_id_overflow_count_(other.chain_id_overflow_count_), exit_records_(std::move(other.exit_records_)),
+      xyz_pixel_data_(std::move(other.xyz_pixel_data_)), xyz_landed_weight_(other.xyz_landed_weight_),
+      lane_pixel_data_(std::move(other.lane_pixel_data_)), lane_class_count_(other.lane_class_count_),
+      anchor_y_pixel_data_(std::move(other.anchor_y_pixel_data_)), root_ray_count_(other.root_ray_count_),
+      emitted_energy_(other.emitted_energy_), stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
       deterministic_crystal_count_(other.deterministic_crystal_count_),
       stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
       deterministic_orientation_count_(other.deterministic_orientation_count_),
@@ -484,6 +562,10 @@ SimData& SimData::operator=(const SimData& other) {
   outgoing_w_ = other.outgoing_w_;
   outgoing_wl_ = other.outgoing_wl_;
   outgoing_component_ = other.outgoing_component_;  // task-331.1
+  outgoing_chain_id_ = other.outgoing_chain_id_;
+  chain_id_table_delta_ = other.chain_id_table_delta_;
+  producer_effective_seed_ = other.producer_effective_seed_;
+  chain_id_overflow_count_ = other.chain_id_overflow_count_;
   exit_records_ = other.exit_records_;
   xyz_pixel_data_ = other.xyz_pixel_data_;
   xyz_landed_weight_ = other.xyz_landed_weight_;
@@ -526,6 +608,12 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   outgoing_component_ = std::move(other.outgoing_component_);  // task-331.1: same
                                                                // move-assign trap as
                                                                // outgoing_wl_ above.
+  // Same move-assign trap again: the consumer queue takes this path, so a
+  // missed std::move here would silently deliver empty chain ids.
+  outgoing_chain_id_ = std::move(other.outgoing_chain_id_);
+  chain_id_table_delta_ = std::move(other.chain_id_table_delta_);
+  producer_effective_seed_ = other.producer_effective_seed_;
+  chain_id_overflow_count_ = other.chain_id_overflow_count_;
   exit_records_ = std::move(other.exit_records_);
   xyz_pixel_data_ = std::move(other.xyz_pixel_data_);
   xyz_landed_weight_ = other.xyz_landed_weight_;

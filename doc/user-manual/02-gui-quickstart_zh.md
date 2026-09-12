@@ -79,5 +79,6 @@
 
 - 同一份 `.lmc` 用 CLI 跑一遍 → [`03-cli-quickstart_zh.md`](03-cli-quickstart_zh.md)
 - 用现成 recipe 复现经典光晕 → [`04-recipes_zh.md`](04-recipes_zh.md)
+- 查一道晕是哪些光路做出来的，并排除某一条 → [`06-raypath-analysis_zh.md`](06-raypath-analysis_zh.md)
 - 完整 GUI 面板参考 → [`../gui-guide_zh.md`](../gui-guide_zh.md)
 - 全部字段名与类型 → [`../configuration_zh.md`](../configuration_zh.md)

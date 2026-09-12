@@ -1,15 +1,19 @@
 #ifndef INCLUDE_SERVER_H_
 #define INCLUDE_SERVER_H_
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "config/render_config.hpp"  // RaypathRoiSpec::frame_config_
 #include "core/backend/backend_kind.hpp"
 #include "core/def.hpp"  // ColorDegradeCounts (task-color-degrade-gui-surfacing)
 #include "server/component_compositor.hpp"
@@ -179,7 +183,139 @@ struct StatsResult {
   size_t orientation_num_;
 };
 
-using Result = std::variant<NoneResult, RenderResult, StatsResult>;
+// =============== Raypath histogram (analysis run) ===============
+// Which exit directions the raypath histogram counts. Lives here rather than in
+// the consumer's own header because RaypathHistogramResult echoes it.
+enum class RaypathRoiMode : uint8_t {
+  kFullSky,  ///< every outgoing ray
+  kInFrame,  ///< rays that land inside the frame a RenderConfig describes (lens, view, visible, front)
+  kCone,     ///< rays within an angular radius of a world-space centre direction, binned by angular distance
+};
+
+// The request: which rays count. Only the fields of the chosen mode are read.
+// Lives here rather than in raypath_histogram_consumer.hpp because it is also
+// the ROI half of RaypathAnalysisRequest, the argument Server::StartRaypathAnalysis
+// takes — and that header includes this one, not the other way round.
+struct RaypathRoiSpec {
+  RaypathRoiMode mode_ = RaypathRoiMode::kFullSky;
+  // kInFrame: the frame whose lens / view / visible / front decide membership.
+  RenderConfig frame_config_;
+  // kCone: world-space centre direction (normalised at construction; a zero
+  // vector is rejected), angular radius and ring count.
+  float cone_center_[3]{ 0.0f, 0.0f, 1.0f };
+  float cone_radius_rad_ = 0.0f;
+  int cone_ring_count_ = 1;
+};
+
+// What Server::StartRaypathAnalysis takes: the ROI and the ray budget. There is
+// deliberately NO symmetry in it: the run records every chain at its finest
+// (FilterConfig::kSymNone — each face sequence its own chain), and the P/B/D
+// reduction is applied when a result is READ (ReduceRaypathHistogram,
+// raypath_histogram_consumer.hpp), so a reader can change the reduction on a
+// finished result without re-running.
+struct RaypathAnalysisRequest {
+  RaypathRoiSpec roi_;
+  // The run's own ray budget, in the scene's representation (total across every
+  // wavelength; kInfSize = unlimited). nullopt = trace the committed scene's own
+  // ray_num_, which is what every analysis run did before the request carried one.
+  // Never written back into the scene: an analysis session does not edit the
+  // document it reports on.
+  std::optional<size_t> ray_num_;
+};
+
+// One MS layer of a chain: which crystal, and the face sequence through it —
+// the same triple the interning table keys on (core/chain_id_table.hpp), minus
+// the ids. As recorded the sequence is the finest (unreduced) one; after
+// ReduceRaypathHistogram it is the canonical form under the reader's symmetry.
+struct RaypathChainSegment {
+  IdType crystal_id = kInvalidId;
+  std::vector<IdType> segment;
+};
+
+// What the read-time reduction needs to know about the scene the run traced,
+// captured by Server::StartRaypathAnalysis from the committed scene and
+// published with every snapshot of the result, so a reader reduces against
+// the scene the chains were recorded on even after the next commit.
+//
+// Two kinds of fact, keyed two different ways on purpose:
+//  - crystal_params_: the axis-derived D parameters of each crystal DESIGN,
+//    keyed by CrystalConfig::id_. A property of the crystal alone (the same
+//    config object wherever the scene reuses it), so one entry per id is
+//    exact.
+//  - layer_multi_crystal_: whether scattering layer i holds more than one
+//    crystal, indexed by the LAYER (ms_[i]). A property of the layer, not of
+//    the crystal: one crystal id can be the only crystal of layer 0 and share
+//    layer 1 with another, so keying this by crystal id would let the layer
+//    walked last overwrite the answer for the layer walked first. A chain's
+//    segment i was recorded on layer i (simulator.cpp's hit loop walks ms_ in
+//    order and interns one segment per layer), so the display formatter
+//    indexes this by the segment's position in the chain.
+struct RaypathCrystalReduceParams {
+  int sigma_a = 0;
+  bool d_applicable = false;
+};
+struct RaypathReduceContext {
+  std::unordered_map<IdType, RaypathCrystalReduceParams> crystal_params_;
+  std::vector<bool> layer_multi_crystal_;
+};
+
+struct RaypathHistogramEntry {
+  std::vector<RaypathChainSegment> chain_;  ///< root -> leaf, one per MS layer traversed
+  // The chain as text. In the recorded (finest) result this is
+  // ChainIdInterningTable::Format()'s diagnostic form and reaches no consumer;
+  // ReduceRaypathHistogram rewrites it through FormatRaypathChainDisplay, the
+  // one authority for the text a user sees (lumice.h `display`).
+  std::string display_;
+  double energy_ = 0.0;  ///< Σ over counted rays of Y(wavelength) · weight
+  size_t count_ = 0;     ///< number of counted rays
+  // kCone only: energy_ split by angular-distance ring, ring_energy_.size() ==
+  // cone_ring_count_ and Σ ring_energy_ == energy_ (up to summation order).
+  // Empty in the other two modes.
+  std::vector<double> ring_energy_;
+  // How much of energy_ may belong to some OTHER chain: the consumer keeps a
+  // bounded number of rows (raypath_histogram_consumer.hpp, Space-Saving) and
+  // a row that took over an evicted row's slot inherits that row's energy as
+  // its own uncertainty. The chain's true energy lies in
+  // [energy_ - error_bound_, energy_]. 0 for a row that never took a slot over.
+  // In a reduced result it is the Σ over the finest rows the row merged.
+  double error_bound_ = 0.0;
+};
+
+struct RaypathHistogramResult {
+  // Sorted by energy_ descending, ties by display_ ascending — so equal
+  // energies still order the same way on every run.
+  std::vector<RaypathHistogramEntry> entries_;
+  // What the bounded record could not keep as a row of its own, as one bucket:
+  // the rays whose chain the producer's interning table turned away
+  // (ChainIdInterningTable::kOverflowChainId). A row the consumer evicted is
+  // not here — its content lives on in the row that took its slot, as that
+  // row's error_bound_ — so Σ entries_.energy_ + other_energy_ is the energy
+  // of every counted ray, and likewise for count_. Not a chain: it has no
+  // segments and no ring split, and the read-time reduction passes it through
+  // unchanged.
+  double other_energy_ = 0.0;
+  size_t other_count_ = 0;
+  // How many times the producers' tables turned a chain away over the run (Σ
+  // SimData::chain_id_overflow_count_): arrivals at a full table, not distinct
+  // chains (a turned-away chain is not remembered, so it counts again when it
+  // comes back) — an upper bound on the distinct chains the "other" bucket
+  // stands for, and the measure of how often the producer-side cut hit. Rows
+  // evicted on the consumer side are not chains lost — they can come back —
+  // and are not in this number.
+  size_t truncated_chain_count_ = 0;
+  // max over entries_ of error_bound_ — of THIS result's entries, so a reduced
+  // result's is over its merged rows; 0 when no row ever took a slot over,
+  // which is the "no eviction happened" signal.
+  double max_row_error_ = 0.0;
+  // Echo of the request the entries were counted under.
+  RaypathRoiMode roi_mode_ = RaypathRoiMode::kFullSky;
+  int cone_ring_count_ = 0;
+  float cone_radius_rad_ = 0.0f;
+  // The scene facts the read-time reduction and the display text need (above).
+  RaypathReduceContext reduce_ctx_;
+};
+
+using Result = std::variant<NoneResult, RenderResult, StatsResult, RaypathHistogramResult>;
 
 /**
  * @brief One composited per-raypath colored image.
@@ -244,6 +380,46 @@ struct ResultFrame {
   std::vector<RawXyzResult> xyz_results_;
   std::vector<CompositeResult> composite_results_;
   std::optional<StatsResult> stats_result_;
+  // The analysis run's result (Server::StartRaypathAnalysis). Set only when the
+  // consumer set that produced this snapshot held a RaypathHistogramConsumer,
+  // i.e. only for frames of an analysis session; a render session's frame has no
+  // such consumer and leaves it nullopt — there is no cross-snapshot cache that a
+  // stale value could survive in.
+  std::optional<RaypathHistogramResult> raypath_histogram_result_;
+  // The read-time reduction of raypath_histogram_result_, memoized per symmetry so the two
+  // C API reads a consumer makes per (frame, symmetry) — the row count, then the rows — cost
+  // one reduction rather than two (ReduceRaypathHistogram is O(rows), and an unreduced
+  // multi-scatter record has hundreds of thousands).
+  //
+  // ONE SLOT PER SYMMETRY, not one global slot: symmetry is a 3-bit bitmask (P|B|D, 0..7), so
+  // this is a small bounded array, not "one per caller". A single shared slot lets two real
+  // callers with different, both-fixed-for-their-lifetime symmetries starve each other:
+  // server_poller.cpp polls this frame at a fixed symmetry=0 (it never reads entry_count, only
+  // present/roi_mode/cone_*/snapshot_generation — see its own comment — but
+  // LUMICE_FrameGetRaypathAnalysisInfo still has to fill entry_count, so it still triggers a
+  // reduction), while the GUI main thread reads the same frame at whatever symmetry the
+  // panel's checkboxes name (analysis_panel.cpp::RefreshAnalysisEntries). With one slot, each
+  // read evicted the other's cached result, turning "reduce once per (frame, symmetry)" back
+  // into "reduce on every poll and every refresh" — measured in the hundreds of milliseconds
+  // to low seconds on a multi-scatter scene with hundreds of thousands of finest chains. Eight
+  // slots (one per possible bitmask value) means the poller's fixed symmetry and the GUI's
+  // currently-selected symmetry each keep their own memo and never evict each other.
+  //
+  // The reduction itself runs OUTSIDE the mutex (see ReducedRaypathHistogramOf): holding the
+  // lock for the ~1.6s worst-case computation would block every other reader of this frame —
+  // including the render/GUI thread — for that long. A race where two threads miss the same
+  // empty slot at once recomputes twice and keeps whichever result is published first; both
+  // are equal (the reduction is a pure function of the frame + symmetry), so this trades a
+  // rare duplicate computation for never blocking a reader on another reader's compute.
+  //
+  // Behind a shared_ptr so the shallow copies AcquireResultFrame makes share it; guarded by
+  // its own mutex since frames are read from any thread. Allocated by DoSnapshot alongside the
+  // result; null on a render frame.
+  struct RaypathReduceCache {
+    std::mutex mutex_;
+    std::array<std::shared_ptr<const RaypathHistogramResult>, 8> slots_;
+  };
+  std::shared_ptr<RaypathReduceCache> raypath_reduce_cache_;
 
   // Lifetime anchors, parallel to render_results_ / xyz_results_.
   std::vector<std::shared_ptr<const uint8_t[]>> render_storage_;
@@ -272,7 +448,10 @@ struct ResultFrame {
  *          `--benchmark` dual-pass, which must skip the meaningless "single" warmup pass for
  *          the single-engine GPU route) should query this rather than re-deriving the logic.
  */
-bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger);
+// `force_cpu` is the analysis run's session property (Server::StartRaypathAnalysis): when
+// true the answer is CPU before the env override or the preference is even consulted,
+// mirroring CreateBackend's `force_cpu` so the two routing decisions cannot split.
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger, bool force_cpu = false);
 
 /**
  * @brief per-batch dispatch grain `GenerateScene` should actually use.
@@ -378,6 +557,51 @@ class Server {
    * @return Error object indicating success or failure
    */
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
+
+  /**
+   * @brief Start an ANALYSIS run — the other kind of run this server's one lifecycle
+   *        carries (doc/raypath-analysis-panel.md §3): no image, a histogram of
+   *        complete raypath chains over the committed scene.
+   * @details Same Stop → rebuild consumers → Start sequence as CommitConfig, on the
+   *          scene already committed; only the consumer set differs (a
+   *          RaypathHistogramConsumer + a StatsConsumer). Three session properties
+   *          follow from it and hold until the next successful CommitConfig, which
+   *          switches the server back to a render session:
+   *          - every Simulator carries chain ids (SetAnalysisChainId);
+   *          - the trace backend is forced to the legacy CPU path regardless of
+   *            SetPreferredBackend and LUMICE_TRACE_BACKEND (SetAnalysisForceCpu); the
+   *            preference itself is left untouched, so a later render session still
+   *            honours it;
+   *          - the run ends on its ray budget (RaypathAnalysisRequest::ray_num_) or on
+   *            Stop(), in every ROI mode; a Stop() publishes the histogram accumulated up
+   *            to it before resetting, so the partial result stays readable through
+   *            AcquireResultFrame() (the run then reads as kIdle, not kCompleted).
+   *          The result is read through AcquireResultFrame():
+   *          ResultFrame::raypath_histogram_result_.
+   * @param scene_json The document to analyse, in the same JSON grammar CommitConfig takes
+   *        (crystal / filter / scene / render). Parsed before anything is stopped: a document
+   *        this call rejects changes nothing.
+   * @param request The ROI and the ray budget.
+   * @return Error::ServerError when a RENDER run is in progress (GetSimLifecycle() ==
+   *         kRunning in a render session): AC1 of the analysis run — the caller must Stop()
+   *         first or wait for the render to complete; this call never interrupts it silently.
+   *         Calling it while an ANALYSIS run is in progress is allowed and restarts the
+   *         analysis with the new request and scene. A rejected `scene_json` returns what
+   *         CommitConfig would return for it — MissingField / InvalidJson / InvalidConfig.
+   */
+  Error StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request);
+
+  /**
+   * @brief The trace backend this server's Simulator ACTUALLY runs on, as opposed to the
+   *        one SetPreferredBackend asked for.
+   * @details The two differ in exactly two situations, and this is the read that makes
+   *          both observable: an analysis session (always kCpu — the session forces it,
+   *          structurally, so the answer does not wait for Run() to re-enter), and a GPU
+   *          route whose backend was lost or never obtained (see BackendFellBack). In a
+   *          render session it is the value the Simulator published at its last Run()
+   *          entry, kCpu before any run. Cheap; safe to poll.
+   */
+  BackendKind GetActiveBackend() const;
 
   /**
    * @brief Acquire a share of the most recent result frame.

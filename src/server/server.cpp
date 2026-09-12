@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -29,6 +30,7 @@
 #include "server/component_compositor.hpp"
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
+#include "server/raypath_histogram_consumer.hpp"
 #include "server/render.hpp"
 #include "server/scene_batch_publish.hpp"
 #include "server/server.hpp"
@@ -73,6 +75,13 @@ class ServerImpl {
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
+  // The analysis run (see Server::StartRaypathAnalysis for the contract). Same
+  // Stop → rebuild consumers → Start shape as CommitConfig, on the scene `scene_json`
+  // carries — its own submission, not the last render commit's.
+  Error StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request);
+  // See Server::GetActiveBackend. Structural kCpu in an analysis session; the
+  // Simulator's own published answer otherwise.
+  BackendKind GetActiveBackend() const;
   size_t GetLiveSimRayCount();
 
   // THE result entry point. Materializes a snapshot if one is pending, then
@@ -142,9 +151,31 @@ class ServerImpl {
   // this is an ASYNCHRONOUS fact discovered by the worker mid-run, so the GUI polls
   // it (LUMICE_GetBackendFallbackFlag) instead of the fallback living only as a core
   // WARN line no GUI user ever sees. Cheap: one atomic load under a short mutex.
-  bool BackendFellBack() const { return gpu_route_ && !ReadBackendActive(); }
+  // An analysis session is not a fallback: its CPU route is asked for, not fallen to.
+  bool BackendFellBack() const {
+    return gpu_route_ && mode_.load(std::memory_order_acquire) != SessionMode::kAnalysis && !ReadBackendActive();
+  }
 
  private:
+  // The one owner of "a JSON document becomes a ConfigManager, or a return code". Both
+  // submission entry points — CommitConfig (a render) and StartRaypathAnalysis (an analysis)
+  // — parse through here, so the four failure shapes map onto the Error vocabulary in exactly
+  // one place: nlohmann::json::out_of_range → MissingField, any other json exception →
+  // InvalidJson, std::exception → InvalidConfig, anything else → InvalidConfig. `validate`
+  // runs inside the same try on the parsed document (CommitConfig builds its colour tables
+  // there, which throw std::invalid_argument on a config error); nullptr for no extra step.
+  // On failure `*out` is untouched — the parse lands in a local first and is only moved into
+  // `out` once every step has passed — and so is every other member, status_ included: a
+  // rejected document is a return code, not a state. (CommitConfig used to write
+  // status_ = kError here. No projection ever read that value as anything but "not running",
+  // and while a session's workers were still tracing it made GetSimLifecycle report the run
+  // as over until the next Stop()/Start() rewrote it — a lie about a live run, and one the
+  // analysis path now reaches on purpose: a rejected scene over an analysis in flight must
+  // leave that analysis readable as in flight.) `caller` prefixes the log line so the two
+  // entry points stay distinguishable in a log.
+  Error ParseConfigManager(const nlohmann::json& config_json, const char* caller,
+                           const std::function<void(const ConfigManager&)>& validate, ConfigManager* out);
+
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
   // along with the 12-worker queue-per-Simulator pattern; num_workers is reserved
@@ -202,6 +233,17 @@ class ServerImpl {
   // duplicate Phase-1 in the raw-xyz getter into a single dirty-flag owner, so every
   // kind of result materialized in one pass is coherent with the others.
   bool DoSnapshot();
+
+  // Publish an EMPTY frame (no results of any kind, has_valid_data_ false, the current epoch
+  // and snapshot generation), for the two session switches. DoSnapshot only publishes when a
+  // batch has dirtied the snapshot, so between Stop() and the new session's first batch the
+  // published frame would still be the previous session's — a render's image under an
+  // analysis session, an analysis histogram under a render session — re-stamped as stale but
+  // readable. Every FrameGet* on the empty frame writes its sentinel instead. Called between
+  // Stop() and Start() only: Stop() has joined the workers, so no DoSnapshot can be
+  // publishing a real frame of the NEW session that this would overwrite; the lock is against
+  // a reader's DoSnapshot still in flight from before the Stop().
+  void PublishEmptyFrame();
 
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
   template <typename F>
@@ -321,27 +363,38 @@ class ServerImpl {
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
-  // Active scene and generation counter for batch staleness detection
+  // Active scene and generation counter for batch staleness detection. The scene the
+  // workers trace is the most recent SUBMISSION, whichever kind: CommitConfig (a render)
+  // and StartRaypathAnalysis (an analysis) both bind it, under scene_mutex_, together with
+  // scene_generation_ and committed_epoch_ below. GenerateScene reads it without asking
+  // which kind bound it — that is the point, an analysis traces the document it was handed —
+  // so nothing may read this field as "the last RENDER's scene"; config_manager_ is that.
   std::shared_ptr<const SceneConfig> active_scene_;
   // Snapshot of renderers paired with active_scene_ (task 252.3, TraceBackend seam).
   // Set in CommitConfig under scene_mutex_ in lockstep with active_scene_, then
   // attached to every SimBatch emitted by GenerateScene. Stays nullptr if no
-  // CommitConfig has yet succeeded; consumers tolerate null.
+  // CommitConfig has yet succeeded; consumers tolerate null. An analysis submission
+  // binds it null too: it has no render output, and the forced CPU route reads no renderer.
   std::shared_ptr<const std::vector<RenderConfig>> active_renders_;
   // Design 2 (task-engine-redirect-design2): snapshot of raypath_color paired
   // with active_scene_ / active_renders_. Updated inside the same scene_mutex_
   // critical section so a concurrent CommitConfig cannot tear the
   // (scene, renders, raypath_color) triple. Null → no color configured (AC3
-  // zero-cost path).
+  // zero-cost path). An analysis submission binds it null as well, and not as an
+  // economy: the simulator builds the colour gate table from (raypath_color, scene) on
+  // every batch, and a colour config left over from the last render can name a crystal
+  // the analysis's scene does not have — that is a throw on a worker thread.
   std::shared_ptr<const RaypathColorConfig> active_raypath_color_;
   std::atomic<uint64_t> scene_generation_{ 0 };
   // Published lifecycle epoch (the backend-owned truth authority). Distinct from
   // scene_generation_ (an internal batch-staleness key): keeping them separate
   // keeps the externally-published epoch from being polluted by batch-scheduling
-  // details. ++ inside CommitConfig's scene_mutex_ critical section (next to
-  // scene_generation_) on the accumulator-reset action — every successful commit
-  // is reset-causing today, so every success ++s. A future "continue-same-config"
-  // path (append rays without reset) must skip this ++. See plan §2 decision 3.
+  // details. ++ inside the scene_mutex_ critical section (next to scene_generation_)
+  // of BOTH submission entry points — CommitConfig and StartRaypathAnalysis — on the
+  // accumulator-reset action: every successful submission is reset-causing today, so
+  // every success ++s, and an analysis is a submission of its own scene, not a re-run of
+  // the last render's. A future "continue-same-config" path (append rays without reset)
+  // must skip this ++. See plan §2 decision 3.
   std::atomic<uint64_t> committed_epoch_{ 0 };
   // Highest epoch whose data the CONSUMER has fully drained. Read
   // via DrainedEpoch() / LUMICE_GetDrainStatus; "current epoch is drained" is
@@ -376,6 +429,29 @@ class ServerImpl {
   // simulator-rebuild path. Mirrored into every Simulator via
   // SetPreferredBackend(). Default is CPU.
   std::atomic<BackendKind> preferred_backend_{ BackendKind::kCpu };
+
+  // Which kind of run the current session is. Written by the two entry points that
+  // (re)start a run — CommitConfig (→ kRender) and StartRaypathAnalysis (→ kAnalysis) —
+  // after their Stop() has joined the previous run's workers; read by GenerateScene
+  // (the CPU-forcing half of the route decision), by Stop() (the analysis-only
+  // materialisation below), and by the mutual-exclusion guards at both entry points.
+  // Atomic for the same reason the analysis budget fields below are: control thread
+  // writes, worker threads read, and a plain member would rest on Stop()'s join being a
+  // happens-before that every future edit of this file preserves.
+  enum class SessionMode { kRender, kAnalysis };
+  std::atomic<SessionMode> mode_{ SessionMode::kRender };
+
+  // The analysis run's own ray budget (RaypathAnalysisRequest::ray_num_), carried from
+  // StartRaypathAnalysis (control thread) to GenerateScene's budget ingest point (worker
+  // thread) — the same write/read pair, and the same reason for atomics, as mode_
+  // above. Two atomics rather than one optional because an optional is not lock-free
+  // and the pair is only ever read under mode_ == kAnalysis, after both stores: the
+  // flag says whether the value applies, the value is the budget (kInfSize = unlimited).
+  // Written by StartRaypathAnalysis for every analysis session, on both branches, so a
+  // session that inherits the scene's budget cannot read the previous session's
+  // override; never read by a render session (the gate is kAnalysis).
+  std::atomic<size_t> analysis_ray_num_override_{ 0 };
+  std::atomic_bool analysis_ray_num_overridden_{ false };
 
   // ResolveGpuRoute's verdict at CONSTRUCTION time — the route this
   // server was actually sized for (worker_count, and hence simulators_.size()).
@@ -486,7 +562,13 @@ void ServerImpl::RunPersistentLoop(F work_fn) {
 // degrades to CPU via task-282, the accepted edge case).
 // (296.6: generalized from the former Metal-only ResolveMetalRoute so CUDA also
 // takes the single-engine route — see doc/seam-design.md §5.)
-bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
+bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger, bool force_cpu) {
+  // The analysis run's forced CPU route sits ABOVE the env override, as it does in
+  // CreateBackend — the two must agree, and "CPU regardless of the environment" is the
+  // contract being kept (see the declaration in server.hpp).
+  if (force_cpu) {
+    return false;
+  }
   // Env override wins, mirroring CreateBackend's TraceBackendOverride handling.
   if (std::optional<std::string> override = env::TraceBackendOverride(logger)) {
     const std::string& name = *override;
@@ -551,6 +633,11 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
     worker_count = num_workers > 0 ? num_workers : std::min(PhysicalCoreCount(), kMaxDefaultWorkerCount);
     if (sim_seed != 0) {
       worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
+      // Also what keeps SimData::producer_effective_seed_ distinct per worker
+      // (a fixed seed is returned verbatim as the effective seed): relaxing
+      // this needs every worker's seed made distinct, or ChainIdMerger fuses
+      // chains across workers silently. The per-index offset below is that
+      // guard, dead today.
     }
   }
   // AC1 observability (296.6): the GPU single-engine route must run worker_count==1.
@@ -765,30 +852,65 @@ void WarnLowContrastHeadroom(Logger& logger, const std::map<IdType, RenderConfig
 
 }  // namespace
 
+Error ServerImpl::ParseConfigManager(const nlohmann::json& config_json, const char* caller,
+                                     const std::function<void(const ConfigManager&)>& validate, ConfigManager* out) {
+  ConfigManager parsed;
+  try {
+    parsed = config_json.get<ConfigManager>();
+    if (validate) {
+      validate(parsed);
+    }
+  } catch (const nlohmann::json::out_of_range& e) {
+    ILOG_ERROR(logger_, "{}: Missing field: {}", caller, e.what());
+    return Error::MissingField(e.what());
+  } catch (const nlohmann::json::exception& e) {
+    ILOG_ERROR(logger_, "{}: JSON parsing error: {}", caller, e.what());
+    return Error::InvalidJson(e.what());
+  } catch (const std::exception& e) {
+    ILOG_ERROR(logger_, "{}: Configuration error: {}", caller, e.what());
+    return Error::InvalidConfig(e.what());
+  } catch (...) {
+    ILOG_ERROR(logger_, "{}: Unknown error", caller);
+    return Error::InvalidConfig("Unknown configuration error");
+  }
+  *out = std::move(parsed);
+  return Error::Success();
+}
+
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
 
+  // Mutual exclusion with the analysis run, this direction. "In progress" is
+  // GetSimLifecycle() == kRunning at THIS moment, not "an analysis was ever started": a
+  // completed (or stopped) analysis session is exactly the state a new render commit is
+  // expected to replace. Checked before the parse so a rejected commit leaves the server
+  // — config_manager_ included — untouched.
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis && GetSimLifecycle() == SimLifecycle::kRunning) {
+    ILOG_WARN(logger_, "CommitConfig: rejected — an analysis run is in progress; Stop() it first");
+    return Error::ServerError("analysis run in progress; stop it before committing a render config");
+  }
+
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
   ConfigManager new_config;
-  // task-339.3: runtime color-class table (default = empty → no raypath_color,
-  // pre-336 behavior bit-for-bit). Declared outside the try so it survives to
+  // Runtime color-class table (default = empty → no raypath_color, the pre-colour
+  // behavior bit-for-bit). Declared outside the parse so it survives to
   // the reuse-judgment / consumer construction below.
   ColorClassTable class_table;
-  // task-339.4: the parsed composite mode. Declared outside the try so it
+  // The parsed composite mode. Declared outside the parse so it
   // survives to the member assignment below, mirroring class_table.
   CompositeMode composite_mode = CompositeMode::kDominant;
-  try {
-    new_config = config_json.get<ConfigManager>();
-    // task-339.2/339.3/339.4: color-class schema build path. BuildColorClassTable
-    // resolves id → ci (setting_[] slot) using new_config.scene_ and may throw
-    // std::invalid_argument on any config error (unknown combine, missing
-    // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
-    // combine:"all" ban) — that lands in the std::exception catch below →
-    // Error::InvalidConfig. class_table feeds directly into the RenderConsumer
-    // (per-class Y-lane accumulation) and into the compositor
-    // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
-    ColorGateTable color_gate_table = BuildColorGateTable(new_config.raypath_color_, new_config.scene_);
+  // The render's own validation step, run inside ParseConfigManager's try on the parsed
+  // document so its throws map onto the same Error vocabulary as the parse itself.
+  // Color-class schema build path. BuildColorClassTable
+  // resolves id → ci (setting_[] slot) using the scene and may throw
+  // std::invalid_argument on any config error (unknown combine, missing
+  // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
+  // combine:"all" ban) — that lands in the std::exception catch → Error::InvalidConfig.
+  // class_table feeds directly into the RenderConsumer (per-class Y-lane accumulation)
+  // and into the compositor (CompositeColorClassesLinear); no legacy per-bit adapter layer.
+  const auto build_colour_tables = [this, &class_table, &composite_mode](const ConfigManager& parsed) {
+    ColorGateTable color_gate_table = BuildColorGateTable(parsed.raypath_color_, parsed.scene_);
     // task-gui-feedback-affordances Step 5 (AC1): carry the component-bit
     // overflow count (predicates that hit `kNoBit`) out so the GUI DoRun path
     // can surface a "coloring degraded" modal via LUMICE_GetColorOverflowInfo.
@@ -805,36 +927,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     last_color_symmetry_group_overflow_.store(0, std::memory_order_release);
     last_color_or_summand_overflow_.store(0, std::memory_order_release);
     last_color_class_overflow_.store(0, std::memory_order_release);
-    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, color_gate_table);
-    composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
-  } catch (const nlohmann::json::out_of_range& e) {
-    ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::MissingField(e.what());
-  } catch (const nlohmann::json::exception& e) {
-    ILOG_ERROR(logger_, "CommitConfig: JSON parsing error: {}", e.what());
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::InvalidJson(e.what());
-  } catch (const std::exception& e) {
-    ILOG_ERROR(logger_, "CommitConfig: Configuration error: {}", e.what());
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::InvalidConfig(e.what());
-  } catch (...) {
-    ILOG_ERROR(logger_, "CommitConfig: Unknown error");
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::InvalidConfig("Unknown configuration error");
+    class_table = BuildColorClassTable(parsed.raypath_color_, parsed.scene_, color_gate_table);
+    composite_mode = ParseCompositeMode(parsed.raypath_color_.mode_);
+  };
+  if (const Error err = ParseConfigManager(config_json, "CommitConfig", build_colour_tables, &new_config)) {
+    return err;
   }
 
   // The one rule of doc/print-mode-subtractive-ink.md §7, applied to the config that is about to
@@ -855,8 +952,33 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   auto stop_end = std::chrono::steady_clock::now();
   auto stop_ms = std::chrono::duration<double, std::milli>(stop_end - stop_start).count();
 
+  // A successful commit is a RENDER session, whatever the previous one was. Written
+  // unconditionally (also when already kRender) so that no early-return path above can be
+  // the one that forgot to switch back. Stop() has joined the workers, so the three
+  // per-Simulator analysis properties can be withdrawn here without racing a Run(): a
+  // render session must not pay the chain-id cost (non-analysis mode is zero-cost by
+  // contract) and must get the backend the user asked for back.
+  const bool was_analysis = mode_.exchange(SessionMode::kRender, std::memory_order_acq_rel) == SessionMode::kAnalysis;
+  if (was_analysis) {
+    {
+      std::lock_guard<std::mutex> lock(prod_mutex_);
+      for (auto& s : simulators_) {
+        s.SetAnalysisChainId(false, 0);
+        s.SetAnalysisForceCpu(false);
+      }
+    }
+    // Symmetric to StartRaypathAnalysis: the analysis histogram must not linger on the
+    // render session's first frame. Gated on was_analysis so a render → render commit keeps
+    // publishing exactly what it always did (the previous image, re-stamped stale).
+    PublishEmptyFrame();
+  }
+
   // Check if consumers can be reused (same renderer key set, no layout changes).
   // See doc/accumulator-consumer-architecture.md §5.4 (reuse eligibility).
+  // An analysis session's consumer set (histogram + stats) is never reusable for a
+  // render: it holds no RenderConsumer. `was_analysis` says so explicitly below rather
+  // than leaning on the renderer-count comparison, which would let a zero-renderer
+  // config (whose render set is also two consumers) reuse the histogram set by accident.
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
@@ -877,8 +999,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // concurrent DoSnapshot here.
   active_composite_mode_ = composite_mode;
 
-  bool can_reuse =
-      !consumers_.empty() && !class_table_changed && (old_renderers.size() == config_manager_.renderers_.size());
+  bool can_reuse = !consumers_.empty() && !was_analysis && !class_table_changed &&
+                   (old_renderers.size() == config_manager_.renderers_.size());
   if (can_reuse) {
     auto old_it = old_renderers.begin();
     auto new_it = config_manager_.renderers_.begin();
@@ -964,6 +1086,131 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
             start_ms);
 
   return Error::Success();
+}
+
+
+void ServerImpl::PublishEmptyFrame() {
+  std::lock_guard<std::mutex> snapshot_pass(do_snapshot_mutex_);
+  auto empty = std::make_shared<ResultFrame>();
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    // The generation is NOT bumped: this is not a new snapshot, it is the absence of one.
+    // A poller comparing generations sees "nothing new", and has_valid_data_ says stale.
+    empty->snapshot_generation_ = snapshot_generation_;
+  }
+  empty->epoch_ = committed_epoch_.load(std::memory_order_acquire);
+  empty->has_valid_data_ = false;
+  StorePublished(std::move(empty));
+}
+
+// The analysis run. Same lifecycle as a render commit — parse, Stop, swap the consumer
+// set, bind the scene, Start — on the scene `scene_json` carries: the analysis is a
+// submission of its own document, not a re-run of whatever the last CommitConfig left in
+// config_manager_ (which it never touches — the next render commit still judges consumer
+// reuse against the last RENDER). What makes it an analysis session is three per-Simulator
+// properties (chain ids on, CPU forced) plus mode_, which GenerateScene / ConsumeData / the
+// two entry guards read. Everything else — queues, threads, epoch, the drain signal,
+// AcquireResultFrame — is the one lifecycle this server has, unchanged.
+Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request) {
+  ILOG_DEBUG(logger_, "StartRaypathAnalysis: entry");
+
+  // Mutual exclusion with the render run, this direction. Deliberately NOT "Stop the
+  // render and go ahead": a caller that wants that says so by calling Stop() first. A
+  // running ANALYSIS is not refused — the same call with a new ROI restarts it, which is
+  // how a caller changes the cone without a Stop() round-trip. Checked before the parse so
+  // a rejected request leaves the server untouched, as CommitConfig's guard does.
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kRender && GetSimLifecycle() == SimLifecycle::kRunning) {
+    ILOG_WARN(logger_, "StartRaypathAnalysis: rejected — a render run is in progress; Stop() it first");
+    return Error::ServerError("render run in progress; stop it before starting analysis");
+  }
+
+  // The scene this run traces, parsed into a local so that a rejected document changes
+  // nothing — not the session in flight, not the scene the workers hold. The full
+  // ConfigManager, not just its scene section, through the same owner CommitConfig parses
+  // with: one grammar, one error mapping. No colour tables and none of the render's output
+  // diagnostics (print-mode, contrast headroom): an analysis has no render output for them
+  // to be about. ROI validation (zero centre, non-positive radius, ring count < 1) is the
+  // consumer constructor's, and it degrades with a log line rather than failing — the
+  // request still names a well-defined ROI.
+  ConfigManager new_config;
+  if (const Error err = ParseConfigManager(scene_json, "StartRaypathAnalysis", nullptr, &new_config)) {
+    return err;
+  }
+  // The scene facts the read-time reduction needs, from the scene this run will trace — the
+  // one bound below, which GenerateScene reads. Not from active_scene_: that is the previous
+  // submission's until the bind, and a reduce context for a different scene than the one
+  // traced would canonicalise chains by the wrong crystals' D parameters.
+  RaypathReduceContext reduce_ctx = BuildRaypathReduceContext(new_config.scene_);
+
+  Stop();
+  mode_.store(SessionMode::kAnalysis, std::memory_order_release);
+  // The render's image must not be readable off an analysis session's frame, not even
+  // flagged stale: the first frame of this session is empty until its first batch.
+  PublishEmptyFrame();
+  // The session's ray budget: the request's own when it carries one, the scene's otherwise.
+  // Value before flag, so a reader that sees the flag sees the value it belongs to.
+  if (request.ray_num_.has_value()) {
+    analysis_ray_num_override_.store(*request.ray_num_, std::memory_order_release);
+    analysis_ray_num_overridden_.store(true, std::memory_order_release);
+  } else {
+    analysis_ray_num_overridden_.store(false, std::memory_order_release);
+  }
+  {
+    std::lock_guard<TicketMutex> lock(consumer_mutex_);
+    consumers_.clear();
+    consumers_.emplace_back(std::make_shared<RaypathHistogramConsumer>(request.roi_, std::move(reduce_ctx)));
+    // StatsConsumer for the live ray count (GetLiveSimRayCount reads it by dynamic_cast)
+    // — the run's only progress signal, since there is no image to watch grow. No
+    // AnchorConsumer: it measures an exposure anchor, and nothing here is exposed.
+    consumers_.emplace_back(std::make_shared<StatsConsumer>());
+  }
+  {
+    std::lock_guard<std::mutex> lock(prod_mutex_);
+    for (auto& s : simulators_) {
+      // Finest, always: the reader reduces (RaypathAnalysisRequest says why).
+      s.SetAnalysisChainId(true, FilterConfig::kSymNone);
+      s.SetAnalysisForceCpu(true);
+    }
+  }
+  // Said once, here, and not in ResolveGpuRoute / CreateBackend, which run on every
+  // render batch: the analysis run overrides both the preference and the environment,
+  // and the preference itself is untouched (GetActiveBackend is the readable form).
+  ILOG_INFO(logger_,
+            "StartRaypathAnalysis: forcing CPU route (analysis run session property; overrides "
+            "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified); roi_mode={} (chains recorded "
+            "unreduced; symmetry is applied when the result is read)",
+            static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), static_cast<int>(request.roi_.mode_));
+  // Bind the scene this session traces — the same three writes, under the same lock, on
+  // the same reset action as CommitConfig's bind (see the fields' declarations for why an
+  // analysis advances the epoch: it is a submission of its own scene, and a reader's "is
+  // this the frame of my commit" test must say no to an analysis frame). Stop() above has
+  // drained every worker, so no in-flight batch reads a half-updated triple, and
+  // PublishDrainedEpochIfSettled's invariant (the epoch only moves past a drained one)
+  // holds for the same reason it does in CommitConfig. renders and raypath_color are bound
+  // null on purpose — their declarations say why.
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    active_scene_ = std::make_shared<const SceneConfig>(new_config.scene_);
+    active_renders_.reset();
+    active_raypath_color_.reset();
+    scene_generation_.fetch_add(1);
+    committed_epoch_.fetch_add(1, std::memory_order_release);
+  }
+  Start();
+  return Error::Success();
+}
+
+BackendKind ServerImpl::GetActiveBackend() const {
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis) {
+    return BackendKind::kCpu;  // structural: SetAnalysisForceCpu(true) on every Simulator
+  }
+  std::lock_guard<std::mutex> lock(prod_mutex_);
+  if (simulators_.empty()) {
+    return BackendKind::kCpu;
+  }
+  // Every worker of a multi-worker CPU server resolves the same way; the GPU route has
+  // exactly one. Reading the first is reading the session.
+  return simulators_[0].ActiveBackend();
 }
 
 
@@ -1090,6 +1337,12 @@ bool ServerImpl::DoSnapshot() {
         frame->render_storage_.push_back(rc != nullptr ? rc->SnapshotImageStorage() : nullptr);
       } else if (auto* s = std::get_if<StatsResult>(&result)) {
         frame->stats_result_ = *s;
+      } else if (auto* h = std::get_if<RaypathHistogramResult>(&result)) {
+        // Copied out of the consumer's snapshot into this frame, like the stats above:
+        // no cache between snapshots, so a render session's frame (whose consumer set
+        // has no histogram) keeps the nullopt default rather than a previous analysis.
+        frame->raypath_histogram_result_ = *h;
+        frame->raypath_reduce_cache_ = std::make_shared<ResultFrame::RaypathReduceCache>();
       }
     }
     // Raw XYZ views + their storage anchors, same treatment as the mono images above.
@@ -1285,6 +1538,23 @@ void ServerImpl::Stop() {
     start_cv_.wait(lk, [this] { return active_workers_.load() == 0; });
   }
   auto t1 = std::chrono::steady_clock::now();
+
+  // Analysis session: publish what the stop leaves behind. An analysis run has no way to
+  // end other than its ray budget or this call, and its result is a histogram that is
+  // worth reading at whatever point it was stopped — so the batches consumed since the
+  // last poll must not be skipped by the snapshot_dirty_ reset below (which never
+  // publishes them: DoSnapshot() is the only materialisation point, and a cleared dirty
+  // flag makes it a no-op). What the frame carries is raypath_histogram_result_ — the
+  // C API's `present` — not has_valid_data_: that flag is re-stamped live by
+  // AcquireResultFrame from has_ever_consumed_, so after the reset below it reads false,
+  // exactly as GetSimLifecycle() reads kIdle. A stopped analysis is idle with a readable
+  // partial result; it is not "completed".
+  // Render sessions are deliberately untouched: their Stop() contract (a stop reads as
+  // idle with no data, doc/capi-lifecycle-architecture.md §7.1) is what the GUI's
+  // re-simulate paths rest on. No lock is held here; DoSnapshot() takes its own two.
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis) {
+    DoSnapshot();
+  }
 
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
@@ -1844,7 +2114,11 @@ void ServerImpl::GenerateScene() {
   // misses the --benchmark/CLI env path). Metal is Apple-only; CUDA is the only
   // GPU route on a non-Apple CUDA build — so there a true GPU route IS CUDA.
   const BackendKind kPref = preferred_backend_.load(std::memory_order_acquire);
-  const bool kGpuRoute = ResolveGpuRoute(kPref, logger_);
+  // The analysis session forces the CPU route here AND in the Simulator's CreateBackend
+  // (through the same session flag) — the two halves of one routing decision, kept in
+  // step by passing the same fact to both.
+  const bool kAnalysis = mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis;
+  const bool kGpuRoute = ResolveGpuRoute(kPref, logger_, /*force_cpu=*/kAnalysis);
 #if defined(LUMICE_CUDA_ENABLED) && !defined(__APPLE__)
   const bool kIsCudaRoute = kGpuRoute;
 #else
@@ -1859,7 +2133,9 @@ void ServerImpl::GenerateScene() {
   // questions off the same ResolveGpuRoute (see gpu_route_'s declaration). They
   // cannot disagree today; say so out loud if they ever do, rather than letting one
   // silently size the batches while the other decides whether a fallback happened.
-  if (kGpuRoute != gpu_route_) {
+  if (kGpuRoute != gpu_route_ && !kAnalysis) {
+    // (An analysis session on a GPU-built server differs by design, not by drift: it is
+    // still sized single-worker, and the forced CPU route is exactly the point.)
     ILOG_WARN(logger_,
               "GenerateScene: live gpu_route ({}) disagrees with the construction-time route ({}); this server was "
               "sized for the latter, so dispatch grain and the fallback signal are now keyed off different routes",
@@ -1891,7 +2167,13 @@ void ServerImpl::GenerateScene() {
   // quantities in distinctly-named variables (avoids the "same name carrying two dimensions" trap):
   // per_wl = ceil(total / N_wl) guarantees at least `total` rays are traced across the spectrum.
   // Illuminant (N_wl=1) is the identity transform. kInfSize is passed through unchanged.
+  // An analysis session with a budget of its own (RaypathAnalysisRequest::ray_num_) reads that
+  // here, at the ONE ingest point, in the same total-across-wavelengths unit — the scene's own
+  // ray_num_ is left as committed, so the render that follows traces what the document says.
   size_t total_ray_num = scene->ray_num_;
+  if (kAnalysis && analysis_ray_num_overridden_.load(std::memory_order_acquire)) {
+    total_ray_num = analysis_ray_num_override_.load(std::memory_order_acquire);
+  }
   // A hand-written discrete config with total < N_wl asks for fewer rays than wavelengths; ceil still
   // yields >=1 per wavelength, so the actual total is rounded UP to N_wl. Warn so the author of a bad
   // config notices the bump (the GUI never hits this — total is always >> the wavelength count).
@@ -2179,6 +2461,20 @@ Error Server::CommitConfig(const std::string& config_str) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfig: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
+}
+
+Error Server::StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request) {
+  if (!impl_) {
+    return Error::ServerNotReady();
+  }
+  return impl_->StartRaypathAnalysis(scene_json, request);
+}
+
+BackendKind Server::GetActiveBackend() const {
+  if (!impl_) {
+    return BackendKind::kCpu;
+  }
+  return impl_->GetActiveBackend();
 }
 
 size_t Server::GetLiveSimRayCount() {

@@ -284,3 +284,4 @@ The simulation state — `Ready`, `Simulating`, `Done`, `Modified` — is shown 
 - [Architecture Document](architecture.md) — system architecture and GUI module design
 - [Developer Guide](developer-guide.md) — GUI testing and development
 - [User Manual — GUI Quickstart](user-manual/02-gui-quickstart.md) — step-by-step tour for first-time users
+- [User Manual — Raypath Analysis](user-manual/06-raypath-analysis.md) — which raypaths make a halo, and how to exclude one

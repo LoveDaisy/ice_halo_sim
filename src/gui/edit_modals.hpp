@@ -1,6 +1,7 @@
 #ifndef LUMICE_GUI_EDIT_MODALS_HPP
 #define LUMICE_GUI_EDIT_MODALS_HPP
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,26 @@
 struct GLFWwindow;
 
 namespace lumice::gui {
+
+struct GuiState;
+struct EntryCard;
+struct FilterConfig;
+
+// The filter pool's two write primitives, shared by the edit modal's OK path and the analysis
+// panel's "Exclude this raypath" (analysis_panel.cpp) so a filter reaches the pool one way.
+//
+// PropagateFilterIdToLinked: after `entry`'s filter_id changed from `old_filter_id` to
+// `new_filter_id`, move every other entry that was linked with it — same crystal_id, same
+// old_filter_id — to the new id too, so the linked group (gui_state.hpp "Linked group
+// invariants") stays one share unit when a filter is added to or removed from a previously
+// filter-less group. A no-op when the id did not change (an in-place pool edit; siblings already
+// see it through the shared slot).
+void PropagateFilterIdToLinked(GuiState& state, int crystal_id, std::optional<int> old_filter_id,
+                               std::optional<int> new_filter_id);
+
+// WriteFilterToPool: bind `filter` to `entry` — overwrite the pool slot it already references, or
+// append a new slot, point the entry at it and propagate the new id to its linked siblings.
+void WriteFilterToPool(GuiState& state, EntryCard& entry, const FilterConfig& filter);
 
 struct GuiState;
 struct EditRequest;

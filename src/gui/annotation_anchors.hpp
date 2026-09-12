@@ -146,6 +146,14 @@ struct AnnotationViewInput {
 };
 AnnotationAnchors::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height);
 
+// The C view struct for a key: the ONE translation from the GUI's description of a view into what
+// core is asked about. Three callers — AnnotationAnchors::Compute (the anchors), the analysis
+// panel's click (LUMICE_UnprojectPixel) and its IN_FRAME request (LUMICE_RaypathAnalysisRequest
+// .frame_view) — and a click has to be unprojected through exactly the projection the anchors
+// were placed with, or the ring lands beside the label. A second copy of these ten assignments is
+// how that agreement would end.
+LUMICE_AnnotationView BuildAnnotationView(const AnnotationAnchors::ViewKey& key);
+
 // A core canvas point as the preview shader's marker uniforms want it. The two spaces are not the
 // same and differ in two ways at once: core's origin is the top-left corner with y DOWN
 // (annotation_overlay.hpp), the shader's is the canvas centre with y UP (`pos = v_ndc *
