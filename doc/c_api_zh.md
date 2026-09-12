@@ -29,7 +29,7 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 ### 常量
 
 ```c
-#define LUMICE_API_VERSION 413        // ABI 版本，编码为 major*100 + minor（v4.13）
+#define LUMICE_API_VERSION 437        // ABI 版本，编码为 major*100 + minor（v4.37）
 #define LUMICE_MAX_RENDER_RESULTS 16  // 渲染结果数组最大容量
 #define LUMICE_MAX_STATS_RESULTS 1    // 统计结果数组最大容量
 ```
@@ -37,7 +37,7 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 `LUMICE_API_VERSION` 让调用方把编译时依赖的 ABI 钉死，在不匹配时编译期报错，而不是撞上结构体布局漂移导致的静默 UB：
 
 ```c
-static_assert(LUMICE_API_VERSION >= 413, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 437, "Lumice header too old for this integration");
 ```
 
 公开符号集或结构体布局每发生一次 BREAKING 变更就 bump 一次。

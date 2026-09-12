@@ -69,8 +69,9 @@ class ChainIdInterningTable {
   static constexpr uint32_t kRootChainId = 0;
   // The "no room" answer (see the class comment). Never an entry, never in a
   // delta, never a parent: 0xFFFFFFFE, one below ChainIdMerger::kUnresolved
-  // so the two sentinels of this header cannot be confused for one another,
-  // and far above any dense id a bounded table can hand out.
+  // so the two sentinels of this header cannot be confused for one another
+  // (static_assert below pins the relationship), and far above any dense id
+  // a bounded table can hand out.
   static constexpr uint32_t kOverflowChainId = 0xFFFFFFFEu;
   // Per-table chain capacity (K_trie). One table per simulation worker, so a
   // process holds worker_count × this many chains at most on the producer side
@@ -232,6 +233,12 @@ class ChainIdMerger {
   ChainIdInterningTable table_{ ChainIdInterningTable::kUnboundedCapacity };
   std::unordered_map<uint32_t, ProducerState> producers_;
 };
+
+// Pins the "one below" relationship the two sentinels' own comments describe in prose:
+// ChainIdInterningTable::kOverflowChainId and ChainIdMerger::kUnresolved must stay adjacent and
+// distinct so neither header can drift into aliasing the other's sentinel.
+static_assert(ChainIdInterningTable::kOverflowChainId + 1 == ChainIdMerger::kUnresolved,
+              "kOverflowChainId must stay one below ChainIdMerger::kUnresolved");
 
 }  // namespace lumice
 

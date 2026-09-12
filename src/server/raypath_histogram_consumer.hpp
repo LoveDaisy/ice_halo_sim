@@ -76,6 +76,12 @@ struct SceneConfig;
 // and reads back in 15 ms on the 838k-chain two-layer scene that took 1.5 s
 // unbounded; 32768 would double that for no exact row gained there.
 constexpr size_t kRaypathHistogramCapacity = 16384;
+// "The two bounds are only ever both exact or both not" (comment above) is a claim about this
+// value tracking ChainIdInterningTable::kDefaultCapacity (K_trie); pin it so a change to either
+// constant alone is a compile error rather than a silently-reintroduced mismatch.
+static_assert(kRaypathHistogramCapacity == ChainIdInterningTable::kDefaultCapacity,
+              "kRaypathHistogramCapacity (k) must track ChainIdInterningTable::kDefaultCapacity "
+              "(K_trie) — see the comment above");
 
 class RaypathHistogramConsumer : public IConsume {
  public:
@@ -206,11 +212,13 @@ std::string FormatRaypathChainDisplay(const std::vector<RaypathChainSegment>& ch
 // authority's at every setting.
 RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& finest, uint8_t symmetry);
 
-// ReduceRaypathHistogram over a frame's recorded result, through the frame's one-slot cache
-// (ResultFrame::raypath_reduce_cache_): the reduction is computed when the slot is empty or
-// holds another symmetry, and returned as is otherwise. Null when the frame carries no
-// analysis result. What both C API reads of the histogram call, so the row count and the
-// rows of one (frame, symmetry) pair are one reduction, and provably the same one.
+// ReduceRaypathHistogram over a frame's recorded result, through the frame's per-symmetry cache
+// (ResultFrame::raypath_reduce_cache_, one memo per possible kSym* bitmask — 8 slots, see that
+// struct's own comment for why one slot is not enough): the reduction for `symmetry` is computed
+// once and reused on every later call with the same symmetry, without evicting any other
+// symmetry's memo. Null when the frame carries no analysis result. What both C API reads of the
+// histogram call, so the row count and the rows of one (frame, symmetry) pair are one reduction,
+// and provably the same one.
 std::shared_ptr<const RaypathHistogramResult> ReducedRaypathHistogramOf(const ResultFrame& frame, uint8_t symmetry);
 
 }  // namespace lumice

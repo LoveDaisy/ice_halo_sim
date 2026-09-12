@@ -2180,6 +2180,10 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
   // entry is; 0 means no row ever took a slot over and every entry is exact.
   double other_energy;
   LUMICE_RayCount other_count;
+  // Clamped from the internal size_t counter to INT_MAX rather than truncated by the narrowing
+  // cast — a run would need to overflow a chain's arrival count past ~2.1 billion for this to
+  // read anything other than the true count, but the clamp keeps that case a saturated (still
+  // meaningful) lower bound instead of a wrapped, misleading one.
   int truncated_chain_count;
   double max_row_error;
 } LUMICE_RaypathAnalysisInfo;

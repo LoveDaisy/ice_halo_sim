@@ -863,9 +863,10 @@ ChainIdLayerContext MakeChainIdLayerContext(ChainIdInterningTable& table, const 
   ctx.crystal = &crystal;
   ctx.crystal_id = crystal_id;
   ctx.symmetry = symmetry;
-  // Same two derivations, in the same order, as FilterSpec::Create.
-  ctx.d_applicable = detail::IsDApplicable(axis);
-  ctx.sigma_a = ctx.d_applicable ? detail::ComputeSigmaA(axis.roll_dist.center) : 0;
+  // Same shared derivation FilterSpec::Create uses (detail::DeriveDSymmetryParams).
+  auto d_params = detail::DeriveDSymmetryParams(axis);
+  ctx.d_applicable = d_params.d_applicable;
+  ctx.sigma_a = d_params.sigma_a;
   return ctx;
 }
 
@@ -1362,17 +1363,17 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   // why it is sound (nothing downstream reads the buffer's content). Reset is
   // grow-never-shrink, so the steady state asks the allocator for nothing.
   auto& all_data = workspace.all_data;
-  all_data.Reset(ComputeAllDataCapacity(config, ray_num));
+  // Raypath-analysis foundation: per-outgoing-ray chain id, parallel to
+  // outgoing_w. Stays empty (and every chain-id column stays unallocated)
+  // unless this Run() was entered in analysis mode.
+  const bool chain_ids_on = chain_id_session_.enabled;
+  all_data.Reset(ComputeAllDataCapacity(config, ray_num), chain_ids_on);
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
   // task-331.1: per-outgoing-ray component mask parallel to outgoing_d_/w_.
   // Phase-1 emits 0s (no producer wired), but the plumbing must exist so T2/T3
   // don't need to touch this legacy path.
   std::vector<uint64_t> outgoing_component;
-  // Raypath-analysis foundation: per-outgoing-ray chain id, parallel to
-  // outgoing_w. Stays empty (and every chain-id column stays unallocated)
-  // unless this Run() was entered in analysis mode.
-  const bool chain_ids_on = chain_id_session_.enabled;
   std::vector<uint32_t> outgoing_chain_id;
   auto& init_data = workspace.init_data;
   auto& buffer_data = workspace.buffer_data;

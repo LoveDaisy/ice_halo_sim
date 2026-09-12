@@ -38,7 +38,7 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 413, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 437, "Lumice header too old for this integration");
 ```
 
 It is bumped on every BREAKING change to the public symbol set or struct layout.

@@ -166,10 +166,17 @@ RaypathHistogramConsumer::Entry& RaypathHistogramConsumer::RowFor(uint32_t merge
 }
 
 void RaypathHistogramConsumer::Consume(const SimData& data) {
-  if (data.outgoing_chain_id_.empty()) {
-    // No chain ids: a GPU / CpuTraceBackend batch, or a Simulator whose
-    // analysis mode is off. Not a fault of this batch, and not worth a line —
-    // a run mixing such batches in is expected to see many of them.
+  if (data.outgoing_chain_id_.empty() && data.chain_id_table_delta_.empty()) {
+    // No chain ids AND no newly-interned entries: a GPU / CpuTraceBackend
+    // batch, or a Simulator whose analysis mode is off. Not a fault of this
+    // batch, and not worth a line — a run mixing such batches in is expected
+    // to see many of them.
+    //
+    // A batch with zero *outgoing* rays but a non-empty delta (every ray of
+    // this batch continued into the next MS layer, and continuing rays are
+    // interned too) must NOT take this early return — the next batch's
+    // continuing rays name entries from this delta as their parent, and
+    // skipping the absorb here would make the merger see them as orphaned.
     return;
   }
   // The whole delta first, unconditionally: later batches name these entries
@@ -284,15 +291,8 @@ void RaypathHistogramConsumer::Reset() {
 
 // ---- Read-time reduction ----------------------------------------------------
 
-namespace {
-
-// Every crystal family the engine builds has six prism faces (crystal.cpp sets
-// fn_period_ = 6 in both factories; filter_spec.cpp pins the same as
-// kFnPeriodHex). The reduce context carries no period because there is only
-// this one to carry.
-constexpr int kFnPeriodHex = 6;
-
-}  // namespace
+// The reduce context carries no period because crystal.hpp's kHexagonalFnPeriod
+// (every crystal family the engine builds today) is the only one to carry.
 
 RaypathReduceContext BuildRaypathReduceContext(const SceneConfig& scene) {
   RaypathReduceContext ctx;
@@ -391,7 +391,7 @@ RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& fine
         logged_unknown_crystal = true;
       }
       id = table.Intern(id, seg.crystal_id,
-                        ReduceRaypathByPeriod(seg.segment, symmetry, p.sigma_a, p.d_applicable, kFnPeriodHex));
+                        ReduceRaypathByPeriod(seg.segment, symmetry, p.sigma_a, p.d_applicable, kHexagonalFnPeriod));
     }
     auto& dst = merged[id];
     if (dst.chain_.empty()) {
