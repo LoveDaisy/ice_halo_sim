@@ -146,6 +146,30 @@ TEST(AnalysisPanelLogic, SameGenerationObservedRepeatedlyKeepsSelectionAndOrder)
   EXPECT_EQ(state.analysis_result.display_order[0], 0);
 }
 
+// The other half of the gate: OLDER is not new either. RefreshAnalysisEntries can put a frame on
+// show that is one generation ahead of the poller's last publish (a Stop publishes the run's
+// final snapshot after the poller paused), and the poller then carries the older generation
+// forward on every frame. Under a "different generation" gate that carry-forward would be
+// adopted every frame — selection cleared, list re-ordered, on a result that never changed —
+// and the row click that Exclude needs could never stick. Red-state probe: change `<=` back to
+// `==` in the gate and this fails on the first poll.
+TEST(AnalysisPanelLogic, OlderGenerationFromThePollerNeverReplacesTheNewerResultOnShow) {
+  GuiState state;
+  auto older = MakePayload(13, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0, 5.0, 3.0 });
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, older));
+  // What RefreshAnalysisEntries does with the newer frame: the payload on show moves ahead.
+  auto newer = MakePayload(14, LUMICE_RAYPATH_ROI_FULL_SKY, { 2.0, 6.0, 4.0 });
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, newer));
+  state.analysis.selected_entry = "3-4";
+  const std::vector<int> order_before = state.analysis_result.display_order;
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_FALSE(AdoptAnalysisPayloadIfNew(state, older)) << "poll " << i;
+    EXPECT_EQ(state.analysis.selected_entry, std::optional<std::string>{ "3-4" }) << "poll " << i;
+    EXPECT_EQ(state.analysis_result.display_order, order_before);
+    EXPECT_EQ(state.analysis_result.payload, newer) << "the newer result stays on show";
+  }
+}
+
 // ---- the selection, by chain ----
 
 // The selection is the chain's text, so it is found again in any payload that still has that

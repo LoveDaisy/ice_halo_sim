@@ -114,7 +114,7 @@ bool AdoptAnalysisPayloadIfNew(GuiState& state, const std::shared_ptr<const Anal
   }
   const unsigned long long held =
       state.analysis_result.payload ? state.analysis_result.payload->snapshot_generation : 0ULL;
-  if (payload->snapshot_generation == held) {
+  if (payload->snapshot_generation <= held) {
     return false;
   }
   state.analysis_result.payload = payload;

@@ -46,7 +46,7 @@ bool DeriveAnalysisInProgress(bool started, const PreviewSnapshot* snap);
 // ---- Result adoption and the display-time projection ----------------------------------------------
 
 // Adopt `payload` as the result on show iff it is a NEW result: non-null and carrying a
-// snapshot_generation different from the one already held. The ONE place that decides "new",
+// snapshot_generation NEWER than the one already held. The ONE place that decides "new",
 // called by SyncFromPoller every frame with whatever the snapshot carries (carry-forwards and all)
 // and by tests directly. On adoption: the selection is cleared (it named a chain of the old
 // result) and the display order is recomputed for the current radius. Returns whether it adopted.
@@ -56,7 +56,11 @@ bool DeriveAnalysisInProgress(bool started, const PreviewSnapshot* snap);
 // The held generation starts at 0, and 0 is what a payload can never carry (the server's counter
 // is incremented before it is stamped on a frame — server.cpp DoSnapshot), so the first real
 // result is always adopted; and since the counter only grows, a second analysis session on the
-// same server can never repeat a value this view has already held.
+// same server can never repeat a value this view has already held. "Newer", not "different":
+// RefreshAnalysisEntries may put a frame on show that is one snapshot AHEAD of what the poller
+// last published (a Stop publishes the run's final snapshot after the poller has paused, and
+// the poller never catches up), and the poller's carry-forward of the older one must not
+// replace it — that would clear the selection every frame, on a result that never changed.
 bool AdoptAnalysisPayloadIfNew(GuiState& state, const std::shared_ptr<const AnalysisPayload>& payload);
 
 // How many of a CONE result's rings lie within `radius_deg` of the centre, given the request's
