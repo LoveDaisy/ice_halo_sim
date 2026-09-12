@@ -69,6 +69,9 @@ enum LabelKind : int {
   kLabelElevation = 1,
   kLabelLongitude = 2,
   kLabelAngularDist = 3,
+  // Circles around the camera's optical axis. Same geometry as kLabelAngularDist with a different
+  // centre; kept a distinct family so a consumer can style and switch it on its own.
+  kLabelViewDist = 4,
 };
 
 // A named reference direction that is reported as a POINT on the canvas: it gets a screen position
@@ -121,6 +124,13 @@ struct Request {
   std::vector<float> angular_dist_deg;
   float reference_dir[3] = { 0.0f, 0.0f, -1.0f };
 
+  // Circles of constant angular distance from the camera's OPTICAL AXIS — the view's own forward
+  // direction, derived here from `view`'s az/el/roll (the same axis the front-hemisphere clip
+  // reads). No direction field of its own: unlike `angular_dist_deg` the centre is not a caller
+  // input, and it is independent of `lens_shift` by construction — a shifted lens moves the axis's
+  // PIXEL, not the axis, so the circles follow the axis and not the canvas centre.
+  std::vector<float> view_dist_deg;
+
   // Report where zenith / nadir land. Points, not curves: they carry no mask and no text (the
   // marker's appearance, glyph included, belongs to the consumer).
   //
@@ -162,6 +172,7 @@ struct Overlay {
   std::vector<uint8_t> elevation;
   std::vector<uint8_t> longitude;
   std::vector<uint8_t> angular_dist;
+  std::vector<uint8_t> view_dist;
 
   CanvasPoint zenith;
   CanvasPoint nadir;

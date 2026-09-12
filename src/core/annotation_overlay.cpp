@@ -405,10 +405,62 @@ void SampleMarkers(const Request& req, const RequestFrame& f, std::vector<Canvas
   }
 }
 
+// One ring family: circles of constant angular distance around `ref_dir` (a unit vector), one
+// label list entry per requested angle. Shared by the sun-referenced family (angular_dist) and the
+// axis-referenced one (view_dist) — the geometry is the same level set with a different centre,
+// so the walk is written once and told which centre and which LabelKind to stamp. `ctx` is the
+// WalkContext SetUp built for the request (projection, canvas, hemisphere policy).
+void WalkRingFamily(const WalkContext& ctx, const float ref_dir[3], const std::vector<float>& angles, LabelKind kind,
+                    std::vector<Label>* labels) {
+  for (size_t k = 0; k < angles.size(); ++k) {
+    const float value = angles[k];
+    float u[3];
+    float v[3];
+    if (!BuildRingFrame(ref_dir, u, v)) {
+      continue;
+    }
+    const float cos_d = std::cos(value * math::kDegreeToRad);
+    const float sin_d = std::sin(value * math::kDegreeToRad);
+    std::vector<CurveSample> samples;
+    samples.reserve(kCurveAzSteps + 1);
+    for (int i = 0; i <= kCurveAzSteps; ++i) {
+      const float phi = 2.0f * math::kPi * static_cast<float>(i) / static_cast<float>(kCurveAzSteps);
+      float d[3];
+      RingDirAt(ref_dir, u, v, cos_d, sin_d, phi, d);
+      samples.push_back(SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]));
+    }
+    const std::string text = FormatAngleDeg(value);
+
+    int boundary_count = 0;
+    for (size_t i = 1; i < samples.size(); ++i) {
+      if (!samples[i - 1].vis && samples[i].vis) {
+        labels->push_back({ samples[i].px, samples[i].py, kind, static_cast<int>(k), value, text });
+        ++boundary_count;
+      }
+    }
+    if (boundary_count > 0) {
+      continue;
+    }
+    // Interior mode: the whole ring is in view, so there is no entry point to anchor on. Four
+    // canonical anchors a quarter turn apart around the reference direction, matching the GUI.
+    const bool any_vis = std::any_of(samples.begin(), samples.end(), [](const CurveSample& s) { return s.vis; });
+    if (!any_vis) {
+      continue;
+    }
+    for (int li = 0; li < 4; ++li) {
+      float d[3];
+      RingDirAt(ref_dir, u, v, cos_d, sin_d, static_cast<float>(li) * math::kPi_2, d);
+      const CurveSample s = SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]);
+      if (s.vis) {
+        labels->push_back({ s.px, s.py, kind, static_cast<int>(k), value, text });
+      }
+    }
+  }
+}
+
 // The curve walk: one label list for every requested family.
 void WalkLabels(const Request& req, const RequestFrame& f, std::vector<Label>* labels) {
   const WalkContext& ctx = f.ctx;
-  const float* ref_dir = f.ref_dir;
   if (req.horizon) {
     EmitCurveLabel(WalkAltitudeCurve(ctx, 0.0f), kLabelHorizon, -1, 0.0f, FormatAngleDeg(0.0f), *labels);
   }
@@ -449,50 +501,8 @@ void WalkLabels(const Request& req, const RequestFrame& f, std::vector<Label>* l
       }
     }
   }
-  for (size_t k = 0; k < req.angular_dist_deg.size(); ++k) {
-    const float value = req.angular_dist_deg[k];
-    float u[3];
-    float v[3];
-    if (!BuildRingFrame(ref_dir, u, v)) {
-      continue;
-    }
-    const float cos_d = std::cos(value * math::kDegreeToRad);
-    const float sin_d = std::sin(value * math::kDegreeToRad);
-    std::vector<CurveSample> samples;
-    samples.reserve(kCurveAzSteps + 1);
-    for (int i = 0; i <= kCurveAzSteps; ++i) {
-      const float phi = 2.0f * math::kPi * static_cast<float>(i) / static_cast<float>(kCurveAzSteps);
-      float d[3];
-      RingDirAt(ref_dir, u, v, cos_d, sin_d, phi, d);
-      samples.push_back(SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]));
-    }
-    const std::string text = FormatAngleDeg(value);
-
-    int boundary_count = 0;
-    for (size_t i = 1; i < samples.size(); ++i) {
-      if (!samples[i - 1].vis && samples[i].vis) {
-        labels->push_back({ samples[i].px, samples[i].py, kLabelAngularDist, static_cast<int>(k), value, text });
-        ++boundary_count;
-      }
-    }
-    if (boundary_count > 0) {
-      continue;
-    }
-    // Interior mode: the whole ring is in view, so there is no entry point to anchor on. Four
-    // canonical anchors a quarter turn apart around the reference direction, matching the GUI.
-    const bool any_vis = std::any_of(samples.begin(), samples.end(), [](const CurveSample& s) { return s.vis; });
-    if (!any_vis) {
-      continue;
-    }
-    for (int li = 0; li < 4; ++li) {
-      float d[3];
-      RingDirAt(ref_dir, u, v, cos_d, sin_d, static_cast<float>(li) * math::kPi_2, d);
-      const CurveSample s = SampleWorldDir(ctx, AltitudeDegOfDir(d[2]), d[0], d[1], d[2]);
-      if (s.vis) {
-        labels->push_back({ s.px, s.py, kLabelAngularDist, static_cast<int>(k), value, text });
-      }
-    }
-  }
+  WalkRingFamily(ctx, f.ref_dir, req.angular_dist_deg, kLabelAngularDist, labels);
+  WalkRingFamily(ctx, f.forward, req.view_dist_deg, kLabelViewDist, labels);
 }
 
 }  // namespace
@@ -548,12 +558,14 @@ Overlay ComputeOverlay(const Request& req) {
   const bool need_alt = req.horizon || !req.elevation_deg.empty();
   const bool need_az = !req.longitude_deg.empty();
   const bool need_dist = !req.angular_dist_deg.empty();
+  const bool need_view_dist = !req.view_dist_deg.empty();
 
   std::vector<uint8_t> imaged(n, 0);
   out.drawable.assign(n, 0);
   std::vector<float> alt_field(need_alt ? n : 0, 0.0f);
   std::vector<float> az_field(need_az ? n : 0, 0.0f);
   std::vector<float> dist_field(need_dist ? n : 0, 0.0f);
+  std::vector<float> view_dist_field(need_view_dist ? n : 0, 0.0f);
 
   // One inverse projection per pixel feeds every field, which is what AC1's "any new angle field
   // goes into the SAME loop" buys: three annotation categories cost one sweep, not three.
@@ -586,6 +598,12 @@ Overlay ComputeOverlay(const Request& req) {
         if (need_dist) {
           dist_field[i] = AngularDistDegOfDir(ref_dir, dir.x, dir.y, dir.z);
         }
+        if (need_view_dist) {
+          // Same level set, centred on the optical axis. `dir` is already shift-aware (PixelToWorld
+          // consumes lens_shift), so the circle lands around the axis's pixel without any extra
+          // handling here.
+          view_dist_field[i] = AngularDistDegOfDir(forward, dir.x, dir.y, dir.z);
+        }
       }
     }
   });
@@ -606,6 +624,10 @@ Overlay ComputeOverlay(const Request& req) {
   if (!req.angular_dist_deg.empty()) {
     out.angular_dist = mask_detail::LevelSetMaskFromField(dist_field, imaged, out.drawable, width, height,
                                                           req.angular_dist_deg, false);
+  }
+  if (need_view_dist) {
+    out.view_dist = mask_detail::LevelSetMaskFromField(view_dist_field, imaged, out.drawable, width, height,
+                                                       req.view_dist_deg, false);
   }
 
   // Not level sets: named directions, sampled as points. The legacy pair and the general list are

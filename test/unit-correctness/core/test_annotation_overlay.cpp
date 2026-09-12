@@ -251,6 +251,7 @@ TEST(AnnotationOverlay, OnlyRequestedCategoriesAreBuilt) {
   EXPECT_TRUE(out.elevation.empty());
   EXPECT_TRUE(out.longitude.empty());
   EXPECT_TRUE(out.angular_dist.empty());
+  EXPECT_TRUE(out.view_dist.empty());
   EXPECT_FALSE(out.zenith.valid) << "zenith_nadir was not requested";
 }
 
@@ -264,11 +265,12 @@ TEST(AnnotationOverlay, EveryCategoryMaskIsASubsetOfTheDrawableRegion) {
   req.reference_dir[0] = 0.0f;
   req.reference_dir[1] = -1.0f;
   req.reference_dir[2] = 0.0f;
+  req.view_dist_deg = { 30.0f, 80.0f };
   const ann::Overlay out = ann::ComputeOverlay(req);
 
   ASSERT_EQ(out.drawable.size(), 128u * 64u);
-  const std::vector<const std::vector<uint8_t>*> masks{ &out.horizon, &out.elevation, &out.longitude,
-                                                        &out.angular_dist };
+  const std::vector<const std::vector<uint8_t>*> masks{ &out.horizon, &out.elevation, &out.longitude, &out.angular_dist,
+                                                        &out.view_dist };
   // Non-fatal per category and per pixel, and only the FIRST stray pixel of each category is
   // reported: a category-wide leak would otherwise print one line per pixel, and a fatal assert
   // would stop at the first category and hide whether the others leak too.
@@ -603,6 +605,156 @@ TEST(AnnotationOverlay, AngularDistLabelsSitOnTheCircleTheyName) {
   EXPECT_GT(checked, 0) << "no circle anchor was imageable — the assertion above never ran";
   EXPECT_GT(saw_22, 0) << "the 22 deg ring produced no label";
   EXPECT_GT(saw_46, 0) << "the 46 deg ring produced no label";
+}
+
+// =============== view_dist: the axis-referenced twin of angular_dist ===============
+// The same level set with a different centre. What is worth pinning is exactly what differs: the
+// centre is the camera's optical axis (derived from the view, not a request field), it follows the
+// view and not the sun, and under a shifted lens it follows the axis's PIXEL and not the canvas
+// centre. The ring geometry itself is the shared walk the angular_dist cases above already pin.
+
+namespace {
+
+// The camera's optical axis in world space for a view, computed the way the renderer's own
+// Omega_axis does it (MakeCameraRotation applied to +z, negated) — i.e. from the sole authority on
+// what "the view's forward" is, not from a transcription of annotation_overlay.cpp's SetUp.
+std::array<float, 3> CameraForwardOf(const ann::ViewSnapshot& view) {
+  const RenderConfig cfg = ann::ToRenderConfig(view);
+  const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+  std::array<float, 3> f{ 0.0f, 0.0f, 1.0f };
+  rot.Apply(f.data());
+  return { -f[0], -f[1], -f[2] };
+}
+
+// Pixel centroid of a mask's lit pixels.
+std::array<double, 2> Centroid(const std::vector<uint8_t>& mask, int width) {
+  double sx = 0.0;
+  double sy = 0.0;
+  double count = 0.0;
+  for (size_t i = 0; i < mask.size(); ++i) {
+    if (mask[i] != 0) {
+      sx += static_cast<double>(i % static_cast<size_t>(width));
+      sy += static_cast<double>(i / static_cast<size_t>(width));
+      count += 1.0;
+    }
+  }
+  return { sx / count, sy / count };
+}
+
+}  // namespace
+
+TEST(AnnotationOverlay, ViewDistCirclesAreCentredOnTheOpticalAxisNotTheSun) {
+  // Sun and camera pointed different ways; the sun ring and the axis ring must land on different
+  // centres, and the axis ring's centre must be where the camera forward is imaged.
+  ann::Request req;
+  req.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128);
+  req.view.az_deg = 40.0f;
+  req.view.el_deg = 25.0f;
+  req.view.roll_deg = 10.0f;
+  req.labels = false;
+  req.reference_dir[0] = 0.0f;
+  req.reference_dir[1] = -0.7071f;
+  req.reference_dir[2] = -0.7071f;
+  req.angular_dist_deg = { 22.0f };
+  req.view_dist_deg = { 22.0f };
+  const ann::Overlay out = ann::ComputeOverlay(req);
+  ASSERT_GT(CountOn(out.view_dist), 0u);
+  ASSERT_GT(CountOn(out.angular_dist), 0u);
+
+  const RenderConfig cfg = ann::ToRenderConfig(req.view);
+  const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+  const lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 128.0f);
+  const std::array<float, 3> fwd = CameraForwardOf(req.view);
+  const ann::CanvasPoint axis = ann::ProjectWorldDir(p, fwd[0], fwd[1], fwd[2]);
+  ASSERT_TRUE(axis.valid);
+
+  const std::array<double, 2> c_view = Centroid(out.view_dist, 256);
+  EXPECT_NEAR(c_view[0], static_cast<double>(axis.px), 4.0);
+  EXPECT_NEAR(c_view[1], static_cast<double>(axis.py), 4.0);
+
+  const std::array<double, 2> c_sun = Centroid(out.angular_dist, 256);
+  const double sep = std::hypot(c_view[0] - c_sun[0], c_view[1] - c_sun[1]);
+  EXPECT_GT(sep, 20.0) << "the two families collapsed onto one centre — view_dist is following the sun";
+}
+
+TEST(AnnotationOverlay, ViewDistCirclesFollowTheAxisPixelUnderLensShift) {
+  // A single-lens view with a non-zero lens_shift images the optical axis off the canvas centre.
+  // The ring must be centred on that pixel (the axis), not on the canvas centre.
+  ann::Request req;
+  req.view = MakeView(LensParam::kLinear, 90.0f, 256, 192);
+  req.view.lens_shift[0] = 40;
+  req.view.lens_shift[1] = -20;
+  req.labels = false;
+  req.view_dist_deg = { 20.0f };
+  const ann::Overlay out = ann::ComputeOverlay(req);
+  ASSERT_GT(CountOn(out.view_dist), 0u);
+
+  const RenderConfig cfg = ann::ToRenderConfig(req.view);
+  const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+  const lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 192.0f);
+  const std::array<float, 3> fwd = CameraForwardOf(req.view);
+  const ann::CanvasPoint axis = ann::ProjectWorldDir(p, fwd[0], fwd[1], fwd[2]);
+  ASSERT_TRUE(axis.valid);
+  // The premise: the shift really did move the axis off centre, or the case below is vacuous.
+  const double centre_x = 256.0 / 2.0;
+  const double centre_y = 192.0 / 2.0;
+  ASSERT_GT(std::hypot(axis.px - centre_x, axis.py - centre_y), 10.0)
+      << "lens_shift left the axis at the canvas centre; the test cannot tell the two apart";
+
+  const std::array<double, 2> c = Centroid(out.view_dist, 256);
+  EXPECT_NEAR(c[0], static_cast<double>(axis.px), 2.0);
+  EXPECT_NEAR(c[1], static_cast<double>(axis.py), 2.0);
+}
+
+TEST(AnnotationOverlay, ViewDistLabelsSitOnTheCircleTheyNameAndComeFromBothEntryPoints) {
+  ann::Request req;
+  req.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128);
+  req.view.az_deg = 15.0f;
+  req.view.el_deg = 35.0f;
+  req.view_dist_deg = { 22.0f, 100.0f };  // one interior ring, one that straddles the disc seam
+  const ann::Overlay out = ann::ComputeOverlay(req);
+  const ann::Anchors anchors = ann::ComputeAnchors(req);
+
+  const RenderConfig cfg = ann::ToRenderConfig(req.view);
+  const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+  const lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 128.0f);
+  const std::array<float, 3> fwd = CameraForwardOf(req.view);
+
+  int checked = 0;
+  int saw_22 = 0;
+  int saw_100 = 0;
+  for (const ann::Label& l : out.labels) {
+    if (l.kind != ann::kLabelViewDist) {
+      continue;
+    }
+    if (l.index < 0 || l.index >= 2) {
+      ADD_FAILURE() << "a view_dist label carries index " << l.index << ", outside the 2-entry request list";
+      continue;
+    }
+    EXPECT_FLOAT_EQ(l.value_deg, req.view_dist_deg[static_cast<size_t>(l.index)]);
+    l.value_deg > 50.0f ? ++saw_100 : ++saw_22;
+    const lumice::mask_detail::MaskDir dir =
+        lumice::mask_detail::PixelToWorld(cfg, p, rot, static_cast<int>(l.px), static_cast<int>(l.py));
+    if (!dir.valid) {
+      continue;
+    }
+    ++checked;
+    const float dot = std::clamp(dir.x * fwd[0] + dir.y * fwd[1] + dir.z * fwd[2], -1.0f, 1.0f);
+    const float deg = std::acos(dot) / lumice::math::kDegreeToRad;
+    EXPECT_NEAR(deg, l.value_deg, 2.0f) << "an anchor labelled " << l.value_deg << " deg sits " << deg
+                                        << " deg from the optical axis";
+  }
+  EXPECT_GT(checked, 0);
+  EXPECT_GT(saw_22, 0);
+  EXPECT_GT(saw_100, 0);
+
+  // Both entry points share the walk, so the anchor list is the same object by construction.
+  ASSERT_EQ(anchors.labels.size(), out.labels.size());
+  for (size_t i = 0; i < anchors.labels.size(); ++i) {
+    EXPECT_EQ(anchors.labels[i].kind, out.labels[i].kind);
+    EXPECT_FLOAT_EQ(anchors.labels[i].px, out.labels[i].px);
+    EXPECT_FLOAT_EQ(anchors.labels[i].py, out.labels[i].py);
+  }
 }
 
 // =============== The named direction table ===============
