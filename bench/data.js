@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789248089334,
+  "lastUpdate": 1789249339896,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "4e3f2bf4a1010ee5fe92f5a0cb24a863a3d96272",
-          "message": "Merge pull request #254 from LoveDaisy/fix/revert-field-scope-alignment\n\nfix(gui): align Revert's field scope with the predicate that decides what counts as a change",
-          "timestamp": "2026-08-06T17:07:01+08:00",
-          "tree_id": "39a256ded94aa63c7c11aaeb8f2c923af34401c7",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/4e3f2bf4a1010ee5fe92f5a0cb24a863a3d96272"
-        },
-        "date": 1786007854448,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 337434.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 592328.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 398755.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 304469,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4758,6 +4710,54 @@ window.BENCHMARK_DATA = {
             "value": 550630,
             "unit": "rays/sec",
             "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a68880e398137ef91895edbb6d4ff0c997923e4",
+          "message": "Merge pull request #352 from LoveDaisy/chore/regen-refs-deterministic-single-shot\n\nchore(regen-refs): shoot deterministic groups once, share runs across groups, refuse stale-base reshoots",
+          "timestamp": "2026-09-13T05:31:09+08:00",
+          "tree_id": "5e9ceaec07873c2b9154175e6d957784999b8820",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7a68880e398137ef91895edbb6d4ff0c997923e4"
+        },
+        "date": 1789249338363,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 389497.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 592514.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 425177.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 372608.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
