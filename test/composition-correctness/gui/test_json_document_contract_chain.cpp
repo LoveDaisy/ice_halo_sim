@@ -39,6 +39,7 @@
 #include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
+#include "util/lens_fov_default.hpp"
 
 namespace lumice::gui {
 namespace {
@@ -510,8 +511,9 @@ TEST(JsonImportContractChain, AJsonLightSourceMissingSpectrumWarnsAndKeepsDefaul
 // preview inverts, and `linear` is one specific projection rather than an absence of one. Also a
 // singleton (the GUI keeps a single renderer), so again the value stays and the silence goes.
 //
-// `fov` beside it deliberately gets no such treatment: core itself reads that one as optional, so
-// its absence is a document saying nothing, not a document being malformed.
+// `fov` beside it is optional to core as well, and gets the same warn-and-default treatment — see
+// D-6b below: its absence is a document saying nothing, not a document being malformed, but the
+// angle chosen for it is still one the author never wrote, so it is named rather than kept quiet.
 TEST(JsonImportContractChain, AJsonRenderLensMissingTypeWarnsAndKeepsLinear) {
   const std::string doc =
       DocWithParts(kWellFormedLightSource, R"([{"id": 1, "lens": {"fov": 60}, "resolution": [64, 64]}])", "");
@@ -527,6 +529,63 @@ TEST(JsonImportContractChain, AJsonRenderLensMissingTypeWarnsAndKeepsLinear) {
   EXPECT_FALSE(warning.empty()) << "a projection was chosen for the user and never mentioned";
   EXPECT_NE(warning.find("lens"), std::string::npos) << "must name the object, got: " << warning;
   ClearImportComplexFilterWarning();
+}
+
+// D-6b: a lens that states neither `fov` nor `f`. Core's LensParam::from_json loads such a document
+// at a documented default (90 degrees; 30 for `globe`) and logs a WARNING naming the angle; this is
+// the GUI half of that contract. The value is compared against the shared util/ function rather
+// than a literal on purpose: the literal numbers are pinned in test_lens_fov_default.cpp, and what
+// THIS chain has to prove is that the GUI reaches for the same authority core does — the same
+// document must not render at 90 in the CLI and preview at something else in the GUI, on a key the
+// author never wrote. Before this branch existed the GUI defaulted to a flat RenderConfig{}.fov,
+// which is 90 for `globe` too; the globe row is what would have caught that.
+TEST(JsonImportContractChain, AJsonRenderLensMissingFovAndFDefaultsAndWarns) {
+  const std::string doc =
+      DocWithParts(kWellFormedLightSource, R"([{"id": 1, "lens": {"type": "linear"}, "resolution": [64, 64]}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_EQ(scratch.renderer.lens_type, kLensTypeLinear) << "premise: the lens object was read at all";
+  EXPECT_FLOAT_EQ(scratch.renderer.fov, lumice::LensDefaultFovDegrees(false));
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "an angle was chosen for the user and never mentioned";
+  EXPECT_NE(warning.find("fov"), std::string::npos) << "must name the field, got: " << warning;
+  EXPECT_EQ(warning.find("no \"type\""), std::string::npos) << "the document DID state its type, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+TEST(JsonImportContractChain, AJsonRenderLensMissingFovAndFOnGlobeDefaultsToThirty) {
+  const std::string doc =
+      DocWithParts(kWellFormedLightSource, R"([{"id": 1, "lens": {"type": "globe"}, "resolution": [64, 64]}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_EQ(scratch.renderer.lens_type, kLensTypeGlobe) << "premise: the lens object was read at all";
+  EXPECT_FLOAT_EQ(scratch.renderer.fov, lumice::LensDefaultFovDegrees(true));
+  EXPECT_NE(scratch.renderer.fov, RenderConfig{}.fov)
+      << "control: the globe default must differ from the GUI's own flat default, or this row proves nothing";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_NE(warning.find("fov"), std::string::npos) << "must name the field, got: " << warning;
+  EXPECT_NE(warning.find("30"), std::string::npos) << "must name the angle it chose, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// Control for D-6b: a lens that does state `fov` is not told it was defaulted.
+TEST(JsonImportContractChain, AJsonRenderLensWithStatedFovIsSilent) {
+  const std::string doc = DocWithParts(kWellFormedLightSource, kWellFormedRender, "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_FLOAT_EQ(scratch.renderer.fov, 60.0f);
+  EXPECT_TRUE(PeekImportComplexFilterWarning().empty()) << PeekImportComplexFilterWarning();
 }
 
 // D-7: a colour class with no colour. No colour is the neutral one — black and white both read as

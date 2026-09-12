@@ -671,7 +671,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 
 **默认值**：
 - `type`: "linear"
-- `fov`: 90.0（度）；`globe` 默认 30.0
+- `fov`: 90.0（度）；`globe` 默认 30.0。默认值只在 lens 对象**既没写 `fov` 也没写 `f`** 时生效；此时文档按该默认值渲染，并记录一行 WARNING 说明采用了哪个角度（`lens: neither "fov" nor "f" given; using the default fov=...`），让没写角度的作者能看到自己实际得到的值。GUI 导入路径套用同一默认值，并在导入告警里报告。
 
 **注意**：
 - `fov` 为覆盖输出图像**短边**（`min(width, height)`）的全视场角（度）——不是对角线。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。⚠️ 按对角线换算 `fov` 会让实际视场比预期小：例如 3600×2400 的 linear 渲染，若按对角线把 `fov` 算成 120°，等效的短边口径 `fov` 其实约为 87°——一个 22° 的晕会缩小到约一半半径。请始终按短边推导 `fov`（或下方的 `f`）。GUI 预览 shader 用的是同一口径（`src/gui/preview_renderer.cpp` 的 `linearInverse`/`fisheyeInverse`，`short_edge = min(u_resolution.x, u_resolution.y)`），因此同一份 config 在 GUI 与 CLI 里渲染出的视觉尺寸一致。

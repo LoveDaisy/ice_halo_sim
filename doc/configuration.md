@@ -696,7 +696,7 @@ The render configuration defines the renderer parameters.
 
 **Defaults**:
 - `type`: "linear"
-- `fov`: 90.0 (degrees); `globe` defaults to 30.0
+- `fov`: 90.0 (degrees); `globe` defaults to 30.0. The default applies only when the lens object states **neither** `fov` nor `f`; when it does, the document renders at that default and one WARNING line is logged naming the angle that was chosen (`lens: neither "fov" nor "f" given; using the default fov=...`), so an author who never wrote the angle can see which one they got. The GUI's import path applies the same default and reports it in its import warning.
 
 **Note**:
 - `fov` is the **full field of view covering the output image's short edge** (`min(width, height)`) in degrees — not the diagonal. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections). ⚠️ Computing `fov` from the diagonal instead gives a smaller apparent halo than intended: for example, a 3600×2400 linear render authored with a diagonal-based `fov = 120°` reproduces the framing of a short-edge-based `fov ≈ 87°` — a 22° halo comes out at roughly half its expected radius. Always derive `fov` (or `f`, below) from the short edge. The GUI preview shader uses the identical convention (`src/gui/preview_renderer.cpp`'s `linearInverse` / `fisheyeInverse`, `short_edge = min(u_resolution.x, u_resolution.y)`), so the same document renders at the same apparent size in the GUI and the CLI.

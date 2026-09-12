@@ -29,6 +29,7 @@
 #include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
 #include "util/color_space.hpp"
+#include "util/lens_fov_default.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -3056,8 +3057,9 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       } else {
         // Same shape as light_source.spectrum above: `type` selects the whole projection branch the
         // preview inverts, `linear` is one specific projection rather than the absence of one, and a
-        // single renderer means there is no unit to drop. `fov` beside it is genuinely optional to
-        // core, so its absence is a document saying nothing rather than a malformed one.
+        // single renderer means there is no unit to drop. `fov` beside it is optional to core too,
+        // and gets the same treatment one branch down: an absent `fov` is a document saying nothing,
+        // so it loads at a default — but a default the author is told about, exactly as here.
         r.lens_type = RenderConfig{}.lens_type;
         const std::string msg = std::string("render[0].lens states no \"type\"; loaded as ") +
                                 kLensTypeJsonNames[RenderConfig{}.lens_type] +
@@ -3065,7 +3067,28 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
         SetImportComplexFilterWarning(msg);
       }
-      r.fov = jlens.value("fov", RenderConfig{}.fov);
+      if (jlens.contains("fov")) {
+        r.fov = jlens.at("fov").get<float>();
+      } else {
+        // The default is the one core's LensParam::from_json also takes, from the one function both
+        // readers share (util/lens_fov_default.hpp) — so the CLI and the GUI load this document at
+        // the same angle, 30 for `globe` and 90 for everything else. This is the value core
+        // documents and warns about, not the GUI's own RenderConfig{}.fov, which is a flat 90 that
+        // knows nothing about `globe`.
+        //
+        // Hand-over boundary: this decoder does not read `f` (focal length) yet, so a document that
+        // states `f` and not `fov` also lands here and is told "no fov" even though it did say how
+        // wide the lens is. That is the status quo (`f` was silently ignored before, now the author
+        // at least hears a default was used); when `f` is read, the "stated f" case splits off into
+        // its own path and this wording should be narrowed to the genuinely-empty lens object.
+        r.fov = LensDefaultFovDegrees(r.lens_type == kLensTypeGlobe);
+        // Both defaults are whole degrees, so the truncating cast prints them exactly.
+        const std::string msg = std::string("render[0].lens states no \"fov\"; loaded as ") +
+                                std::to_string(static_cast<int>(r.fov)) +
+                                " degrees (core's default for this lens type, and what the CLI renders it at).";
+        GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+        SetImportComplexFilterWarning(msg);
+      }
     }
 
     if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
