@@ -289,8 +289,8 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 `crystal1(1-3-5)` 与其它晶体的组合」）。这个限制在 UI 上要明确说明，不能让按钮在多段链上
 显示为可用却生成一个不达意的 filter。
 
-**as-built**：GUI 侧「Exclude this raypath」按钮（`ICON_FA_BAN`）的可用性由
-`EvaluateExcludeEligibility`（`analysis_panel.cpp:547`，声明 `analysis_panel.hpp:229`）判定：
+**as-built**：GUI 侧「Exclude this raypath」按钮（`ICON_FA_BAN`，`src/gui/analysis_panel.cpp:1037`）
+的可用性由 `EvaluateExcludeEligibility`（`analysis_panel.cpp:547`，声明 `analysis_panel.hpp:229`）判定：
 
 | 判据 | 结果 | 提示文案（原文） |
 |---|---|---|
@@ -360,6 +360,11 @@ entry 共享）/ 多个 Out 槽位 / 还有未筛选子组分别措辞。实施�
   `test_server_analysis_run.cpp` 补齐（互斥/强制 CPU 场景），但**没有**一个测试是「多 worker
   并发跑分析会话，断言合并结果与已知答案一致」这种端到端形状——仍然是合成/白盒覆盖，
   没有再往上升级。
+- **ROI 圈随视角错位**（2026-09-12 前的已知限制，仅记在 `GuiState::analysis` 的代码注释与
+  `doc/user-manual/06-raypath-analysis{,_zh}.md` 的「已知限制」小节里，本设计文档从未记录这条限制——
+  全部历史版本无此措辞，可用 `git log --all -p -- doc/raypath-analysis-panel.md` 核实）——**已修复**：
+  锥心从「点击时缓存的画布像素」改为每帧从方向正投影的 marker（见 §2 第 3 条 2026-09-12 更新），
+  ROI 圈与 marker 同步重投影，不会再与转动后的画面脱节；用户手册的对应「已知限制」小节已删除。
 - **反投影走 C API 还是 `src/util/`**（未决问题，非裁决）——**已裁定：C API**。子任务 4 新增
   `LUMICE_UnprojectPixel(view, px, py, out_dir[3])`（`src/include/lumice.h:2064`），签名从
   plan 字面的 `float px, py` 改为 `int px, py`（整数像素坐标）——用浮点签名会在 bridge 层复制一份
