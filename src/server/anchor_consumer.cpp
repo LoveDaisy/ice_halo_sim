@@ -79,7 +79,7 @@ void AnchorConsumer::AccumulateDevicePlane(const SimData& data) {
     if (device_plane_size_mismatch_count_++ == 0) {
       ILOG_ERROR(logger_,
                  "device anchor plane has {} floats, expected {} ({}x{}); ignoring it for the whole run — "
-                 "L99_sky will read 0 and every relative-EV frame will be exposed against nothing",
+                 "L99_sky will read 0, so ExposureScale() returns 0 and every ev_mode=relative render is black",
                  data.anchor_y_pixel_data_.size(), kAnchorPixels, kAnchorWidth, kAnchorHeight);
     }
     return;
