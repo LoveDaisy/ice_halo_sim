@@ -19,6 +19,19 @@
 // delta's entries are exactly the ids in (last flushed, Size()], and every
 // parent_id in it is either 0 or already delivered.
 //
+// The table is BOUNDED. It holds at most `capacity` chains (kDefaultCapacity
+// unless the constructor says otherwise); once full, a key it has not seen is
+// not interned at all but answered with kOverflowChainId, a reserved id that
+// names "some chain this table had no room for". That answer is sticky along
+// the chain: interning any child under kOverflowChainId is kOverflowChainId
+// again, so a ray whose chain overflowed at layer i carries the sentinel out
+// of every later layer too. The number of distinct keys turned away since the
+// last FlushDelta() is counted (ConsumeOverflowCount) so the consumer can
+// report how much of the record was truncated. The sentinel sits at the top of
+// the id space rather than in slot 1 on purpose: it is never an entry, so the
+// dense-id contract above and Size() stay exactly what they were, and nothing
+// that walks ids 1..Size() can meet it.
+//
 // One table per Simulator, i.e. per worker (server.cpp owns one Simulator per
 // worker thread), and every access happens on that worker's own thread inside
 // SimulateOneWavelength — nothing here is synchronised. Ids are therefore
@@ -53,12 +66,39 @@ struct ChainIdTableEntry {
 class ChainIdInterningTable {
  public:
   static constexpr uint32_t kRootChainId = 0;
+  // The "no room" answer (see the class comment). Never an entry, never in a
+  // delta, never a parent: 0xFFFFFFFE, one below ChainIdMerger::kUnresolved
+  // so the two sentinels of this header cannot be confused for one another,
+  // and far above any dense id a bounded table can hand out.
+  static constexpr uint32_t kOverflowChainId = 0xFFFFFFFEu;
+  // Per-table chain capacity (K_trie). One table per simulation worker, so a
+  // process holds worker_count × this many chains at most on the producer side.
+  // Sized by measurement on the two-layer plate+column scene that motivated the
+  // bound (839k distinct chains at 200k rays, ms_prob 0.3): see the task's
+  // calibration table in doc/raypath-analysis-panel.md.
+  static constexpr size_t kDefaultCapacity = 8192;
+  // "No bound": the consumer-side merge table (ChainIdMerger) is bounded by
+  // construction — it only ever absorbs entries that fit into some producer's
+  // bounded table — and must not turn a delivered entry away, which would drop
+  // a chain the producer already counted.
+  static constexpr size_t kUnboundedCapacity = static_cast<size_t>(-1);
 
-  ChainIdInterningTable();
+  explicit ChainIdInterningTable(size_t capacity = kDefaultCapacity);
 
-  // Return the id of (parent_id, crystal_id, segment), assigning the next
-  // dense id if the key is new. Never returns kRootChainId.
+  // Return the id of (parent_id, crystal_id, segment): the key's id if it is
+  // known; the next dense id if it is new and there is room; kOverflowChainId
+  // if it is new and there is none, or if parent_id is kOverflowChainId (the
+  // sentinel is sticky down the chain). Never returns kRootChainId.
   uint32_t Intern(uint32_t parent_id, IdType crystal_id, std::vector<IdType> segment);
+
+  size_t Capacity() const { return capacity_; }
+
+  // Distinct keys turned away for want of room since the previous call (or
+  // construction / Clear()), then zeroed — read at the same point as
+  // FlushDelta(). A child interned under the sentinel is not a "distinct key
+  // turned away" (its chain was already counted when it first overflowed), so
+  // this counts chains lost, not layers walked past the loss.
+  size_t ConsumeOverflowCount();
 
   // Number of interned chains, i.e. the largest id in use.
   size_t Size() const { return entries_.size() - 1; }
@@ -75,7 +115,8 @@ class ChainIdInterningTable {
   void Clear();
 
   // Human-readable chain, leaf first walked back to the root, e.g.
-  // "crystal1(1-3-5)-crystal2(3-2)". The root itself formats as "".
+  // "crystal1(1-3-5)-crystal2(3-2)". The root itself formats as "", and so
+  // does kOverflowChainId: it has no path to walk.
   //
   // INTERNAL DIAGNOSTIC USE ONLY — do not surface this string to a user. It formats the
   // finest, unreduced chain (this table has no symmetry or scene-layer context to reduce or
@@ -87,8 +128,9 @@ class ChainIdInterningTable {
 
   // The same walk as Format(), structured: this chain's entries root-first,
   // one per MS layer the ray traversed, so result[i] is layer i+1 (1-indexed,
-  // the order Format() prints). Empty for kRootChainId. Both walks go through
-  // one private helper so the two can never disagree on the order.
+  // the order Format() prints). Empty for kRootChainId and for
+  // kOverflowChainId. Both walks go through one private helper so the two can
+  // never disagree on the order.
   std::vector<ChainIdTableEntry> Segments(uint32_t id) const;
 
  private:
@@ -112,6 +154,8 @@ class ChainIdInterningTable {
   std::vector<ChainIdTableEntry> entries_;
   std::unordered_map<Key, uint32_t, KeyHash> index_;
   size_t flush_cursor_ = 1;
+  size_t capacity_ = kDefaultCapacity;
+  size_t overflow_since_flush_ = 0;
 };
 
 // The consumer-side merge of several producers' tables into one. Each
@@ -153,8 +197,10 @@ class ChainIdMerger {
   // FlushDelta() emits them (ascending id, parents before children).
   AbsorbReport Absorb(uint32_t producer_key, const std::vector<ChainIdTableEntry>& delta);
 
-  // Merged id of `local_id` as reported by `producer_key`; kRootChainId maps
-  // to itself, anything never absorbed to kUnresolved.
+  // Merged id of `local_id` as reported by `producer_key`; kRootChainId and
+  // kOverflowChainId map to themselves (the sentinel is the same constant in
+  // every table, so every producer's overflow converges on one merged
+  // sentinel with no coordination), anything never absorbed to kUnresolved.
   uint32_t Resolve(uint32_t producer_key, uint32_t local_id) const;
 
   const ChainIdInterningTable& Table() const { return table_; }
@@ -168,7 +214,11 @@ class ChainIdMerger {
     uint32_t max_local_id = ChainIdInterningTable::kRootChainId;
   };
 
-  ChainIdInterningTable table_;
+  // Unbounded on purpose — see kUnboundedCapacity: it holds the union of what
+  // the producers' bounded tables delivered, so it is bounded by construction
+  // (worker_count × ChainIdInterningTable::kDefaultCapacity) and a bound of its
+  // own could only lose a chain a producer already counted.
+  ChainIdInterningTable table_{ ChainIdInterningTable::kUnboundedCapacity };
   std::unordered_map<uint32_t, ProducerState> producers_;
 };
 

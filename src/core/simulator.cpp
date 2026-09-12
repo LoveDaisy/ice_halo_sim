@@ -1629,6 +1629,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     // Only the entries this batch added: the consumer rebuilds the trie
     // incrementally, and every parent an entry names was delivered earlier.
     sim_data.chain_id_table_delta_ = chain_id_table_.FlushDelta();
+    // And how many chains the bounded table could not hold this batch: their
+    // rays carry kOverflowChainId above, this is what that sentinel stands for.
+    sim_data.chain_id_overflow_count_ = static_cast<uint32_t>(chain_id_table_.ConsumeOverflowCount());
     // Tag the batch with who interned those ids, so a consumer fed by several
     // workers can keep their id spaces apart (ChainIdMerger).
     sim_data.producer_effective_seed_ = effective_seed_;

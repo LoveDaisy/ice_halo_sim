@@ -16,6 +16,15 @@
 //      distinct value per instance. Not new behaviour — pinned because the
 //      merger's "distinct key per worker" premise is served by ServerImpl's
 //      fixed-seed -> single-worker rule, not by the seed derivation itself.
+//   E. The table's bound: a table of capacity K answers the (K+1)-th distinct
+//      key with kOverflowChainId, keeps every earlier chain intact, counts the
+//      distinct keys it turned away (and not the layers walked past the
+//      loss), and hands the count over once per FlushDelta() cycle. The
+//      capacity is the ruler, not a fixed assertion: two tables of different
+//      capacity under the same stream overflow at different points, which is
+//      what shows the bound is in force rather than the test being true of
+//      any table. The merger maps the sentinel to itself for every producer,
+//      so two workers' overflow meet on one merged sentinel.
 
 #include <gtest/gtest.h>
 
@@ -169,6 +178,92 @@ TEST(ChainIdMerger, EffectiveSeedIsVerbatimWhenFixedAndDistinctWhenZero) {
   EXPECT_NE(auto_a.GetEffectiveSeed(), 0u);
   EXPECT_NE(auto_b.GetEffectiveSeed(), 0u);
   EXPECT_NE(auto_a.GetEffectiveSeed(), auto_b.GetEffectiveSeed()) << "seed 0 derives a distinct value per instance";
+}
+
+// E: the bound, its ruler, and the merger's view of the sentinel.
+TEST(ChainIdTableBound, CapacityIsTheRulerNewKeysPastItGetTheSentinelAndEarlierChainsStay) {
+  constexpr uint32_t kOverflow = ChainIdInterningTable::kOverflowChainId;
+  constexpr uint32_t kRoot = ChainIdInterningTable::kRootChainId;
+  // Red state first: the same stream of 6 distinct keys against capacity 3
+  // and capacity 5 must overflow at the 4th and the 6th key respectively. If
+  // the bound were not in force both would intern all six.
+  auto overflow_index = [](size_t capacity) -> size_t {
+    ChainIdInterningTable t(capacity);
+    for (size_t i = 0; i < 6; i++) {
+      if (t.Intern(kRoot, 1, Seg{ static_cast<IdType>(i + 1) }) == kOverflow) {
+        return i;
+      }
+    }
+    return 6;
+  };
+  EXPECT_EQ(overflow_index(3), 3u);
+  EXPECT_EQ(overflow_index(5), 5u);
+  EXPECT_EQ(overflow_index(ChainIdInterningTable::kUnboundedCapacity), 6u) << "unbounded never overflows";
+
+  ChainIdInterningTable t(3);
+  EXPECT_EQ(t.Capacity(), 3u);
+  const uint32_t a = t.Intern(kRoot, 1, Seg{ 1 });
+  const uint32_t b = t.Intern(kRoot, 1, Seg{ 2 });
+  const uint32_t c = t.Intern(a, 2, Seg{ 3 });
+  EXPECT_EQ(t.Size(), 3u);
+  EXPECT_EQ(t.ConsumeOverflowCount(), 0u) << "nothing turned away while there was room";
+
+  const uint32_t d = t.Intern(kRoot, 1, Seg{ 4 });
+  EXPECT_EQ(d, kOverflow);
+  EXPECT_EQ(t.Size(), 3u) << "the sentinel is not an entry";
+  // Earlier chains are untouched: same ids on re-query, same walks.
+  EXPECT_EQ(t.Intern(kRoot, 1, Seg{ 1 }), a);
+  EXPECT_EQ(t.Intern(kRoot, 1, Seg{ 2 }), b);
+  EXPECT_EQ(t.Intern(a, 2, Seg{ 3 }), c);
+  EXPECT_EQ(t.Format(c), "crystal1(1)-crystal2(3)");
+  // A known key under a known parent is still answered, even at capacity:
+  // the bound is on distinct chains, not on lookups.
+  EXPECT_EQ(t.Intern(a, 2, Seg{ 3 }), c);
+
+  // Sticky down the chain, and not counted twice: the child of an overflowed
+  // chain is the sentinel again, but the chain was lost once.
+  EXPECT_EQ(t.Intern(d, 2, Seg{ 9 }), kOverflow);
+  EXPECT_EQ(t.Intern(kOverflow, 1, Seg{ 1 }), kOverflow);
+  EXPECT_EQ(t.Intern(kRoot, 1, Seg{ 5 }), kOverflow);
+  EXPECT_EQ(t.ConsumeOverflowCount(), 2u) << "keys {4} and {5} were turned away; the children were not new keys";
+  EXPECT_EQ(t.ConsumeOverflowCount(), 0u) << "the count is handed over once";
+
+  // The sentinel walks as nothing: no path, no crash.
+  EXPECT_TRUE(t.Segments(kOverflow).empty());
+  EXPECT_EQ(t.Format(kOverflow), "");
+
+  // FlushDelta() carries only the real entries; the count travels beside it.
+  auto delta = t.FlushDelta();
+  ASSERT_EQ(delta.size(), 3u);
+  for (const auto& e : delta) {
+    EXPECT_NE(e.id, kOverflow);
+    EXPECT_NE(e.parent_id, kOverflow);
+  }
+  t.Intern(kRoot, 1, Seg{ 6 });
+  EXPECT_EQ(t.ConsumeOverflowCount(), 1u);
+  EXPECT_TRUE(t.FlushDelta().empty());
+
+  // Clear() rewinds the bound with the ids: room again, count zeroed.
+  t.Intern(kRoot, 1, Seg{ 7 });
+  t.Clear();
+  EXPECT_EQ(t.ConsumeOverflowCount(), 0u);
+  EXPECT_EQ(t.Intern(kRoot, 1, Seg{ 4 }), 1u) << "ids restart from 1 and the 4th key now fits";
+}
+
+TEST(ChainIdTableBound, MergerMapsTheSentinelToItselfForEveryProducer) {
+  constexpr uint32_t kOverflow = ChainIdInterningTable::kOverflowChainId;
+  ChainIdMerger merger;
+  merger.Absorb(10, { Entry(1, 0, 1, { 1, 3 }) });
+  merger.Absorb(20, { Entry(1, 0, 1, { 2, 4 }) });
+  // Both producers overflowed: their rays carry the same constant, which the
+  // merger resolves to the same constant without either producer having
+  // delivered an entry for it — there is none to deliver.
+  EXPECT_EQ(merger.Resolve(10, kOverflow), kOverflow);
+  EXPECT_EQ(merger.Resolve(20, kOverflow), kOverflow);
+  EXPECT_EQ(merger.Resolve(30, kOverflow), kOverflow) << "even a producer never seen: the sentinel needs no remap";
+  EXPECT_EQ(merger.Table().Size(), 2u) << "no entry was interned for the sentinel";
+  EXPECT_EQ(merger.Resolve(10, 99), ChainIdMerger::kUnresolved) << "the two sentinels stay distinct";
+  EXPECT_NE(kOverflow, ChainIdMerger::kUnresolved);
 }
 
 }  // namespace

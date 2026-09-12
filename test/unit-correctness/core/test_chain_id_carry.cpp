@@ -866,11 +866,19 @@ void VerifyChainsAgainstTheRaysOwnSegments(const SimData& sd, const RayBuffer& a
   ChainIdMerger trie;
   AbsorbOrFail(trie, 0, sd.chain_id_table_delta_);
   std::vector<size_t> verified_at_depth(layers + 1, 0);
+  size_t overflowed = 0;
   for (size_t k = 0; k < outgoing.size(); k++) {
     const size_t leaf_si = outgoing[k];
     uint32_t id = trie.Resolve(0, sd.outgoing_chain_id_[k]);
     if (id == ChainIdMerger::kUnresolved) {
       ADD_FAILURE() << "ray " << k << ": delivered id " << sd.outgoing_chain_id_[k] << " missing from the delta";
+      continue;
+    }
+    if (id == ChainIdInterningTable::kOverflowChainId) {
+      // The producer's table is bounded (ChainIdInterningTable::kDefaultCapacity)
+      // and a three-layer scene exceeds it: such a ray has no chain to verify.
+      // What is checked instead is below — that the batch says so.
+      overflowed++;
       continue;
     }
     const size_t leaf_layer = layer_of(all[leaf_si]);
@@ -932,6 +940,11 @@ void VerifyChainsAgainstTheRaysOwnSegments(const SimData& sd, const RayBuffer& a
   for (size_t d = 1; d <= layers; d++) {
     EXPECT_GT(verified_at_depth[d], 20u) << "too few depth-" << d << " chains were independently verified";
   }
+  // The sentinel and the count travel together: a ray carries it iff the
+  // batch reports at least one chain turned away, and never the other way.
+  EXPECT_EQ(overflowed > 0, sd.chain_id_overflow_count_ > 0)
+      << overflowed << " rays carry the overflow sentinel, the batch reports " << sd.chain_id_overflow_count_
+      << " chains turned away";
 }
 
 }  // namespace

@@ -252,6 +252,14 @@ struct SimData {
   // construction: ServerImpl runs a single worker whenever the seed is fixed,
   // and seed 0 derives a process-unique value per Simulator.
   uint32_t producer_effective_seed_ = 0;
+  // Distinct chains the producer's interning table turned away for want of
+  // room while tracing this batch (ChainIdInterningTable::ConsumeOverflowCount,
+  // read at the same point as chain_id_table_delta_). The rays of those chains
+  // carry ChainIdInterningTable::kOverflowChainId in outgoing_chain_id_; this
+  // is how many chains that sentinel stands for. 0 whenever the pair above is
+  // empty. Sits in the 4 bytes of padding producer_effective_seed_ left before
+  // the next 8-aligned member, so sizeof(SimData) does not move.
+  uint32_t chain_id_overflow_count_ = 0;
 
   // Rich exit records (scrum-258.2+) parallel to outgoing_d_/w_. Produced by
   // the trace backend via ReadbackExitRays; consumed by 258.3 (filter +

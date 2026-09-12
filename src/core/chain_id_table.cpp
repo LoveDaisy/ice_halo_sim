@@ -21,15 +21,25 @@ size_t ChainIdInterningTable::KeyHash::operator()(const Key& k) const {
   return static_cast<size_t>(h);
 }
 
-ChainIdInterningTable::ChainIdInterningTable() {
+ChainIdInterningTable::ChainIdInterningTable(size_t capacity) : capacity_(capacity) {
   entries_.emplace_back();  // id 0 placeholder (the root has no entry)
 }
 
 uint32_t ChainIdInterningTable::Intern(uint32_t parent_id, IdType crystal_id, std::vector<IdType> segment) {
+  if (parent_id == kOverflowChainId) {
+    // Sticky: the chain was lost at an earlier layer, and a real entry under
+    // the sentinel would be a node with no path to the root. Not counted —
+    // the loss was counted where it happened.
+    return kOverflowChainId;
+  }
   Key key{ parent_id, crystal_id, std::move(segment) };
   auto it = index_.find(key);
   if (it != index_.end()) {
     return it->second;
+  }
+  if (Size() >= capacity_) {
+    overflow_since_flush_++;
+    return kOverflowChainId;
   }
   auto id = static_cast<uint32_t>(entries_.size());
   ChainIdTableEntry e;
@@ -46,6 +56,12 @@ const ChainIdTableEntry& ChainIdInterningTable::EntryAt(uint32_t id) const {
   return entries_.at(id);
 }
 
+size_t ChainIdInterningTable::ConsumeOverflowCount() {
+  const size_t n = overflow_since_flush_;
+  overflow_since_flush_ = 0;
+  return n;
+}
+
 std::vector<ChainIdTableEntry> ChainIdInterningTable::FlushDelta() {
   std::vector<ChainIdTableEntry> out(entries_.begin() + static_cast<std::ptrdiff_t>(flush_cursor_), entries_.end());
   flush_cursor_ = entries_.size();
@@ -57,10 +73,14 @@ void ChainIdInterningTable::Clear() {
   entries_.emplace_back();
   index_.clear();
   flush_cursor_ = 1;
+  overflow_since_flush_ = 0;
 }
 
 std::vector<uint32_t> ChainIdInterningTable::PathToRoot(uint32_t id) const {
   std::vector<uint32_t> path;
+  if (id == kOverflowChainId) {
+    return path;  // no entry, no parent chain: nothing to walk
+  }
   for (uint32_t cur = id; cur != kRootChainId; cur = entries_.at(cur).parent_id) {
     path.push_back(cur);
   }
@@ -124,8 +144,8 @@ ChainIdMerger::AbsorbReport ChainIdMerger::Absorb(uint32_t producer_key, const s
 }
 
 uint32_t ChainIdMerger::Resolve(uint32_t producer_key, uint32_t local_id) const {
-  if (local_id == ChainIdInterningTable::kRootChainId) {
-    return ChainIdInterningTable::kRootChainId;
+  if (local_id == ChainIdInterningTable::kRootChainId || local_id == ChainIdInterningTable::kOverflowChainId) {
+    return local_id;
   }
   auto p = producers_.find(producer_key);
   if (p == producers_.end()) {
