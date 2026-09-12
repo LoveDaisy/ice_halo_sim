@@ -34,6 +34,12 @@ using QueuePtrU = std::unique_ptr<Queue<T>>;
 template <class T>
 using QueuePtrS = std::shared_ptr<Queue<T>>;
 
+// NOTE: of the four shared_ptr fields below, the first three (scene_, renders_,
+// raypath_color_) are shared_ptr<const T> input snapshots bound once when the
+// batch is constructed and never written again. ray_alloc_online_ is the
+// exception: it is non-const and the worker writes into it (Accumulate) while
+// running the batch — a synchronized channel, not a snapshot. See its own
+// comment below for why.
 struct SimBatch {
   size_t ray_num_ = 0;
   std::shared_ptr<const SceneConfig> scene_;

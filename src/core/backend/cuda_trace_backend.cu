@@ -1273,7 +1273,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // warp instead of two atomics per exit. Every lane that passed the
   // `tid < n_roots` guard reaches this point (the bounce loop only breaks, never
   // returns), and the lanes that did NOT pass it are exactly the warp's top
-  // `32 − n_active` lanes — blockDim is 256, so a warp is 32 consecutive tids —
+  // `32 − n_active` lanes — blockDim must be a multiple of 32 for this to hold
+  // (the launch site's `static_assert` on the block size literal enforces it) —
   // which lets every lane compute the warp's active mask from n_roots alone
   // rather than from __activemask() (whose answer depends on where the
   // scheduler left the warp's divergence). __shfl_down_sync on that mask
@@ -4573,7 +4574,16 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     // per-ray from the shape carrier. Kept in the launch site for parity
     // with the diagnostic log paths but not used device-side.)
     (void)geom_poly_cnt;  // silence unused-var; poly_cnt is read per-ray from d_pool_shape_in
-    trace_single_ms_kernel<<<grid, 256, 0, impl_->stream_>>>(
+    // The tally epilogue inside trace_single_ms_kernel (warp-reduction over
+    // `tid & 31u`) assumes a warp is 32 consecutive tids, which only holds
+    // when the block size is a multiple of 32 — this ties that assumption to
+    // the literal actually launched, so changing it without updating the
+    // epilogue fails to compile instead of silently miscomputing warp/lane
+    // (code-review round 1 Minor: the assumption previously lived only in a
+    // comment inside the kernel).
+    constexpr int kTraceBlockSize = 256;
+    static_assert(kTraceBlockSize % 32 == 0, "trace_single_ms_kernel's tally epilogue assumes a warp is 32 consecutive tids");
+    trace_single_ms_kernel<<<grid, kTraceBlockSize, 0, impl_->stream_>>>(
         impl_->d_dirs_, impl_->d_pos_, impl_->d_ws_, impl_->d_from_poly_,
         cin, geom_poly_n, geom_poly_d,
         impl_->d_root_pool_shape_,
