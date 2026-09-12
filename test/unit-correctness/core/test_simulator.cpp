@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <set>
@@ -1564,4 +1565,303 @@ TEST(SimulatorEmittedEnergy, IlluminantChargesTheBandExpectationNotTheSampledWei
 }
 
 }  // namespace
+
+// --- Ray allocation: dealing by q while charging by p ---------------------- //
+//
+// Under scene.ray_allocation = adaptive a layer deals its rays by the delivered
+// q_i (ScatteringSetting::crystal_ray_alloc_weight_) instead of by p_i, and every
+// ray born into entry i is scaled by (p_i/ΣP)/(q_i/ΣQ) so that the expected image
+// is unchanged. Three propositions are pinned here, all on the legacy CPU path
+// (Simulator::Run with no renders_, so no backend can be selected):
+//   1. the correction formula itself (normalized shares, not raw ratios);
+//   2. Σ_i n_i · w · correction_i == N · w up to the partition's ±1-ray rounding,
+//      read off the RAW root segments (every ray's w_ at birth) AND off the
+//      emitted_energy_ the batch charges — the two must agree, and both must
+//      equal the a-priori budget;
+//   3. q == p under adaptive is BIT-IDENTICAL to proportional — the strongest
+//      "the new path has no hidden side effect" statement available without a
+//      pilot to deliver a real q, and the one the mode's default rests on.
+// The multi-layer case pins that a continuation layer's correction is its own
+// (AC4) and that continuation hops are not charged as emissions (AC3).
+
+TEST(RayAllocationCorrection, EqualVectorsAtAnyScaleAreIdentity) {
+  // q == p exactly.
+  auto c = ComputeRayAllocationCorrection({ 100.0f, 100.0f, 0.2f }, { 100.0f, 100.0f, 0.2f });
+  ASSERT_EQ(c.size(), 3u);
+  for (float v : c) {
+    EXPECT_EQ(v, 1.0f);
+  }
+  // Same shares, different scale: still identity — the shares are what count.
+  c = ComputeRayAllocationCorrection({ 1.0f, 1.0f }, { 10.0f, 10.0f });
+  EXPECT_EQ(c[0], 1.0f);
+  EXPECT_EQ(c[1], 1.0f);
+}
+
+TEST(RayAllocationCorrection, ComparesNormalizedSharesNotRawRatios) {
+  // p shares (1/2, 1/2); q shares (3/4, 1/4) → corrections (2/3, 2). A raw
+  // p_i/q_i would read (1/30, 1/10) here: the q vector is deliberately on a
+  // different scale from p, which is exactly the input a pilot might deliver.
+  auto c = ComputeRayAllocationCorrection({ 1.0f, 1.0f }, { 30.0f, 10.0f });
+  ASSERT_EQ(c.size(), 2u);
+  EXPECT_NEAR(c[0], 2.0f / 3.0f, 1e-6f);
+  EXPECT_NEAR(c[1], 2.0f, 1e-6f);
+  // Σ share_q · correction == 1: the weighted mean of the corrections over the
+  // dealt shares is what makes the total emitted weight come out at N·w.
+  EXPECT_NEAR(0.75 * c[0] + 0.25 * c[1], 1.0, 1e-6);
+}
+
+TEST(RayAllocationCorrection, UndealtEntriesStayFiniteAndNegativesAreClamped) {
+  // q_1 == 0 with p_1 > 0: the entry is dealt no rays, so the slot is never read
+  // — it must simply not be NaN. p_0 == 0 with q_0 > 0 is the mirror case (a
+  // switched-off crystal handed a weight): finite, zero, harmless.
+  auto c = ComputeRayAllocationCorrection({ 0.0f, 1.0f, 1.0f }, { 1.0f, 0.0f, 1.0f });
+  ASSERT_EQ(c.size(), 3u);
+  EXPECT_TRUE(std::isfinite(c[0]));
+  EXPECT_EQ(c[0], 0.0f);
+  EXPECT_EQ(c[1], 1.0f);
+  // Entry 2: p share 1/2 (of the clamped ΣP = 2), q share 1/2 (ΣQ = 2) → 1.
+  EXPECT_TRUE(std::isfinite(c[2]));
+  EXPECT_NEAR(c[2], 1.0f, 1e-6f);
+  // Negative entries are clamped to 0 on both sides, matching PartitionCrystalRayNum.
+  c = ComputeRayAllocationCorrection({ -5.0f, 1.0f }, { -5.0f, 1.0f });
+  EXPECT_EQ(c[0], 1.0f);
+  EXPECT_EQ(c[1], 1.0f);
+  // Degenerate: nothing dealt at all. Finite, no throw.
+  c = ComputeRayAllocationCorrection({ 0.0f, 0.0f }, { 0.0f, 0.0f });
+  EXPECT_EQ(c[0], 1.0f);
+  EXPECT_EQ(c[1], 1.0f);
+}
+
+namespace {
+
+// Deterministic hexagonal prism of height `h`; two different heights make two
+// distinguishable crystals without any of them being stochastic.
+ScatteringSetting MakePrismEntry(IdType id, float h, float proportion, float alloc_weight) {
+  ScatteringSetting s;
+  // FilterConfig has no default member initializers: leave it default-initialized and
+  // action_ is stack garbage, which can read as kFilterOut and silently terminate every ray.
+  s.filter_ = FilterConfig{ kInvalidId, FilterConfig::kSymNone, FilterConfig::kFilterIn, NoneFilterParam{} };
+  s.crystal_.id_ = id;
+  PrismCrystalParam prism;
+  prism.h_ = Distribution{ DistributionType::kNoRandom, h, 0.0f };
+  for (auto& d : prism.d_) {
+    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
+  }
+  s.crystal_.param_ = prism;
+  s.crystal_proportion_ = proportion;
+  s.crystal_ray_alloc_weight_ = alloc_weight;
+  return s;
+}
+
+// Two-entry single layer: p = (1, 1), q as given (-1 = not delivered).
+SceneConfig MakeTwoEntryScene(SceneConfig::RayAllocationMode mode, float q0, float q1, float prob = 0.0f) {
+  SceneConfig scene;
+  scene.ray_num_ = 0;
+  scene.max_hits_ = 4;
+  scene.ray_allocation_ = mode;
+  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
+  scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
+  MsInfo ms;
+  ms.prob_ = prob;
+  ms.setting_.push_back(MakePrismEntry(0, 1.0f, 1.0f, q0));
+  ms.setting_.push_back(MakePrismEntry(1, 0.3f, 1.0f, q1));
+  scene.ms_.push_back(std::move(ms));
+  return scene;
+}
+
+struct AllocRunOutput {
+  std::vector<RayBuffer> all_data;  // one snapshot per batch
+  std::vector<SimData> batches;
+};
+
+void SnapshotAllDataForAlloc(void* ctx, const RayBuffer& all_data) {
+  static_cast<std::vector<RayBuffer>*>(ctx)->emplace_back(all_data);
+}
+
+AllocRunOutput RunLegacy(const SceneConfig& scene, size_t ray_num, size_t batches, uint32_t seed) {
+  auto config_queue = std::make_shared<Queue<SimBatch>>();
+  auto data_queue = std::make_shared<Queue<SimData>>();
+  Simulator sim(config_queue, data_queue, seed);
+  AllocRunOutput out;
+  sim.SetAllDataObserverForTest(&SnapshotAllDataForAlloc, &out.all_data);
+  auto shared_scene = std::make_shared<const SceneConfig>(scene);
+  for (size_t b = 0; b < batches; ++b) {
+    SimBatch batch;
+    batch.ray_num_ = ray_num;
+    batch.scene_ = shared_scene;
+    batch.generation_ = 1;
+    config_queue->Emplace(std::move(batch));
+  }
+  config_queue->Emplace(SimBatch{});  // ray_num_ == 0 → Run() exits
+  std::thread runner([&] { sim.Run(); });
+  runner.join();
+  while (!data_queue->Empty()) {
+    out.batches.push_back(data_queue->Get());
+  }
+  return out;
+}
+
+// A root segment is the one InitRay_p_fid stamped with no source face; every
+// traced child carries its parent's hit face as from_face_.
+bool IsRootSegment(const RaySeg& r) {
+  return r.from_face_ == kInvalidId && !r.is_continue_ && r.w_ >= 0.0f;
+}
+
+struct RootTally {
+  std::map<IdType, size_t> count;   // by crystal_idx_ (== per-(layer,ci) crystal instance here)
+  std::map<IdType, double> weight;  // Σ w_ at birth, by the same key
+};
+
+RootTally TallyRoots(const RayBuffer& all_data) {
+  RootTally t;
+  for (size_t i = 0; i < all_data.size_; i++) {
+    const auto& r = all_data[i];
+    if (IsRootSegment(r)) {
+      t.count[r.crystal_idx_]++;
+      t.weight[r.crystal_idx_] += r.w_;
+    }
+  }
+  return t;
+}
+
+}  // namespace
+
+TEST(RayAllocationLegacyPath, AdaptiveDealsByQAndChargesByP) {
+  // p = (1, 1), q = (1, 2): the partition must deal 1000 rays as (333, 667) —
+  // the partition's own rounding of (333.3, 666.7) — and the corrections are
+  // (0.5/(1/3), 0.5/(2/3)) = (1.5, 0.75), so Σ n_i·c_i = 499.5 + 500.25 = 999.75:
+  // N up to one ray at the larger correction, which is the stated tolerance.
+  constexpr size_t kN = 1000;
+  const float kW = 1.0f;
+  auto out = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 2.0f), kN, 1, 7);
+  ASSERT_EQ(out.batches.size(), 1u);
+  ASSERT_EQ(out.all_data.size(), 1u);
+
+  const auto tally = TallyRoots(out.all_data[0]);
+  ASSERT_EQ(tally.count.size(), 2u) << "both entries must be dealt rays";
+  // Dealt by q, not by p (proportional would deal 500/500).
+  EXPECT_EQ(tally.count.at(0), 333u);
+  EXPECT_EQ(tally.count.at(1), 667u);
+  // Every root of entry i was born at w · c_i: the per-entry weight sum is
+  // n_i · w · c_i to float rounding.
+  EXPECT_NEAR(tally.weight.at(0), 333.0 * kW * 1.5, 1e-3);
+  EXPECT_NEAR(tally.weight.at(1), 667.0 * kW * 0.75, 1e-3);
+  // AC6: Σ n_i · w · c_i == N · w within one ray at the largest correction.
+  const double total_root_weight = tally.weight.at(0) + tally.weight.at(1);
+  EXPECT_NEAR(total_root_weight, static_cast<double>(kN) * kW, 1.5);
+  // And the batch charges exactly what it emitted — not `w · N`.
+  EXPECT_NEAR(out.batches[0].emitted_energy_, total_root_weight, 1e-3);
+  EXPECT_EQ(out.batches[0].root_ray_count_, kN);
+}
+
+TEST(RayAllocationLegacyPath, QEqualToPIsBitIdenticalToProportional) {
+  // The default's zero-regression claim, stated as the strongest thing it can
+  // be: same seed, same scene, adaptive with q == p vs proportional — every
+  // root weight, every traced segment, every outgoing ray, and the charged
+  // energy are the same bits. Both arms deal (500, 500) and multiply by 1.0f.
+  constexpr size_t kN = 1000;
+  auto prop = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f), kN, 2, 11);
+  auto adap = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 1.0f), kN, 2, 11);
+  ASSERT_EQ(prop.batches.size(), 2u);
+  ASSERT_EQ(adap.batches.size(), 2u);
+  ASSERT_EQ(prop.all_data.size(), adap.all_data.size());
+  // Segment-level mismatches are counted, not asserted per row: the first
+  // differing segment would otherwise hide every one after it.
+  for (size_t b = 0; b < prop.batches.size(); b++) {
+    EXPECT_EQ(prop.batches[b].emitted_energy_, adap.batches[b].emitted_energy_);
+    EXPECT_EQ(prop.batches[b].outgoing_w_, adap.batches[b].outgoing_w_);
+    EXPECT_EQ(prop.batches[b].outgoing_d_, adap.batches[b].outgoing_d_);
+    const auto& a = prop.all_data[b];
+    const auto& c = adap.all_data[b];
+    EXPECT_EQ(a.size_, c.size_);
+    size_t mismatched = 0;
+    for (size_t i = 0; i < std::min(a.size_, c.size_); i++) {
+      if (a[i].w_ != c[i].w_ || a[i].crystal_idx_ != c[i].crystal_idx_) {
+        mismatched++;
+      }
+    }
+    EXPECT_EQ(mismatched, 0u) << "batch " << b;
+  }
+  // Positive control on the comparison itself: q != p does move the bits.
+  auto skew = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 3.0f), kN, 1, 11);
+  EXPECT_NE(TallyRoots(skew.all_data[0]).count.at(0), TallyRoots(prop.all_data[0]).count.at(0));
+}
+
+TEST(RayAllocationLegacyPath, UndeliveredWeightMakesTheLayerProportional) {
+  // adaptive with one entry still at the -1 sentinel: the layer deals by p,
+  // whole — not "by q where delivered". Pinned by the dealt counts (500/500,
+  // not q-shaped) and by every correction being exactly 1.0f (root weights == w).
+  constexpr size_t kN = 1000;
+  auto out = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 3.0f, -1.0f), kN, 1, 5);
+  const auto tally = TallyRoots(out.all_data[0]);
+  EXPECT_EQ(tally.count.at(0), 500u);
+  EXPECT_EQ(tally.count.at(1), 500u);
+  size_t roots_off_nominal = 0;
+  for (size_t i = 0; i < out.all_data[0].size_; i++) {
+    const auto& r = out.all_data[0][i];
+    if (IsRootSegment(r) && r.w_ != 1.0f) {
+      roots_off_nominal++;
+    }
+  }
+  EXPECT_EQ(roots_off_nominal, 0u);
+  EXPECT_EQ(out.batches[0].emitted_energy_, static_cast<float>(kN));
+}
+
+TEST(RayAllocationLegacyPath, ContinuationLayerUsesItsOwnCorrectionAndIsNotCharged) {
+  // Two layers, both adaptive with DIFFERENT q: layer 0 q = (1, 3), layer 1
+  // q = (4, 1). prob = 1 on layer 0 so every filter-pass exit continues.
+  //   AC3: emitted_energy_ is layer 0's Σ n_i·c_i·w only — the continuation
+  //        hops (which re-deal the SAME rays) add nothing.
+  //   AC4: layer 1's roots are the continuation segments re-dealt by ITS q and
+  //        scaled by ITS corrections. Each layer-1 root is one continuation
+  //        segment times c_1[ci], so Σ_{layer-1 roots} w_/c_1[ci] equals
+  //        Σ_{continuation segments} w_ EXACTLY (to summation rounding),
+  //        whatever random subset each entry was dealt. Detection power: with
+  //        layer 1 left uncorrected the left side reads ≈1.36× the right; with
+  //        layer 0's (2, 2/3) applied instead of layer 1's (0.625, 2.5) it reads
+  //        ≈2.6× — both far outside the 1e-4 tolerance.
+  constexpr size_t kN = 1000;
+  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 3.0f, /*prob=*/1.0f);
+  MsInfo second;
+  second.prob_ = 0.0f;
+  second.setting_.push_back(MakePrismEntry(2, 1.0f, 1.0f, 4.0f));
+  second.setting_.push_back(MakePrismEntry(3, 0.3f, 1.0f, 1.0f));
+  scene.ms_.push_back(std::move(second));
+
+  auto out = RunLegacy(scene, kN, 1, 3);
+  ASSERT_EQ(out.batches.size(), 1u);
+  const auto& all_data = out.all_data[0];
+
+  // Layer-0 crystals are instances 0 and 1 (created in ci order on the first
+  // layer); layer-1 crystals are 2 and 3. Corrections per layer:
+  //   layer 0: shares p (1/2, 1/2) vs q (1/4, 3/4) → (2, 2/3)
+  //   layer 1: shares p (1/2, 1/2) vs q (4/5, 1/5) → (0.625, 2.5)
+  const auto c0 = ComputeRayAllocationCorrection({ 1.0f, 1.0f }, { 1.0f, 3.0f });
+  const auto c1 = ComputeRayAllocationCorrection({ 1.0f, 1.0f }, { 4.0f, 1.0f });
+  const auto tally = TallyRoots(all_data);
+  ASSERT_EQ(tally.count.size(), 4u) << "every (layer, entry) must be dealt rays";
+  EXPECT_EQ(tally.count.at(0), 250u);
+  EXPECT_EQ(tally.count.at(1), 750u);
+
+  // AC3: charged = layer 0 only.
+  const double layer0_weight = tally.weight.at(0) + tally.weight.at(1);
+  EXPECT_NEAR(layer0_weight, 250.0 * c0[0] + 750.0 * c0[1], 1e-3);
+  EXPECT_NEAR(out.batches[0].emitted_energy_, layer0_weight, 1e-3);
+  EXPECT_NEAR(out.batches[0].emitted_energy_, static_cast<double>(kN), 2.0);
+
+  // AC4: layer 1 re-deals the continuation weight by its own corrections.
+  double continuation_weight = 0.0;
+  for (size_t i = 0; i < all_data.size_; i++) {
+    if (all_data[i].IsContinue()) {
+      continuation_weight += all_data[i].w_;
+    }
+  }
+  ASSERT_GT(continuation_weight, 0.0) << "prob=1 on layer 0 must produce continuations";
+  const size_t layer1_roots = tally.count.at(2) + tally.count.at(3);
+  // Layer 1 deals its (continuation count) rays as (4/5, 1/5) of that count.
+  EXPECT_NEAR(static_cast<double>(tally.count.at(2)), 0.8 * static_cast<double>(layer1_roots), 1.0);
+  const double undone = tally.weight.at(2) / c1[0] + tally.weight.at(3) / c1[1];
+  EXPECT_NEAR(undone, continuation_weight, continuation_weight * 1e-4);
+}
+
 }  // namespace lumice

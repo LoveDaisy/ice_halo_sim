@@ -742,6 +742,50 @@ TEST_F(V3TestJson, Scene_GeomClockRejectsOutOfRange) {
   }
 }
 
+// scene.ray_allocation is optional and opt-in: absent, "proportional", and any unrecognized
+// value all resolve to kProportional (today's behavior — the mode must never change an existing
+// config); only the literal "adaptive" switches it. The unrecognized-value case is pinned as a
+// FALLBACK, not a rejection, on purpose: the codec is NLOHMANN_JSON_SERIALIZE_ENUM, whose
+// generated from_json maps an unknown string to the first table entry, and a config must not
+// become unloadable over a knob whose safe value is the one it falls back to. Do not "fix"
+// this into a throw without also changing the codec.
+TEST_F(V3TestJson, Scene_RayAllocationDefaultsToProportional) {
+  auto manager = config_json_.get<ConfigManager>();
+  ASSERT_FALSE(config_json_.at("scene").contains("ray_allocation"));
+  EXPECT_EQ(manager.scene_.ray_allocation_, SceneConfig::RayAllocationMode::kProportional);
+  // Round trip: the default is not written back, so an exported config does not grow a key.
+  nlohmann::json j_out = manager.scene_;
+  EXPECT_FALSE(j_out.contains("ray_allocation"));
+}
+
+TEST_F(V3TestJson, Scene_RayAllocationAcceptedValues) {
+  {
+    auto j = config_json_;
+    j.at("scene")["ray_allocation"] = "adaptive";
+    auto manager = j.get<ConfigManager>();
+    EXPECT_EQ(manager.scene_.ray_allocation_, SceneConfig::RayAllocationMode::kAdaptive);
+    nlohmann::json j_out = manager.scene_;
+    ASSERT_TRUE(j_out.contains("ray_allocation"));
+    EXPECT_EQ(j_out.at("ray_allocation").get<std::string>(), "adaptive");
+  }
+  {
+    auto j = config_json_;
+    j.at("scene")["ray_allocation"] = "proportional";
+    auto manager = j.get<ConfigManager>();
+    EXPECT_EQ(manager.scene_.ray_allocation_, SceneConfig::RayAllocationMode::kProportional);
+  }
+}
+
+TEST_F(V3TestJson, Scene_RayAllocationUnrecognizedFallsBackToProportional) {
+  for (const nlohmann::json bad : { nlohmann::json("neyman"), nlohmann::json("Adaptive"), nlohmann::json(1) }) {
+    auto j = config_json_;
+    j.at("scene")["ray_allocation"] = bad;
+    ConfigManager manager;
+    EXPECT_NO_THROW(manager = j.get<ConfigManager>()) << bad.dump();
+    EXPECT_EQ(manager.scene_.ray_allocation_, SceneConfig::RayAllocationMode::kProportional) << bad.dump();
+  }
+}
+
 // `prob` is required: omitting it used to take MsInfo's value-initialized 0.0f silently, which is
 // how the GUI's legacy loader came to fall back to a different value nobody had agreed on. The
 // ruling was to delete the implicit default rather than write it down, so there is nothing left

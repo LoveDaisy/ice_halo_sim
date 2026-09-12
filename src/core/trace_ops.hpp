@@ -29,8 +29,12 @@ class FilterSpec;
 void InitRay_p_fid(const Crystal& curr_crystal, RayBuffer* ray_buf_ptr);
 
 // Set initial direction d (sampled from light source), weight w, and
-// prev_ray_idx for `ray_num` rays.
-void InitRay_d_w_previdx(const SunParam& light_param, const WlParam& wl_param, size_t ray_num, RayBuffer* ray_buf_ptr);
+// prev_ray_idx for `ray_num` rays. `weight_correction` is the ray-allocation
+// correction of the entry these rays are born into (see
+// ComputeRayAllocationCorrection in core/simulator.hpp); 1.0f — the default,
+// and the value every proportional layer resolves to — is an IEEE identity.
+void InitRay_d_w_previdx(const SunParam& light_param, const WlParam& wl_param, size_t ray_num, RayBuffer* ray_buf_ptr,
+                         float weight_correction = 1.0f);
 
 // Sample per-ray crystal-orientation rotation matrices, writing into
 // buffer_data[0]. buffer_data[1] is unused.
@@ -44,17 +48,22 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
 
 // First-MS-layer init: sample direction from sun, sample p on crystal,
 // orient the crystal, fill bookkeeping, and EmplaceBack into all_data.
+// `weight_correction`: see InitRay_d_w_previdx.
 void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, const WlParam& wl_param,
                     size_t curr_ray_num, const Crystal& curr_crystal, size_t curr_crystal_id,
-                    const AxisDistribution& crystal_axis, RayBuffer buffer_data[2], RayBuffer& all_data);
+                    const AxisDistribution& crystal_axis, RayBuffer buffer_data[2], RayBuffer& all_data,
+                    float weight_correction = 1.0f);
 
 // Non-first MS layer init: copy continuation rays from init_data, sample a
 // fresh crystal orientation per ray, rotate d into crystal-local, sample p,
 // fill bookkeeping, EmplaceBack into all_data. `init_ray_offset` is advanced
-// by curr_ray_num.
+// by curr_ray_num. `weight_correction` scales the carried-in weight of every
+// copied ray — the continuation layer re-deals rays across ITS entries, so the
+// correction is this layer's, compounding with whatever earlier layers applied.
 void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], size_t curr_ray_num,
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,
-                    RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset);
+                    RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset,
+                    float weight_correction = 1.0f);
 
 // One hit: refract+reflect (HitSurface) -> propagate, fan out into
 // buffer_data[1] (2x input size). buffer_data[0] is consumed (size_=0).

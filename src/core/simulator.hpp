@@ -321,6 +321,40 @@ class Simulator {
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
                                                  std::vector<double>& carry);
 
+// Per-entry weight correction for dealing a layer's rays by `q` while the energy shares are
+// `p`: correction_i = (p_i/ΣP) / (q_i/ΣQ), with ΣP = Σ max(0, p_i) and ΣQ = Σ max(0, q_i) —
+// the same normalization PartitionCrystalRayNum applies to whatever it is handed, so the two
+// agree entry for entry and Σ_i n_i · w · correction_i == N · w up to the partition's ±1-ray
+// rounding, whatever raw scale `p` and `q` arrive in. Comparing the raw ratio p_i/q_i instead
+// would fold a constant ΣP/ΣQ into every ray whenever the two vectors are not on the same
+// scale — a global brightness bias, not a rounding error, and one a ±1-ray tolerance would
+// not catch.
+// An entry with q_i <= 0 is dealt no rays by PartitionCrystalRayNum, so its correction is
+// never read; it is returned as 1.0f so the unread slot holds a finite value rather than a
+// 0/0 NaN. Precondition: p.size() == q.size(). The single owner of this formula — every
+// backend consumes the vector, none re-derives it.
+std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, const std::vector<float>& q);
+
+// What one MS layer's ray partition and per-entry weight correction are, resolved from the
+// scene's allocation mode and the layer's entries. `proportions` is what PartitionCrystalRayNum
+// is handed; `corrections` is what each ray born into entry ci is multiplied by.
+struct LayerRayAllocation {
+  std::vector<float> proportions;
+  std::vector<float> corrections;
+  // True when the layer is dealt by q (kAdaptive AND every entry delivered a weight).
+  bool adaptive = false;
+};
+
+// The one place that decides whether a layer deals by p or by q. kProportional, or kAdaptive
+// with any entry still at the -1 "not delivered" sentinel, deals by crystal_proportion_ with
+// every correction exactly 1.0f — the multiply is then an IEEE identity and the layer is
+// bit-for-bit what it was before the mode existed. The fallback is per LAYER, not per entry,
+// on purpose: mixing delivered q_i with fallback p_i in one ΣQ would normalize an importance
+// estimate against a proportion, which is not a quantity. A partially delivered layer is
+// therefore not "partly adaptive" — it is proportional, and stays so until every entry has a
+// weight.
+LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer);
+
 // Single owner of the hit-loop buffer-pair capacity contract. The pair is a
 // producer/consumer ping-pong (buffer_data[0] holds a hit's input rays,
 // buffer_data[1] receives their two-child fan-out), so their sizes are NOT

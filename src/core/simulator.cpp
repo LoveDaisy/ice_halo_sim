@@ -200,15 +200,19 @@ static void SampleRayDir(const SunParam& p, float* d, size_t num, size_t step) {
  * @brief Set initial value of d & w (direction and intensity) for rays.
  */
 void InitRay_d_w_previdx(const SunParam& light_param, const WlParam& wl_param, size_t ray_num,  // input
-                         RayBuffer* ray_buf_ptr) {                                              // output
+                         RayBuffer* ray_buf_ptr,                                                // output
+                         float weight_correction) {                                             // input
   if (!ray_buf_ptr) {
     return;
   }
   const auto& ray_buf = *ray_buf_ptr;
 
-  // w, prev_ray_idx: set init weight & previous ray index
+  // w, prev_ray_idx: set init weight & previous ray index. The allocation
+  // correction is folded in at birth — the one moment every ray of this entry
+  // passes through — so nothing downstream needs to know which entry dealt it.
+  const float init_weight = wl_param.weight_ * weight_correction;
   for (auto& r : ray_buf) {
-    r.w_ = wl_param.weight_;
+    r.w_ = init_weight;
     r.prev_ray_idx_ = kInfSize;
   }
 
@@ -277,14 +281,15 @@ void InitRay_other_info(const Crystal& curr_crystal, size_t curr_crystal_id, siz
 void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, const WlParam& wl_param,
                     size_t curr_ray_num,                                                                        // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
-                    RayBuffer buffer_data[2], RayBuffer& all_data) {  // output
+                    RayBuffer buffer_data[2], RayBuffer& all_data,  // output
+                    float weight_correction) {                      // input
   buffer_data[0].size_ = curr_ray_num;
 
   // 1.0 init crystal_rot
   InitRay_rot(rng, crystal_axis, buffer_data);
 
   // 1.1 init d & w & (prev_ray_idx)
-  InitRay_d_w_previdx(light_param, wl_param, curr_ray_num, buffer_data + 0);
+  InitRay_d_w_previdx(light_param, wl_param, curr_ray_num, buffer_data + 0, weight_correction);
 
   // 1.2 init p & fid
   InitRay_p_fid(curr_crystal, buffer_data + 0);
@@ -319,12 +324,22 @@ void InitRayFirstMs(RandomNumberGenerator& rng, const SunParam& light_param, con
 // NOLINTNEXTLINE(readability-function-size)
 void InitRayOtherMs(RandomNumberGenerator& rng, const RayBuffer init_data[2], size_t curr_ray_num,              // input
                     const Crystal& curr_crystal, size_t curr_crystal_id, const AxisDistribution& crystal_axis,  // input
-                    RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset) {  // output
+                    RayBuffer buffer_data[2], RayBuffer& all_data, size_t& init_ray_offset,  // output
+                    float weight_correction) {                                               // input
   buffer_data[0].size_ = 0;
 
   // 1.0 copy previous rays.
   buffer_data[0].EmplaceBack(init_data[0], init_ray_offset, curr_ray_num);
   init_ray_offset += curr_ray_num;
+  // 1.0.1 this layer's allocation correction on the carried-in weight. Right
+  // after the copy and before anything reads w_: the multiply is an identity
+  // at 1.0f (every proportional layer), so the RNG order and every other field
+  // are untouched either way.
+  if (weight_correction != 1.0f) {
+    for (auto& r : buffer_data[0]) {
+      r.w_ *= weight_correction;
+    }
+  }
 
   // 1.1 init crystal_rot
   InitRay_rot(rng, crystal_axis, buffer_data);
@@ -593,6 +608,58 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
   }
 
   return c_num;
+}
+
+
+std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, const std::vector<float>& q) {
+  assert(p.size() == q.size());
+  const size_t n = std::min(p.size(), q.size());
+  std::vector<float> correction(n, 1.0f);
+  double total_p = 0.0;
+  double total_q = 0.0;
+  for (size_t i = 0; i < n; i++) {
+    total_p += std::max(0.0f, p[i]);
+    total_q += std::max(0.0f, q[i]);
+  }
+  if (total_p <= 0.0 || total_q <= 0.0) {
+    return correction;  // nothing is dealt; nothing is read
+  }
+  for (size_t i = 0; i < n; i++) {
+    if (q[i] <= 0.0f) {
+      continue;  // dealt no rays: slot never read, keep the finite 1.0f
+    }
+    const double share_p = static_cast<double>(std::max(0.0f, p[i])) / total_p;
+    const double share_q = static_cast<double>(q[i]) / total_q;
+    correction[i] = static_cast<float>(share_p / share_q);
+  }
+  return correction;
+}
+
+
+LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer) {
+  LayerRayAllocation out;
+  const size_t n = layer.setting_.size();
+  out.proportions.reserve(n);
+  for (const auto& s : layer.setting_) {
+    out.proportions.push_back(s.crystal_proportion_);
+  }
+  bool delivered = (mode == SceneConfig::RayAllocationMode::kAdaptive);
+  for (size_t i = 0; delivered && i < n; i++) {
+    delivered = layer.setting_[i].crystal_ray_alloc_weight_ >= 0.0f;
+  }
+  if (!delivered) {
+    out.corrections.assign(n, 1.0f);
+    return out;
+  }
+  std::vector<float> q;
+  q.reserve(n);
+  for (const auto& s : layer.setting_) {
+    q.push_back(s.crystal_ray_alloc_weight_);
+  }
+  out.corrections = ComputeRayAllocationCorrection(out.proportions, q);
+  out.proportions = std::move(q);
+  out.adaptive = true;
+  return out;
 }
 
 
@@ -1398,15 +1465,24 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   // continuation layers' resampling (InitRayOtherMs) accumulates here too.
   size_t stochastic_orientation_sample_count = 0;
 
+  // What the source emitted, in "rays at the nominal weight": N plus, over the
+  // FIRST layer only, Σ_ci n_ci · (correction_ci − 1). Written that way rather
+  // than as Σ n_ci · correction_ci so that it is N exactly — the old expression
+  // — whenever every correction is 1.0f, including the layer that deals no rays
+  // at all (every proportion zero), which the sum form would charge as 0.
+  // Continuation layers re-deal rays that already exist, so they never add to
+  // it: the denominator counts emissions, not hops.
+  double emitted_ray_equivalent = static_cast<double>(original_ray_num);
+
   bool first_ms = true;
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
     const auto& m = config.ms_[mi];
     auto ms_crystal_cnt = m.setting_.size();
-    std::vector<float> proportions;
-    proportions.reserve(ms_crystal_cnt);
-    for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
-      proportions.push_back(m.setting_[ci].crystal_proportion_);
-    }
+    // proportions: what the partition deals by (p, or q under adaptive);
+    // corrections: what each ray born into ci is scaled by (all 1.0f under p).
+    const LayerRayAllocation alloc = ResolveLayerRayAllocation(config.ray_allocation_, m);
+    const std::vector<float>& proportions = alloc.proportions;
+    const std::vector<float>& corrections = alloc.corrections;
 
     // Lazy-initialize carry for this scattering layer.
     if (ray_alloc_carry.size() <= mi) {
@@ -1417,6 +1493,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     }
 
     auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num, ray_alloc_carry[mi]);
+    if (first_ms) {
+      for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
+        emitted_ray_equivalent +=
+            static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(corrections[ci]) - 1.0);
+      }
+    }
 
     // NOTE: ray_num will change between scatterings.
     ResetHitLoopBuffers(buffer_data, ray_num, chain_ids_on);
@@ -1537,11 +1619,13 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
         if (first_ms) {
           InitRayFirstMs(rng_, config.light_source_.param_, wl_param, curr_ray_num,  // input
                          curr_crystal, curr_crystal_id, s.crystal_.axis_,            // input
-                         buffer_data, all_data);                                     // output
+                         buffer_data, all_data,                                      // output
+                         corrections[ci]);                                           // input
         } else {
           InitRayOtherMs(rng_, init_data, curr_ray_num,                    // input
                          curr_crystal, curr_crystal_id, s.crystal_.axis_,  // input
-                         buffer_data, all_data, init_ray_offset);          // output
+                         buffer_data, all_data, init_ray_offset,           // output
+                         corrections[ci]);                                 // input
         }
 
         // 2. Start tracing
@@ -1647,7 +1731,11 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     sim_data.producer_effective_seed_ = effective_seed_;
   }
   sim_data.root_ray_count_ = original_ray_num;
-  sim_data.emitted_energy_ = emitted_weight * static_cast<float>(original_ray_num);
+  // Not `emitted_weight * original_ray_num`: under adaptive allocation the rays
+  // of one batch are not all at the nominal weight, and the denominator has to
+  // charge what was actually emitted — see emitted_ray_equivalent above.
+  // Identical to the old expression whenever every correction is 1.0f.
+  sim_data.emitted_energy_ = emitted_weight * static_cast<float>(emitted_ray_equivalent);
   // Newly DRAWN stochastic geometries, not materialised instances. `crystals_`
   // keeps every instance (the consumers index into it by per-ray crystal id and
   // need the reuse copies), but reporting its size made the stat a function of

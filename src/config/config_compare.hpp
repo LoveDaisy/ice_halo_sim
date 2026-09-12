@@ -147,7 +147,8 @@ inline bool operator==(const LightSourceConfig& a, const LightSourceConfig& b) {
 // ---- Scene config ----
 
 inline bool operator==(const ScatteringSetting& a, const ScatteringSetting& b) {
-  return a.filter_ == b.filter_ && a.crystal_ == b.crystal_ && a.crystal_proportion_ == b.crystal_proportion_;
+  return a.filter_ == b.filter_ && a.crystal_ == b.crystal_ && a.crystal_proportion_ == b.crystal_proportion_ &&
+         a.crystal_ray_alloc_weight_ == b.crystal_ray_alloc_weight_;
 }
 
 inline bool operator==(const MsInfo& a, const MsInfo& b) {
@@ -156,7 +157,7 @@ inline bool operator==(const MsInfo& a, const MsInfo& b) {
 
 inline bool operator==(const SceneConfig& a, const SceneConfig& b) {
   return a.ray_num_ == b.ray_num_ && a.max_hits_ == b.max_hits_ && a.geom_clock_ == b.geom_clock_ &&
-         a.light_source_ == b.light_source_ && a.ms_ == b.ms_;
+         a.ray_allocation_ == b.ray_allocation_ && a.light_source_ == b.light_source_ && a.ms_ == b.ms_;
 }
 
 // ---- Raypath color config ----
