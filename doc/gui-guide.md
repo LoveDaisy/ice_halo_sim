@@ -123,7 +123,7 @@ The right panel groups every parameter that influences how the simulated rays ar
 ### Scene
 
 - **Sun**: `Altitude` (-90° to 90°), apparent `Diameter` (0.1° to 5°), and `Spectrum` (one of `D50` / `D55` / `D65` / `D75` / `A` / `E`).
-- **Simulation**: `Infinite rays` checkbox (let the simulator keep accumulating until you stop it), `Rays(M)` count in millions when bounded, `Max hits` per ray (1 – 20), and the `Adaptive ray allocation` checkbox — on by default in a new document — which deals each crystal's rays by its measured per-ray energy variance instead of its population share (`scene.ray_allocation` in `configuration.md`): the expected image is unchanged, but noise is made more even across crystals, so a faint halo's edge no longer looks rougher than the rest. The choice is saved in the `.lmc` and written to an exported config; a document saved before the control existed opens with it on.
+- **Simulation**: `Infinite rays` checkbox (let the simulator keep accumulating until you stop it), `Rays(M)` count in millions when bounded (0.1 to 100 000 M, i.e. 1e5 to 1e11 rays, on a logarithmic slider so both ends of the range are reachable by hand; the box beside it takes a typed value), `Max hits` per ray (1 – 20), and the `Adaptive ray allocation` checkbox — on by default in a new document — which deals each crystal's rays by its measured per-ray energy variance instead of its population share (`scene.ray_allocation` in `configuration.md`): the expected image is unchanged, but noise is made more even across crystals, so a faint halo's edge no longer looks rougher than the rest. The choice is saved in the `.lmc` and written to an exported config; a document saved before the control existed opens with it on.
 
 ### View
 
