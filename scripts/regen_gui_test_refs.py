@@ -473,10 +473,11 @@ def check_reference_base(groups: list[ReferenceGroup], args: argparse.Namespace)
 # ---------------------------------------------------------------------------
 
 
-def _phase_a_average_group(group: ReferenceGroup, n: int, args: argparse.Namespace) -> None:
+def _phase_a_average_group(group: ReferenceGroup, n: int, args: argparse.Namespace) -> int:
     """Per (scene, mode): pixel-average the group's n collected frames, apply the format
     silence rule, save the reference. n == 1 is the deterministic case and is not special-cased:
-    the mean of one frame is that frame, and the rms terms below evaluate to 0 for it."""
+    the mean of one frame is that frame, and the rms terms below evaluate to 0 for it.
+    Returns the number of (scene, mode) keys that had no frame at all and were left untouched."""
     refs_dir = args.refs_dir
     quality = args.quality
     scenes = _scene_list(group, args)
@@ -484,6 +485,7 @@ def _phase_a_average_group(group: ReferenceGroup, n: int, args: argparse.Namespa
 
     print(f"\n[Phase A][{group.key}] Averaging N={n} run(s), JPEG quality={quality}")
     updated = 0
+    skipped = 0
     for scene in scenes:
         for mode in group.modes:
             key = _scene_key(scene, mode)
@@ -498,6 +500,7 @@ def _phase_a_average_group(group: ReferenceGroup, n: int, args: argparse.Namespa
 
             if not frames:
                 print(f"  ERROR: no frames for {key} — skipping", file=sys.stderr)
+                skipped += 1
                 continue
 
             stack = np.stack(frames, axis=0)   # (N, H, W, C)
@@ -544,6 +547,7 @@ def _phase_a_average_group(group: ReferenceGroup, n: int, args: argparse.Namespa
             updated += 1
 
     print(f"[Phase A][{group.key}] Done — {updated} references updated in {refs_dir}")
+    return skipped
 
 
 def phase_a(args: argparse.Namespace) -> None:
@@ -585,8 +589,16 @@ def phase_a(args: argparse.Namespace) -> None:
                 run_dir = os.path.join(STAGING_DIR, group.key, f"run_{i}")
                 _collect_pngs(group, run_dir, _scene_list(group, args), export_dir)
 
-    for group in groups:
-        _phase_a_average_group(group, plan[group.key], args)
+    # A run's exit code is not a usable signal here: a reshoot exists because the frame changed,
+    # so gui_test failing its comparison against the OLD reference is the expected outcome. What
+    # is a signal is a capture that never appeared — and with a deterministic group's single run
+    # there is no other sample to fall back on, so a missing frame must not end as exit 0 with a
+    # stale reference still in place.
+    skipped = sum(_phase_a_average_group(group, plan[group.key], args) for group in groups)
+    if skipped:
+        print(f"ERROR: [Phase A] {skipped} reference(s) not written — no captured frame; see above",
+              file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
