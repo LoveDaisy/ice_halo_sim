@@ -1127,11 +1127,20 @@ void Simulator::Run() {
   stop_ = false;
   ILOG_DEBUG(logger_, "Simulator::Run: entry");
 
-  // When a fixed seed is provided, also seed the thread-local global RNG singleton
-  // used by sampling functions (RandomSample, SampleTrianglePoint, SampleSphCapPoint, etc.)
-  // to ensure fully deterministic behavior.
+  // A fixed seed means one Run() is one deterministic session, and this entry point is
+  // where the session starts — so BOTH generators the CPU path draws from are re-seeded
+  // here, at the same point, under the same condition: the thread-local global singleton
+  // used by the sampling helpers (RandomSample, SampleTrianglePoint, SampleSphCapPoint, ...)
+  // and this worker's own rng_ (wavelength draw, crystal shape/orientation, scattering
+  // choices). rng_ used to be seeded at construction only, so every session after a
+  // Simulator's first picked the stream up wherever the previous one had left it: the
+  // second analysis a fixed-seed server ran reproduced neither the first's total energy
+  // nor its rows, on every session, whatever the session before it was. The GPU backends
+  // already keep this contract on their side (created per Run(), see below); this is the
+  // legacy CPU path's half of it.
   if (seed_ != 0) {
     RandomNumberGenerator::GetInstance().SetSeed(seed_);
+    rng_.SetSeed(seed_);
   }
 
   // Pick a TraceBackend once per Run() entry. nullptr keeps the legacy CPU
