@@ -680,7 +680,7 @@ The render configuration defines the renderer parameters.
 | `front` | boolean | no | false | Front-hemisphere clip: keep only what the camera faces. A SECOND clip dimension, independent of `visible` and ANDed with it — not a fourth `visible` value. (Writing `"visible": "front"` is silently read as `"upper"`, so use this key.) |
 | `background` | float array | no | [0, 0, 0] | Background color RGB, in **sRGB** (the numbers a color picker shows) |
 | `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
-| `intensity_factor` | float | no | 1.0 | Intensity factor (`2^EV`) |
+| `intensity_factor` | float | no | 1.0 | Intensity factor (`2^EV`). Scales the ray energy only: `0` renders a frame with no light at all but with every annotation (`grid`, `horizon`, markers, labels) still drawn, which is how to get a bare grid to draw over. |
 | `ev_mode` | string | no | "relative" | Exposure anchor: `"relative"` anchors to the **scene's** sky brightness — a P99 radiance measured on a fixed full-sky buffer, so the lens, FOV, camera pose, `visible` and output resolution no longer move the exposure, and the same document renders at the same brightness however you look at it (the image also keeps its look as `ray_num` grows, so `ray_num` still co-determines brightness — that is what `"absolute"` is for). `"absolute"` anchors to the light source's emitted energy, so two renders at the same `intensity_factor` are directly comparable across configs (only within one lens/FOV/resolution — see [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7). A missing key or an unrecognized string both mean `"relative"`. ⚠️ `"relative"` output brightness **moved** when that anchor changed — every config, by −2.02…+2.55 stop across the measured corpus, in a direction that depends on the scene; the migration law and the table are in [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §2.8, and `intensity_factor` cancels the shift exactly if a specific render needs its old look. See [`doc/adaptive-brightness.md`](adaptive-brightness.md) §3. |
 | `grid` | object | no | see below | Grid configuration |
 | `filter` | integer array | no | [] | Multi-scattering filter ID array |
@@ -696,26 +696,27 @@ The render configuration defines the renderer parameters.
 
 **Defaults**:
 - `type`: "linear"
-- `fov`: 90.0 (degrees); `globe` defaults to 30.0
+- `fov`: 90.0 (degrees); `globe` defaults to 30.0. The default applies only when the lens object states **neither** `fov` nor `f`; when it does, the document renders at that default and one WARNING line is logged naming the angle that was chosen (`lens: neither "fov" nor "f" given; using the default fov=...`), so an author who never wrote the angle can see which one they got. The GUI's import path applies the same default and reports it in its import warning.
 
 **Note**:
-- `fov` is the **full diagonal field of view** in degrees. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections).
+- `fov` is the **full field of view covering the output image's short edge** (`min(width, height)`) in degrees — not the diagonal. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections). ⚠️ Computing `fov` from the diagonal instead gives a smaller apparent halo than intended: for example, a 3600×2400 linear render authored with a diagonal-based `fov = 120°` reproduces the framing of a short-edge-based `fov ≈ 87°` — a 22° halo comes out at roughly half its expected radius. Always derive `fov` (or `f`, below) from the short edge. The GUI preview shader uses the identical convention (`src/gui/preview_renderer.cpp`'s `linearInverse` / `fisheyeInverse`, `short_edge = min(u_resolution.x, u_resolution.y)`), so the same document renders at the same apparent size in the GUI and the CLI.
 - `fisheye_orthographic` and `dual_fisheye_orthographic` are capped at **180°** (the projection formula `r = f·sin(θ)` aliases past θ=90°); values above 180 are rejected.
 - `dual_fisheye_orthographic` does not support the `overlap` parameter (silently ignored with a VERBOSE log entry).
-- You can use `f` (focal length in mm, based on 35mm film) instead of `fov`. The program converts `f` to `fov` using the correct formula for each projection model:
+- You can use `f` (focal length in mm, based on 35mm film) instead of `fov`. In the formulas below, `d = 12mm` is half the short edge of the 35mm-film-equivalent frame (35mm film's short edge is 24mm) — the same short-edge convention `fov` itself uses. The program converts `f` to `fov` using the correct formula for each projection model. The GUI's import path reads `f` too, through the same conversion (`src/util/lens_focal.hpp`, the one implementation both readers call), so a config written with `f` opens in the GUI at the same `fov` the CLI renders it at; the GUI's own export writes `fov` only. When `fov` is present it wins and `f` is ignored, on both sides.
   - Linear: `fov = 2·atan(d/f)`
   - Equal area: `fov = 4·arcsin(d/(2f))`
   - Equidistant: `fov = 2d/f` (radians → degrees)
   - Stereographic: `fov = 4·arctan(d/(2f))`
   - Orthographic: `fov = 2·arcsin(d/f)` (requires `f ≥ 12mm` for fov=180)
   - Rectangular: `f` is ignored (always full-sky)
-  - Globe: `f` is not supported (use `fov` directly)
+  - Globe: same formula as Linear (`fov = 2·atan(d/f)`) — the globe's on-image scale is the linear model's, see `ComputeLensScale`
 
 **`globe` lens (outside-in perspective view of the celestial sphere)**:
 - Projection model: a pinhole perspective camera placed at distance `D = 4.0` (in unit-sphere radii) from the unit sphere centered at the world origin, looking toward the sphere center. The shader ray-traces against the unit sphere and shades the sample pointed to by the hit point.
 - `fov` range: `(0°, 90°]`; default `30°`. With the default the sphere fills approximately 96% of the viewport's short edge.
 - `view.roll`: stored as a normal `view` field, but at render time it is **forced to 0** for the `globe` lens; the right-panel Roll slider is greyed out while `globe` is selected. Switching to a non-Globe lens restores the stored value (the field is preserved, only the rendered roll is overridden).
 - `view.azimuth` / `view.elevation` semantics: under `globe`, they describe the **observer's orbit around the sphere**, not the camera's own attitude. The view matrix is mathematically the same as for inside-out lenses, but the user-facing intuition is inverted (Az/El point the camera *at* a place on the sphere instead of *toward* a direction in the sky).
+  - Concretely: the sky direction at the **centre of the frame** is the one *opposite* to `(azimuth, elevation)`, i.e. `(azimuth + 180°, −elevation)`, and the frame shows the cap of angular radius `acos(1/D) ≈ 75.5°` around it (fixed by `D`; `fov` only scales the sphere on the canvas). The camera sits at distance `D` on the far side of that point and looks through the sphere's centre at it. So to centre the sun at altitude 45° / azimuth 0° — for a `grid.angular_dist` halo circle, say — write `"view": {"azimuth": 180, "elevation": -45}`. A `view` copied from an inside-out lens, which *faces* the sun, puts the sun 180° from the cap's centre: the sun-centred circles and markers then lie wholly on the far side and are not drawn, while parallels, meridians and the horizon — global curves that cross the cap from any orbit position — still are. That combination is the lens's orbit semantics at work, not a missing annotation.
 - `view.elevation` clamp under `globe`: trackball drag and the right-panel slider both clamp to `[-89°, +89°]` to avoid the view-matrix degeneracy at ±90°.
 - `.lmc` compatibility: no new fields are introduced; older `.lmc` files load unchanged.
 

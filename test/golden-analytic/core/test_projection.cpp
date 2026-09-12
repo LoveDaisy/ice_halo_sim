@@ -770,6 +770,81 @@ TEST(FovScale, EquidistantScaleShortEdge) {
   EXPECT_NEAR(r_pix, static_cast<float>(kShort) / 2.0f, 0.1f);
 }
 
+// =============== FOV Edge Convention (short edge, not diagonal) ===============
+// Regression anchor for doc/configuration.md's "fov covers the short edge" contract. Unlike
+// the FovScale group above — which restates the scale formula by hand and samples only the
+// fov/2 edge — these two cases drive the REAL entry point (lumice::ComputeLensScale +
+// lm_proj::ProjectExitToPixel) at a non-edge angle (22 deg) on a W != H frame, and compare
+// against the doc's literal closed-form pixel offset. Different failure surface: this catches a
+// break in how short_pix/scale get assembled into ProjParams, which a hand-rolled scale copy
+// cannot. Both cases go red if the expected offset is derived from the diagonal half-length
+// instead of the short edge (the mistake the doc used to invite).
+
+namespace {
+
+// Camera-frame direction kThetaDeg off the optical axis, offset along camera-y, fed through the
+// production projector with an identity rotation. ProjectExitToPixel computes c = R^T * (-w);
+// with R = I that means feeding w = -c.
+lm_proj::ProjResult ProjectOffAxisOnShortEdgeFrame(LensParam::LensType type, int img_w, int img_h, float fov_rad,
+                                                   float theta_rad) {
+  const float short_pix = static_cast<float>(std::min(img_w, img_h));
+  lm_proj::ProjParams p{};
+  p.proj_type = static_cast<int>(type);
+  p.img_w = img_w;
+  p.img_h = img_h;
+  p.scale = lumice::ComputeLensScale(type, fov_rad, short_pix, img_w, img_h);
+  p.r_scale = 1.0f;
+  const float kIdentity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+  std::memcpy(p.rot, kIdentity, sizeof(kIdentity));
+
+  const float cx = 0.0f;
+  const float cy = std::sin(theta_rad);
+  const float cz = std::cos(theta_rad);
+  return lm_proj::ProjectExitToPixel(p, -cx, -cy, -cz);
+}
+
+}  // namespace
+
+TEST(FovEdgeConvention, LinearOffAxisMatchesShortEdgeFormula) {
+  constexpr int kWidth = 640;
+  constexpr int kHeight = 480;  // W != H; short edge is H
+  constexpr float kFovDeg = 90.0f;
+  constexpr float kThetaDeg = 22.0f;
+  const float fov_rad = kFovDeg * math::kDegreeToRad;
+  const float theta_rad = kThetaDeg * math::kDegreeToRad;
+
+  const auto res = ProjectOffAxisOnShortEdgeFrame(LensParam::kLinear, kWidth, kHeight, fov_rad, theta_rad);
+  ASSERT_EQ(res.count, 1);
+
+  // Doc's literal formula: offset = (H/2) / tan(fov/2) * tan(theta), H = short edge.
+  const float half_short = static_cast<float>(std::min(kWidth, kHeight)) / 2.0f;
+  const float expected_offset = half_short / std::tan(fov_rad / 2.0f) * std::tan(theta_rad);
+  const int expected_px = kWidth / 2;
+  const int expected_py = static_cast<int>(std::floor(kHeight / 2.0f + expected_offset));
+  EXPECT_EQ(res.hits[0].px, expected_px);
+  EXPECT_EQ(res.hits[0].py, expected_py);
+}
+
+TEST(FovEdgeConvention, EquidistantOffAxisMatchesShortEdgeFormula) {
+  constexpr int kWidth = 640;
+  constexpr int kHeight = 480;  // W != H; short edge is H
+  constexpr float kFovDeg = 180.0f;
+  constexpr float kThetaDeg = 22.0f;
+  const float fov_rad = kFovDeg * math::kDegreeToRad;
+  const float theta_rad = kThetaDeg * math::kDegreeToRad;
+
+  const auto res = ProjectOffAxisOnShortEdgeFrame(LensParam::kFisheyeEquidistant, kWidth, kHeight, fov_rad, theta_rad);
+  ASSERT_EQ(res.count, 1);
+
+  // Doc's literal formula: offset = (H/2) * (theta / (fov/2)), H = short edge.
+  const float half_short = static_cast<float>(std::min(kWidth, kHeight)) / 2.0f;
+  const float expected_offset = half_short * (theta_rad / (fov_rad / 2.0f));
+  const int expected_px = kWidth / 2;
+  const int expected_py = static_cast<int>(std::floor(kHeight / 2.0f + expected_offset));
+  EXPECT_EQ(res.hits[0].px, expected_px);
+  EXPECT_EQ(res.hits[0].py, expected_py);
+}
+
 // =============== Orthographic ===============
 
 TEST(Projection, FisheyeOrthographicForwardPole) {

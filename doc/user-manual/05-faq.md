@@ -18,7 +18,7 @@ Lumice's JSON schema requires only a handful of fields; the rest fall back to de
 | `scene.light_source.spectrum` | yes | — | Either a CIE illuminant name (`"D65"`, …) or a `[{wavelength, weight}, …]` array |
 | `crystal[].axis` | no | `{zenith: 90, azimuth: 0, roll: 0}` | "Horizontal" (column) orientation |
 | `render[].lens.type` | no | `"linear"` | Other choices include the `fisheye_*` and `dual_fisheye_*` projections |
-| `render[].lens.fov` | no | `90.0` | Diagonal FOV in degrees; ignored for `rectangular` and `dual_*` lenses |
+| `render[].lens.fov` | no | `90.0` | Field of view covering the output's short edge (`min(width,height)`), in degrees — not diagonal; ignored for `rectangular` and `dual_*` lenses |
 | `render[].view.{azimuth,elevation,roll}` | no | `0.0` each | Camera direction relative to the world frame |
 | `render[].visible` | no | `"upper"` | Hemisphere mask: `"upper"`, `"lower"`, or `"full"` |
 | `render[].background` | no | `[0, 0, 0]` | RGB background |

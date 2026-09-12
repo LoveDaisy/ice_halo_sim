@@ -655,7 +655,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `front` | 布尔 | 否 | false | 前半球裁剪：只保留相机朝向的那半边。它是**独立于 `visible` 的第二个裁剪维度**，两者相与，而不是 `visible` 的第四个取值。（写成 `"visible": "front"` 会被静默当作 `"upper"`，务必用这个独立键。） |
 | `background` | 浮点数组 | 否 | [0, 0, 0] | 背景颜色 RGB，**sRGB** 空间（即取色器上显示的那组数） |
 | `ray_color` | 浮点数组 | 否 | [-1, -1, -1] | 光线颜色 RGB，-1表示使用真实颜色 |
-| `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子（`2^EV`） |
+| `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子（`2^EV`）。只缩放光线能量：取 `0` 时画面里没有任何光，但所有注解（`grid`、`horizon`、marker、标签）照常绘制——要一张纯网格底图就这么做。 |
 | `ev_mode` | 字符串 | 否 | "relative" | 曝光锚点：`"relative"` 锚到**场景**的天空亮度——在一块固定全天缓冲上量到的 P99 辐亮度，因此 lens / FOV / 相机朝向 / `visible` / 输出分辨率都不再改变曝光，同一份 config 无论怎么看都渲染出同样的亮度（画面外观同样随 `ray_num` 增长保持稳定，即 `ray_num` 仍与亮度相关——那正是 `"absolute"` 存在的理由）；`"absolute"` 锚到光源发射的能量，使不同 config 在同一 `intensity_factor` 下直接可比（仅限同一 lens/FOV/分辨率——见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7）。缺该键或值无法识别都视为 `"relative"`。⚠️ 换锚时 `"relative"` 的输出亮度**发生了位移**：所有 config 都会动，实测语料上为 −2.02…+2.55 stop，方向取决于场景；迁移律与实测表见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §2.8，若某张图需要恢复旧观感，`intensity_factor` 可精确抵消。另见 [`doc/adaptive-brightness.zh.md`](adaptive-brightness.zh.md) §3。 |
 | `grid` | 对象 | 否 | 见下方 | 网格配置 |
 | `filter` | 整数数组 | 否 | [] | 多散射过滤器ID数组 |
@@ -671,26 +671,27 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 
 **默认值**：
 - `type`: "linear"
-- `fov`: 90.0（度）；`globe` 默认 30.0
+- `fov`: 90.0（度）；`globe` 默认 30.0。默认值只在 lens 对象**既没写 `fov` 也没写 `f`** 时生效；此时文档按该默认值渲染，并记录一行 WARNING 说明采用了哪个角度（`lens: neither "fov" nor "f" given; using the default fov=...`），让没写角度的作者能看到自己实际得到的值。GUI 导入路径套用同一默认值，并在导入告警里报告。
 
 **注意**：
-- `fov` 为**全对角线视场角**（度）。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。
+- `fov` 为覆盖输出图像**短边**（`min(width, height)`）的全视场角（度）——不是对角线。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。⚠️ 按对角线换算 `fov` 会让实际视场比预期小：例如 3600×2400 的 linear 渲染，若按对角线把 `fov` 算成 120°，等效的短边口径 `fov` 其实约为 87°——一个 22° 的晕会缩小到约一半半径。请始终按短边推导 `fov`（或下方的 `f`）。GUI 预览 shader 用的是同一口径（`src/gui/preview_renderer.cpp` 的 `linearInverse`/`fisheyeInverse`，`short_edge = min(u_resolution.x, u_resolution.y)`），因此同一份 config 在 GUI 与 CLI 里渲染出的视觉尺寸一致。
 - `fisheye_orthographic` 和 `dual_fisheye_orthographic` 的 FOV 上限为 **180°**（投影公式 `r = f·sin(θ)` 在 θ > 90° 时回折），超出值会被拒绝。
 - `dual_fisheye_orthographic` 不支持 `overlap` 参数（会被静默忽略并输出一条 VERBOSE 日志）。
-- 可以使用 `f`（焦距，mm，基于 35mm 胶片）代替 `fov`，程序会根据投影模型使用正确公式换算：
+- 可以使用 `f`（焦距，mm，基于 35mm 胶片）代替 `fov`。下列公式里的 `d = 12mm` 是 35mm 胶片等效画幅**短边**的半长（35mm 胶片短边为 24mm）——与 `fov` 本身的短边口径一致。程序会根据投影模型使用正确公式换算。GUI 导入路径同样读 `f`，走的是同一份换算实现（`src/util/lens_focal.hpp`，两个读取方都调它），因此用 `f` 写的 config 在 GUI 里打开得到的 `fov` 与 CLI 渲染用的相同；GUI 自己导出时只写 `fov`。两侧都是 `fov` 存在时以 `fov` 为准、忽略 `f`。
   - Linear: `fov = 2·atan(d/f)`
   - Equal area: `fov = 4·arcsin(d/(2f))`
   - Equidistant: `fov = 2d/f`（弧度 → 度）
   - Stereographic: `fov = 4·arctan(d/(2f))`
   - Orthographic: `fov = 2·arcsin(d/f)`（`f ≥ 12mm` 时 fov=180）
   - Rectangular: `f` 被忽略（始终全天投影）
-  - Globe: 不支持 `f`，请直接使用 `fov`
+  - Globe: 与 Linear 相同公式（`fov = 2·atan(d/f)`）——globe 的像面尺度就是 linear 模型的，见 `ComputeLensScale`
 
 **`globe` 镜头（外部观察天球的透视视角）**：
 - 投影模型：相机位于距单位球心 `D = 4.0`（单位球半径为单位）处，朝球心方向看；shader 对单位球做光线—球面求交，命中点对应的样本被着色。
 - `fov` 范围：`(0°, 90°]`，默认 `30°`。默认 fov 下球面占视口短边约 96%。
 - `view.roll`：作为常规 `view` 字段保存，但渲染时**强制为 0**（仅 `globe` 适用）；右侧面板 Roll slider 在选中 `globe` 时置灰；切回非 Globe lens 时恢复原值（字段保留，仅渲染时屏蔽）。
 - `view.azimuth` / `view.elevation` 语义：在 `globe` 下表示**观察者绕球公转的视角**，而非相机自身姿态。view 矩阵与 inside-out lens 完全相同，但用户心智反转（Az/El 指向球面上某个点，而非天空中某个方向）。
+  - 具体地说：画面**正中央**对应的天球方向是 `(azimuth, elevation)` 的**对跖点**，即 `(azimuth + 180°, −elevation)`，画面显示的是以它为中心、角半径 `acos(1/D) ≈ 75.5°` 的球冠（由 `D` 决定；`fov` 只改变球在画布上的大小）。相机位于该点背后距离 `D` 处，穿过球心看向它。所以要把高度 45°、方位 0° 的太阳放到画面中央（例如为了画 `grid.angular_dist` 的日晕环），应写 `"view": {"azimuth": 180, "elevation": -45}`。若把 inside-out 镜头下「朝向太阳」的 `view` 原样搬过来，太阳会落在球冠中心的正背面（相距 180°）：以太阳为中心的圆环与 marker 整体落在球的另一侧、不会被画出，而平行圈、经线和地平线是全天球曲线，从任何公转位置看都与球冠相交，因此照常显示。这是 globe 镜头公转语义的正常结果，不是注解缺失。
 - `view.elevation` 在 `globe` 下被 clamp 到 `[-89°, +89°]`，避免 ±90° 的 view-matrix 退化；trackball drag 与右侧 slider 共享此约束。
 - `.lmc` 兼容性：未引入新字段，旧 `.lmc` 加载行为不变。
 

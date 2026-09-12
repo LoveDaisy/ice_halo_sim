@@ -31,6 +31,7 @@
 #include "config/sim_data.hpp"
 #include "core/annotation_overlay.hpp"
 #include "core/lens_proj_build.hpp"
+#include "core/math.hpp"
 #include "core/scatter_accum.hpp"  // MakeCameraRotation
 #include "server/render.hpp"
 #include "support/render_anchor.hpp"
@@ -287,6 +288,121 @@ TEST(RenderConsumerAngularDist, ResetWithPicksUpANewSun) {
   const std::vector<uint8_t>& after = rc.AngularDistMasksForTest()[0];
   ASSERT_EQ(after.size(), before.size());
   EXPECT_NE(before, after) << "moving the sun must move the circle";
+}
+
+// ---------------------------------------------------------------------------------------------
+// The globe lens. Two cases, because the way this circle "does not draw" under globe has a
+// specific mechanism that is easy to re-derive as a bug: `view` under globe is the observer's
+// ORBIT position (doc/configuration.md, "globe lens"), so the cap the frame shows is centred on
+// the direction OPPOSITE to (azimuth, elevation) — (azimuth + 180, -elevation). A config that
+// points `view` at the sun the way an inside-out lens would puts the sun 180 deg from the cap's
+// centre, and a 22 deg circle around it lies wholly on the far side of the sphere. The parallels,
+// the meridians and the horizon are global curves that cross the cap from any orbit position,
+// which is why they still appear in the same frame and make the circle look singled out.
+//
+// The mask path itself (RebuildAngularDistMasks -> annotation::ComputeOverlay -> PixelToWorld's
+// kGlobe branch -> LevelSetMaskFromField) has no lens-type branch of its own; the first case
+// shows it producing the right circle when the geometry can, and the second pins the orbit
+// semantics that make the "wrong" view empty, so the next reader does not spend a day proving
+// the circle code is fine.
+
+// The globe's default frame: fov 30 fills ~96% of the short edge with the sphere. `az`/`el` are
+// the ORBIT position; see above.
+RenderConfig MakeGlobeConfig(float view_az, float view_el, const std::vector<GridLineParam>& lines) {
+  RenderConfig cfg;
+  cfg.id_ = 0;
+  cfg.lens_.type_ = LensParam::kGlobe;
+  cfg.lens_.fov_ = 30.0f;
+  cfg.resolution_[0] = kW;
+  cfg.resolution_[1] = kH;
+  cfg.view_.az_ = view_az;
+  cfg.view_.el_ = view_el;
+  cfg.visible_ = RenderConfig::kUpper;
+  cfg.angular_dist_grid_ = lines;
+  return cfg;
+}
+
+size_t CountMarked(const std::vector<uint8_t>& mask) {
+  return static_cast<size_t>(std::count(mask.begin(), mask.end(), uint8_t{ 1 }));
+}
+
+TEST(RenderConsumerAngularDist, GlobeCircleAppearsAtTheGlobeRadius) {
+  // The orbit position opposite the sun, so the sun sits on the optical axis and the 22 deg circle
+  // around it is, by symmetry, a circle on the canvas too (off-axis it would be an ellipse).
+  const RenderConfig cfg = MakeGlobeConfig(180.0f, -kSunAltitude, { Line(22.0f, 1.0f, 1.0f, 0.0f, 0.0f) });
+  RenderConsumer rc(cfg, ColorClassTable{}, MakeSun());
+  const auto& masks = rc.AngularDistMasksForTest();
+  ASSERT_EQ(masks.size(), 1u);
+  ASSERT_EQ(masks[0].size(), static_cast<size_t>(kTotalPix));
+
+  const annotation::CanvasPoint sun_px = SunPixel(cfg, MakeSun());
+  ASSERT_TRUE(sun_px.valid) << "the orbit position opposite the sun must image the sun";
+  EXPECT_NEAR(sun_px.px, kW / 2.0f, 1.0f) << "and image it on the optical axis";
+  EXPECT_NEAR(sun_px.py, kH / 2.0f, 1.0f);
+
+  // The radius, twice over and independently of the mask: once through the forward projection
+  // the rays themselves land by (a point 22 deg up the meridian from the sun), and once from the
+  // globe's own closed form, rho = focal * sin(psi) / (D - cos(psi)) with focal = (short/2) /
+  // tan(fov/2) — the formula projection_shared.h's globe branch evaluates.
+  const annotation::CanvasPoint edge_px = SunPixel(cfg, MakeSun(kSunAltitude + 22.0f));
+  ASSERT_TRUE(edge_px.valid);
+  const float expect_r = std::hypot(edge_px.px - sun_px.px, edge_px.py - sun_px.py);
+  const float focal = (static_cast<float>(std::min(kW, kH)) / 2.0f) / std::tan(15.0f * math::kDegreeToRad);
+  const float psi = 22.0f * math::kDegreeToRad;
+  const float closed_form_r = focal * std::sin(psi) / (lm_proj::kGlobeCameraD - std::cos(psi));
+  EXPECT_NEAR(expect_r, closed_form_r, 1.0f) << "the forward projection and the closed form must agree";
+  ASSERT_GT(expect_r, 4.0f);
+
+  size_t marked = 0;
+  float min_r = 1e9f;
+  float max_r = 0.0f;
+  for (int i = 0; i < kTotalPix; ++i) {
+    if (masks[0][static_cast<size_t>(i)] == 0) {
+      continue;
+    }
+    ++marked;
+    const float px = static_cast<float>(i % kW) + 0.5f;
+    const float py = static_cast<float>(i / kW) + 0.5f;
+    const float r = std::hypot(px - sun_px.px, py - sun_px.py);
+    min_r = std::min(min_r, r);
+    max_r = std::max(max_r, r);
+  }
+  ASSERT_GT(marked, 0u) << "globe must draw the 22 deg circle when the sun is on the visible cap";
+  EXPECT_NEAR(min_r, expect_r, 3.0f) << "inner edge of the ring";
+  EXPECT_NEAR(max_r, expect_r, 3.0f) << "outer edge of the ring";
+}
+
+TEST(RenderConsumerAngularDist, GlobeImagesTheCapOppositeTheViewDirection) {
+  // The shape of the report that motivated the case above: `view` written to face the sun, as it
+  // would be for a linear lens, under globe shows the cap centred 180 deg away. The sun is then
+  // not on the canvas at all and its circle has nowhere to be drawn — while the same list in the
+  // opposite orbit position draws hundreds of pixels. Pinned so that this reads as the lens's
+  // documented orbit semantics rather than as a mask defect.
+  const std::vector<GridLineParam> lines = { Line(22.0f, 1.0f, 1.0f, 0.0f, 0.0f) };
+  const RenderConfig facing = MakeGlobeConfig(0.0f, kSunAltitude, lines);
+  const RenderConfig opposite = MakeGlobeConfig(180.0f, -kSunAltitude, lines);
+
+  EXPECT_FALSE(SunPixel(facing, MakeSun()).valid) << "an orbit position AT the sun looks at the far side";
+  EXPECT_TRUE(SunPixel(opposite, MakeSun()).valid);
+
+  RenderConsumer rc_facing(facing, ColorClassTable{}, MakeSun());
+  RenderConsumer rc_opposite(opposite, ColorClassTable{}, MakeSun());
+  ASSERT_EQ(rc_facing.AngularDistMasksForTest().size(), 1u);
+  ASSERT_EQ(rc_opposite.AngularDistMasksForTest().size(), 1u);
+  EXPECT_EQ(CountMarked(rc_facing.AngularDistMasksForTest()[0]), 0u)
+      << "a 22 deg circle around a point 180 deg from the cap's centre lies wholly outside the cap";
+  EXPECT_GT(CountMarked(rc_opposite.AngularDistMasksForTest()[0]), 0u);
+
+  // The cap's angular radius is acos(1/D) ~ 75.5 deg, set by the camera distance alone (never by
+  // fov, which only scales the sphere on the canvas). A circle of that radius or more around the
+  // on-axis sun cannot be imaged, and one well inside it is — the two bounds on what "visible" can
+  // mean for this family under globe.
+  RenderConsumer inside(MakeGlobeConfig(180.0f, -kSunAltitude, { Line(46.0f, 1.0f, 1.0f, 0.0f, 0.0f) }),
+                        ColorClassTable{}, MakeSun());
+  RenderConsumer beyond(MakeGlobeConfig(180.0f, -kSunAltitude, { Line(80.0f, 1.0f, 1.0f, 0.0f, 0.0f) }),
+                        ColorClassTable{}, MakeSun());
+  EXPECT_GT(CountMarked(inside.AngularDistMasksForTest()[0]), 0u);
+  EXPECT_EQ(CountMarked(beyond.AngularDistMasksForTest()[0]), 0u);
 }
 
 }  // namespace

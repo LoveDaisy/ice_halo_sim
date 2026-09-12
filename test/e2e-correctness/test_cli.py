@@ -454,6 +454,65 @@ class TestScatteringProbRequired(LumiceTestCase):
         self.assertIn('"prob": 0', combined, "must state the migration write-up" + context)
 
 
+class TestLensFovDefault(LumiceTestCase):
+    """A `lens` that states neither `fov` nor `f` renders at the documented default, and says so.
+
+    Same reason the `prob` suite above exists at this layer: the C++ unit test proves core's
+    own parser defaults the angle when called directly, and only the binary a user runs proves
+    the CLI does too (it reaches core through the C API, which decodes the lens object on its
+    own before handing it to core). Derived from a real repo config rather than a hand-built
+    one, so the document differs from a working one in exactly the deleted key.
+
+    The oracle is the warning text plus the exit code and the produced image. The angle itself
+    is not read back out of the CLI (it has no way to print it); the number is pinned by the
+    unit tests in test_json.cpp and test_lens_fov_default.cpp, and what THIS layer proves is
+    that the document is accepted and the author is told a default was chosen.
+    """
+
+    # The distinctive prefix of core's warning (src/config/render_config.cpp,
+    # LensParam::from_json); match on it rather than the full wording.
+    WARNING_PREFIX = 'lens: neither "fov" nor "f" given'
+
+    def _config_with_lens_type_only(self, lens_type):
+        cfg = CONFIGS_DIR / "halo_22.json"
+        if not cfg.exists():
+            self.skipTest(f"{cfg} not found")
+        doc = json.loads(cfg.read_text())
+        doc["scene"]["ray_num"] = 20000  # see _cheap_halo_22_config: the oracle is not the image
+        lens = doc["render"][0]["lens"]
+        self.assertIn("fov", lens, "fixture no longer writes `fov`; this test would pass vacuously")
+        doc["render"][0]["lens"] = {"type": lens_type}
+        out = Path(self.output_dir) / f"halo_22_lens_{lens_type}_no_fov.json"
+        out.write_text(json.dumps(doc))
+        return out
+
+    def _render_and_read_warning(self, lens_type):
+        cfg = self._config_with_lens_type_only(lens_type)
+        result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir])
+        context = f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        self.assertEqual(result.returncode, 0, "CLI rejected a lens with no fov/f" + context)
+        # "renders" and "reports" are separate claims: an image must exist, not just exit 0.
+        self.assertEqual(len(glob.glob(os.path.join(self.output_dir, "img_*.jpg"))), 1, context)
+        combined = result.stdout + result.stderr
+        self.assertIn(self.WARNING_PREFIX, combined, "must tell the author a default was chosen" + context)
+        return combined
+
+    def test_linear_without_fov_renders_and_warns_with_ninety(self):
+        combined = self._render_and_read_warning("linear")
+        self.assertIn("fov=90", combined, "the non-globe default is 90 degrees")
+
+    def test_globe_without_fov_renders_and_warns_with_thirty(self):
+        combined = self._render_and_read_warning("globe")
+        self.assertIn("fov=30", combined, "the globe default is 30 degrees")
+
+    def test_stated_fov_is_not_told_it_was_defaulted(self):
+        """Control: the untouched fixture states `fov`, so the warning must stay silent."""
+        cfg = _cheap_halo_22_config(self.output_dir)
+        result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(self.WARNING_PREFIX, result.stdout + result.stderr)
+
+
 class TestAxisSlotTypeRequired(LumiceTestCase):
     """A crystal's `axis` slot written as an object must name its `type`.
 

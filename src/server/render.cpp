@@ -124,27 +124,34 @@ inline float BlendAnnotation(float base, float alpha, float line_rgb, bool print
   return print_mode ? base * (1.0f - alpha) : base * (1.0f - alpha) + line_rgb * alpha;
 }
 
-// The "no energy at all" image, for the two early exits below that never reach the pixel loop.
-//
-// screen's zero-energy colour is black, which is what the std::memset these replaced meant
-// literally. print's is the paper: an unexposed sheet. Writing it as one function with the tone as
-// an argument keeps AC5 ("a masked or unexposed region is that mode's zero-energy colour") as a
-// single rule instead of a special case bolted onto one mode.
-//
-// Neither early exit runs the annotation layers — PostSnapshot returns before PaintLabels() in both
-// — which is pre-existing behaviour this change does not touch.
-void FillZeroEnergyImage(uint8_t* buf, size_t total_pix, bool print_mode, const float paper[3]) {
-  if (!print_mode) {
-    std::memset(buf, 0, total_pix * 3u);
-    return;
-  }
-  uint8_t paper_srgb[3];
+// The "no energy at all" colour, in LINEAR RGB — the one value both frame paths agree an unexposed
+// pixel has. screen's is black, which is what the std::memset this replaced meant literally.
+// print's is the paper: an unexposed sheet. It is also, by construction, what PostSnapshot's pixel
+// loop computes for a pixel with no energy and no sky term (0 + nothing, or paper * 10^(-0)), so a
+// frame built on it composites the annotations onto the same base the exposed path would have.
+// Writing it as one function with the tone as an argument keeps AC5 ("a masked or unexposed region
+// is that mode's zero-energy colour") as a single rule instead of a special case bolted onto one
+// mode.
+void ZeroEnergyLinearRgb(bool print_mode, const float paper[3], float out[3]) {
   for (int j = 0; j < 3; j++) {
-    paper_srgb[j] = static_cast<uint8_t>(LinearToSrgb(std::clamp(paper[j], 0.0f, 1.0f)) * 255);
+    out[j] = print_mode ? std::clamp(paper[j], 0.0f, 1.0f) : 0.0f;
+  }
+}
+
+// The "no energy at all" image, for the early exit that has no frame to draw on at all (no ray has
+// landed yet, or a degenerate resolution). The other exit — a live frame with a zero exposure
+// scale — no longer comes here: it draws the annotations onto this same colour instead, in
+// PostSnapshot.
+void FillZeroEnergyImage(uint8_t* buf, size_t total_pix, bool print_mode, const float paper[3]) {
+  float zero_energy[3];
+  ZeroEnergyLinearRgb(print_mode, paper, zero_energy);
+  uint8_t srgb[3];
+  for (int j = 0; j < 3; j++) {
+    srgb[j] = static_cast<uint8_t>(LinearToSrgb(zero_energy[j]) * 255);
   }
   for (size_t i = 0; i < total_pix; i++) {
     for (int j = 0; j < 3; j++) {
-      buf[i * 3 + j] = paper_srgb[j];
+      buf[i * 3 + j] = srgb[j];
     }
   }
 }
@@ -708,52 +715,24 @@ void RenderConsumer::CountEffectivePixels() {
   effective_pix_ = std::max(count, 1);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-void RenderConsumer::PostSnapshot() {
-  int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  // Resolved here, at the top, because BOTH early exits below need it as well as the pixel loop:
-  // the zero-energy colour is the paper under kPrint, so "the simulation has produced nothing yet"
-  // must not fall through to a black frame (AC5).
-  const bool print_mode = config_.tone_ == RenderConfig::kPrint;
-  // Fresh borrow for the same reason PrepareSnapshot takes one (the previous mono
-  // image belongs to the previously published frame). Taken before the early-out below
-  // so BOTH exits hand the frame a buffer this snapshot owns.
-  snapshot_image_buffer_ = image_pool_->Acquire(static_cast<size_t>(std::max(total_pix, 0)) * 3u);
-  if (total_pix <= 0 || snapshot_intensity_ <= 0) {
-    FillZeroEnergyImage(snapshot_image_buffer_.get(), static_cast<size_t>(std::max(total_pix, 0)), print_mode,
-                        config_.paper_);
-    return;
-  }
+// The annotation layers, made blend-ready once per snapshot. Shared by the two places that draw
+// them — the fused pixel loop in PostSnapshot and its zero-scale exit — so a layer exists for one
+// exactly when it exists for the other. Nothing here reads the exposure: every input is a mask the
+// consumer already holds plus that mask's configured appearance.
+RenderConsumer::AnnotationLayers RenderConsumer::BuildAnnotationLayers() const {
+  const int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  AnnotationLayers layers;
 
-  // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
-  // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
-  // task-336.3: the scale expression now lives in ExposureScale() (single source
-  // shared with the compositor). Its guard is on the emitted-energy denominator,
-  // a different quantity from the snapshot_intensity_ tested above, so ask it for
-  // the value and test that — restating its guard here would be two conditions
-  // free to drift apart.
-  float scale = ExposureScale();
-  if (scale <= 0.0f) {
-    FillZeroEnergyImage(snapshot_image_buffer_.get(), static_cast<size_t>(total_pix), print_mode, config_.paper_);
-    return;
-  }
-
-  bool use_real_color = config_.ray_color_[0] < 0;
-  // Defensive: a degenerate resolution leaves the mask empty (BuildVisibleMask's contract).
-  // total_pix > 0 is already guaranteed above, so this only differs from `true` if the two
-  // ever disagree about the pixel count.
-  const bool masked_bg = visible_mask_.size() == static_cast<size_t>(total_pix);
   // The celestial-horizon annotation. Gated here rather than at build time — see the member's
   // declaration. Its colour comes from the file-scope kOutlineSrgb / kOutlineAlpha, converted here
   // because this blend happens in LINEAR RGB — same domain and same place in the chain as the
-  // background term below it, which is the repo's standing rule for anything added to radiance
-  // before the transfer curve.
+  // background term in the pixel loop, which is the repo's standing rule for anything added to
+  // radiance before the transfer curve.
   //
   // `config_.horizon_` alone, NOT ORed with horizon_label_: whether the LINE is painted is this
   // flag's own question. The label half is independent of it and is decided in PaintLabels().
-  const bool paint_outline_layer = config_.horizon_ && horizon_mask_.size() == static_cast<size_t>(total_pix);
-  float outline_rgb[3];
-  SrgbToLinearRgb(kOutlineSrgb, outline_rgb);
+  layers.paint_outline = config_.horizon_ && horizon_mask_.size() == static_cast<size_t>(total_pix);
+  SrgbToLinearRgb(kOutlineSrgb, layers.outline_rgb);
 
   // The angular-distance circles and the coordinate grid (parallels + meridians). Unlike the
   // horizon these carry their own appearance (GridLineParam::opacity_ / color_), so the pre-pass
@@ -763,11 +742,7 @@ void RenderConsumer::PostSnapshot() {
   //
   // The colour is per line, so the masks are per line too, and a pixel on two circles is blended
   // twice — which is what the preview shader's loop already does, in this same order.
-  struct LineLayer {
-    const uint8_t* mask;
-    float rgb[3];
-    float alpha;
-  };
+  //
   // Turn one family's (mask, GridLineParam) pairs into blend-ready layers: drop the degenerate and
   // the fully transparent, convert each line's sRGB colour to linear once. Shared by all three
   // families — they differ only in which list they read, never in how a line becomes a layer.
@@ -797,19 +772,17 @@ void RenderConsumer::PostSnapshot() {
   // flags), so a family with its line switched off still contributes its numbers through
   // PaintLabels. That is the whole point of the flags — before them, "no lines" could only be said
   // by emptying the angle list, which took the labels with it.
-  std::vector<LineLayer> grid_layers;
-  grid_layers.reserve(elevation_masks_.size() + longitude_masks_.size());
+  layers.grid.reserve(elevation_masks_.size() + longitude_masks_.size());
   if (config_.elevation_grid_line_) {
-    collect_layers(elevation_masks_, config_.elevation_grid_, grid_layers);
+    collect_layers(elevation_masks_, config_.elevation_grid_, layers.grid);
   }
   if (config_.longitude_grid_line_) {
-    collect_layers(longitude_masks_, config_.longitude_grid_, grid_layers);
+    collect_layers(longitude_masks_, config_.longitude_grid_, layers.grid);
   }
 
-  std::vector<LineLayer> angular_dist_layers;
-  angular_dist_layers.reserve(angular_dist_masks_.size());
+  layers.angular_dist.reserve(angular_dist_masks_.size());
   if (config_.angular_dist_grid_line_) {
-    collect_layers(angular_dist_masks_, config_.angular_dist_grid_, angular_dist_layers);
+    collect_layers(angular_dist_masks_, config_.angular_dist_grid_, layers.angular_dist);
   }
 
   // The ring markers, on top of everything else — the layer order the preview shader uses
@@ -829,53 +802,162 @@ void RenderConsumer::PostSnapshot() {
   // `"zenith_nadir"` falls back to the legacy pair — a vector cannot tell "key absent" from "key
   // present and empty", and recording a "was the key seen" bit would push a JSON-parsing detail
   // into a struct that two of its three producers build with no JSON at all.
-  struct MarkerLayer {
-    annotation::CanvasPoint point;
-    float rgb[3];
-  };
-  std::vector<MarkerLayer> marker_layers;
-  float marker_alpha = 0.0f;
-  float marker_radius_px = 0.0f;
   if (!config_.markers_.empty()) {
-    marker_alpha = std::clamp(config_.markers_opacity_, 0.0f, 1.0f);
-    marker_radius_px = config_.markers_radius_px_;
-    marker_layers.reserve(config_.markers_.size());
+    layers.marker_alpha = std::clamp(config_.markers_opacity_, 0.0f, 1.0f);
+    layers.marker_radius_px = config_.markers_radius_px_;
+    layers.markers.reserve(config_.markers_.size());
     for (const auto& m : config_.markers_) {
       if (!m.enabled_) {
         continue;
       }
       MarkerLayer layer{ marker_points_[static_cast<size_t>(m.id_)], { 0.0f, 0.0f, 0.0f } };
       SrgbToLinearRgb(m.color_, layer.rgb);
-      marker_layers.push_back(layer);
+      layers.markers.push_back(layer);
     }
   } else if (config_.zenith_nadir_.enabled_) {
     // The legacy pair, expressed in the same terms. Deliberately the SAME arithmetic in the same
     // order as the branch above and as the code this replaced: one clamp of the same opacity, one
     // sRGB conversion of the same colour, then zenith before nadir. That is what makes a
     // zenith_nadir-only config render the identical bytes rather than merely a similar picture —
-    // the per-pixel work below is one loop over two entries where it used to be two ifs, and no
+    // the per-pixel work is one loop over two entries where it used to be two ifs, and no
     // floating-point operation is added, removed or reordered.
-    marker_alpha = std::clamp(config_.zenith_nadir_.opacity_, 0.0f, 1.0f);
-    marker_radius_px = config_.zenith_nadir_.radius_px_;
+    layers.marker_alpha = std::clamp(config_.zenith_nadir_.opacity_, 0.0f, 1.0f);
+    layers.marker_radius_px = config_.zenith_nadir_.radius_px_;
     float rgb[3]{ 0.0f, 0.0f, 0.0f };
     SrgbToLinearRgb(config_.zenith_nadir_.color_, rgb);
-    marker_layers.push_back({ marker_points_[annotation::kMarkerZenith], { rgb[0], rgb[1], rgb[2] } });
-    marker_layers.push_back({ marker_points_[annotation::kMarkerNadir], { rgb[0], rgb[1], rgb[2] } });
+    layers.markers.push_back({ marker_points_[annotation::kMarkerZenith], { rgb[0], rgb[1], rgb[2] } });
+    layers.markers.push_back({ marker_points_[annotation::kMarkerNadir], { rgb[0], rgb[1], rgb[2] } });
   }
   // A coarse gate on entering the per-pixel work at all; each point's own `valid` is still tested
-  // individually below, because opposite world directions cannot both be on a canvas that is not
-  // full-sky.
-  const bool paint_marker =
-      std::any_of(marker_layers.begin(), marker_layers.end(), [](const MarkerLayer& l) { return l.point.valid; });
+  // individually per pixel, because opposite world directions cannot both be on a canvas that is
+  // not full-sky.
+  layers.paint_marker =
+      std::any_of(layers.markers.begin(), layers.markers.end(), [](const MarkerLayer& l) { return l.point.valid; });
+  // Sized once so the ring test costs no allocation per pixel; every entry is (re)written before
+  // it is read, under the same `paint_marker` guard.
+  layers.on_marker_ring.assign(layers.markers.size(), 0);
+  return layers;
+}
+
+// The annotation composite for ONE pixel, over whatever `rgb` already holds in linear RGB. This is
+// the single implementation both frame paths call: the fused pixel loop hands it the pixel's
+// exposed colour with its background already added, the zero-scale exit hands it the tone's
+// zero-energy colour, and the layers, their order and their blend are the same object either way.
+// A second copy of this loop "kept in step" with the first is exactly what this method exists not
+// to have — test_render_consumer_intensity_independence.cpp holds the two paths to the same bytes.
+//
+// After the background (the line is drawn ON the sky, not under it), before the clamp, and in
+// linear — the same three constraints the background term satisfies.
+//
+// The layer order is the preview shader's own (grid -> sun circles -> horizon -> zenith/nadir,
+// overlayAuxLines in preview_renderer.cpp); the two paths have to agree about which line wins
+// where they cross.
+//
+// `layers` is not const because the marker-ring scratch it carries is written here, per pixel.
+void RenderConsumer::CompositeAnnotations(AnnotationLayers& layers, int i, bool print_mode, float rgb[3]) const {
   // Half the ring's thickness. The same 1.5 px the level-set mask generator lands on for a field
   // that changes by one unit per pixel (LevelSetMaskFromField: clamp(|grad|, 1e-4, 2) * 1.5), and
   // the distance to a fixed point IS such a field — its gradient is a unit vector everywhere. Not
   // a separately chosen number: the markers are the same thickness as every other annotation.
   constexpr float kMarkerHalfWidthPx = 1.5f;
-  const int width_px = config_.resolution_[0];
-  // Hoisted out of the pixel loop so the ring test costs no allocation per pixel. Sized once;
-  // every entry is (re)written before it is read, under the same `paint_marker` guard.
-  std::vector<uint8_t> on_marker_ring(marker_layers.size(), 0);
+  const bool paint_outline = layers.paint_outline && horizon_mask_[static_cast<size_t>(i)] != 0;
+  // Resolved once per pixel rather than per channel: the ring test does not depend on j. The
+  // pixel's coordinates are recovered inside the guard so the default (markers off) path pays
+  // for neither the division nor the modulo.
+  if (layers.paint_marker) {
+    const int width_px = config_.resolution_[0];
+    const auto px = static_cast<float>(i % width_px);
+    const auto py = static_cast<float>(i / width_px);
+    for (size_t m = 0; m < layers.markers.size(); ++m) {
+      const annotation::CanvasPoint& p = layers.markers[m].point;
+      // `valid` first, and per point: a default-constructed CanvasPoint sits at (0, 0), so a
+      // point that missed the canvas would otherwise draw a ring in the corner for a direction
+      // the picture does not contain.
+      layers.on_marker_ring[m] = static_cast<uint8_t>(
+          p.valid && std::fabs(std::hypot(px - p.px, py - p.py) - layers.marker_radius_px) < kMarkerHalfWidthPx);
+    }
+  }
+  for (int j = 0; j < 3; j++) {
+    for (const auto& layer : layers.grid) {
+      if (layer.mask[i] != 0) {
+        rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
+      }
+    }
+    for (const auto& layer : layers.angular_dist) {
+      if (layer.mask[i] != 0) {
+        rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
+      }
+    }
+    if (paint_outline) {
+      rgb[j] = BlendAnnotation(rgb[j], kOutlineAlpha, layers.outline_rgb[j], print_mode);
+    }
+    // One independent blend per layer rather than one on the union, matching the shader: where
+    // two rings overlap it composites both, and so does this. In list order, which for the
+    // legacy pair is zenith then nadir — the order the two hardcoded ifs this replaced had.
+    if (layers.paint_marker) {
+      for (size_t m = 0; m < layers.markers.size(); ++m) {
+        if (layers.on_marker_ring[m] != 0) {
+          rgb[j] = BlendAnnotation(rgb[j], layers.marker_alpha, layers.markers[m].rgb[j], print_mode);
+        }
+      }
+    }
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void RenderConsumer::PostSnapshot() {
+  int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  // Resolved here, at the top, because BOTH early exits below need it as well as the pixel loop:
+  // the zero-energy colour is the paper under kPrint, so "the simulation has produced nothing yet"
+  // must not fall through to a black frame (AC5).
+  const bool print_mode = config_.tone_ == RenderConfig::kPrint;
+  // Fresh borrow for the same reason PrepareSnapshot takes one (the previous mono
+  // image belongs to the previously published frame). Taken before the early-out below
+  // so BOTH exits hand the frame a buffer this snapshot owns.
+  snapshot_image_buffer_ = image_pool_->Acquire(static_cast<size_t>(std::max(total_pix, 0)) * 3u);
+  if (total_pix <= 0 || snapshot_intensity_ <= 0) {
+    FillZeroEnergyImage(snapshot_image_buffer_.get(), static_cast<size_t>(std::max(total_pix, 0)), print_mode,
+                        config_.paper_);
+    return;
+  }
+
+  // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
+  // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
+  // The scale expression lives in ExposureScale(), the single source shared with the
+  // compositor. Its guard is on the emitted-energy denominator,
+  // a different quantity from the snapshot_intensity_ tested above, so ask it for
+  // the value and test that — restating its guard here would be two conditions
+  // free to drift apart.
+  float scale = ExposureScale();
+  if (scale <= 0.0f) {
+    // No exposure — `intensity_factor: 0` is the way a config says "the grid only, no light" —
+    // but the annotations are geometry, not light, and are drawn all the same. Every pixel starts
+    // at the tone's zero-energy colour, which is what the loop below produces for a pixel that
+    // carries no energy and no sky (screen: black, print: the paper). NOT the configured
+    // background: this exit is "nothing was exposed", and a background painted where the sky
+    // would be is what the exposed path does, not the zero-energy frame.
+    AnnotationLayers layers = BuildAnnotationLayers();
+    float zero_energy[3];
+    ZeroEnergyLinearRgb(print_mode, config_.paper_, zero_energy);
+    for (int i = 0; i < total_pix; i++) {
+      float rgb[3]{ zero_energy[0], zero_energy[1], zero_energy[2] };
+      CompositeAnnotations(layers, i, print_mode, rgb);
+      for (int j = 0; j < 3; j++) {
+        rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
+        rgb[j] = LinearToSrgb(rgb[j]);
+        snapshot_image_buffer_[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
+      }
+    }
+    PaintLabels();
+    return;
+  }
+
+  bool use_real_color = config_.ray_color_[0] < 0;
+  // Defensive: a degenerate resolution leaves the mask empty (BuildVisibleMask's contract).
+  // total_pix > 0 is already guaranteed above, so this only differs from `true` if the two
+  // ever disagree about the pixel count.
+  const bool masked_bg = visible_mask_.size() == static_cast<size_t>(total_pix);
+  AnnotationLayers layers = BuildAnnotationLayers();
 
   // One pass per pixel, intermediates kept in registers. This used to be four
   // full-buffer passes (memcpy into a work buffer → scale → color transform →
@@ -935,9 +1017,12 @@ void RenderConsumer::PostSnapshot() {
       }
     }
 
-    // Background blending + clamp, then sRGB gamma and the narrowing write. The
-    // gamma call is the scalar LinearToSrgb the old LinearToSrgbBatch looped
-    // over element by element (color_space.cpp), not a different formula.
+    // Background blending, then the annotations, then clamp, sRGB gamma and the narrowing
+    // write. The gamma call is the scalar LinearToSrgb the old LinearToSrgbBatch looped
+    // over element by element (color_space.cpp), not a different formula. The three
+    // channel loops below are one per stage rather than one for all three stages; each
+    // channel's own chain of operations is unchanged, and the channels never read each
+    // other, so the bytes are the ones the single loop produced.
     //
     // The background is added only where the lens actually images visible sky
     // (visible_mask_, built once at construction). Outside that region — beyond the image
@@ -951,22 +1036,6 @@ void RenderConsumer::PostSnapshot() {
     // can land, but inside it the excluded hemisphere is imaged normally and its rays deposit
     // energy like any other — measured at 89% (rectangular) to 99.8% (globe) of that region
     // carrying energy. Left alone they show up as lit pixels scattered through a black field.
-    const bool paint_outline = paint_outline_layer && horizon_mask_[i] != 0;
-    // Resolved once per pixel rather than per channel: the ring test does not depend on j. The
-    // pixel's coordinates are recovered inside the guard so the default (markers off) path pays
-    // for neither the division nor the modulo.
-    if (paint_marker) {
-      const auto px = static_cast<float>(i % width_px);
-      const auto py = static_cast<float>(i / width_px);
-      for (size_t m = 0; m < marker_layers.size(); ++m) {
-        const annotation::CanvasPoint& p = marker_layers[m].point;
-        // `valid` first, and per point: a default-constructed CanvasPoint sits at (0, 0), so a
-        // point that missed the canvas would otherwise draw a ring in the corner for a direction
-        // the picture does not contain.
-        on_marker_ring[m] = static_cast<uint8_t>(
-            p.valid && std::fabs(std::hypot(px - p.px, py - p.py) - marker_radius_px) < kMarkerHalfWidthPx);
-      }
-    }
     for (int j = 0; j < 3; j++) {
       // This whole block is the ADDITIVE operator's way of saying "what colour is this pixel's
       // ground", and kPrint answered that question already, up in the colour branch: paper times
@@ -992,35 +1061,9 @@ void RenderConsumer::PostSnapshot() {
           rgb[j] = 0.0f;
         }
       }
-      // After the background (the line is drawn ON the sky, not under it), before the clamp, and
-      // in linear — the same three constraints the background term above satisfies.
-      //
-      // The layer order is the preview shader's own (grid -> sun circles -> horizon ->
-      // zenith/nadir, overlayAuxLines in preview_renderer.cpp); the two paths have to agree about
-      // which line wins where they cross.
-      for (const auto& layer : grid_layers) {
-        if (layer.mask[i] != 0) {
-          rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
-        }
-      }
-      for (const auto& layer : angular_dist_layers) {
-        if (layer.mask[i] != 0) {
-          rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
-        }
-      }
-      if (paint_outline) {
-        rgb[j] = BlendAnnotation(rgb[j], kOutlineAlpha, outline_rgb[j], print_mode);
-      }
-      // One independent blend per layer rather than one on the union, matching the shader: where
-      // two rings overlap it composites both, and so does this. In list order, which for the
-      // legacy pair is zenith then nadir — the order the two hardcoded ifs this replaced had.
-      if (paint_marker) {
-        for (size_t m = 0; m < marker_layers.size(); ++m) {
-          if (on_marker_ring[m] != 0) {
-            rgb[j] = BlendAnnotation(rgb[j], marker_alpha, marker_layers[m].rgb[j], print_mode);
-          }
-        }
-      }
+    }
+    CompositeAnnotations(layers, i, print_mode, rgb);
+    for (int j = 0; j < 3; j++) {
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
       rgb[j] = LinearToSrgb(rgb[j]);
       snapshot_image_buffer_[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);

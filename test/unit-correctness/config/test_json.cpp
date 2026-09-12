@@ -22,6 +22,7 @@
 #include "core/math.hpp"
 #include "util/color_space.hpp"
 #include "util/illuminant.hpp"
+#include "util/lens_fov_default.hpp"
 #include "util/logger.hpp"
 
 extern std::string config_file_name;
@@ -936,6 +937,56 @@ TEST(LensConfigGlobe, FFieldMapsLikeLinear) {
   nlohmann::json jl = { { "type", "linear" }, { "f", 12.0f } };
   auto ll = jl.get<LensParam>();
   EXPECT_NEAR(l.fov_, ll.fov_, 1e-5f);
+}
+
+
+// =============== Lens defaults (neither fov nor f) ===============
+// A `lens` that states neither key loads at the angle doc/configuration.md's Defaults section
+// promises, and says so. The value is compared against the shared util/ function on purpose — the
+// literal numbers are pinned in test_lens_fov_default.cpp, and what THIS layer has to prove is that
+// core reaches for that one authority rather than a copy of it.
+
+TEST(LensConfigDefaults, MissingFovAndFDefaultsToNinetyForLinear) {
+  nlohmann::json j = { { "type", "linear" } };
+  LensParam l;
+  EXPECT_NO_THROW(l = j.get<LensParam>());
+  EXPECT_EQ(l.type_, LensParam::kLinear);
+  EXPECT_FLOAT_EQ(l.fov_, LensDefaultFovDegrees(false));
+}
+
+TEST(LensConfigDefaults, MissingFovAndFDefaultsToThirtyForGlobe) {
+  nlohmann::json j = { { "type", "globe" } };
+  LensParam l;
+  EXPECT_NO_THROW(l = j.get<LensParam>());
+  EXPECT_EQ(l.type_, LensParam::kGlobe);
+  EXPECT_FLOAT_EQ(l.fov_, LensDefaultFovDegrees(true));
+}
+
+// The warning is the half that matters: the author never wrote the angle, and this line is the
+// only thing that tells them which one they got. Text, not level tag — see logger.hpp's
+// ToSpdLevel for why kWarning prints under spdlog's err label.
+TEST(LensConfigDefaults, MissingFovAndFWarns) {
+  nlohmann::json j = { { "type", "linear" } };
+  std::string logged;
+  {
+    LogCapture capture;
+    (void)j.get<LensParam>();
+    logged = capture.Text();
+  }
+  EXPECT_NE(logged.find("fov"), std::string::npos) << logged;
+  EXPECT_NE(logged.find("default"), std::string::npos) << logged;
+}
+
+// Control: a lens that does state `fov` must not be told it was defaulted.
+TEST(LensConfigDefaults, StatedFovIsSilent) {
+  nlohmann::json j = { { "type", "linear" }, { "fov", 60.0f } };
+  std::string logged;
+  {
+    LogCapture capture;
+    (void)j.get<LensParam>();
+    logged = capture.Text();
+  }
+  EXPECT_EQ(logged.find("default fov"), std::string::npos) << logged;
 }
 
 

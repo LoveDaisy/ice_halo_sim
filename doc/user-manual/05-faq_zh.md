@@ -18,7 +18,7 @@ Lumice 的 JSON schema 只要求少量字段，其他字段都有默认值。下
 | `scene.light_source.spectrum` | 是 | — | 取 CIE 标准光源名（`"D65"` 等）或 `[{wavelength, weight}, …]` 数组 |
 | `crystal[].axis` | 否 | `{zenith: 90, azimuth: 0, roll: 0}` | 默认"水平柱状"取向 |
 | `render[].lens.type` | 否 | `"linear"` | 其他选项：`fisheye_*`、`dual_fisheye_*` 系列投影 |
-| `render[].lens.fov` | 否 | `90.0` | 对角视场角（度）；`rectangular` / `dual_*` 镜头忽略此字段 |
+| `render[].lens.fov` | 否 | `90.0` | 覆盖输出图像短边（`min(width,height)`）的视场角（度）——不是对角线；`rectangular` / `dual_*` 镜头忽略此字段 |
 | `render[].view.{azimuth,elevation,roll}` | 否 | 各 `0.0` | 相机相对世界系的指向 |
 | `render[].visible` | 否 | `"upper"` | 半球遮罩：`"upper"` / `"lower"` / `"full"` |
 | `render[].background` | 否 | `[0, 0, 0]` | RGB 背景 |
