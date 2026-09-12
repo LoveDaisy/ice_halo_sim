@@ -302,6 +302,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["tone"] = r.tone_;
 
   j["grid"].emplace("angular_dist", r.angular_dist_grid_);
+  j["grid"].emplace("view_dist", r.view_dist_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
   j["grid"].emplace("longitude", r.longitude_grid_);
   j["grid"].emplace("horizon", r.horizon_);
@@ -311,9 +312,11 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["grid"].emplace("elevation_line", r.elevation_grid_line_);
   j["grid"].emplace("longitude_line", r.longitude_grid_line_);
   j["grid"].emplace("angular_dist_line", r.angular_dist_grid_line_);
+  j["grid"].emplace("view_dist_line", r.view_dist_grid_line_);
   j["grid"].emplace("horizon_label", r.horizon_label_);
   j["grid"].emplace("label", r.grid_label_);
   j["grid"].emplace("angular_dist_label", r.angular_dist_label_);
+  j["grid"].emplace("view_dist_label", r.view_dist_label_);
   j["grid"].emplace("zenith_nadir", r.zenith_nadir_);
   // The marker family: the list, then its two family-wide appearance fields as SIBLING keys rather
   // than as members of a wrapper object. Same shape as "horizon" / "horizon_label" and the rest of
@@ -371,7 +374,18 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // ground the finished image is composited onto and tone_ selects WHICH operator does that
   // compositing, so neither touches the buffer being accumulated into. A config that edits either
   // reaches an existing consumer through ResetWith() with no rebuild.
-  static_assert(sizeof(RenderConfig) == 240,
+  // 240 -> 272 for the view_dist family: view_dist_grid_ (a std::vector, 24) beside
+  // angular_dist_grid_, and two bools (view_dist_grid_line_ / view_dist_label_) that cost eight,
+  // not two — the bool run grows from eight to ten bytes, ZenithNadirParam (4-byte aligned) moves
+  // from +8 to +12 after it, and markers_ (8-byte aligned) then needs four more bytes of padding
+  // that the old layout did not, measured with offsetof rather than reasoned. All three are
+  // APPEARANCE, for exactly the reason their angular_dist twins are: a circle composited onto the
+  // finished image and the text beside it, never the buffer being accumulated into. The
+  // reference direction (the optical axis) is derived from view_, which IS a layout field — so a
+  // consumer built for one view never sees the axis move, and RebuildViewDistMasks() needs no
+  // direction cache of its own; a config that edits the list or its switches reaches an existing
+  // consumer through ResetWith() with no rebuild.
+  static_assert(sizeof(RenderConfig) == 272,
                 "RenderConfig layout changed — re-check the classification in NeedsRebuild");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.

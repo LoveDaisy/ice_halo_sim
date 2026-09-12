@@ -131,6 +131,10 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     } else if (j_grid.contains("central")) {
       j_grid.at("central").get_to(render.angular_dist_grid_);
     }
+    // The axis-referenced twin. No legacy spelling: the key was born with this name.
+    if (j_grid.contains("view_dist")) {
+      j_grid.at("view_dist").get_to(render.view_dist_grid_);
+    }
     if (j_grid.contains("elevation")) {
       j_grid.at("elevation").get_to(render.elevation_grid_);
     }
@@ -152,6 +156,9 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("angular_dist_line")) {
       j_grid.at("angular_dist_line").get_to(render.angular_dist_grid_line_);
     }
+    if (j_grid.contains("view_dist_line")) {
+      j_grid.at("view_dist_line").get_to(render.view_dist_grid_line_);
+    }
     // The three text-label switches. Read next to the lines they annotate rather than under a
     // "labels" object of their own: "grid.label" is a property of the grid, and nesting it one
     // level deeper would give one concept two paths into the same object.
@@ -163,6 +170,9 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     }
     if (j_grid.contains("angular_dist_label")) {
       j_grid.at("angular_dist_label").get_to(render.angular_dist_label_);
+    }
+    if (j_grid.contains("view_dist_label")) {
+      j_grid.at("view_dist_label").get_to(render.view_dist_label_);
     }
     if (j_grid.contains("zenith_nadir")) {
       j_grid.at("zenith_nadir").get_to(render.zenith_nadir_);

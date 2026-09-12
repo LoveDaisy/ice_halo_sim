@@ -207,6 +207,14 @@ struct RenderConfig {
   Tone tone_ = kScreen;
 
   std::vector<GridLineParam> angular_dist_grid_;
+  // Circles of constant angular distance from the camera's OPTICAL AXIS — the view's own forward
+  // (elevation/azimuth/roll), the same axis the exposure anchor's Omega_axis is taken on. The
+  // camera-referenced twin of angular_dist_grid_ above (referenced to the sun): same GridLineParam
+  // per entry, same line/label switches, same compositing. No direction field of its own — the
+  // axis is derived from view_, so a config never has to state it, and it is independent of
+  // lens_shift_ by construction: a shifted lens moves the axis's PIXEL, and the circles follow
+  // the axis, not the canvas centre.
+  std::vector<GridLineParam> view_dist_grid_;
   std::vector<GridLineParam> elevation_grid_;
   // Meridians: lines of constant azimuth. Named "longitude" rather than "azimuth" because that is
   // the word the annotation layer already uses for this concept everywhere it is public
@@ -247,6 +255,7 @@ struct RenderConfig {
   bool elevation_grid_line_ = true;
   bool longitude_grid_line_ = true;
   bool angular_dist_grid_line_ = true;
+  bool view_dist_grid_line_ = true;
   // Draw the TEXT labels — the angle each line stands for, "22\u00b0" and the like — next to the
   // three line families. One switch per family, mirroring the GUI's three
   // (show_horizon_label / show_grid_label / show_sun_circles_label, gui_state.hpp), because those
@@ -270,6 +279,7 @@ struct RenderConfig {
   // The parallels and the meridians share one switch, as they share one appearance in the GUI.
   bool grid_label_ = false;
   bool angular_dist_label_ = false;
+  bool view_dist_label_ = false;
   // The zenith / nadir ring markers. Opt-in for the same reason horizon_ is: an annotation nobody
   // asked for must not appear in a config that predates the field.
   //
@@ -322,10 +332,11 @@ struct RenderConfig {
 // pins do see that class, so the two are complements and neither replaces the other.
 inline void RenderConfigFieldSetGuard(const RenderConfig& c) {
   [[maybe_unused]] const auto& [id, lens, lens_shift, resolution, view, visible, front, background, paper, ray_color,
-                                intensity_factor, overlap, ev_mode, tone, angular_dist_grid, elevation_grid,
-                                longitude_grid, horizon, elevation_grid_line, longitude_grid_line,
-                                angular_dist_grid_line, horizon_label, grid_label, angular_dist_label, zenith_nadir,
-                                markers, markers_opacity, markers_radius_px] = c;
+                                intensity_factor, overlap, ev_mode, tone, angular_dist_grid, view_dist_grid,
+                                elevation_grid, longitude_grid, horizon, elevation_grid_line, longitude_grid_line,
+                                angular_dist_grid_line, view_dist_grid_line, horizon_label, grid_label,
+                                angular_dist_label, view_dist_label, zenith_nadir, markers, markers_opacity,
+                                markers_radius_px] = c;
 }
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
