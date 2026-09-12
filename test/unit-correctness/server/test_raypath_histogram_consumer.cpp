@@ -20,6 +20,16 @@
 // not), batches without chain ids are ignored, a never-delivered id is dropped
 // not crashed on, and Reset() forgets producers as well as buckets.
 //
+// The bounded record (the BoundedRecord suite): with a row capacity k over a
+// synthetic stream of known chain energies, every chain above E/k has a row,
+// no row is under its chain's true energy or over it by more than its own
+// error_bound_, no error_bound_ exceeds E/k, and Σ rows + other is whole — in
+// energy, count and (cone) ring split; a capacity above the chain count is
+// the identity with every error 0; the sentinel's rays land in the other
+// bucket with the producer's truncation count beside them; Reset() empties
+// all of it. The reduction adds the errors of the rows it merges (≤ orbit
+// size × E/k) and passes the record-level scalars through at every symmetry.
+//
 // The read-time reduction (the ReadTimeReduction / ChainDisplayFormat /
 // ReduceContext suites at the bottom): Σ energy and Σ count are conserved and
 // the row count is monotone over none / P / P|B / P|B|D on a hand-built finest
@@ -38,6 +48,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -100,12 +111,14 @@ RaypathHistogramResult Snapshot(RaypathHistogramConsumer& c) {
   return std::get<RaypathHistogramResult>(r);
 }
 
-// The number of rays counted into the ROI: Σ count over the entries, which is the
-// only place the consumer keeps it (a ray is counted iff it is in the ROI and its
-// chain id resolves).
+// The number of rays counted into the ROI: Σ count over the entries plus the
+// other bucket, which between them are the only places the consumer keeps it
+// (a ray is counted iff it is in the ROI and its chain id resolves — to a row,
+// or to the sentinel the other bucket stands for).
 size_t RoiHitCount(RaypathHistogramConsumer& c) {
-  size_t n = 0;
-  for (const auto& e : Snapshot(c).entries_) {
+  const auto r = Snapshot(c);
+  size_t n = r.other_count_;
+  for (const auto& e : r.entries_) {
     n += e.count_;
   }
   return n;
@@ -811,7 +824,13 @@ TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
     counted += e.count_;
     energy += e.energy_;
   }
-  EXPECT_EQ(counted, delivered);
+  // The record is bounded (kRaypathHistogramCapacity rows, ChainIdInterningTable::
+  // kDefaultCapacity chains per producer) and this scene, recorded at its finest,
+  // exceeds both; what no row holds is in the other bucket, and the two together
+  // are every ray delivered.
+  EXPECT_EQ(counted + r.other_count_, delivered);
+  EXPECT_EQ(r.other_count_, finest.other_count_) << "the reduction passes the bucket through";
+  EXPECT_EQ(r.truncated_chain_count_, finest.truncated_chain_count_);
   // Conservation across the four symmetries a reader can ask for, on real
   // data: the sums are the finest sums, the row count never grows, and the
   // 22° path's ORBIT — the rows that fold into "3-5" under P|B|D — carries
@@ -900,6 +919,9 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
           ADD_FAILURE() << "ray " << i << " carries an id its producer never delivered";
           continue;
         }
+        if (id == ChainIdInterningTable::kOverflowChainId) {
+          continue;  // a chain the producer's bounded table had no room for: no segment to read
+        }
         if (m.Table().EntryAt(id).segment != through) {
           continue;
         }
@@ -954,6 +976,226 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
 }
 
 // ---------------------------------------------------------------------------
+// The bounded record. Ten single-layer chains, w = 1 per ray so energy is
+// count × Y(550, 1); the order is adversarial — the eight light chains arrive
+// first and fill every row, then the two heavy ones arrive with no row free —
+// so what the assertions see is the eviction path, not the "there was room"
+// path.
+// ---------------------------------------------------------------------------
+struct SyntheticStream {
+  std::vector<size_t> rays_per_chain;  // chain i (1-based) has rays_per_chain[i-1] rays
+  Batch batch{ 7 };
+  size_t total_rays = 0;
+  explicit SyntheticStream(std::vector<size_t> rays, bool cone = false) : rays_per_chain(std::move(rays)) {
+    for (size_t i = 0; i < rays_per_chain.size(); i++) {
+      batch.AddChain(static_cast<uint32_t>(i + 1), 0, 1, Seg{ static_cast<IdType>(i + 1) });
+    }
+    // Round-robin over the chains, each round adding one ray to every chain
+    // that still has rays left: every chain shows up early and the heavy
+    // ones keep arriving after the light ones have taken every row.
+    bool any = true;
+    for (size_t round = 0; any; round++) {
+      any = false;
+      for (size_t i = 0; i < rays_per_chain.size(); i++) {
+        if (round < rays_per_chain[i]) {
+          any = true;
+          // Cone: chain i's rays in ring i mod 3 (5° cone, 3 rings, +z centre).
+          const float angle = cone ? (static_cast<float>(i % 3) + 0.5f) * (5.0f / 3.0f) * math::kDegreeToRad : 0.0f;
+          batch.AddRay(static_cast<uint32_t>(i + 1), 1.0f, std::sin(angle), 0.0f, std::cos(angle));
+          total_rays++;
+        }
+      }
+    }
+  }
+  double ChainEnergy(size_t i) const { return static_cast<double>(rays_per_chain[i - 1]) * Y(550.0f, 1.0f); }
+  double Total() const { return static_cast<double>(total_rays) * Y(550.0f, 1.0f); }
+  static std::string Display(size_t i) { return "crystal1(" + std::to_string(i) + ")"; }
+};
+
+RaypathRoiSpec Cone5Deg3Rings() {
+  RaypathRoiSpec roi;
+  roi.mode_ = RaypathRoiMode::kCone;
+  roi.cone_center_[0] = 0.0f;
+  roi.cone_center_[1] = 0.0f;
+  roi.cone_center_[2] = 1.0f;
+  roi.cone_radius_rad_ = 5.0f * math::kDegreeToRad;
+  roi.cone_ring_count_ = 3;
+  return roi;
+}
+
+// The Space-Saving guarantee on `r` for a stream `st` recorded at capacity `k`.
+void ExpectSpaceSavingGuarantee(const RaypathHistogramResult& r, const SyntheticStream& st, size_t k) {
+  const double total = st.Total();
+  const double bound = total / static_cast<double>(k);
+  const double tol = 1e-12 * total;
+  EXPECT_LE(r.entries_.size(), k);
+  double sum_energy = r.other_energy_;
+  size_t sum_count = r.other_count_;
+  double max_err = 0.0;
+  for (const auto& e : r.entries_) {
+    sum_energy += e.energy_;
+    sum_count += e.count_;
+    max_err = std::max(max_err, e.error_bound_);
+    EXPECT_LE(e.error_bound_, bound + tol) << e.display_ << ": a row's error never exceeds E/k";
+    if (e.chain_.size() != 1u) {
+      ADD_FAILURE() << e.display_ << ": single-layer stream, " << e.chain_.size() << " layers";
+      continue;
+    }
+    const size_t i = e.chain_[0].segment[0];
+    const double truth = st.ChainEnergy(i);
+    EXPECT_GE(e.energy_, truth - tol) << e.display_ << ": a row never under-estimates its chain";
+    EXPECT_LE(e.energy_ - e.error_bound_, truth + tol) << e.display_ << ": the truth lies within the error";
+    double rings = 0.0;
+    for (double v : e.ring_energy_) {
+      rings += v;
+    }
+    if (!e.ring_energy_.empty()) {
+      EXPECT_NEAR(rings, e.energy_, tol) << e.display_ << ": the ring split is as whole as the energy";
+    }
+  }
+  EXPECT_NEAR(sum_energy, total, tol) << "Σ rows + other is every ray's energy";
+  EXPECT_EQ(sum_count, st.total_rays) << "Σ rows + other is every ray";
+  EXPECT_DOUBLE_EQ(r.max_row_error_, max_err);
+  for (size_t i = 1; i <= st.rays_per_chain.size(); i++) {
+    if (st.ChainEnergy(i) > bound) {
+      EXPECT_NE(Find(r, SyntheticStream::Display(i)), nullptr) << "chain " << i << " is above E/k and must have a row";
+    }
+  }
+}
+
+TEST(BoundedRecord, EveryChainAboveTotalOverKHasARowAndNoRowIsOffByMoreThanTotalOverK) {
+  // Eight light chains (2 rays), two heavy (40 and 30): E/4 = 24 rays' worth,
+  // so exactly the two heavy chains must have rows.
+  const SyntheticStream st({ 2, 2, 2, 2, 2, 2, 2, 2, 40, 30 });
+  constexpr size_t kCap = 4;
+  RaypathHistogramConsumer c(FullSky(), {}, kCap);
+  EXPECT_EQ(c.Capacity(), kCap);
+  c.Consume(st.batch.data);
+  const auto r = Snapshot(c);
+  ExpectSpaceSavingGuarantee(r, st, kCap);
+  EXPECT_EQ(r.entries_.size(), kCap) << "ten chains into four rows: full";
+  EXPECT_GT(r.max_row_error_, 0.0) << "positive control: the eviction path ran";
+  EXPECT_DOUBLE_EQ(r.other_energy_, 0.0) << "no sentinel ray: the bucket is empty, evictions do not fill it";
+  EXPECT_EQ(r.other_count_, 0u);
+  EXPECT_EQ(r.truncated_chain_count_, 0u);
+  // The two heavy rows are the top two, each over by at most its own error.
+  ASSERT_GE(r.entries_.size(), 2u);
+  EXPECT_EQ(r.entries_[0].display_, SyntheticStream::Display(9));
+  EXPECT_EQ(r.entries_[1].display_, SyntheticStream::Display(10));
+}
+
+// The ruler is the capacity: the same stream at k = 2, 4 and 10 evicts less
+// as k grows, and at k >= the chain count the record is the unbounded one —
+// every chain its own row, every error 0, which is the identity the small
+// single-layer scenes rely on.
+TEST(BoundedRecord, CapacityIsTheRulerAndAboveTheChainCountTheRecordIsExact) {
+  const SyntheticStream st({ 2, 2, 2, 2, 2, 2, 2, 2, 40, 30 });
+  double prev_err = 1e300;
+  for (const size_t k : { size_t{ 2 }, size_t{ 4 }, size_t{ 10 }, size_t{ 4096 } }) {
+    RaypathHistogramConsumer c(FullSky(), {}, k);
+    c.Consume(st.batch.data);
+    const auto r = Snapshot(c);
+    ExpectSpaceSavingGuarantee(r, st, k);
+    EXPECT_LE(r.max_row_error_, prev_err) << "k=" << k << ": a larger table is never less certain";
+    prev_err = r.max_row_error_;
+    if (k >= st.rays_per_chain.size()) {
+      EXPECT_EQ(r.entries_.size(), st.rays_per_chain.size()) << "k=" << k;
+      EXPECT_DOUBLE_EQ(r.max_row_error_, 0.0) << "k=" << k << ": no eviction, no error";
+      for (const auto& e : r.entries_) {
+        EXPECT_DOUBLE_EQ(e.error_bound_, 0.0);
+        EXPECT_NEAR(e.energy_, st.ChainEnergy(e.chain_[0].segment[0]), 1e-12 * st.Total()) << e.display_;
+      }
+    } else {
+      EXPECT_EQ(r.entries_.size(), k) << "k=" << k;
+      EXPECT_GT(r.max_row_error_, 0.0) << "k=" << k;
+    }
+  }
+}
+
+TEST(BoundedRecord, ConeRingsTravelWithTheRowTheyAreTakenOverInto) {
+  const SyntheticStream st({ 3, 3, 3, 3, 3, 3, 50, 20 }, /*cone=*/true);
+  RaypathHistogramConsumer c(Cone5Deg3Rings(), {}, 3);
+  c.Consume(st.batch.data);
+  const auto r = Snapshot(c);
+  ExpectSpaceSavingGuarantee(r, st, 3);  // includes Σ rings == energy per row
+  EXPECT_GT(r.max_row_error_, 0.0);
+  // And the reduction keeps the rings whole too.
+  const auto rr = ReduceRaypathHistogram(r, kSymAll);
+  for (const auto& e : rr.entries_) {
+    double rings = 0.0;
+    for (double v : e.ring_energy_) {
+      rings += v;
+    }
+    EXPECT_NEAR(rings, e.energy_, 1e-12 * st.Total()) << e.display_;
+  }
+}
+
+TEST(BoundedRecord, SentinelRaysFillTheOtherBucketBesideTheProducersTruncationCount) {
+  constexpr uint32_t kOverflow = ChainIdInterningTable::kOverflowChainId;
+  Batch b(3);
+  b.AddChain(1, 0, 1, Seg{ 3, 5 });
+  b.AddRay(1, 1.0f, 0.0f, 0.0f, 1.0f);
+  b.AddRay(kOverflow, 0.5f, 0.0f, 0.0f, 1.0f);
+  b.AddRay(kOverflow, 0.25f, 0.0f, 0.0f, 1.0f);
+  b.data.chain_id_overflow_count_ = 7;
+  RaypathHistogramConsumer c(FullSky(), {}, 4096);
+  c.Consume(b.data);
+  // A second batch from the same producer: the count accumulates across
+  // batches whether or not the batch has any sentinel ray.
+  Batch b2(3);
+  b2.AddRay(1, 1.0f, 0.0f, 0.0f, 1.0f);
+  b2.data.chain_id_overflow_count_ = 2;
+  c.Consume(b2.data);
+  const auto r = Snapshot(c);
+  ASSERT_EQ(r.entries_.size(), 1u) << "the sentinel is never a row";
+  EXPECT_DOUBLE_EQ(r.entries_[0].energy_, Y(550.0f, 1.0f) * 2.0);
+  EXPECT_EQ(r.entries_[0].count_, 2u);
+  EXPECT_DOUBLE_EQ(r.entries_[0].error_bound_, 0.0);
+  EXPECT_DOUBLE_EQ(r.other_energy_, Y(550.0f, 0.5f) + Y(550.0f, 0.25f));
+  EXPECT_EQ(r.other_count_, 2u);
+  EXPECT_EQ(r.truncated_chain_count_, 9u);
+  EXPECT_DOUBLE_EQ(r.max_row_error_, 0.0);
+  // Cone: the sentinel's rays are ring-split into the bucket like any other
+  // ray, and the row count is unaffected.
+  RaypathHistogramConsumer cc(Cone5Deg3Rings(), {}, 4096);
+  cc.Consume(b.data);
+  const auto rc = Snapshot(cc);
+  EXPECT_EQ(rc.entries_.size(), 1u);
+  EXPECT_EQ(rc.other_count_, 2u);
+
+  c.Reset();
+  const auto after = Snapshot(c);
+  EXPECT_TRUE(after.entries_.empty());
+  EXPECT_DOUBLE_EQ(after.other_energy_, 0.0);
+  EXPECT_EQ(after.other_count_, 0u);
+  EXPECT_EQ(after.truncated_chain_count_, 0u);
+  EXPECT_DOUBLE_EQ(after.max_row_error_, 0.0);
+  // And the rows are free again: the same stream lands in the same shape.
+  c.Consume(b.data);
+  EXPECT_EQ(Snapshot(c).entries_.size(), 1u);
+}
+
+// A row's error after many evictions of the same slot stays at most E/k:
+// stream where every chain is seen once, so every arrival past capacity is
+// an eviction, and the taken-over energy chains through the slot.
+TEST(BoundedRecord, ChainedTakeOversNeverPushARowsErrorPastTotalOverK) {
+  std::vector<size_t> rays(200, 1);
+  rays[0] = 100;  // one heavy chain, first to arrive, that must survive
+  const SyntheticStream st(rays);
+  constexpr size_t kCap = 8;
+  RaypathHistogramConsumer c(FullSky(), {}, kCap);
+  c.Consume(st.batch.data);
+  const auto r = Snapshot(c);
+  ExpectSpaceSavingGuarantee(r, st, kCap);
+  EXPECT_NE(Find(r, SyntheticStream::Display(1)), nullptr);
+  EXPECT_EQ(r.entries_[0].display_, SyntheticStream::Display(1));
+  // Round-robin, so the heavy chain was the minimum (a one-ray tie) early on
+  // and lost its row at least once: it is back, over by at most E/k, never
+  // under. The 200-way slot churn behind it is what the guarantee is for.
+  EXPECT_GT(r.entries_[0].error_bound_, 0.0) << "positive control: the heavy chain did get evicted once";
+}
+
+// ---------------------------------------------------------------------------
 // Read-time reduction on a hand-built finest result. Crystal 1 has D
 // applicable with sigma_a = 0 (the σ-mirror keeps prism face 3 and maps
 // pri k -> -k), crystal 2 has no D. Five finest rows on crystal 1:
@@ -964,18 +1206,30 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
 // stay put. Each expected representative is Crystal::ReduceRaypath's word,
 // re-derived here through ReduceRaypathByPeriod rather than typed.
 // ---------------------------------------------------------------------------
+// Every row carries an error_bound_ of 0.5 — as if recorded at a capacity k
+// with E/k = 0.5 (the record-level scalars below say so: 15 units of energy
+// in rows + 5 in the other bucket = 20, k = 40) — so a merged row's error is
+// 0.5 × its orbit size.
+constexpr double kFixtureRowError = 0.5;
+constexpr double kFixtureTotalOverK = 0.5;  // (15 + 5) / 40
+
 RaypathHistogramResult FinestFixture() {
   RaypathHistogramResult r;
   r.roi_mode_ = RaypathRoiMode::kFullSky;
   r.reduce_ctx_.crystal_params_[1] = RaypathCrystalReduceParams{ 0, true };
   r.reduce_ctx_.crystal_params_[2] = RaypathCrystalReduceParams{ 0, false };
   r.reduce_ctx_.layer_multi_crystal_ = { false };
+  r.other_energy_ = 5.0;
+  r.other_count_ = 50;
+  r.truncated_chain_count_ = 12;
+  r.max_row_error_ = kFixtureRowError;
   auto add = [&r](Seg seg, double energy, size_t count) {
     RaypathHistogramEntry e;
     e.chain_.push_back(RaypathChainSegment{ 1, std::move(seg) });
     e.display_ = "finest";
     e.energy_ = energy;
     e.count_ = count;
+    e.error_bound_ = kFixtureRowError;
     r.entries_.push_back(std::move(e));
   };
   add({ 3, 5 }, 5.0, 50);
@@ -1034,6 +1288,54 @@ TEST(ReadTimeReduction, RowCountIsMonotoneAndSumsAreConservedOverTheFourSymmetri
   // Symmetry 0 is not a bypass: the display text is the read-time format even then.
   EXPECT_NE(Find(none, "3-5"), nullptr);
   EXPECT_EQ(Find(none, "finest"), nullptr);
+}
+
+// AC4: a merged row's error is the Σ of its finest rows' — m rows each ≤ E/k
+// bound the merged row by m × E/k — and the record-level scalars are the
+// same at every symmetry, being about no chain.
+TEST(ReadTimeReduction, MergedRowErrorIsTheOrbitSumAndRecordScalarsPassThrough) {
+  const auto finest = FinestFixture();
+  const auto none = ReduceRaypathHistogram(finest, FilterConfig::kSymNone);
+  const auto p = ReduceRaypathHistogram(finest, FilterConfig::kSymP);
+  const auto pbd = ReduceRaypathHistogram(finest, kSymAll);
+  for (const auto* r : { &none, &p, &pbd }) {
+    EXPECT_DOUBLE_EQ(r->other_energy_, 5.0);
+    EXPECT_EQ(r->other_count_, 50u);
+    EXPECT_EQ(r->truncated_chain_count_, 12u);
+    EXPECT_DOUBLE_EQ(r->max_row_error_, kFixtureRowError);
+  }
+  // Orbit sizes by the reduction authority itself, not typed: how many finest
+  // rows reduce onto each row's segment under that symmetry.
+  auto orbit_of = [&finest](const RaypathHistogramEntry& e, uint8_t sym) {
+    size_t n = 0;
+    for (const auto& f : finest.entries_) {
+      if (ReduceRaypathByPeriod(f.chain_[0].segment, sym, 0, true, 6) == e.chain_[0].segment) {
+        n++;
+      }
+    }
+    return n;
+  };
+  for (const auto& [r, sym] : { std::pair{ &none, FilterConfig::kSymNone }, std::pair{ &p, FilterConfig::kSymP },
+                                std::pair{ &pbd, kSymAll } }) {
+    for (const auto& e : r->entries_) {
+      const size_t orbit = orbit_of(e, sym);
+      EXPECT_GE(orbit, 1u) << e.display_;
+      EXPECT_DOUBLE_EQ(e.error_bound_, kFixtureRowError * static_cast<double>(orbit)) << e.display_;
+      EXPECT_LE(e.error_bound_, static_cast<double>(orbit) * kFixtureTotalOverK + 1e-12) << e.display_;
+    }
+  }
+  // Symmetry 0 merges nothing: every error is the finest one.
+  for (const auto& e : none.entries_) {
+    EXPECT_DOUBLE_EQ(e.error_bound_, kFixtureRowError);
+  }
+  // Under P, {3,5} and {4,6} became one row: error 2 × 0.5 = 1.0 ≤ 2 × E/k.
+  const auto* p35 = Find(p, "3-5");
+  ASSERT_NE(p35, nullptr);
+  EXPECT_DOUBLE_EQ(p35->error_bound_, 2.0 * kFixtureRowError);
+  // Under P|B|D the top row is the 3-member orbit {3,5} {4,6} {3,7}: 1.5.
+  ASSERT_EQ(pbd.entries_.size(), 2u);
+  EXPECT_DOUBLE_EQ(pbd.entries_[0].error_bound_, 3.0 * kFixtureRowError);
+  EXPECT_DOUBLE_EQ(pbd.entries_[1].error_bound_, 2.0 * kFixtureRowError);
 }
 
 TEST(ReadTimeReduction, DIsAppliedPerLayerWithThatLayersCrystalParameters) {

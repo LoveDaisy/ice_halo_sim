@@ -29,8 +29,11 @@ void SortByEnergyThenDisplay(std::vector<RaypathHistogramEntry>& entries) {
 
 }  // namespace
 
-RaypathHistogramConsumer::RaypathHistogramConsumer(RaypathRoiSpec roi, RaypathReduceContext reduce_ctx)
-    : roi_(std::move(roi)), reduce_ctx_(std::move(reduce_ctx)) {
+RaypathHistogramConsumer::RaypathHistogramConsumer(RaypathRoiSpec roi, RaypathReduceContext reduce_ctx, size_t capacity)
+    : roi_(std::move(roi)), reduce_ctx_(std::move(reduce_ctx)), capacity_(std::max<size_t>(capacity, 1)) {
+  if (capacity < 1) {
+    ILOG_WARN(logger_, "row capacity {} < 1; using 1", capacity);
+  }
   switch (roi_.mode_) {
     case RaypathRoiMode::kFullSky:
       break;
@@ -103,6 +106,65 @@ bool RaypathHistogramConsumer::ConeMembership(float wx, float wy, float wz, int*
   return true;
 }
 
+void RaypathHistogramConsumer::AddToEntry(Entry& e, double y, bool cone, int ring) {
+  e.energy_ += y;
+  e.count_ += 1;
+  if (cone) {
+    if (e.ring_energy_.empty()) {
+      e.ring_energy_.assign(static_cast<size_t>(roi_.cone_ring_count_), 0.0);
+    }
+    e.ring_energy_[static_cast<size_t>(ring)] += y;
+  }
+}
+
+uint32_t RaypathHistogramConsumer::PopMinRow() {
+  while (true) {
+    const HeapItem top = min_heap_.top();
+    min_heap_.pop();
+    const auto it = live_.find(top.id_);
+    // Every heap item names a live row (a row leaves the heap only through
+    // this pop, and leaves live_ only right after). A stale item — the row
+    // gained energy since it was pushed — goes back at its current value; a
+    // fresh one is the minimum, since every other row's energy is at least
+    // what its own item says, which is at least this.
+    if (it->second.energy_ != top.energy_) {
+      min_heap_.push(HeapItem{ it->second.energy_, top.id_ });
+      continue;
+    }
+    return top.id_;
+  }
+}
+
+RaypathHistogramConsumer::Entry& RaypathHistogramConsumer::RowFor(uint32_t merged_id) {
+  if (const auto it = live_.find(merged_id); it != live_.end()) {
+    return it->second;
+  }
+  if (live_.size() < capacity_) {
+    auto& e = live_[merged_id];
+    min_heap_.push(HeapItem{ 0.0, merged_id });
+    return e;
+  }
+  // Space-Saving: the lowest row makes room, and the new row TAKES OVER its
+  // energy, count and ring split rather than starting from zero, recording
+  // the energy it took over as its error_bound_. That is the whole of the
+  // algorithm's guarantee: a chain that was under-counted while it had no
+  // row is never under-estimated once it has one (its row is at least its
+  // true energy), and since the lowest of k rows is at most E/k, no row is
+  // over by more than E/k. Nothing goes to other_ here — every ray stays in
+  // exactly one row, so Σ rows + other_ is whole at every capacity — and the
+  // rings come along for the same reason: what the row's energy holds, its
+  // ring split holds, so a cone read sums to the same whole.
+  const uint32_t victim = PopMinRow();
+  auto vit = live_.find(victim);
+  Entry taken = std::move(vit->second);
+  live_.erase(vit);
+  taken.error_bound_ = taken.energy_;
+  auto& e = live_[merged_id];
+  e = std::move(taken);
+  min_heap_.push(HeapItem{ e.energy_, merged_id });
+  return e;
+}
+
 void RaypathHistogramConsumer::Consume(const SimData& data) {
   if (data.outgoing_chain_id_.empty()) {
     // No chain ids: a GPU / CpuTraceBackend batch, or a Simulator whose
@@ -121,6 +183,9 @@ void RaypathHistogramConsumer::Consume(const SimData& data) {
               data.producer_effective_seed_, report.orphaned, report.non_monotonic);
     logged_delta_contract_ = true;
   }
+  // What the producer's bounded table could not hold this batch, whether or
+  // not any of those rays lands in the ROI: the count is about the record.
+  truncated_chain_count_ += data.chain_id_overflow_count_;
 
   const size_t n = data.outgoing_w_.size();
   if (data.outgoing_chain_id_.size() != n) {
@@ -161,21 +226,17 @@ void RaypathHistogramConsumer::Consume(const SimData& data) {
     }
     const float wl = per_ray_wl ? data.outgoing_wl_[i] : data.curr_wl_;
     const double y = SpectrumToYSingle(wl, data.outgoing_w_[i]);
-    auto& e = live_[merged_id];
-    e.energy_ += y;
-    e.count_ += 1;
-    if (cone) {
-      if (e.ring_energy_.empty()) {
-        e.ring_energy_.assign(static_cast<size_t>(roi_.cone_ring_count_), 0.0);
-      }
-      e.ring_energy_[static_cast<size_t>(ring)] += y;
-    }
+    // A ray of a chain the producer had no room for has no chain to be a row
+    // of; it is counted where every other unrepresentable ray is.
+    Entry& e = merged_id == ChainIdInterningTable::kOverflowChainId ? other_ : RowFor(merged_id);
+    AddToEntry(e, y, cone, ring);
   }
 }
 
 void RaypathHistogramConsumer::PrepareSnapshot() {
   snapshot_entries_.clear();
   snapshot_entries_.reserve(live_.size());
+  snapshot_max_row_error_ = 0.0;
   const auto& table = merger_.Table();
   for (const auto& [id, e] : live_) {
     RaypathHistogramEntry out;
@@ -186,6 +247,8 @@ void RaypathHistogramConsumer::PrepareSnapshot() {
     out.energy_ = e.energy_;
     out.count_ = e.count_;
     out.ring_energy_ = e.ring_energy_;
+    out.error_bound_ = e.error_bound_;
+    snapshot_max_row_error_ = std::max(snapshot_max_row_error_, e.error_bound_);
     snapshot_entries_.push_back(std::move(out));
   }
   SortByEnergyThenDisplay(snapshot_entries_);
@@ -194,6 +257,10 @@ void RaypathHistogramConsumer::PrepareSnapshot() {
 Result RaypathHistogramConsumer::GetResult() const {
   RaypathHistogramResult r;
   r.entries_ = snapshot_entries_;
+  r.other_energy_ = other_.energy_;
+  r.other_count_ = other_.count_;
+  r.truncated_chain_count_ = truncated_chain_count_;
+  r.max_row_error_ = snapshot_max_row_error_;
   r.roi_mode_ = roi_.mode_;
   if (roi_.mode_ == RaypathRoiMode::kCone) {
     r.cone_ring_count_ = roi_.cone_ring_count_;
@@ -205,7 +272,11 @@ Result RaypathHistogramConsumer::GetResult() const {
 
 void RaypathHistogramConsumer::Reset() {
   live_.clear();
+  min_heap_ = {};
+  other_ = Entry{};
+  truncated_chain_count_ = 0;
   snapshot_entries_.clear();
+  snapshot_max_row_error_ = 0.0;
   merger_.Clear();
   logged_unresolved_ = false;
   logged_delta_contract_ = false;
@@ -288,12 +359,20 @@ RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& fine
   out.cone_ring_count_ = finest.cone_ring_count_;
   out.cone_radius_rad_ = finest.cone_radius_rad_;
   out.reduce_ctx_ = finest.reduce_ctx_;
+  // About the record, not about any chain: through unchanged.
+  out.other_energy_ = finest.other_energy_;
+  out.other_count_ = finest.other_count_;
+  out.truncated_chain_count_ = finest.truncated_chain_count_;
+  out.max_row_error_ = finest.max_row_error_;
 
   // A table of this call's own: interning the reduced segments layer by layer,
   // parent before child exactly as the recording table did, gives one dense id
   // per distinct reduced chain — the merge key — and keeps the chain's layer
   // order (Segments() is root-first) without a second walk of our own.
-  ChainIdInterningTable table;
+  // Unbounded: it holds at most one id per finest row, and the finest rows
+  // are already bounded by the consumer's capacity; a bound here could only
+  // lose a row the record kept.
+  ChainIdInterningTable table(ChainIdInterningTable::kUnboundedCapacity);
   std::unordered_map<uint32_t, RaypathHistogramEntry> merged;
   bool logged_unknown_crystal = false;
   const auto& params = finest.reduce_ctx_.crystal_params_;
@@ -323,6 +402,9 @@ RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& fine
     }
     dst.energy_ += src.energy_;
     dst.count_ += src.count_;
+    // Additive, like the energy it bounds: a merged row may be wrong by as
+    // much as every finest row it merged may be — m rows, each <= E/k.
+    dst.error_bound_ += src.error_bound_;
     if (dst.ring_energy_.size() < src.ring_energy_.size()) {
       dst.ring_energy_.resize(src.ring_energy_.size(), 0.0);
     }

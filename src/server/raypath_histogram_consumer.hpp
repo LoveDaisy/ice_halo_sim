@@ -11,12 +11,34 @@
 // a chain's energy here and its pixels' Y in a render of the same batches sum
 // to the same number (test_raypath_histogram_consumer.cpp pins that).
 //
+// The record is BOUNDED, at two levels. The producer's interning table holds
+// at most ChainIdInterningTable::kDefaultCapacity chains per worker and
+// answers the rest with one sentinel id; this consumer holds at most
+// kRaypathHistogramCapacity rows and, when a chain it has no row for arrives
+// while full, replaces its lowest-energy row (Space-Saving, Metwally et al.
+// 2005): the new row starts from the evicted row's energy and count — that is
+// what makes the algorithm's guarantee hold — and records that inherited
+// energy as its error_bound_, so a reader knows how much of a row may belong
+// to some other chain. The sentinel's rays, which have no chain to be a row
+// of, go to one "other" bucket that is never a row and never evicted; an
+// evicted row's content is NOT moved there — it stays in the row that took
+// the slot over, as that row's error — so every ray is in exactly one row or
+// in other, and Σ energy over rows + other is the energy of every counted
+// ray, at every capacity. The guarantee, for a capacity of k rows over a
+// total energy E: every chain with energy > E/k has a row, and every row's
+// error_bound_ <= E/k. Memory is O(k) per consumer,
+// the rows are found in O(1) and the eviction in O(log k) amortised (a
+// min-heap over the rows with lazy re-insertion, sized k), so neither grows
+// with the ray count or the MS depth.
+//
 // Symmetry is a READ-time choice, not a recording-time one. The run records
 // every chain at its finest (the simulator interns under kSymNone), and the
 // three free functions at the bottom of this header — BuildRaypathReduceContext,
 // ReduceRaypathHistogram, FormatRaypathChainDisplay — turn a finest result into
 // what a reader asked for: chains reduced per layer under a P/B/D bit set,
-// merged into one row per canonical chain, labelled in the one display format.
+// merged into one row per canonical chain, labelled in the one display format,
+// each merged row's error_bound_ the Σ of its finest rows' — so a reduced row
+// standing for an orbit of m finest chains is uncertain by at most m × E/k.
 // The C API calls them on every read (c_api.cpp LUMICE_FrameGetRaypathAnalysis),
 // which is what lets a GUI toggle P/B/D on a finished result without re-running.
 #ifndef CONSUMER_RAYPATH_HISTOGRAM_H_
@@ -24,7 +46,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <queue>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -43,6 +67,13 @@ namespace lumice {
 
 struct SceneConfig;
 
+// Row capacity of one consumer (k in the class comment): the bound on the
+// finest record's memory and on what a read-time reduction has to walk. Sized
+// by measurement on the two-layer plate+column scene that motivated the bound
+// (839k distinct chains at 200k rays, ms_prob 0.3): see the calibration table
+// in doc/raypath-analysis-panel.md.
+constexpr size_t kRaypathHistogramCapacity = 4096;
+
 class RaypathHistogramConsumer : public IConsume {
  public:
   // `reduce_ctx` is published with every snapshot (RaypathHistogramResult::
@@ -50,8 +81,11 @@ class RaypathHistogramConsumer : public IConsume {
   // it. The server builds it from the committed scene (BuildRaypathReduceContext
   // below); a test feeding synthetic batches may leave it empty, which reduces
   // every crystal with sigma_a = 0 / D off and labels every layer as
-  // single-crystal.
-  explicit RaypathHistogramConsumer(RaypathRoiSpec roi, RaypathReduceContext reduce_ctx = {});
+  // single-crystal. `capacity` is the row bound (kRaypathHistogramCapacity);
+  // a test that wants to see an eviction sets it small, the product never
+  // passes it.
+  explicit RaypathHistogramConsumer(RaypathRoiSpec roi, RaypathReduceContext reduce_ctx = {},
+                                    size_t capacity = kRaypathHistogramCapacity);
 
   void Consume(const SimData& data) override;
   void PrepareSnapshot() override;
@@ -59,13 +93,26 @@ class RaypathHistogramConsumer : public IConsume {
   void Reset() override;
 
   const RaypathRoiSpec& Roi() const { return roi_; }
+  size_t Capacity() const { return capacity_; }
 
  private:
   struct Entry {
     double energy_ = 0.0;
     size_t count_ = 0;
     std::vector<double> ring_energy_;  // kCone only, sized on first touch
+    double error_bound_ = 0.0;         // see RaypathHistogramEntry::error_bound_
   };
+  // One ray's contribution into `e` — the one accumulate path, shared by a
+  // row and by the other bucket.
+  void AddToEntry(Entry& e, double y, bool cone, int ring);
+  // The row for `merged_id`: found; made, while there is room; or the
+  // lowest-energy row taken over (Space-Saving), its content moved to other_.
+  Entry& RowFor(uint32_t merged_id);
+  // The row of lowest energy_ — the heap's top once stale items (a row whose
+  // energy grew since it was pushed) have been re-pushed at their current
+  // value. Every row is in the heap exactly once, so the heap never exceeds
+  // live_.size() items.
+  uint32_t PopMinRow();
 
   // Decision B in the design record: the frame test is the forward
   // projection plus the two display clips, on the ray's world direction.
@@ -87,8 +134,24 @@ class RaypathHistogramConsumer : public IConsume {
   float ring_width_rad_ = 0.0f;
 
   ChainIdMerger merger_;
+  const size_t capacity_;
   std::unordered_map<uint32_t, Entry> live_;
+  // Min-heap over live_ by energy_ (ties by id, so two runs evict alike):
+  // (energy as pushed, id). An item whose energy no longer matches its row is
+  // stale, and is re-pushed at the current value when it surfaces.
+  struct HeapItem {
+    double energy_;
+    uint32_t id_;
+    bool operator>(const HeapItem& o) const { return energy_ != o.energy_ ? energy_ > o.energy_ : id_ > o.id_; }
+  };
+  std::priority_queue<HeapItem, std::vector<HeapItem>, std::greater<HeapItem>> min_heap_;
+  // The bucket for what no row can hold (RaypathHistogramResult::other_*):
+  // the sentinel's rays. A member, not an element of live_, so it can neither
+  // be evicted nor found by RowFor.
+  Entry other_;
+  size_t truncated_chain_count_ = 0;
   std::vector<RaypathHistogramEntry> snapshot_entries_;
+  double snapshot_max_row_error_ = 0.0;
 
   // One-shot diagnostics: the data contract is either honoured for the whole
   // session or broken on the first batch, so repeating the line buys nothing.
@@ -128,10 +191,12 @@ std::string FormatRaypathChainDisplay(const std::vector<RaypathChainSegment>& ch
 // entry's segments are reduced per layer with that layer's crystal's D
 // parameters (ReduceRaypathByPeriod, the same rule a filter canonicalises
 // under), entries that meet on one reduced chain are merged — energy_, count_
-// and ring_energy_ summed — and each merged row is labelled by
+// ring_energy_ and error_bound_ summed — and each merged row is labelled by
 // FormatRaypathChainDisplay and sorted as the recorded result is (energy
 // descending, display ascending). Σ energy_ and Σ count_ are conserved
-// exactly up to summation order; the row count never grows. Pure: reads
+// exactly up to summation order; the row count never grows; the four
+// record-level scalars (other_energy_, other_count_, truncated_chain_count_,
+// max_row_error_) are copied through unchanged, being about no chain. Pure: reads
 // `finest`, returns a new result, and is what every C API read of the
 // histogram goes through — symmetry 0 too, so the display text is the same
 // authority's at every setting.

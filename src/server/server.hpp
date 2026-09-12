@@ -272,12 +272,37 @@ struct RaypathHistogramEntry {
   // cone_ring_count_ and Σ ring_energy_ == energy_ (up to summation order).
   // Empty in the other two modes.
   std::vector<double> ring_energy_;
+  // How much of energy_ may belong to some OTHER chain: the consumer keeps a
+  // bounded number of rows (raypath_histogram_consumer.hpp, Space-Saving) and
+  // a row that took over an evicted row's slot inherits that row's energy as
+  // its own uncertainty. The chain's true energy lies in
+  // [energy_ - error_bound_, energy_]. 0 for a row that never took a slot over.
+  // In a reduced result it is the Σ over the finest rows the row merged.
+  double error_bound_ = 0.0;
 };
 
 struct RaypathHistogramResult {
   // Sorted by energy_ descending, ties by display_ ascending — so equal
   // energies still order the same way on every run.
   std::vector<RaypathHistogramEntry> entries_;
+  // What the bounded record could not keep as a row of its own, as one bucket:
+  // the rays whose chain the producer's interning table turned away
+  // (ChainIdInterningTable::kOverflowChainId). A row the consumer evicted is
+  // not here — its content lives on in the row that took its slot, as that
+  // row's error_bound_ — so Σ entries_.energy_ + other_energy_ is the energy
+  // of every counted ray, and likewise for count_. Not a chain: it has no
+  // segments and no ring split, and the read-time reduction passes it through
+  // unchanged.
+  double other_energy_ = 0.0;
+  size_t other_count_ = 0;
+  // Distinct chains the producers' tables turned away over the run (Σ
+  // SimData::chain_id_overflow_count_): how many chains the "other" bucket
+  // stands for on the producer side. Rows evicted on the consumer side are
+  // not chains lost — they can come back — and are not in this number.
+  size_t truncated_chain_count_ = 0;
+  // max over entries_ of error_bound_ at the snapshot; 0 when no row ever
+  // took a slot over, which is the "no eviction happened" signal.
+  double max_row_error_ = 0.0;
   // Echo of the request the entries were counted under.
   RaypathRoiMode roi_mode_ = RaypathRoiMode::kFullSky;
   int cone_ring_count_ = 0;
