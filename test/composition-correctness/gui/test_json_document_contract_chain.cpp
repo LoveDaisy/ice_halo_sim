@@ -684,6 +684,8 @@ TEST(JsonImportContractChain, AJsonRenderLensWithATooShortFWarnsAndDefaults) {
   const std::string warning = PeekImportComplexFilterWarning();
   EXPECT_FALSE(warning.empty()) << "an angle was chosen for the user and never mentioned";
   EXPECT_NE(warning.find("\"f\""), std::string::npos) << "must name the field it could not use, got: " << warning;
+  EXPECT_NE(warning.find("too short"), std::string::npos)
+      << "must say WHY it could not use it — the no-fov-no-f wording also names \"f\", got: " << warning;
   EXPECT_NE(warning.find("90"), std::string::npos) << "must name the angle it chose, got: " << warning;
   ClearImportComplexFilterWarning();
 }
