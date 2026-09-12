@@ -14,6 +14,7 @@
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "core/exit_seam.hpp"
+#include "core/shared/ray_allocation_shared.hpp"
 
 namespace lumice {
 
@@ -212,6 +213,13 @@ struct SessionSpec {
   // using the actual partitioned ci_n; the CPU backend has no pool. 0 is a
   // valid default (CUDA falls back to P_ci=1 → today's behavior).
   size_t ray_num = 0;
+  // The q snapshot this session's layers deal by under scene.ray_allocation =
+  // adaptive (core/shared/ray_allocation_shared.hpp), or nullptr — every
+  // proportional scene and every analysis session — in which case each layer
+  // deals by p with every correction 1.0f and the backend keeps NO tally (the
+  // zero-cost path). Non-owning like `scene`: the Simulator holds the snapshot
+  // for the batch that Loaded it, which outlives the session.
+  const RayAllocationSnapshot* ray_alloc = nullptr;
 };
 
 // -----------------------------------------------------------------------------
@@ -661,6 +669,20 @@ class TraceBackend {
   // re-deal rays that already exist, and the denominator counts emissions, not
   // hops. Reset per BeginSession like the two counters above.
   virtual float GetLastBatchEmittedRayEquivalent(size_t ray_num) const { return static_cast<float>(ray_num); }
+
+  // What THIS session's layers measured for the online ray allocation, [mi][ci]
+  // in the layout of scene.ms_, under the contract in
+  // core/shared/ray_allocation_shared.hpp — and EMPTY whenever the session was
+  // given no q snapshot (SessionSpec::ray_alloc == nullptr), which is what the
+  // base returns: a backend that never deals by q has nothing to report. A
+  // backend that does deal by q must override with what it accumulated across
+  // every TraceLayer of the session, entry by entry: `rays` from the partition it
+  // dealt, Σw / Σw² from the true exits with that entry's own correction divided
+  // out. Reset per BeginSession like the counters above.
+  virtual const RayAllocationTally& GetLastBatchRayAllocationTally() const {
+    static const RayAllocationTally kEmpty;
+    return kEmpty;
+  }
 
   // Per-committed-config tally of GPU-side raypath-color drops (see
   // ColorDegradeCounts above). Base + CPU backend have no such caps and return

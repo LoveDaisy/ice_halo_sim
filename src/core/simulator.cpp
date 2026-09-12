@@ -657,43 +657,29 @@ double AccumulateFirstLayerEmittedRayEquivalentDelta(const size_t* crystal_ray_n
 }
 
 
-LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer) {
+LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer,
+                                             const std::vector<float>* q_for_layer) {
   LayerRayAllocation out;
   const size_t n = layer.setting_.size();
   out.partition_weights.reserve(n);
   for (const auto& s : layer.setting_) {
     out.partition_weights.push_back(s.crystal_proportion_);
   }
-  bool delivered = (mode == SceneConfig::RayAllocationMode::kAdaptive);
-  for (size_t i = 0; delivered && i < n; i++) {
-    delivered = layer.setting_[i].crystal_ray_alloc_weight_ >= 0.0f;
-  }
+  const bool delivered = (mode == SceneConfig::RayAllocationMode::kAdaptive) && q_for_layer != nullptr;
   if (!delivered) {
     out.corrections.assign(n, 1.0f);
     return out;
   }
-  std::vector<float> q;
-  q.reserve(n);
-  for (const auto& s : layer.setting_) {
-    q.push_back(s.crystal_ray_alloc_weight_);
-  }
-  out.corrections = ComputeRayAllocationCorrection(out.partition_weights, q);
-  out.partition_weights = std::move(q);
+  assert(q_for_layer->size() == n && "q snapshot row does not match the layer's entry count");
+  out.corrections = ComputeRayAllocationCorrection(out.partition_weights, *q_for_layer);
+  out.partition_weights = *q_for_layer;
   out.adaptive = true;
   return out;
 }
 
 
-void RayAllocationPilotStats::Reset(const SceneConfig& scene) {
-  layers.assign(scene.ms_.size(), {});
-  for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
-    layers[mi].assign(scene.ms_[mi].setting_.size(), Entry{});
-  }
-}
-
-
 std::vector<float> ComputeAdaptiveRayAllocationWeights(const std::vector<float>& p,
-                                                       const std::vector<RayAllocationPilotStats::Entry>& stats) {
+                                                       const std::vector<RayAllocationEntryTally>& stats) {
   assert(p.size() == stats.size());
   const size_t n = p.size();
   std::vector<float> q(n, 0.0f);
@@ -729,78 +715,106 @@ std::vector<float> ComputeAdaptiveRayAllocationWeights(const std::vector<float>&
 }
 
 
-bool RayAllocationEntryResolved(const RayAllocationPilotStats::Entry& entry, double target_rel_error,
-                                size_t zero_hit_resolve_rays) {
-  if (entry.rays == 0) {
+RayAllocationOnline::RayAllocationOnline(const SceneConfig& scene) {
+  p_.resize(scene.ms_.size());
+  cumulative_.resize(scene.ms_.size());
+  auto snapshot = std::make_shared<RayAllocationSnapshot>();
+  snapshot->q.resize(scene.ms_.size());
+  for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
+    const auto& layer = scene.ms_[mi].setting_;
+    p_[mi].reserve(layer.size());
+    for (const auto& s : layer) {
+      p_[mi].push_back(s.crystal_proportion_);
+    }
+    cumulative_[mi].assign(layer.size(), RayAllocationEntryTally{});
+    // Cold start: with nothing measured every raw_i is 0 and the live entries
+    // land on the floor together — a uniform deal, from the one formula.
+    snapshot->q[mi] = ComputeAdaptiveRayAllocationWeights(p_[mi], cumulative_[mi]);
+  }
+  current_ = std::move(snapshot);
+}
+
+
+std::shared_ptr<const RayAllocationSnapshot> RayAllocationOnline::Load() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return current_;
+}
+
+
+bool RayAllocationOnline::Accumulate(const RayAllocationTally& delta) {
+  if (delta.empty()) {
     return false;
   }
-  if (entry.exits == 0) {
-    return entry.rays >= zero_hit_resolve_rays;
+  assert(delta.size() == cumulative_.size() && "tally layer count does not match the scene");
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto snapshot = std::make_shared<RayAllocationSnapshot>();
+  snapshot->q.resize(cumulative_.size());
+  for (size_t mi = 0; mi < cumulative_.size(); mi++) {
+    assert(delta[mi].size() == cumulative_[mi].size() && "tally entry count does not match the layer");
+    for (size_t ci = 0; ci < cumulative_[mi].size(); ci++) {
+      cumulative_[mi][ci] += delta[mi][ci];
+    }
+    snapshot->q[mi] = ComputeAdaptiveRayAllocationWeights(p_[mi], cumulative_[mi]);
   }
-  const double n = static_cast<double>(entry.rays);
-  const double mean_w2 = entry.sum_w2 / n;
-  if (mean_w2 <= 0.0) {
-    return entry.rays >= zero_hit_resolve_rays;
+  current_ = std::move(snapshot);
+  size_t layer0_rays = 0;
+  if (!cumulative_.empty()) {
+    for (const auto& e : cumulative_[0]) {
+      layer0_rays += e.rays;
+    }
   }
-  // Sample variance of w² over the n dealt rays; the mean's standard error is
-  // √(var / n), and √mean's relative error is half the mean's.
-  const double var_w2 = std::max(0.0, entry.sum_w4 / n - mean_w2 * mean_w2);
-  const double rel_err_sqrt = 0.5 * std::sqrt(var_w2 / n) / mean_w2;
-  return rel_err_sqrt <= target_rel_error;
+  bool milestone = false;
+  while (layer0_rays >= next_log_rays_) {
+    next_log_rays_ *= 2;
+    milestone = true;
+  }
+  return milestone;
+}
+
+
+RayAllocationTally RayAllocationOnline::Cumulative() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return cumulative_;
+}
+
+
+void LogRayAllocationState(Logger& logger, const RayAllocationOnline& online, const char* prefix) {
+  const auto snapshot = online.Load();
+  const auto cumulative = online.Cumulative();
+  const auto& p = online.Proportions();
+  for (size_t mi = 0; mi < p.size(); mi++) {
+    // Reported as shares of the layer (Σq = 1 over the live entries), so the
+    // number reads directly against the proportion's own share.
+    double total_q = 0.0;
+    for (float q : snapshot->q[mi]) {
+      total_q += q;
+    }
+    for (size_t ci = 0; ci < p[mi].size(); ci++) {
+      const double share = total_q > 0.0 ? snapshot->q[mi][ci] / total_q : 0.0;
+      ILOG_INFO(logger, "{}: layer {} entry {}: p={:.4g} q={:.4g} rays={} sum_w={:.4g} sum_w2={:.4g}", prefix, mi, ci,
+                p[mi][ci], share, cumulative[mi][ci].rays, cumulative[mi][ci].sum_w, cumulative[mi][ci].sum_w2);
+    }
+  }
 }
 
 
 namespace {
 
-// The fields the pilot's tally does not depend on, masked to one value so that the
-// scene equality compares everything else. See RayAllocationPilotInputsChanged.
-SceneConfig MaskRayAllocationPilotIndifferentFields(const SceneConfig& scene) {
+// The fields the online tally does not depend on, masked to one value so that the
+// scene equality compares everything else. See RayAllocationInputsChanged.
+SceneConfig MaskRayAllocationIndifferentFields(const SceneConfig& scene) {
   SceneConfig masked = scene;
   masked.ray_num_ = 0;
   masked.geom_clock_ = 0;
   masked.ray_allocation_ = SceneConfig::RayAllocationMode::kProportional;
-  for (auto& layer : masked.ms_) {
-    for (auto& s : layer.setting_) {
-      s.crystal_ray_alloc_weight_ = -1.0f;
-    }
-  }
   return masked;
-}
-
-bool RayAllocationWeightsDelivered(const SceneConfig& scene) {
-  for (const auto& layer : scene.ms_) {
-    for (const auto& s : layer.setting_) {
-      if (s.crystal_ray_alloc_weight_ < 0.0f) {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 }  // namespace
 
 
-bool RayAllocationPilotInputsChanged(const SceneConfig& previous, const SceneConfig& next) {
-  return !(MaskRayAllocationPilotIndifferentFields(previous) == MaskRayAllocationPilotIndifferentFields(next));
-}
-
-
-bool CopyForwardRayAllocationWeights(const SceneConfig& previous, SceneConfig& next) {
-  if (previous.ms_.size() != next.ms_.size() || !RayAllocationWeightsDelivered(previous)) {
-    return false;
-  }
-  for (size_t mi = 0; mi < next.ms_.size(); mi++) {
-    if (previous.ms_[mi].setting_.size() != next.ms_[mi].setting_.size()) {
-      return false;
-    }
-  }
-  for (size_t mi = 0; mi < next.ms_.size(); mi++) {
-    for (size_t ci = 0; ci < next.ms_[mi].setting_.size(); ci++) {
-      next.ms_[mi].setting_[ci].crystal_ray_alloc_weight_ = previous.ms_[mi].setting_[ci].crystal_ray_alloc_weight_;
-    }
-  }
-  return true;
+bool RayAllocationInputsChanged(const SceneConfig& previous, const SceneConfig& next) {
+  return !(MaskRayAllocationIndifferentFields(previous) == MaskRayAllocationIndifferentFields(next));
 }
 
 
@@ -1430,6 +1444,26 @@ void Simulator::Run() {
       prev_generation = generation;
     }
 
+    // Online ray allocation (scene.ray_allocation = adaptive): ONE snapshot per
+    // SimBatch, Loaded here and held for every wavelength of the batch, so the q
+    // a ray is corrected by depends only on batches that finished before this one
+    // started; every wavelength's tally is Accumulated right after it is traced.
+    // Null on proportional and analysis batches — then nothing is loaded, nothing
+    // is tallied, and the layers deal by p with every correction 1.0f.
+    const std::shared_ptr<const RayAllocationSnapshot> ray_alloc_snapshot =
+        batch.ray_alloc_online_ ? batch.ray_alloc_online_->Load() : nullptr;
+    const RayAllocationSnapshot* ray_alloc = ray_alloc_snapshot.get();
+    RayAllocationTally wl_tally;
+    RayAllocationTally* tally_out = batch.ray_alloc_online_ ? &wl_tally : nullptr;
+    auto deliver_tally = [&]() {
+      if (batch.ray_alloc_online_ && !wl_tally.empty()) {
+        if (batch.ray_alloc_online_->Accumulate(wl_tally)) {
+          LogRayAllocationMilestone(*batch.ray_alloc_online_);
+        }
+        wl_tally.clear();
+      }
+    };
+
     bool use_backend =
         CanUseBackend(backend.get(), batch, logger_, warned_no_renders, warned_multi_renderer, warned_compat);
     // Analysis chain ids exist on the legacy CPU path only (v1, doc/raypath-
@@ -1456,12 +1490,14 @@ void Simulator::Run() {
       // catch-block fallback (run the legacy CPU path, report "backend not used").
       if (!backend) {
         SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
-                              crystal_cache, workspace, generation, ray_alloc_carry);
+                              crystal_cache, workspace, generation, ray_alloc_carry, ray_alloc, tally_out);
+        deliver_tally();
         return false;
       }
       try {
         SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], batch.raypath_color_, wl_param,
-                                         emitted_weight, batch.ray_num_, generation);
+                                         emitted_weight, batch.ray_num_, generation, ray_alloc, tally_out);
+        deliver_tally();
         return true;
       } catch (const BackendUnavailableError& e) {
         ILOG_WARN(
@@ -1478,7 +1514,8 @@ void Simulator::Run() {
         backend_active_.store(false, std::memory_order_release);
         active_backend_.store(BackendKind::kCpu, std::memory_order_release);
         SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
-                              crystal_cache, workspace, generation, ray_alloc_carry);
+                              crystal_cache, workspace, generation, ray_alloc_carry, ray_alloc, tally_out);
+        deliver_tally();
         return false;
       }
     };
@@ -1518,7 +1555,8 @@ void Simulator::Run() {
           run_with_backend(wl_param, emitted_weight);
         } else {
           SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
-                                crystal_cache, workspace, generation, ray_alloc_carry);
+                                crystal_cache, workspace, generation, ray_alloc_carry, ray_alloc, tally_out);
+          deliver_tally();
         }
       }
     } else {
@@ -1534,7 +1572,8 @@ void Simulator::Run() {
           run_with_backend(wl_param, wl_param.weight_);
         } else {
           SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, wl_param.weight_, batch.ray_num_,
-                                crystal_cache, workspace, generation, ray_alloc_carry);
+                                crystal_cache, workspace, generation, ray_alloc_carry, ray_alloc, tally_out);
+          deliver_tally();
         }
       }
     }
@@ -1551,7 +1590,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
                                       const WlParam& wl_param, float emitted_weight, size_t ray_num,
                                       CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
                                       std::vector<std::vector<double>>& ray_alloc_carry,
-                                      RayAllocationPilotStats* pilot_stats) {
+                                      const RayAllocationSnapshot* ray_alloc, RayAllocationTally* tally_out) {
   ILOG_TRACE(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
 
@@ -1566,6 +1605,17 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   const RaypathColorConfig& color_cfg = (raypath_color != nullptr) ? *raypath_color : empty_color;
   ColorGateTable color_gate_table = BuildColorGateTable(color_cfg, config);
   ILOG_DEBUG(logger_, "ColorGateTable built: {} entries (legacy path)", color_gate_table.entries_.size());
+
+  // This call's own tally (core/shared/ray_allocation_shared.hpp), sized only when
+  // there is somewhere to deliver it; folded into `tally_out` after the ms loop so
+  // a stop_ abort publishes nothing, exactly like the SimData it accompanies.
+  RayAllocationTally tally;
+  if (tally_out != nullptr) {
+    tally.resize(config.ms_.size());
+    for (size_t mi = 0; mi < config.ms_.size(); mi++) {
+      tally[mi].assign(config.ms_[mi].setting_.size(), RayAllocationEntryTally{});
+    }
+  }
 
   // Recycled across batches instead of freshly allocated: see the SimWorkspace
   // member comment for why this matters (Windows CRT heap-cache threshold) and
@@ -1622,7 +1672,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     auto ms_crystal_cnt = m.setting_.size();
     // partition_weights: what the partition deals by (p, or q under adaptive);
     // corrections: what each ray born into ci is scaled by (all 1.0f under p).
-    const LayerRayAllocation alloc = ResolveLayerRayAllocation(config.ray_allocation_, m);
+    const LayerRayAllocation alloc =
+        ResolveLayerRayAllocation(config.ray_allocation_, m, ray_alloc != nullptr ? &ray_alloc->q[mi] : nullptr);
     const std::vector<float>& proportions = alloc.partition_weights;
     const std::vector<float>& corrections = alloc.corrections;
 
@@ -1677,14 +1728,19 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
       if (!s.crystal_.axis_.IsAxisDeterministic()) {
         stochastic_orientation_sample_count += crystal_ray_num[ci];
       }
-      // Pilot tally, denominator half: what this (layer, entry) was dealt. Exact
+      // Online tally, denominator half: what this (layer, entry) was dealt. Exact
       // for the same reason the orientation count above is — a stop_ below
-      // returns before anything is published, and the pilot never sets stop_.
-      RayAllocationPilotStats::Entry* pilot_entry = nullptr;
-      if (pilot_stats != nullptr) {
-        pilot_entry = &pilot_stats->layers[mi][ci];
-        pilot_entry->rays += crystal_ray_num[ci];
+      // returns before anything is published. Only a layer dealt by q is
+      // measured: a proportional layer has no q to feed.
+      RayAllocationEntryTally* tally_entry = nullptr;
+      if (tally_out != nullptr && alloc.adaptive) {
+        tally_entry = &tally[mi][ci];
+        tally_entry->rays += crystal_ray_num[ci];
       }
+      // The tally is of w with this entry's own correction divided out (see the
+      // contract in core/shared/ray_allocation_shared.hpp); every root of this ci
+      // was born at × corrections[ci], so one reciprocal serves the whole ci.
+      const double tally_inv_c = corrections[ci] > 0.0f ? 1.0 / static_cast<double>(corrections[ci]) : 0.0;
 
       // Look up cross-call cache for deterministic crystal params.
       const CrystalParam* param_ptr = &s.crystal_.param_;
@@ -1814,15 +1870,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
               outgoing_d.push_back(r.d_[1]);
               outgoing_d.push_back(r.d_[2]);
               outgoing_w.push_back(r.w_);
-              // Pilot tally, numerator half: the same rays, at the same point,
-              // that a render would hand the consumer as outgoing_w_.
-              if (pilot_entry != nullptr) {
-                const double w = r.w_;
-                const double w2 = w * w;
-                pilot_entry->sum_w += w;
-                pilot_entry->sum_w2 += w2;
-                pilot_entry->sum_w4 += w2 * w2;
-                pilot_entry->exits++;
+              // Online tally, numerator half: the same rays, at the same point,
+              // that the consumer is handed as outgoing_w_.
+              if (tally_entry != nullptr) {
+                const double w = static_cast<double>(r.w_) * tally_inv_c;
+                tally_entry->sum_w += w;
+                tally_entry->sum_w2 += w * w;
               }
               // task-331.2: CollectData has now OR'd this layer's component
               // bits into the mask (0 only when no summand matched / no map).
@@ -1858,10 +1911,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   if (stop_) {
     return;
   }
-  // Pilot mode: the tally is the whole product of this call. See the parameter's
-  // contract in the header for why no SimData is emplaced.
-  if (pilot_stats != nullptr) {
-    return;
+  if (tally_out != nullptr) {
+    *tally_out = std::move(tally);
   }
 
   SimData sim_data;
@@ -1937,6 +1988,10 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
 //
 // `stop_` is checked between TraceLayer/Recombine calls. On stop the session
 // is closed via EndSession (RAII-equivalent) but no SimData is emplaced.
+void Simulator::LogRayAllocationMilestone(const RayAllocationOnline& online) {
+  LogRayAllocationState(logger_, online, "RayAllocationOnline");
+}
+
 void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   // Drain-OR-settle the pending third-clock window: with a live backend this
   // reads the device XYZ accumulator back into a SimData and enqueues it; with a
@@ -2017,7 +2072,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                                  const RenderConfig& render,
                                                  std::shared_ptr<const RaypathColorConfig> raypath_color,
                                                  const WlParam& wl_param, float emitted_weight, size_t ray_num,
-                                                 uint64_t generation) {
+                                                 uint64_t generation, const RayAllocationSnapshot* ray_alloc,
+                                                 RayAllocationTally* tally_out) {
   ILOG_TRACE(logger_, "Run(backend): ray({}), wl({:.1f},{:.2f})", ray_num, wl_param.wl_, wl_param.weight_);
 
   if (ray_num == 0 || scene.ms_.empty()) {
@@ -2033,7 +2089,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   // Task 260.6: hand the backend `effective_seed_` (non-zero) so device-gen
   // activates even when the user-facing `seed_` is 0 (default random mode).
   // When `seed_ != 0` this equals `seed_` → determinism contract unchanged.
-  SessionSpec spec{ &scene, &render, wl_param, effective_seed_, std::move(raypath_color), ray_num };
+  SessionSpec spec{ &scene, &render, wl_param, effective_seed_, std::move(raypath_color), ray_num, ray_alloc };
   backend.BeginSession(spec);
   // RAII guard: EndSession() is called on all exit paths, including exceptions
   // thrown by TraceLayer/Recombine (which would otherwise skip EndSession).
@@ -2099,6 +2155,14 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
 
   if (aborted) {
     return;
+  }
+
+  // The backend's per-(layer, entry) tally for this session, handed over before
+  // any of the three publish paths below returns — the third-clock window
+  // included, whose SimData is deferred but whose tally must not be: the next
+  // batch's q is what it feeds, and that batch starts as soon as this returns.
+  if (tally_out != nullptr) {
+    *tally_out = backend.GetLastBatchRayAllocationTally();
   }
 
   int w = render.resolution_[0];
@@ -2236,132 +2300,6 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.outgoing_component_ = std::move(exit_component);  // task-331.1
   sim_data.exit_records_ = std::move(exit_records);
   data_queue_->Emplace(std::move(sim_data));
-}
-
-RayAllocationPilotReport Simulator::RunRayAllocationPilot(SceneConfig& scene, const RayAllocationPilotBudget& budget) {
-  const auto t0 = std::chrono::steady_clock::now();
-  RayAllocationPilotReport report;
-  report.stats.Reset(scene);
-
-  // K per layer: the entries the floor is for and the ones the budget scales by.
-  size_t max_live = 0;
-  for (const auto& layer : scene.ms_) {
-    size_t live = 0;
-    for (const auto& s : layer.setting_) {
-      if (s.crystal_proportion_ > 0.0f) {
-        live++;
-      }
-    }
-    max_live = std::max(max_live, live);
-  }
-  if (scene.ms_.empty() || max_live == 0) {
-    // Nothing to deal by. Every entry is delivered a 0 so the layers read as
-    // adaptive-with-nothing-dealt, which is what proportional does here too.
-    for (auto& layer : scene.ms_) {
-      for (auto& s : layer.setting_) {
-        s.crystal_ray_alloc_weight_ = 0.0f;
-      }
-    }
-    report.converged = true;
-    return report;
-  }
-
-  // The pass traces a proportional copy: the tally must be of the unmodified
-  // energies, and a scene arriving with stale weights would otherwise be dealt by
-  // them and have their corrections folded into every w.
-  SceneConfig pilot_scene = scene;
-  pilot_scene.ray_allocation_ = SceneConfig::RayAllocationMode::kProportional;
-
-  // One-shot Simulator, driven on this thread. Its queues exist because the ctor
-  // takes them; nothing is ever put on either (pilot mode emplaces no SimData).
-  Simulator pilot(std::make_shared<Queue<SimBatch>>(), std::make_shared<Queue<SimData>>(), kRayAllocationPilotSeed);
-  RandomNumberGenerator::GetInstance().SetSeed(kRayAllocationPilotSeed);
-  CrystalCache crystal_cache;
-  SimWorkspace workspace;
-  std::vector<std::vector<double>> ray_alloc_carry;
-  const size_t chunk = std::max<size_t>(1, budget.chunk_rays);
-
-  // Spectrum handling mirrors Run()'s legacy branch: an illuminant draws one
-  // uniform wavelength per chunk at its SPD weight, a discrete list is cycled
-  // chunk by chunk. Every entry of a chunk sees the same wavelength, so a common
-  // spectral factor cancels in the per-layer normalization; cycling the list keeps
-  // the refractive-index dependence averaged the way the render averages it.
-  const auto& spectrum = pilot_scene.light_source_.spectrum_;
-  const auto* illuminant = std::get_if<IlluminantType>(&spectrum);
-  const std::vector<WlParam>* wl_list = std::get_if<std::vector<WlParam>>(&spectrum);
-  size_t wl_cursor = 0;
-  auto trace = [&](size_t rays) {
-    size_t traced = 0;
-    while (traced < rays) {
-      const size_t n = std::min(chunk, rays - traced);
-      WlParam wl_param;
-      if (illuminant != nullptr) {
-        const float wl = 380.0f + pilot.rng_.GetUniform() * 400.0f;
-        wl_param = WlParam{ wl, GetIlluminantSpd(*illuminant, wl) };
-      } else if (wl_list != nullptr && !wl_list->empty()) {
-        wl_param = (*wl_list)[wl_cursor % wl_list->size()];
-        wl_cursor++;
-      }
-      pilot.SimulateOneWavelength(pilot_scene, nullptr, wl_param, wl_param.weight_, n, crystal_cache, workspace,
-                                  /*generation=*/0, ray_alloc_carry, &report.stats);
-      traced += n;
-    }
-    report.total_rays += rays;
-  };
-  auto all_resolved = [&]() {
-    for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
-      for (size_t ci = 0; ci < scene.ms_[mi].setting_.size(); ci++) {
-        if (scene.ms_[mi].setting_[ci].crystal_proportion_ <= 0.0f) {
-          continue;
-        }
-        if (!RayAllocationEntryResolved(report.stats.layers[mi][ci], budget.target_rel_error,
-                                        budget.zero_hit_resolve_rays)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-
-  size_t initial = budget.initial_rays;
-  if (initial == 0) {
-    initial = std::max(RayAllocationPilotBudget::kMinInitialRays, RayAllocationPilotBudget::kRaysPerEntry * max_live);
-  }
-  trace(initial);
-  report.converged = all_resolved();
-  // Detect → double → continue → bounded stop. Each round traces as many rays
-  // again as have been traced so far, so the cumulative budget doubles.
-  while (!report.converged && report.doublings < budget.max_doublings) {
-    trace(report.total_rays);
-    report.doublings++;
-    report.converged = all_resolved();
-  }
-
-  for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
-    auto& layer = scene.ms_[mi];
-    std::vector<float> p;
-    p.reserve(layer.setting_.size());
-    for (const auto& s : layer.setting_) {
-      p.push_back(s.crystal_proportion_);
-    }
-    const auto q = ComputeAdaptiveRayAllocationWeights(p, report.stats.layers[mi]);
-    for (size_t ci = 0; ci < layer.setting_.size(); ci++) {
-      layer.setting_[ci].crystal_ray_alloc_weight_ = q[ci];
-    }
-  }
-
-  report.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-  ILOG_INFO(pilot.logger_, "RayAllocationPilot: ran {} rays ({} doublings, {}) in {:.1f}ms", report.total_rays,
-            report.doublings, report.converged ? "converged" : "budget cap reached", report.elapsed_ms);
-  for (size_t mi = 0; mi < scene.ms_.size(); mi++) {
-    for (size_t ci = 0; ci < scene.ms_[mi].setting_.size(); ci++) {
-      const auto& e = report.stats.layers[mi][ci];
-      ILOG_INFO(pilot.logger_, "RayAllocationPilot: layer {} entry {}: p={:.4g} q={:.4g} rays={} exits={}", mi, ci,
-                scene.ms_[mi].setting_[ci].crystal_proportion_, scene.ms_[mi].setting_[ci].crystal_ray_alloc_weight_,
-                e.rays, e.exits);
-    }
-  }
-  return report;
 }
 
 

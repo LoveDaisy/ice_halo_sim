@@ -22,7 +22,7 @@
 // power (every allocation lands the same total, corrected or not), which is
 // why entry 1 is a different crystal AND is filtered dark.
 //
-// Three checks per backend, in decreasing strength:
+// Four checks per backend, in decreasing strength:
 //   1. q == p under adaptive vs proportional: the same session bit for bit
 //      (CPU: exit records identical; GPU: landed weight equal to the atomic-add
 //      reordering noise, which is the only thing that can differ).
@@ -31,6 +31,16 @@
 //      from the denominator the Simulator will charge).
 //   3. CPU only: entry 1 really is dark, and entry 0's exit count really did
 //      grow by ~1.5× — the partition dealt by q, not by p.
+//   4. The online tally the session reports (GetLastBatchRayAllocationTally,
+//      contract in core/shared/ray_allocation_shared.hpp): `rays` is the
+//      partition's own number, the dark entry's Σw is exactly 0, and the bright
+//      entry's Σw with its correction put back equals the energy that landed —
+//      the same rays, read on the device at the emit site and on the host from
+//      the accumulator. On a proportional session the tally is EMPTY (nothing
+//      sized, nothing written).
+// q reaches a backend through SessionSpec::ray_alloc, a snapshot the caller owns
+// for the session — the same seam the Simulator uses — so a test hands the
+// backend a snapshot directly rather than going through RayAllocationOnline.
 // Under device gen (the production GPU path) the seed pins every PCG stream, so
 // the GPU arms are as repeatable as the CPU one; the host-gen fallback is run
 // as its own arm because it writes the root weight on a different line.
@@ -40,6 +50,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "config/crystal_config.hpp"
@@ -70,8 +81,12 @@ constexpr uint32_t kSeed = 4242;
 // Landed weight is a sampled quantity (per-ray landed fraction of one crystal);
 // the failure shapes read 1.5× / 0.667×.
 constexpr double kLandedTol = 0.05;
+// The GPU arms' tally is a float atomic sum on the device against a float atomic
+// landed sum taken at the same emit sites: the two differ only by add order and
+// by the fp32 → fp64 conversion point, well under 1e-4 at kN.
+constexpr double kGpuTallyTol = 1e-4;
 
-ScatteringSetting MakeEntry(IdType id, float h, float q, bool dark) {
+ScatteringSetting MakeEntry(IdType id, float h, bool dark) {
   ScatteringSetting s;
   s.crystal_.id_ = id;
   PrismCrystalParam prism;
@@ -89,11 +104,10 @@ ScatteringSetting MakeEntry(IdType id, float h, float q, bool dark) {
     s.filter_ = FilterConfig{ kInvalidId, FilterConfig::kSymNone, FilterConfig::kFilterIn, NoneFilterParam{} };
   }
   s.crystal_proportion_ = 1.0f;
-  s.crystal_ray_alloc_weight_ = q;
   return s;
 }
 
-SceneConfig MakeScene(SceneConfig::RayAllocationMode mode, float q0, float q1) {
+SceneConfig MakeScene(SceneConfig::RayAllocationMode mode) {
   SceneConfig scene;
   scene.ray_num_ = 0;
   scene.max_hits_ = 6;
@@ -102,8 +116,8 @@ SceneConfig MakeScene(SceneConfig::RayAllocationMode mode, float q0, float q1) {
   scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
   MsInfo ms;
   ms.prob_ = 0.0f;
-  ms.setting_.push_back(MakeEntry(0, 1.0f, q0, /*dark=*/false));
-  ms.setting_.push_back(MakeEntry(1, 0.3f, q1, /*dark=*/true));
+  ms.setting_.push_back(MakeEntry(0, 1.0f, /*dark=*/false));
+  ms.setting_.push_back(MakeEntry(1, 0.3f, /*dark=*/true));
   scene.ms_.push_back(std::move(ms));
   return scene;
 }
@@ -123,38 +137,57 @@ RenderConfig MakeFullSkyRender() {
   return cfg;
 }
 
-SceneConfig Proportional() {
-  return MakeScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f);
+// One scene per arm plus the snapshot it deals by; the snapshot outlives the
+// session, as SessionSpec's non-owning pointer requires.
+struct Arm {
+  SceneConfig scene;
+  std::shared_ptr<const RayAllocationSnapshot> snapshot;  // null = deal by p
+};
+
+Arm Proportional() {
+  return { MakeScene(SceneConfig::RayAllocationMode::kProportional), nullptr };
 }
-SceneConfig AdaptiveEqual() {
-  return MakeScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 1.0f);
+Arm Adaptive(float q0, float q1) {
+  auto snapshot = std::make_shared<RayAllocationSnapshot>();
+  snapshot->q = { { q0, q1 } };
+  return { MakeScene(SceneConfig::RayAllocationMode::kAdaptive), std::move(snapshot) };
 }
-SceneConfig AdaptiveSkewed() {
-  return MakeScene(SceneConfig::RayAllocationMode::kAdaptive, 3.0f, 1.0f);
+Arm AdaptiveEqual() {
+  return Adaptive(1.0f, 1.0f);
+}
+Arm AdaptiveSkewed() {
+  return Adaptive(3.0f, 1.0f);
 }
 // c_0 for q = (3, 1) against p = (1, 1): the largest correction is c_1 = 2, the
 // ±1-ray tolerance on the emitted equivalent.
 constexpr float kSkewedMaxCorrection = 2.0f;
+// c_0 itself, what the bright entry's tally has to be multiplied by to read as
+// landed energy again.
+constexpr double kSkewedBrightCorrection = (0.5) / (0.75);
+// n_0 under q = (3, 1): PartitionCrystalRayNum's rounding of 0.75 · kN.
+constexpr size_t kSkewedBrightRays = kN * 3 / 4;
 
 struct ArmResult {
   double landed = 0.0;
   float emitted_equiv = 0.0f;
   std::vector<ExitRayRecord> exits;  // CPU arm only
+  RayAllocationTally tally;
 };
 
-SessionSpec MakeSpec(const SceneConfig& scene, const RenderConfig& render) {
+SessionSpec MakeSpec(const Arm& arm, const RenderConfig& render) {
   SessionSpec spec;
-  spec.scene = &scene;
+  spec.scene = &arm.scene;
   spec.render = &render;
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = kSeed;
   spec.ray_num = kN;
+  spec.ray_alloc = arm.snapshot.get();
   return spec;
 }
 
-ArmResult RunCpuArm(const SceneConfig& scene, const RenderConfig& render) {
+ArmResult RunCpuArm(const Arm& arm, const RenderConfig& render) {
   CpuTraceBackend backend;
-  backend.BeginSession(MakeSpec(scene, render));
+  backend.BeginSession(MakeSpec(arm, render));
   HostRayBatch host;
   host.count = kN;
   auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
@@ -162,6 +195,7 @@ ArmResult RunCpuArm(const SceneConfig& scene, const RenderConfig& render) {
   ArmResult r;
   r.landed = backend.TotalLandedWeight();
   r.emitted_equiv = backend.GetLastBatchEmittedRayEquivalent(kN);
+  r.tally = backend.GetLastBatchRayAllocationTally();
   backend.ReadbackExitRays(r.exits);
   backend.EndSession();
   return r;
@@ -186,16 +220,38 @@ void ExpectSkewedInvariants(const ArmResult& prop, const ArmResult& skew, const 
       << arm << ": landed prop=" << prop.landed << " skew=" << skew.landed;
 }
 
+// Check 4: the tally. `tol` is the relative slack between the Σw the tally holds
+// (double on the CPU arm, float atomics on the GPU arms) and the backend's landed
+// weight, a float running sum on every arm.
+void ExpectSkewedTally(const ArmResult& prop, const ArmResult& skew, const char* arm, double tol) {
+  EXPECT_TRUE(prop.tally.empty()) << arm << ": a proportional session must keep no tally";
+  ASSERT_EQ(skew.tally.size(), 1u) << arm;
+  ASSERT_EQ(skew.tally[0].size(), 2u) << arm;
+  const auto& bright = skew.tally[0][0];
+  const auto& dark = skew.tally[0][1];
+  EXPECT_EQ(bright.rays, kSkewedBrightRays) << arm;
+  EXPECT_EQ(dark.rays, kN - kSkewedBrightRays) << arm;
+  EXPECT_EQ(dark.sum_w, 0.0) << arm << ": the dark entry lands nothing, so it tallies nothing";
+  EXPECT_EQ(dark.sum_w2, 0.0) << arm;
+  ASSERT_GT(bright.sum_w, 0.0) << arm;
+  // The tally holds w with c_0 divided out; put it back and it is the landed
+  // weight — every exit lands on this full-sphere frame.
+  EXPECT_NEAR(bright.sum_w * kSkewedBrightCorrection / skew.landed, 1.0, tol) << arm;
+  // Σw² of the same rays: positive, and no larger than (Σw)².
+  EXPECT_GT(bright.sum_w2, 0.0) << arm;
+  EXPECT_LE(bright.sum_w2, bright.sum_w * bright.sum_w) << arm;
+}
+
 }  // namespace
 
 // ============================== CpuTraceBackend ==============================
 
 TEST(RayAllocationBackends, CpuQEqualToPIsBitIdenticalToProportional) {
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto adap_scene = AdaptiveEqual();
-  auto prop = RunCpuArm(prop_scene, render);
-  auto adap = RunCpuArm(adap_scene, render);
+  const auto prop_arm = Proportional();
+  const auto adap_arm = AdaptiveEqual();
+  auto prop = RunCpuArm(prop_arm, render);
+  auto adap = RunCpuArm(adap_arm, render);
   EXPECT_EQ(prop.landed, adap.landed);
   EXPECT_EQ(prop.emitted_equiv, adap.emitted_equiv);
   ASSERT_EQ(prop.exits.size(), adap.exits.size());
@@ -213,11 +269,23 @@ TEST(RayAllocationBackends, CpuQEqualToPIsBitIdenticalToProportional) {
 
 TEST(RayAllocationBackends, CpuDealsByQAndLandsTheSameEnergy) {
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto skew_scene = AdaptiveSkewed();
-  auto prop = RunCpuArm(prop_scene, render);
-  auto skew = RunCpuArm(skew_scene, render);
+  const auto prop_arm = Proportional();
+  const auto skew_arm = AdaptiveSkewed();
+  auto prop = RunCpuArm(prop_arm, render);
+  auto skew = RunCpuArm(skew_arm, render);
   ExpectSkewedInvariants(prop, skew, "cpu");
+  // TotalLandedWeight is a float running sum (ScatterOutgoingToXyz), so even the
+  // CPU arm reads against it at the fp32 tolerance; the exact check is below.
+  ExpectSkewedTally(prop, skew, "cpu", kGpuTallyTol);
+  // On the CPU arm the tally can also be read against the exit records one
+  // by one: Σ over entry 0's records of weight, exactly.
+  double bright_exit_w = 0.0;
+  for (const auto& e : skew.exits) {
+    if (e.crystal_id == 0) {
+      bright_exit_w += e.weight;
+    }
+  }
+  EXPECT_NEAR(skew.tally[0][0].sum_w * kSkewedBrightCorrection, bright_exit_w, bright_exit_w * 1e-6);
   // The scene's premise: entry 1 is dark in both arms.
   EXPECT_EQ(CountExitsOf(prop.exits, 1), 0u);
   EXPECT_EQ(CountExitsOf(skew.exits, 1), 0u);
@@ -234,15 +302,16 @@ TEST(RayAllocationBackends, CpuDealsByQAndLandsTheSameEnergy) {
 
 namespace {
 
-ArmResult RunMetalArm(const SceneConfig& scene, const RenderConfig& render) {
+ArmResult RunMetalArm(const Arm& arm, const RenderConfig& render) {
   MetalTraceBackend backend;
-  backend.BeginSession(MakeSpec(scene, render));
+  backend.BeginSession(MakeSpec(arm, render));
   HostRayBatch host;
   host.count = kN;
   auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
   EXPECT_NE(handle, nullptr);
   ArmResult r;
   r.emitted_equiv = backend.GetLastBatchEmittedRayEquivalent(kN);
+  r.tally = backend.GetLastBatchRayAllocationTally();
   std::vector<float> xyz(static_cast<size_t>(render.resolution_[0]) * render.resolution_[1] * 3u, 0.0f);
   XyzImageData img{ xyz.data(), render.resolution_[0], render.resolution_[1] };
   float landed = 0.0f;
@@ -260,10 +329,10 @@ TEST(RayAllocationBackends, MetalQEqualToPMatchesProportional) {
   }
   metal_test::EnableDeviceGenForStatisticalParity();
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto adap_scene = AdaptiveEqual();
-  auto prop = RunMetalArm(prop_scene, render);
-  auto adap = RunMetalArm(adap_scene, render);
+  const auto prop_arm = Proportional();
+  const auto adap_arm = AdaptiveEqual();
+  auto prop = RunMetalArm(prop_arm, render);
+  auto adap = RunMetalArm(adap_arm, render);
   ASSERT_GT(prop.landed, 0.0);
   EXPECT_EQ(prop.emitted_equiv, adap.emitted_equiv);
   // Same rays, same weights (× 1.0f); only the device atomic-add order can differ.
@@ -276,11 +345,12 @@ TEST(RayAllocationBackends, MetalDeviceGenDealsByQAndLandsTheSameEnergy) {
   }
   metal_test::EnableDeviceGenForStatisticalParity();
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto skew_scene = AdaptiveSkewed();
-  auto prop = RunMetalArm(prop_scene, render);
-  auto skew = RunMetalArm(skew_scene, render);
+  const auto prop_arm = Proportional();
+  const auto skew_arm = AdaptiveSkewed();
+  auto prop = RunMetalArm(prop_arm, render);
+  auto skew = RunMetalArm(skew_arm, render);
   ExpectSkewedInvariants(prop, skew, "metal/device-gen");
+  ExpectSkewedTally(prop, skew, "metal/device-gen", kGpuTallyTol);
 }
 
 TEST(RayAllocationBackends, MetalHostGenDealsByQAndLandsTheSameEnergy) {
@@ -292,12 +362,13 @@ TEST(RayAllocationBackends, MetalHostGenDealsByQAndLandsTheSameEnergy) {
   // read at backend construction, so each arm builds its own backend.
   metal_test::ForceHostGenForByteIdentity();
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto skew_scene = AdaptiveSkewed();
-  auto prop = RunMetalArm(prop_scene, render);
-  auto skew = RunMetalArm(skew_scene, render);
+  const auto prop_arm = Proportional();
+  const auto skew_arm = AdaptiveSkewed();
+  auto prop = RunMetalArm(prop_arm, render);
+  auto skew = RunMetalArm(skew_arm, render);
   metal_test::EnableDeviceGenForStatisticalParity();
   ExpectSkewedInvariants(prop, skew, "metal/host-gen");
+  ExpectSkewedTally(prop, skew, "metal/host-gen", kGpuTallyTol);
 }
 
 #endif  // __APPLE__
@@ -308,15 +379,16 @@ TEST(RayAllocationBackends, MetalHostGenDealsByQAndLandsTheSameEnergy) {
 
 namespace {
 
-ArmResult RunCudaArm(const SceneConfig& scene, const RenderConfig& render) {
+ArmResult RunCudaArm(const Arm& arm, const RenderConfig& render) {
   CudaTraceBackend backend;
-  backend.BeginSession(MakeSpec(scene, render));
+  backend.BeginSession(MakeSpec(arm, render));
   HostRayBatch host;
   host.count = kN;
   auto handle = backend.TraceLayer(RootRaySource::FromHost(host));
   EXPECT_NE(handle, nullptr);
   ArmResult r;
   r.emitted_equiv = backend.GetLastBatchEmittedRayEquivalent(kN);
+  r.tally = backend.GetLastBatchRayAllocationTally();
   std::vector<float> xyz(static_cast<size_t>(render.resolution_[0]) * render.resolution_[1] * 3u, 0.0f);
   XyzImageData img{ xyz.data(), render.resolution_[0], render.resolution_[1] };
   float landed = 0.0f;
@@ -334,10 +406,10 @@ TEST(RayAllocationBackends, CudaQEqualToPMatchesProportional) {
   }
   test::UnsetEnvVar("LUMICE_DISABLE_DEVICE_GEN");
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto adap_scene = AdaptiveEqual();
-  auto prop = RunCudaArm(prop_scene, render);
-  auto adap = RunCudaArm(adap_scene, render);
+  const auto prop_arm = Proportional();
+  const auto adap_arm = AdaptiveEqual();
+  auto prop = RunCudaArm(prop_arm, render);
+  auto adap = RunCudaArm(adap_arm, render);
   ASSERT_GT(prop.landed, 0.0);
   EXPECT_EQ(prop.emitted_equiv, adap.emitted_equiv);
   EXPECT_NEAR(adap.landed / prop.landed, 1.0, 1e-4);
@@ -349,11 +421,12 @@ TEST(RayAllocationBackends, CudaDeviceGenDealsByQAndLandsTheSameEnergy) {
   }
   test::UnsetEnvVar("LUMICE_DISABLE_DEVICE_GEN");
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto skew_scene = AdaptiveSkewed();
-  auto prop = RunCudaArm(prop_scene, render);
-  auto skew = RunCudaArm(skew_scene, render);
+  const auto prop_arm = Proportional();
+  const auto skew_arm = AdaptiveSkewed();
+  auto prop = RunCudaArm(prop_arm, render);
+  auto skew = RunCudaArm(skew_arm, render);
   ExpectSkewedInvariants(prop, skew, "cuda/device-gen");
+  ExpectSkewedTally(prop, skew, "cuda/device-gen", kGpuTallyTol);
 }
 
 TEST(RayAllocationBackends, CudaHostGenDealsByQAndLandsTheSameEnergy) {
@@ -365,10 +438,10 @@ TEST(RayAllocationBackends, CudaHostGenDealsByQAndLandsTheSameEnergy) {
   // BeginSession, so setting it before each arm's session is enough.
   test::SetEnvVar("LUMICE_DISABLE_DEVICE_GEN", "1");
   const auto render = MakeFullSkyRender();
-  const auto prop_scene = Proportional();
-  const auto skew_scene = AdaptiveSkewed();
-  auto prop = RunCudaArm(prop_scene, render);
-  auto skew = RunCudaArm(skew_scene, render);
+  const auto prop_arm = Proportional();
+  const auto skew_arm = AdaptiveSkewed();
+  auto prop = RunCudaArm(prop_arm, render);
+  auto skew = RunCudaArm(skew_arm, render);
   test::UnsetEnvVar("LUMICE_DISABLE_DEVICE_GEN");
   if (prop.landed == 0.0) {
     // The CUDA host-roots fallback lands NOTHING on this tree, independent of
@@ -382,6 +455,7 @@ TEST(RayAllocationBackends, CudaHostGenDealsByQAndLandsTheSameEnergy) {
                     "the allocation invariants cannot be read off a black frame";
   }
   ExpectSkewedInvariants(prop, skew, "cuda/host-gen");
+  ExpectSkewedTally(prop, skew, "cuda/host-gen", kGpuTallyTol);
 }
 
 #endif  // LUMICE_CUDA_ENABLED

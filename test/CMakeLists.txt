@@ -104,7 +104,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   # The ray-allocation pilot at CommitConfig: runs under adaptive, never under proportional,
   # and is debounced across commits that change nothing its tally depends on.
-  "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_allocation_pilot_commit.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_allocation_online_commit.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_scene_batch_publish_order.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"

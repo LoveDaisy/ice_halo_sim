@@ -428,15 +428,26 @@ struct WlEntry {
   float cmf_z;
 };
 
-// Merged exit-stats accumulator for trace_layer_kernel. One 8-byte struct
-// bound at buffer(14) (count + w_sum atomics); buffer(15) carries the per-ray
-// pool-shape offset (`r_pool_shape`) that the K-shape geometry pool feeds in.
+// Merged exit-stats accumulator for trace_layer_kernel. One 16-byte struct
+// bound at buffer(14); buffer(15) carries the per-ray pool-shape offset
+// (`r_pool_shape`) that the K-shape geometry pool feeds in.
 // Field order MUST match the host mirror `struct ExitStats` in
-// metal_trace_backend.mm (see the static_assert there). Both fields sit at
-// natural 4-byte alignment; total sizeof == 8.
+// metal_trace_backend.mm (see the static_assert there). All fields sit at
+// natural 4-byte alignment; total sizeof == 16.
+//   count / w_sum     : diagnostic tally of EVERY filter-pass polygon exit —
+//                       continuation writes included (parity harness).
+//   tally_w / tally_w2: the online ray-allocation tally
+//                       (core/shared/ray_allocation_shared.hpp): Σw and Σw² over
+//                       the rays handed to the IMAGE only — the two device-fused
+//                       exit tails, never the continuation write — and only when
+//                       prm.alloc_tally != 0 (an adaptive dispatch); a
+//                       proportional dispatch skips both adds. The host divides
+//                       this dispatch's correction out after readback.
 struct ExitStats {
   atomic_uint  count;
   atomic_float w_sum;
+  atomic_float tally_w;
+  atomic_float tally_w2;
 };
 
 struct KernelParams {
@@ -538,6 +549,11 @@ struct KernelParams {
   // MUST mirror the host KernelParams field of the same name (see the host-side static_assert
   // on sizeof(KernelParams)).
   lm_proj::ProjParams anchor_proj;
+  // 1 when this dispatch's layer is dealt by q (scene.ray_allocation = adaptive with a
+  // snapshot delivered) and the two exit tails must add into exit_stats->tally_w /
+  // tally_w2; 0 on every proportional dispatch, which then pays one branch per exit and
+  // no atomic. Mirrors the host field of the same name.
+  uint  alloc_tally;
 };
 
 // Add one emitted ray's Y into the exposure-anchor plane.
@@ -975,6 +991,11 @@ kernel void trace_layer_kernel(
               // Diagnostic counters (not consumed by parity tests).
               atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
+              // Online ray-allocation tally: this ray reached the image.
+              if (prm.alloc_tally != 0u) {
+                atomic_fetch_add_explicit(&exit_stats->tally_w, cw, memory_order_relaxed);
+                atomic_fetch_add_explicit(&exit_stats->tally_w2, cw * cw, memory_order_relaxed);
+              }
             }
           }
           // filter_fail: implicit drop (no buffer write, no atomic counter
@@ -1100,6 +1121,11 @@ kernel void trace_layer_kernel(
             }
             atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
             atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
+            // Online ray-allocation tally: this ray reached the image.
+            if (prm.alloc_tally != 0u) {
+              atomic_fetch_add_explicit(&exit_stats->tally_w, cw, memory_order_relaxed);
+              atomic_fetch_add_explicit(&exit_stats->tally_w2, cw * cw, memory_order_relaxed);
+            }
           }
           // filter_fail: implicit drop — no pixel write, no diagnostic counter bump.
         }

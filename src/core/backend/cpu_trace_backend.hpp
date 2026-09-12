@@ -86,6 +86,10 @@ class CpuTraceBackend : public TraceBackend {
     return static_cast<float>(static_cast<double>(ray_num) + emitted_ray_equivalent_delta_this_batch_);
   }
 
+  // The online ray-allocation tally of this session, [mi][ci]; empty unless the
+  // session was given a q snapshot. See TraceBackend for the contract.
+  const RayAllocationTally& GetLastBatchRayAllocationTally() const override { return ray_alloc_tally_; }
+
  private:
   SessionSpec spec_{};
   RandomNumberGenerator rng_;
@@ -111,6 +115,11 @@ class CpuTraceBackend : public TraceBackend {
   // from ray_num so a proportional session reports ray_num exactly, not a
   // rounded sum that merely equals it.
   double emitted_ray_equivalent_delta_this_batch_ = 0.0;
+  // Output register for GetLastBatchRayAllocationTally: sized to the scene at
+  // BeginSession when spec_.ray_alloc is non-null (left empty otherwise), one
+  // row written per TraceLayer from that layer's partition and its per-ci slice
+  // of the outgoing records.
+  RayAllocationTally ray_alloc_tally_;
   size_t ms_idx_ = 0;  // advances on each Recombine.
   float total_landed_weight_ = 0.0f;
 

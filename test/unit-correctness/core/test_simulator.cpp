@@ -1568,21 +1568,27 @@ TEST(SimulatorEmittedEnergy, IlluminantChargesTheBandExpectationNotTheSampledWei
 
 // --- Ray allocation: dealing by q while charging by p ---------------------- //
 //
-// Under scene.ray_allocation = adaptive a layer deals its rays by the delivered
-// q_i (ScatteringSetting::crystal_ray_alloc_weight_) instead of by p_i, and every
-// ray born into entry i is scaled by (p_i/ΣP)/(q_i/ΣQ) so that the expected image
-// is unchanged. Three propositions are pinned here, all on the legacy CPU path
-// (Simulator::Run with no renders_, so no backend can be selected):
+// Under scene.ray_allocation = adaptive a layer deals its rays by the q_i of the
+// RayAllocationSnapshot the batch Loaded instead of by p_i, and every ray born into
+// entry i is scaled by (p_i/ΣP)/(q_i/ΣQ) so that the expected image is unchanged.
+// Pinned here, all on the legacy CPU path (Simulator::Run with no renders_, so no
+// backend can be selected):
 //   1. the correction formula itself (normalized shares, not raw ratios);
 //   2. Σ_i n_i · w · correction_i == N · w up to the partition's ±1-ray rounding,
 //      read off the RAW root segments (every ray's w_ at birth) AND off the
 //      emitted_energy_ the batch charges — the two must agree, and both must
 //      equal the a-priori budget;
-//   3. q == p under adaptive is BIT-IDENTICAL to proportional — the strongest
-//      "the new path has no hidden side effect" statement available without a
-//      pilot to deliver a real q, and the one the mode's default rests on.
+//   3. the cold-start deal (uniform over the live entries) is BIT-IDENTICAL to
+//      proportional when p is itself uniform — the strongest "the new path has no
+//      hidden side effect" statement available, and the one the mode's default
+//      rests on; and a batch with no snapshot at all (an analysis session's shape)
+//      deals by p whatever the mode says.
 // The multi-layer case pins that a continuation layer's correction is its own
 // (AC4) and that continuation hops are not charged as emissions (AC3).
+//
+// q is never written into the scene: a test that wants a particular q hands the
+// RayAllocationOnline a synthetic tally whose Neyman solution IS that q (SeedQ
+// below), which is the same door the render's own batches come through.
 
 TEST(RayAllocationCorrection, EqualVectorsAtAnyScaleAreIdentity) {
   // q == p exactly.
@@ -1650,7 +1656,7 @@ namespace {
 
 // Deterministic hexagonal prism of height `h`; two different heights make two
 // distinguishable crystals without any of them being stochastic.
-ScatteringSetting MakePrismEntry(IdType id, float h, float proportion, float alloc_weight) {
+ScatteringSetting MakePrismEntry(IdType id, float h, float proportion) {
   ScatteringSetting s;
   // FilterConfig has no default member initializers: leave it default-initialized and
   // action_ is stack garbage, which can read as kFilterOut and silently terminate every ray.
@@ -1663,12 +1669,11 @@ ScatteringSetting MakePrismEntry(IdType id, float h, float proportion, float all
   }
   s.crystal_.param_ = prism;
   s.crystal_proportion_ = proportion;
-  s.crystal_ray_alloc_weight_ = alloc_weight;
   return s;
 }
 
-// Two-entry single layer: p = (1, 1), q as given (-1 = not delivered).
-SceneConfig MakeTwoEntryScene(SceneConfig::RayAllocationMode mode, float q0, float q1, float prob = 0.0f) {
+// Two-entry single layer: p = (1, 1).
+SceneConfig MakeTwoEntryScene(SceneConfig::RayAllocationMode mode, float prob = 0.0f) {
   SceneConfig scene;
   scene.ray_num_ = 0;
   scene.max_hits_ = 4;
@@ -1677,10 +1682,34 @@ SceneConfig MakeTwoEntryScene(SceneConfig::RayAllocationMode mode, float q0, flo
   scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
   MsInfo ms;
   ms.prob_ = prob;
-  ms.setting_.push_back(MakePrismEntry(0, 1.0f, 1.0f, q0));
-  ms.setting_.push_back(MakePrismEntry(1, 0.3f, 1.0f, q1));
+  ms.setting_.push_back(MakePrismEntry(0, 1.0f, 1.0f));
+  ms.setting_.push_back(MakePrismEntry(1, 0.3f, 1.0f));
   scene.ms_.push_back(std::move(ms));
   return scene;
+}
+
+// Drive `online` to publish exactly the shares `q` on every layer: a synthetic tally
+// with rays = 1 and Σw² = q_i² per entry has raw_i = p_i · q_i, so with p uniform
+// on the layer Neyman returns q itself (every q here sits above the 0.01/K floor).
+// The synthetic tally stays in the cumulative afterwards — a test that then runs
+// batches reads the q those batches Loaded, not the one this seeded.
+void SeedQ(RayAllocationOnline& online, const std::vector<std::vector<float>>& q) {
+  RayAllocationTally tally(q.size());
+  for (size_t mi = 0; mi < q.size(); mi++) {
+    tally[mi].resize(q[mi].size());
+    for (size_t ci = 0; ci < q[mi].size(); ci++) {
+      tally[mi][ci].rays = 1;
+      tally[mi][ci].sum_w = q[mi][ci];
+      tally[mi][ci].sum_w2 = static_cast<double>(q[mi][ci]) * q[mi][ci];
+    }
+  }
+  online.Accumulate(tally);
+}
+
+std::shared_ptr<RayAllocationOnline> MakeOnline(const SceneConfig& scene, const std::vector<std::vector<float>>& q) {
+  auto online = std::make_shared<RayAllocationOnline>(scene);
+  SeedQ(*online, q);
+  return online;
 }
 
 struct AllocRunOutput {
@@ -1692,7 +1721,10 @@ void SnapshotAllDataForAlloc(void* ctx, const RayBuffer& all_data) {
   static_cast<std::vector<RayBuffer>*>(ctx)->emplace_back(all_data);
 }
 
-AllocRunOutput RunLegacy(const SceneConfig& scene, size_t ray_num, size_t batches, uint32_t seed) {
+// `online` null = the batch binds no RayAllocationOnline (a proportional scene, or
+// an analysis session's shape under an adaptive one).
+AllocRunOutput RunLegacy(const SceneConfig& scene, size_t ray_num, size_t batches, uint32_t seed,
+                         std::shared_ptr<RayAllocationOnline> online = nullptr) {
   auto config_queue = std::make_shared<Queue<SimBatch>>();
   auto data_queue = std::make_shared<Queue<SimData>>();
   Simulator sim(config_queue, data_queue, seed);
@@ -1704,6 +1736,7 @@ AllocRunOutput RunLegacy(const SceneConfig& scene, size_t ray_num, size_t batche
     batch.ray_num_ = ray_num;
     batch.scene_ = shared_scene;
     batch.generation_ = 1;
+    batch.ray_alloc_online_ = online;
     config_queue->Emplace(std::move(batch));
   }
   config_queue->Emplace(SimBatch{});  // ray_num_ == 0 → Run() exits
@@ -1738,6 +1771,32 @@ RootTally TallyRoots(const RayBuffer& all_data) {
   return t;
 }
 
+// Σ w_ over the true exits (IsOutgoing) of one crystal instance, off the raw
+// segments — the per-entry view of outgoing_w_ that SimData itself does not keep.
+double OutgoingWeightOf(const RayBuffer& all_data, IdType crystal_idx) {
+  double s = 0.0;
+  for (size_t i = 0; i < all_data.size_; i++) {
+    const auto& r = all_data[i];
+    if (r.IsOutgoing() && r.crystal_idx_ == crystal_idx) {
+      s += r.w_;
+    }
+  }
+  return s;
+}
+
+// The shares a snapshot deals one layer by (Σ over the layer = 1).
+std::vector<double> SharesOf(const RayAllocationSnapshot& snapshot, size_t mi) {
+  double total = 0.0;
+  for (float q : snapshot.q[mi]) {
+    total += q;
+  }
+  std::vector<double> shares;
+  for (float q : snapshot.q[mi]) {
+    shares.push_back(total > 0.0 ? q / total : 0.0);
+  }
+  return shares;
+}
+
 }  // namespace
 
 TEST(RayAllocationLegacyPath, AdaptiveDealsByQAndChargesByP) {
@@ -1747,7 +1806,8 @@ TEST(RayAllocationLegacyPath, AdaptiveDealsByQAndChargesByP) {
   // N up to one ray at the larger correction, which is the stated tolerance.
   constexpr size_t kN = 1000;
   const float kW = 1.0f;
-  auto out = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 2.0f), kN, 1, 7);
+  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive);
+  auto out = RunLegacy(scene, kN, 1, 7, MakeOnline(scene, { { 1.0f, 2.0f } }));
   ASSERT_EQ(out.batches.size(), 1u);
   ASSERT_EQ(out.all_data.size(), 1u);
 
@@ -1768,45 +1828,48 @@ TEST(RayAllocationLegacyPath, AdaptiveDealsByQAndChargesByP) {
   EXPECT_EQ(out.batches[0].root_ray_count_, kN);
 }
 
-TEST(RayAllocationLegacyPath, QEqualToPIsBitIdenticalToProportional) {
+TEST(RayAllocationLegacyPath, ColdStartOnUniformPIsBitIdenticalToProportional) {
   // The default's zero-regression claim, stated as the strongest thing it can
-  // be: same seed, same scene, adaptive with q == p vs proportional — every
+  // be: same seed, same scene, adaptive on a fresh RayAllocationOnline (the
+  // cold-start uniform deal, which on p = (1, 1) IS p) vs proportional — every
   // root weight, every traced segment, every outgoing ray, and the charged
   // energy are the same bits. Both arms deal (500, 500) and multiply by 1.0f.
+  // One batch, because the second adaptive batch deals by what the first
+  // measured, and the two prisms do not land the same energy.
   constexpr size_t kN = 1000;
-  auto prop = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f), kN, 2, 11);
-  auto adap = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 1.0f), kN, 2, 11);
-  ASSERT_EQ(prop.batches.size(), 2u);
-  ASSERT_EQ(adap.batches.size(), 2u);
+  auto prop = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional), kN, 1, 11);
+  auto adap_scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive);
+  auto adap = RunLegacy(adap_scene, kN, 1, 11, std::make_shared<RayAllocationOnline>(adap_scene));
+  ASSERT_EQ(prop.batches.size(), 1u);
+  ASSERT_EQ(adap.batches.size(), 1u);
   ASSERT_EQ(prop.all_data.size(), adap.all_data.size());
+  EXPECT_EQ(prop.batches[0].emitted_energy_, adap.batches[0].emitted_energy_);
+  EXPECT_EQ(prop.batches[0].outgoing_w_, adap.batches[0].outgoing_w_);
+  EXPECT_EQ(prop.batches[0].outgoing_d_, adap.batches[0].outgoing_d_);
+  const auto& a = prop.all_data[0];
+  const auto& c = adap.all_data[0];
+  EXPECT_EQ(a.size_, c.size_);
   // Segment-level mismatches are counted, not asserted per row: the first
   // differing segment would otherwise hide every one after it.
-  for (size_t b = 0; b < prop.batches.size(); b++) {
-    EXPECT_EQ(prop.batches[b].emitted_energy_, adap.batches[b].emitted_energy_);
-    EXPECT_EQ(prop.batches[b].outgoing_w_, adap.batches[b].outgoing_w_);
-    EXPECT_EQ(prop.batches[b].outgoing_d_, adap.batches[b].outgoing_d_);
-    const auto& a = prop.all_data[b];
-    const auto& c = adap.all_data[b];
-    EXPECT_EQ(a.size_, c.size_);
-    size_t mismatched = 0;
-    for (size_t i = 0; i < std::min(a.size_, c.size_); i++) {
-      if (a[i].w_ != c[i].w_ || a[i].crystal_idx_ != c[i].crystal_idx_) {
-        mismatched++;
-      }
+  size_t mismatched = 0;
+  for (size_t i = 0; i < std::min(a.size_, c.size_); i++) {
+    if (a[i].w_ != c[i].w_ || a[i].crystal_idx_ != c[i].crystal_idx_) {
+      mismatched++;
     }
-    EXPECT_EQ(mismatched, 0u) << "batch " << b;
   }
+  EXPECT_EQ(mismatched, 0u);
   // Positive control on the comparison itself: q != p does move the bits.
-  auto skew = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 3.0f), kN, 1, 11);
+  auto skew = RunLegacy(adap_scene, kN, 1, 11, MakeOnline(adap_scene, { { 1.0f, 3.0f } }));
   EXPECT_NE(TallyRoots(skew.all_data[0]).count.at(0), TallyRoots(prop.all_data[0]).count.at(0));
 }
 
-TEST(RayAllocationLegacyPath, UndeliveredWeightMakesTheLayerProportional) {
-  // adaptive with one entry still at the -1 sentinel: the layer deals by p,
-  // whole — not "by q where delivered". Pinned by the dealt counts (500/500,
-  // not q-shaped) and by every correction being exactly 1.0f (root weights == w).
+TEST(RayAllocationLegacyPath, NoSnapshotMakesTheLayerProportional) {
+  // adaptive mode, but the batch binds no RayAllocationOnline — the shape of an
+  // analysis session (doc/raypath-analysis-panel.md §10): the layer deals by p,
+  // whole. Pinned by the dealt counts (500/500) and by every correction being
+  // exactly 1.0f (root weights == w, emitted == N).
   constexpr size_t kN = 1000;
-  auto out = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 3.0f, -1.0f), kN, 1, 5);
+  auto out = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive), kN, 1, 5, nullptr);
   const auto tally = TallyRoots(out.all_data[0]);
   EXPECT_EQ(tally.count.at(0), 500u);
   EXPECT_EQ(tally.count.at(1), 500u);
@@ -1835,14 +1898,14 @@ TEST(RayAllocationLegacyPath, ContinuationLayerUsesItsOwnCorrectionAndIsNotCharg
   //        layer 0's (2, 2/3) applied instead of layer 1's (0.625, 2.5) it reads
   //        ≈2.6× — both far outside the 1e-4 tolerance.
   constexpr size_t kN = 1000;
-  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, 1.0f, 3.0f, /*prob=*/1.0f);
+  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, /*prob=*/1.0f);
   MsInfo second;
   second.prob_ = 0.0f;
-  second.setting_.push_back(MakePrismEntry(2, 1.0f, 1.0f, 4.0f));
-  second.setting_.push_back(MakePrismEntry(3, 0.3f, 1.0f, 1.0f));
+  second.setting_.push_back(MakePrismEntry(2, 1.0f, 1.0f));
+  second.setting_.push_back(MakePrismEntry(3, 0.3f, 1.0f));
   scene.ms_.push_back(std::move(second));
 
-  auto out = RunLegacy(scene, kN, 1, 3);
+  auto out = RunLegacy(scene, kN, 1, 3, MakeOnline(scene, { { 1.0f, 3.0f }, { 4.0f, 1.0f } }));
   ASSERT_EQ(out.batches.size(), 1u);
   const auto& all_data = out.all_data[0];
 
@@ -1879,22 +1942,24 @@ TEST(RayAllocationLegacyPath, ContinuationLayerUsesItsOwnCorrectionAndIsNotCharg
 }
 
 
-// --- Ray allocation: the pilot that delivers q ------------------------------ //
+// --- Ray allocation: the online loop that delivers q ------------------------ //
 //
-// The pieces the pilot is made of, each pinned on its own, then the pass as a whole:
+// The pieces the loop is made of, each pinned on its own, then the loop as a whole:
 //   1. the tally hook inside SimulateOneWavelength counts what the partition dealt
-//      and sums what truly exited — measured against a render of the same scene;
+//      and sums what truly exited — the SAME rays, at the same point, that the
+//      batch hands the consumer, with the entry's own correction divided out;
 //   2. ComputeAdaptiveRayAllocationWeights: p_i = 0 stays 0 whatever the tally says,
 //      a zero-exit live entry lands on the floor, the floor's K counts live entries
 //      only, and the design's calibration numbers reproduce its .30/.50/.20;
-//   3. RayAllocationEntryResolved's three branches;
-//   4. RunRayAllocationPilot on a scene with a real energy skew moves q in the
-//      Neyman direction, delivers every layer, and its bounded doubling loop both
-//      fires and stops;
-//   5. the pass leaves a subsequent render bit-identical (no shared state touched);
-//   6. AC6, on the delivered q: dealing by it and correcting by p charges N;
-//   7. AC8, the starvation fixed point: without the floor a zero-exit entry is dealt
-//      nothing forever, with it the entry keeps its 1%/K.
+//   3. RayAllocationOnline: the cold start is uniform over the live entries (AC3),
+//      and every batch deals by the q the batches before it measured (AC4: the
+//      charge is what that batch emitted under ITS q);
+//   4. on a scene with a real energy skew the running q moves in the Neyman
+//      direction and a rare entry never falls under the floor (AC3);
+//   5. AC8, the starvation fixed point: without the floor a zero-exit entry is dealt
+//      nothing forever, with it the entry keeps its 1%/K;
+//   6. RayAllocationInputsChanged: the fields a recommit may change without a cold
+//      start, and the ones it may not.
 
 namespace {
 
@@ -1918,103 +1983,72 @@ SceneConfig MakeSkewedScene(float p_a, float p_b, float p_c) {
   scene.light_source_.spectrum_ = std::vector<WlParam>{ { 550.0f, 1.0f } };
   MsInfo ms;
   ms.prob_ = 0.0f;
-  ms.setting_.push_back(MakePrismEntry(0, 1.0f, p_a, -1.0f));
-  auto b = MakePrismEntry(1, 1.0f, p_b, -1.0f);
+  ms.setting_.push_back(MakePrismEntry(0, 1.0f, p_a));
+  auto b = MakePrismEntry(1, 1.0f, p_b);
   b.filter_ = RaypathFilterIn({ 3, 5, 7, 3 });
   ms.setting_.push_back(std::move(b));
-  ms.setting_.push_back(MakePrismEntry(2, 1.0f, p_c, -1.0f));
+  ms.setting_.push_back(MakePrismEntry(2, 1.0f, p_c));
   scene.ms_.push_back(std::move(ms));
   return scene;
 }
 
-double LayerSumW(const std::vector<RayAllocationPilotStats::Entry>& layer) {
-  double s = 0.0;
-  for (const auto& e : layer) {
-    s += e.sum_w;
-  }
-  return s;
-}
-
 }  // namespace
 
-TEST(RayAllocationPilotHook, TalliesTheDealtRaysAndTheTrueExits) {
-  // Deal counts are the partition's own numbers, exact; the exit energy is what a
-  // render of the same scene hands its consumer, to sampling error. The pilot and
-  // the render draw different random streams (the pilot's chunking differs from a
-  // batch), so the energy is compared per emitted ray at 5% over 40k rays each —
-  // the per-ray mean of a hexagonal prism's landed energy is stable to ~1% there.
-  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f);
+TEST(RayAllocationOnlineTally, TalliesTheDealtRaysAndTheTrueExits) {
+  // Cold start on p = (1, 1) deals (N/2, N/2) at correction 1, so the tally's Σw
+  // per entry is exactly Σ over that entry's outgoing segments, and the two
+  // entries together are exactly the batch's outgoing_w_ — the same rays, read at
+  // the same point. Not "within 5%": the same numbers.
+  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive);
+  auto online = std::make_shared<RayAllocationOnline>(scene);
   constexpr size_t kRays = 40'000;
-  RayAllocationPilotBudget budget;
-  budget.initial_rays = kRays;
-  budget.max_doublings = 0;
-  auto report = Simulator::RunRayAllocationPilot(scene, budget);
-  ASSERT_EQ(report.stats.layers.size(), 1u);
-  ASSERT_EQ(report.stats.layers[0].size(), 2u);
-  EXPECT_EQ(report.total_rays, kRays);
-  EXPECT_EQ(report.stats.layers[0][0].rays, kRays / 2);
-  EXPECT_EQ(report.stats.layers[0][1].rays, kRays / 2);
-  EXPECT_GT(report.stats.layers[0][0].exits, 0u);
-  EXPECT_GT(report.stats.layers[0][1].exits, 0u);
-  // Σw⁴ ≥ (Σw²)²/exits by Cauchy–Schwarz: the fourth moment is accumulated from the
-  // same rays as the second, not from a different set.
-  const auto& e0 = report.stats.layers[0][0];
-  EXPECT_GE(e0.sum_w4 * static_cast<double>(e0.exits), e0.sum_w2 * e0.sum_w2 * (1.0 - 1e-9));
-
-  auto render = RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f), kRays, 1,
-                          /*seed=*/91);
-  ASSERT_EQ(render.batches.size(), 1u);
-  double render_w = 0.0;
-  for (float w : render.batches[0].outgoing_w_) {
-    render_w += w;
+  auto out = RunLegacy(scene, kRays, 1, 91, online);
+  ASSERT_EQ(out.batches.size(), 1u);
+  const auto tally = online->Cumulative();
+  ASSERT_EQ(tally.size(), 1u);
+  ASSERT_EQ(tally[0].size(), 2u);
+  EXPECT_EQ(tally[0][0].rays, kRays / 2);
+  EXPECT_EQ(tally[0][1].rays, kRays / 2);
+  double outgoing = 0.0;
+  for (float w : out.batches[0].outgoing_w_) {
+    outgoing += w;
   }
-  ASSERT_GT(render_w, 0.0);
-  const double pilot_w = LayerSumW(report.stats.layers[0]);
-  EXPECT_NEAR(pilot_w / static_cast<double>(kRays), render_w / static_cast<double>(kRays),
-              0.05 * render_w / static_cast<double>(kRays));
+  ASSERT_GT(outgoing, 0.0);
+  EXPECT_NEAR(tally[0][0].sum_w + tally[0][1].sum_w, outgoing, outgoing * 1e-9);
+  EXPECT_NEAR(tally[0][0].sum_w, OutgoingWeightOf(out.all_data[0], 0), 1e-6);
+  EXPECT_NEAR(tally[0][1].sum_w, OutgoingWeightOf(out.all_data[0], 1), 1e-6);
+  // Σw² ≤ (Σw)² and > 0: the second moment is of the same rays, not of a
+  // different set.
+  EXPECT_GT(tally[0][0].sum_w2, 0.0);
+  EXPECT_LE(tally[0][0].sum_w2, tally[0][0].sum_w * tally[0][0].sum_w);
 }
 
-TEST(RayAllocationPilotHook, DeliversEveryLayerAndTalliesContinuationsUnderTheirOwnEntries) {
-  // Two layers, prob = 1 on the first so every exit continues: layer 1's dealt
-  // count is exactly layer 0's exit count (the survivors, re-dealt), and every
-  // entry on both layers is delivered a weight >= 0 — the all-or-nothing rule of
-  // ResolveLayerRayAllocation needs all of them.
-  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive, -1.0f, -1.0f, /*prob=*/1.0f);
-  MsInfo second;
-  second.prob_ = 0.0f;
-  second.setting_.push_back(MakePrismEntry(2, 1.0f, 1.0f, -1.0f));
-  second.setting_.push_back(MakePrismEntry(3, 0.3f, 1.0f, -1.0f));
-  scene.ms_.push_back(std::move(second));
-  RayAllocationPilotBudget budget;
-  budget.initial_rays = 20'000;
-  budget.max_doublings = 0;
-  auto report = Simulator::RunRayAllocationPilot(scene, budget);
-  ASSERT_EQ(report.stats.layers.size(), 2u);
-  // With prob = 1 every layer-0 candidate exit continues, so layer 0 tallies NO
-  // true exits and layer 1 is dealt every one of them.
-  EXPECT_EQ(report.stats.layers[0][0].exits + report.stats.layers[0][1].exits, 0u);
-  const size_t layer1_dealt = report.stats.layers[1][0].rays + report.stats.layers[1][1].rays;
-  EXPECT_GT(layer1_dealt, 0u);
-  EXPECT_GT(report.stats.layers[1][0].exits + report.stats.layers[1][1].exits, 0u);
-  for (const auto& layer : scene.ms_) {
-    for (const auto& s : layer.setting_) {
-      EXPECT_GE(s.crystal_ray_alloc_weight_, 0.0f);
-    }
-    EXPECT_TRUE(ResolveLayerRayAllocation(scene.ray_allocation_, layer).adaptive);
+TEST(RayAllocationOnlineTally, DividesTheEntrysOwnCorrectionOut) {
+  // q = (1, 3) on p = (1, 1): corrections (2, 2/3). Every exit of entry i was
+  // accumulated at w · c_i; the tally must hold w, so Σw_tally · c_i equals the
+  // Σ of the entry's outgoing segments as traced. The two ways to get this wrong
+  // read 2× / 1.5× on one entry and 2/3× / 0.67× on the other.
+  auto scene = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive);
+  auto online = MakeOnline(scene, { { 1.0f, 3.0f } });
+  const auto seeded = online->Cumulative();  // the synthetic seed, to subtract
+  auto out = RunLegacy(scene, 20'000, 1, 17, online);
+  const auto tally = online->Cumulative();
+  const auto c = ComputeRayAllocationCorrection({ 1.0f, 1.0f }, { 1.0f, 3.0f });
+  for (size_t ci = 0; ci < 2; ci++) {
+    const double measured = tally[0][ci].sum_w - seeded[0][ci].sum_w;
+    const double traced = OutgoingWeightOf(out.all_data[0], static_cast<IdType>(ci));
+    ASSERT_GT(traced, 0.0) << "entry " << ci;
+    EXPECT_NEAR(measured * c[ci], traced, traced * 1e-5) << "entry " << ci;
   }
-  // Layer 0 saw no exit at all, so both live entries sit on the floor: dealt
-  // uniformly, which is what "nothing measured" has to mean.
-  EXPECT_FLOAT_EQ(scene.ms_[0].setting_[0].crystal_ray_alloc_weight_, 0.005f);
-  EXPECT_FLOAT_EQ(scene.ms_[0].setting_[1].crystal_ray_alloc_weight_, 0.005f);
 }
 
 TEST(AdaptiveRayAllocationWeights, ASwitchedOffEntryStaysOffWhateverTheTallySays) {
   // p_0 = 0 with a fat tally (a misuse the code must be indifferent to): q_0 == 0
   // exactly, no floor. K counts the two live entries, so the floor is 0.005.
-  std::vector<RayAllocationPilotStats::Entry> stats(3);
-  stats[0] = { 100.0, 100.0, 100.0, 1000, 1000 };
-  stats[1] = { 10.0, 10.0, 10.0, 1000, 100 };
-  stats[2] = { 10.0, 10.0, 10.0, 1000, 100 };
+  std::vector<RayAllocationEntryTally> stats(3);
+  stats[0] = { 100.0, 100.0, 1000 };
+  stats[1] = { 10.0, 10.0, 1000 };
+  stats[2] = { 10.0, 10.0, 1000 };
   auto q = ComputeAdaptiveRayAllocationWeights({ 0.0f, 0.5f, 0.5f }, stats);
   ASSERT_EQ(q.size(), 3u);
   EXPECT_EQ(q[0], 0.0f);
@@ -2026,9 +2060,9 @@ TEST(AdaptiveRayAllocationWeights, AZeroExitLiveEntryLandsOnTheFloorNotOnZero) {
   // Entry 1 was dealt rays and none exited: raw = 0, q = 0.01/K = 0.005 (K = 2).
   // Entry 2 was dealt nothing at all (a deep layer no ray reached): same floor —
   // nothing measured is not "measured to be zero", and both are dealt something.
-  std::vector<RayAllocationPilotStats::Entry> stats(3);
-  stats[0] = { 10.0, 10.0, 10.0, 1000, 100 };
-  stats[1] = { 0.0, 0.0, 0.0, 1000, 0 };
+  std::vector<RayAllocationEntryTally> stats(3);
+  stats[0] = { 10.0, 10.0, 1000 };
+  stats[1] = { 0.0, 0.0, 1000 };
   stats[2] = {};
   auto q = ComputeAdaptiveRayAllocationWeights({ 0.5f, 0.5f, 0.0f }, stats);
   EXPECT_NEAR(q[0], 1.0f, 1e-6f);
@@ -2045,12 +2079,11 @@ TEST(AdaptiveRayAllocationWeights, ReproducesTheDesignCalibration) {
   // 5×20k-ray probes of the user's scene): p = (.4995, .4995, .001), E[e²] =
   // (1.0e-7, 2.8e-7, 1.1e-2) → Neyman q = (.30, .50, .20). The rare entry's share
   // rises 200× over its energy share; that is the number the whole scrum is for.
-  std::vector<RayAllocationPilotStats::Entry> stats(3);
+  std::vector<RayAllocationEntryTally> stats(3);
   const double e2[3] = { 1.0e-7, 2.8e-7, 1.1e-2 };
   for (size_t i = 0; i < 3; i++) {
     stats[i].rays = 100'000;
     stats[i].sum_w2 = e2[i] * 100'000.0;
-    stats[i].exits = 1;
   }
   auto q = ComputeAdaptiveRayAllocationWeights({ 0.4995f, 0.4995f, 0.001f }, stats);
   const float total = q[0] + q[1] + q[2];
@@ -2059,167 +2092,134 @@ TEST(AdaptiveRayAllocationWeights, ReproducesTheDesignCalibration) {
   EXPECT_NEAR(q[2] / total, 0.20f, 0.01f);
 }
 
-TEST(RayAllocationEntryResolved, ThreeBranches) {
-  RayAllocationPilotStats::Entry none;
-  EXPECT_FALSE(RayAllocationEntryResolved(none, 0.2, 100));
-  // Zero exits: resolved by the dealt count alone.
-  RayAllocationPilotStats::Entry silent;
-  silent.rays = 99;
-  EXPECT_FALSE(RayAllocationEntryResolved(silent, 0.2, 100));
-  silent.rays = 100;
-  EXPECT_TRUE(RayAllocationEntryResolved(silent, 0.2, 100));
-  // Every dealt ray exited at the same w: var(w²) = 0, resolved at any n.
-  RayAllocationPilotStats::Entry constant;
-  constant.rays = 4;
-  constant.exits = 4;
-  constant.sum_w2 = 4.0;
-  constant.sum_w4 = 4.0;
-  EXPECT_TRUE(RayAllocationEntryResolved(constant, 0.2, 100));
-  // One exit among many silent rays: mean(w²) = 1/n, E[w⁴] = 1/n, so
-  // var ≈ 1/n and rel_err(√mean) = 0.5·√(1/n·n)/1 = 0.5 — never resolved by the
-  // variance branch, however many rays, until more exits arrive.
-  RayAllocationPilotStats::Entry rare;
-  rare.rays = 1'000'000;
-  rare.exits = 1;
-  rare.sum_w2 = 1.0;
-  rare.sum_w4 = 1.0;
-  EXPECT_FALSE(RayAllocationEntryResolved(rare, 0.2, 100));
-  // A hundred such exits: rel_err = 0.5·√(1/100) = 0.05 ≤ 0.2.
-  rare.exits = 100;
-  rare.sum_w2 = 100.0;
-  rare.sum_w4 = 100.0;
-  EXPECT_TRUE(RayAllocationEntryResolved(rare, 0.2, 100));
-  EXPECT_FALSE(RayAllocationEntryResolved(rare, 0.04, 100));
+TEST(RayAllocationOnline, ColdStartDealsTheLiveEntriesUniformly) {
+  // AC3. Before any batch is measured the snapshot deals every p_i > 0 entry the
+  // same share and a p_i = 0 entry nothing — not p (the small-sample pilot's
+  // failure was dealing a rare entry by its tiny p), not anything else. Two
+  // layers with different live counts pin that K is per layer.
+  auto scene = MakeSkewedScene(0.5f, 0.3f, 0.0f);
+  MsInfo second;
+  second.prob_ = 0.0f;
+  second.setting_.push_back(MakePrismEntry(3, 1.0f, 0.9f));
+  second.setting_.push_back(MakePrismEntry(4, 0.3f, 0.1f));
+  scene.ms_.push_back(std::move(second));
+  RayAllocationOnline online(scene);
+  const auto snapshot = online.Load();
+  ASSERT_NE(snapshot, nullptr);
+  ASSERT_EQ(snapshot->q.size(), 2u);
+  const auto s0 = SharesOf(*snapshot, 0);
+  EXPECT_DOUBLE_EQ(s0[0], 0.5);
+  EXPECT_DOUBLE_EQ(s0[1], 0.5);
+  EXPECT_DOUBLE_EQ(s0[2], 0.0);
+  const auto s1 = SharesOf(*snapshot, 1);
+  EXPECT_DOUBLE_EQ(s1[0], 0.5);
+  EXPECT_DOUBLE_EQ(s1[1], 0.5);
+  // And that IS what the first batch deals by: p = (1, 1) on the two-entry scene
+  // is uniform already, so use p = (3, 1) — proportional would deal 750/250,
+  // the cold start 500/500.
+  auto two = MakeTwoEntryScene(SceneConfig::RayAllocationMode::kAdaptive);
+  two.ms_[0].setting_[0].crystal_proportion_ = 3.0f;
+  auto out = RunLegacy(two, 1000, 1, 5, std::make_shared<RayAllocationOnline>(two));
+  const auto roots = TallyRoots(out.all_data[0]);
+  EXPECT_EQ(roots.count.at(0), 500u);
+  EXPECT_EQ(roots.count.at(1), 500u);
+  // Dealt uniformly but charged by p: corrections (0.75/0.5, 0.25/0.5) = (1.5, 0.5).
+  EXPECT_NEAR(roots.weight.at(0), 500.0 * 1.5, 1e-3);
+  EXPECT_NEAR(roots.weight.at(1), 500.0 * 0.5, 1e-3);
+  EXPECT_NEAR(out.batches[0].emitted_energy_, 1000.0, 1e-3);
 }
 
-TEST(RayAllocationPilot, MovesQInTheNeymanDirectionOnARealEnergySkew) {
+TEST(RayAllocationOnline, EachBatchDealsByWhatTheBatchesBeforeItMeasuredAndChargesWhatItEmitted) {
+  // AC4. Three batches on the skewed scene through ONE RayAllocationOnline. Batch
+  // 0 deals uniformly (nothing measured yet); batch 1 deals by what batch 0
+  // measured; batch 2 by batches 0+1. Pinned per batch: the deal changed between
+  // batch 0 and batch 1 (the loop is live), and emitted_energy_ equals Σ over the
+  // batch's roots of w at birth — the charge follows the q THAT batch was dealt
+  // by, whatever it was, to the partition's ±1-ray rounding at the largest
+  // correction.
+  auto scene = MakeSkewedScene(1.0f, 1.0f, 0.05f);
+  auto online = std::make_shared<RayAllocationOnline>(scene);
+  constexpr size_t kN = 6000;
+  auto out = RunLegacy(scene, kN, 3, 23, online);
+  ASSERT_EQ(out.batches.size(), 3u);
+  ASSERT_EQ(out.all_data.size(), 3u);
+  std::vector<RootTally> roots;
+  for (const auto& all_data : out.all_data) {
+    roots.push_back(TallyRoots(all_data));
+  }
+  // Batch 0: the cold start, 2000 each.
+  EXPECT_EQ(roots[0].count.at(0), 2000u);
+  EXPECT_EQ(roots[0].count.at(1), 2000u);
+  EXPECT_EQ(roots[0].count.at(2), 2000u);
+  // Batch 1: no longer uniform — the filtered entry got fewer, the unfiltered more.
+  EXPECT_LT(roots[1].count.at(1), 2000u);
+  EXPECT_GT(roots[1].count.at(0), 2000u);
+  for (size_t b = 0; b < 3; b++) {
+    double charged = 0.0;
+    for (const auto& [id, w] : roots[b].weight) {
+      charged += w;
+    }
+    EXPECT_NEAR(out.batches[b].emitted_energy_, charged, 1e-2) << "batch " << b;
+    // Σ n_i·c_i = N + Σ δ_i·c_i with |δ_i| < 1 the partition's rounding, so the
+    // slack is a couple of rays at the largest correction — the floored entry's,
+    // bounded by (p_i/ΣP)/(0.01/K) = (1/2.05)/(0.01/3) ≈ 146.
+    EXPECT_NEAR(charged, static_cast<double>(kN), 300.0) << "batch " << b;
+  }
+  // The cumulative tally counts every dealt ray of every batch.
+  const auto tally = online->Cumulative();
+  EXPECT_EQ(tally[0][0].rays + tally[0][1].rays + tally[0][2].rays, 3 * kN);
+}
+
+TEST(RayAllocationOnline, MovesQInTheNeymanDirectionOnARealEnergySkew) {
   // Energy shares p = (1, 1, 0.05). Entry B keeps one raypath of A's crystal, so
   // per dealt ray it lands a small fraction of A's energy: its q share must fall
   // below its p share. Entry C is A's crystal at 1/20 the share: per ray it lands
   // what A does, so Neyman keeps q_C/q_A == p_C/p_A — the small share alone is not
   // a reason to move (only a per-ray energy difference is; the user's scene had
-  // both, which is why its rare entry rose 200×).
+  // both, which is why its rare entry rose 200×). Ten batches of 6000 rays — the
+  // budget the pilot used to converge on, now spent by the render itself.
   auto scene = MakeSkewedScene(1.0f, 1.0f, 0.05f);
-  RayAllocationPilotBudget budget;
-  budget.initial_rays = 60'000;
-  auto report = Simulator::RunRayAllocationPilot(scene, budget);
-  const auto& s = scene.ms_[0].setting_;
-  ASSERT_GE(s[0].crystal_ray_alloc_weight_, 0.0f);
-  ASSERT_GE(s[1].crystal_ray_alloc_weight_, 0.0f);
-  ASSERT_GE(s[2].crystal_ray_alloc_weight_, 0.0f);
-  const float qa = s[0].crystal_ray_alloc_weight_;
-  const float qb = s[1].crystal_ray_alloc_weight_;
-  const float qc = s[2].crystal_ray_alloc_weight_;
-  EXPECT_LT(qb / qa, 0.5f) << "the filtered entry lands far less per ray; Neyman must deal it less than p does";
-  EXPECT_GT(qb, 0.0f) << "but never nothing: the floor is what keeps a rare entry alive";
-  EXPECT_NEAR(qc / qa, 0.05f, 0.015f) << "same crystal, same per-ray energy: the share is p's";
-  // The tally behind it, as the design's own diagnostic: B exits rarely.
-  const auto& tb = report.stats.layers[0][1];
-  const auto& ta = report.stats.layers[0][0];
-  EXPECT_LT(static_cast<double>(tb.exits) / static_cast<double>(tb.rays),
-            0.5 * static_cast<double>(ta.exits) / static_cast<double>(ta.rays));
+  auto online = std::make_shared<RayAllocationOnline>(scene);
+  (void)RunLegacy(scene, 6000, 10, 29, online);
+  const auto shares = SharesOf(*online->Load(), 0);
+  const double qa = shares[0];
+  const double qb = shares[1];
+  const double qc = shares[2];
+  EXPECT_LT(qb / qa, 0.5) << "the filtered entry lands far less per ray; Neyman must deal it less than p does";
+  EXPECT_GT(qb, 0.0) << "but never nothing: the floor is what keeps a rare entry alive";
+  EXPECT_NEAR(qc / qa, 0.05, 0.015) << "same crystal, same per-ray energy: the share is p's";
+  // The tally behind it, as the design's own diagnostic: B lands far less per
+  // dealt ray than A.
+  const auto tally = online->Cumulative();
+  EXPECT_LT(tally[0][1].sum_w / static_cast<double>(tally[0][1].rays),
+            0.5 * tally[0][0].sum_w / static_cast<double>(tally[0][0].rays));
 }
 
-TEST(RayAllocationPilot, DoublesABudgetThatDidNotConvergeAndStopsAtTheCap) {
-  // Force the doubling loop: a target no entry can meet on the budget (5% relative
-  // error on √E[e²] needs at least 100 exits even at constant w, and 60 rays split
-  // three ways deal 20 each), then a cap of 2 doublings so the loop is seen both to
-  // fire and to stop. total_rays is exactly initial × 2^doublings: each round
-  // re-traces the cumulative count.
-  auto scene = MakeSkewedScene(1.0f, 1.0f, 1.0f);
-  RayAllocationPilotBudget budget;
-  budget.initial_rays = 60;
-  budget.max_doublings = 2;
-  budget.target_rel_error = 0.05;
-  budget.zero_hit_resolve_rays = 1'000'000;  // a silent entry cannot resolve by count here
-  auto report = Simulator::RunRayAllocationPilot(scene, budget);
-  EXPECT_EQ(report.doublings, 2);
-  EXPECT_EQ(report.total_rays, 60u * 4u);
-  EXPECT_FALSE(report.converged);
-  // Every entry is still delivered — an unconverged pilot is a coarser q, not no q.
-  for (const auto& s : scene.ms_[0].setting_) {
-    EXPECT_GE(s.crystal_ray_alloc_weight_, 0.0f);
+TEST(RayAllocationOnline, ARareEntryNeverFallsUnderTheFloorAcrossBatches) {
+  // AC3, the online half: the floor is applied to every published snapshot, so a
+  // rare entry is dealt at least 1%/K of every batch — and is therefore measured
+  // every batch, which is what keeps the loop from the starvation fixed point
+  // (pinned in the abstract by the test after this one). The filtered entry at
+  // p = 0.02 is the rare one; K = 3. The floor is on q as published (the vector
+  // is returned unnormalized past the floor, see ComputeAdaptiveRayAllocationWeights),
+  // which is what the partition is handed.
+  auto scene = MakeSkewedScene(1.0f, 0.02f, 1.0f);
+  auto online = std::make_shared<RayAllocationOnline>(scene);
+  const float floor = 0.01f / 3.0f;
+  size_t min_dealt = std::numeric_limits<size_t>::max();
+  for (int b = 0; b < 8; b++) {
+    const auto before = online->Cumulative();
+    auto out = RunLegacy(scene, 3000, 1, static_cast<uint32_t>(101 + b), online);
+    EXPECT_GE(online->Load()->q[0][1], floor) << "batch " << b;
+    const auto after = online->Cumulative();
+    min_dealt = std::min(min_dealt, after[0][1].rays - before[0][1].rays);
   }
-  // Positive control on the loop's exit condition: with the budget the design
-  // ships (large enough for the unfiltered entries) the first check passes for
-  // them, and the filtered one resolves within the doublings.
-  auto scene2 = MakeSkewedScene(1.0f, 1.0f, 1.0f);
-  RayAllocationPilotBudget ample;
-  ample.initial_rays = 60'000;
-  auto report2 = Simulator::RunRayAllocationPilot(scene2, ample);
-  EXPECT_TRUE(report2.converged);
-  EXPECT_LE(report2.doublings, ample.max_doublings);
+  EXPECT_GT(min_dealt, 0u) << "the rare entry must be dealt rays on every batch";
 }
 
-TEST(RayAllocationPilot, LeavesASubsequentRenderBitIdentical) {
-  // The pass seeds this thread's RandomNumberGenerator and its own Simulator; a
-  // render started afterwards on its own thread with the user's seed must be the
-  // same bits as one started with no pilot before it. RunLegacy's Run() re-seeds
-  // the worker thread's instance on entry, so this is what pins that the pilot
-  // touched nothing a render reads.
-  const auto reference =
-      RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f), 2000, 2, /*seed=*/17);
-  auto pilot_scene = MakeSkewedScene(1.0f, 1.0f, 0.05f);
-  RayAllocationPilotBudget budget;
-  budget.initial_rays = 10'000;
-  budget.max_doublings = 0;
-  (void)Simulator::RunRayAllocationPilot(pilot_scene, budget);
-  const auto after =
-      RunLegacy(MakeTwoEntryScene(SceneConfig::RayAllocationMode::kProportional, -1.0f, -1.0f), 2000, 2, /*seed=*/17);
-  ASSERT_EQ(reference.batches.size(), after.batches.size());
-  for (size_t b = 0; b < reference.batches.size(); b++) {
-    EXPECT_EQ(reference.batches[b].outgoing_w_, after.batches[b].outgoing_w_);
-    EXPECT_EQ(reference.batches[b].outgoing_d_, after.batches[b].outgoing_d_);
-    EXPECT_EQ(reference.batches[b].emitted_energy_, after.batches[b].emitted_energy_);
-  }
-  // And the pilot itself is reproducible: same scene, same q, whatever ran before.
-  auto again = MakeSkewedScene(1.0f, 1.0f, 0.05f);
-  (void)Simulator::RunRayAllocationPilot(again, budget);
-  for (size_t ci = 0; ci < 3; ci++) {
-    EXPECT_EQ(pilot_scene.ms_[0].setting_[ci].crystal_ray_alloc_weight_,
-              again.ms_[0].setting_[ci].crystal_ray_alloc_weight_);
-  }
-}
-
-TEST(RayAllocationPilot, DeliveredQDealsByQAndChargesN) {
-  // AC6 on the delivered vector rather than a hand-picked one: with q from a real
-  // pilot (floor included), a render of the scene deals by it and the root weights
-  // sum to N — the expected image is unchanged by construction of the corrections,
-  // and this is the partition-level statement of that with the real q in hand.
-  auto scene = MakeSkewedScene(1.0f, 1.0f, 0.05f);
-  RayAllocationPilotBudget budget;
-  budget.initial_rays = 30'000;
-  budget.max_doublings = 0;
-  (void)Simulator::RunRayAllocationPilot(scene, budget);
-  constexpr size_t kN = 4000;
-  auto out = RunLegacy(scene, kN, 1, 23);
-  ASSERT_EQ(out.all_data.size(), 1u);
-  const auto tally = TallyRoots(out.all_data[0]);
-  double total_root_weight = 0.0;
-  for (const auto& [id, w] : tally.weight) {
-    total_root_weight += w;
-  }
-  // Within one ray at the largest correction (p share / q share; the floored
-  // entry's correction is the largest and is bounded by (p_i/ΣP)/(0.01/K)).
-  std::vector<float> p;
-  std::vector<float> q;
-  for (const auto& s : scene.ms_[0].setting_) {
-    p.push_back(s.crystal_proportion_);
-    q.push_back(s.crystal_ray_alloc_weight_);
-  }
-  const auto c = ComputeRayAllocationCorrection(p, q);
-  const double c_max = *std::max_element(c.begin(), c.end());
-  EXPECT_NEAR(total_root_weight, static_cast<double>(kN), c_max);
-  EXPECT_NEAR(out.batches[0].emitted_energy_, total_root_weight, 1e-2);
-  // And it really dealt by q: the filtered entry got fewer rays than its p share.
-  const auto alloc = ResolveLayerRayAllocation(scene.ray_allocation_, scene.ms_[0]);
-  ASSERT_TRUE(alloc.adaptive);
-  EXPECT_LT(tally.count.at(1), kN / 3);
-}
-
-TEST(RayAllocationPilot, TheFloorIsWhatKeepsAZeroExitEntryFromStarvingForever) {
+TEST(RayAllocationOnline, TheFloorIsWhatKeepsAZeroExitEntryFromStarvingForever) {
   // AC8. A tally-then-reallocate loop without a floor has an absorbing state: an
-  // entry the pilot saw no exit from gets q = 0, is dealt nothing next round, and
+  // entry the tally saw no exit from gets q = 0, is dealt nothing next round, and
   // so records no exit next round either — Σw²/n = 0 → q = 0, forever. Modelled
   // here exactly as the design's Monte Carlo did: three rounds of "deal by q,
   // tally, recompute q" on a synthetic entry whose exits arrive at rate h per dealt
@@ -2227,7 +2227,7 @@ TEST(RayAllocationPilot, TheFloorIsWhatKeepsAZeroExitEntryFromStarvingForever) {
   // once with the floor stripped (the same normalization with ε = 0).
   const float p[3] = { 0.5f, 0.5f, 0.001f };
   const double h[3] = { 0.2, 0.2, 0.05 };  // exit rate per dealt ray; entry 2 is rare
-  auto no_floor = [](const std::vector<float>& pv, const std::vector<RayAllocationPilotStats::Entry>& st) {
+  auto no_floor = [](const std::vector<float>& pv, const std::vector<RayAllocationEntryTally>& st) {
     std::vector<float> q(3, 0.0f);
     double total = 0.0;
     double raw[3] = { 0.0, 0.0, 0.0 };
@@ -2243,18 +2243,18 @@ TEST(RayAllocationPilot, TheFloorIsWhatKeepsAZeroExitEntryFromStarvingForever) {
     return q;
   };
   auto simulate = [&](bool with_floor) {
-    // Round 0: a pilot so small the rare entry (p = 0.001 → 1 ray of 1000) sees
+    // Round 0: a deal so small the rare entry (p = 0.001 → 1 ray of 1000) sees
     // no exit. Deterministic tally: exits = floor(h · rays), each at w = 1.
     std::vector<float> q = { p[0], p[1], p[2] };
     std::vector<size_t> dealt_last(3, 0);
     for (int round = 0; round < 3; round++) {
       std::vector<double> carry(3, 0.0);
       auto n = PartitionCrystalRayNum(q, 1000, carry);
-      std::vector<RayAllocationPilotStats::Entry> st(3);
+      std::vector<RayAllocationEntryTally> st(3);
       for (size_t i = 0; i < 3; i++) {
         st[i].rays = n[i];
-        st[i].exits = static_cast<size_t>(h[i] * static_cast<double>(n[i]));
-        st[i].sum_w = st[i].sum_w2 = st[i].sum_w4 = static_cast<double>(st[i].exits);
+        const auto exits = static_cast<size_t>(h[i] * static_cast<double>(n[i]));
+        st[i].sum_w = st[i].sum_w2 = static_cast<double>(exits);
         dealt_last[i] = n[i];
       }
       q = with_floor ? ComputeAdaptiveRayAllocationWeights({ p[0], p[1], p[2] }, st) :
@@ -2268,6 +2268,31 @@ TEST(RayAllocationPilot, TheFloorIsWhatKeepsAZeroExitEntryFromStarvingForever) {
   auto [q_floor, dealt_floor] = simulate(true);
   EXPECT_FLOAT_EQ(q_floor[2], 0.01f / 3.0f) << "the floor holds the rare entry at 1%/K";
   EXPECT_GT(dealt_floor[2], 0u) << "so it keeps being dealt rays, and can be measured";
+}
+
+TEST(RayAllocationInputsChanged, IndifferentFieldsDoNotRestartTheTallyAndTheOthersDo) {
+  // The fields a recommit may change while the tally is carried forward are the
+  // ones the statistic cannot depend on: the ray budget, the GPU geometry clock
+  // and the mode switch itself. Anything else — a proportion, the sun, a
+  // crystal, a filter, a layer — is a new statistic.
+  const auto base = MakeSkewedScene(1.0f, 1.0f, 0.05f);
+  auto same = base;
+  same.ray_num_ = 123456;
+  same.geom_clock_ = 64;
+  same.ray_allocation_ = SceneConfig::RayAllocationMode::kProportional;
+  EXPECT_FALSE(RayAllocationInputsChanged(base, same));
+  auto proportion = base;
+  proportion.ms_[0].setting_[2].crystal_proportion_ = 0.2f;
+  EXPECT_TRUE(RayAllocationInputsChanged(base, proportion));
+  auto sun = base;
+  sun.light_source_.param_ = SunParam{ 40.0f, 0.0f, 0.5f };
+  EXPECT_TRUE(RayAllocationInputsChanged(base, sun));
+  auto layer = base;
+  layer.ms_.push_back(layer.ms_[0]);
+  EXPECT_TRUE(RayAllocationInputsChanged(base, layer));
+  auto filter = base;
+  filter.ms_[0].setting_[1].filter_ = RaypathFilterIn({ 3, 5, 7 });
+  EXPECT_TRUE(RayAllocationInputsChanged(base, filter));
 }
 
 }  // namespace lumice

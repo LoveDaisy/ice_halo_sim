@@ -147,8 +147,7 @@ inline bool operator==(const LightSourceConfig& a, const LightSourceConfig& b) {
 // ---- Scene config ----
 
 inline bool operator==(const ScatteringSetting& a, const ScatteringSetting& b) {
-  return a.filter_ == b.filter_ && a.crystal_ == b.crystal_ && a.crystal_proportion_ == b.crystal_proportion_ &&
-         a.crystal_ray_alloc_weight_ == b.crystal_ray_alloc_weight_;
+  return a.filter_ == b.filter_ && a.crystal_ == b.crystal_ && a.crystal_proportion_ == b.crystal_proportion_;
 }
 
 inline bool operator==(const MsInfo& a, const MsInfo& b) {

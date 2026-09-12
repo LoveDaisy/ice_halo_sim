@@ -146,6 +146,9 @@ class MetalTraceBackend : public TraceBackend {
   size_t GetLastBatchStochasticOrientationSampleCount() const override;
   // First-layer emitted-ray equivalent under ray allocation; see TraceBackend.
   float GetLastBatchEmittedRayEquivalent(size_t ray_num) const override;
+  // The online ray-allocation tally of this session, [mi][ci]; empty unless the
+  // session was given a q snapshot. See TraceBackend for the contract.
+  const RayAllocationTally& GetLastBatchRayAllocationTally() const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 

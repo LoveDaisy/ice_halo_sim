@@ -128,14 +128,22 @@ constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
 // reads/writes non-atomically after `waitUntilCompleted` (unified memory +
 // relaxed-order atomics on the device side are fully ordered by the CB
 // completion barrier).
+// tally_w / tally_w2 are the online ray-allocation tally of ONE dispatch — Σw and
+// Σw² over the rays the kernel's two exit tails handed to the image, added only
+// when KernelParams::alloc_tally is set (see the MSL definition) — read back per
+// (layer, ci) by TraceLayer, which divides that dispatch's correction out.
 struct ExitStats {
   uint32_t count;
   float    w_sum;
+  float    tally_w;
+  float    tally_w2;
 };
-static_assert(sizeof(ExitStats) == 8u,
+static_assert(sizeof(ExitStats) == 16u,
               "ExitStats size mismatch — must match MSL struct in lumice_trace.metal");
 static_assert(offsetof(ExitStats, count) == 0u, "ExitStats::count offset drift");
 static_assert(offsetof(ExitStats, w_sum) == 4u, "ExitStats::w_sum offset drift");
+static_assert(offsetof(ExitStats, tally_w) == 8u, "ExitStats::tally_w offset drift");
+static_assert(offsetof(ExitStats, tally_w2) == 12u, "ExitStats::tally_w2 offset drift");
 
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
 // struct field-for-field — all 4-byte scalars, natural alignment).
@@ -237,6 +245,10 @@ struct KernelParams {
   // Placed last, after the 4-byte and_term_counts_base_offset, so it starts at offset 300
   // — 4-aligned, which is all ProjParams (max member alignment 4) requires.
   lm_proj::ProjParams anchor_proj;
+  // 1 when this dispatch's layer deals by q and the exit tails must add into
+  // ExitStats::tally_w / tally_w2; 0 on every proportional dispatch (one branch
+  // per exit, no atomic — the mode's zero-cost promise). Mirrors the MSL field.
+  uint32_t alloc_tally;
 };
 // sizeof(ProjParams) == 68 (5 ints + 3 floats + float[9]). Two fields have left it in the 478
 // series: rectangular's `az0` (the lens now consumes the full camera pose out of `rot` like every
@@ -252,8 +264,10 @@ struct KernelParams {
 // move independently is the whole reason both are asserted rather than one derived from the other.
 // The exposure anchor then appends a second ProjParams (68) at offset 300, taking the struct to
 // 368 with no new padding — ProjParams' own alignment is 4, and 300 is already 4-aligned.
+// alloc_tally (4) then sits at 368-372, and the struct's alignment of 8 (color_class_bits) pads
+// it to 376.
 static_assert(sizeof(lm_proj::ProjParams) == 68u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 368u,
+static_assert(sizeof(KernelParams) == 376u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -878,6 +892,15 @@ struct MetalTraceBackend::Impl {
   // Accumulated in TraceLayer's ci loop on the first layer only, reset per
   // BeginSession beside the two counters above.
   double                   emitted_ray_equivalent_delta_this_batch_ = 0.0;
+  // The online ray-allocation tally of this session (GetLastBatchRayAllocationTally),
+  // [mi][ci]; sized at BeginSession only when spec.ray_alloc is non-null, else left
+  // empty. TraceLayer writes one entry per (layer, ci) dispatch from
+  // `last_dispatch_stats_`, the plain copy of the ExitStats WaitAndReadbackLayer
+  // read back for the dispatch it just waited on; `alloc_tally_on_` is what
+  // DispatchLayer forwards to KernelParams::alloc_tally for the current layer.
+  RayAllocationTally       ray_alloc_tally_;
+  ExitStats                last_dispatch_stats_{};
+  bool                     alloc_tally_on_ = false;
 
   // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
   // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
@@ -2668,6 +2691,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // task-358.3 (renamed from capture_component): gate the test-only capture
   // ring append (0 in prod → append branch skipped).
   params.capture_ray_mask = capture_ray_mask_ ? 1u : 0u;
+  // Online ray allocation: only a layer dealt by q is measured.
+  params.alloc_tally = alloc_tally_on_ ? 1u : 0u;
   // task-358.1 (metal-color-parity): Design-2 color-gate hot-path knobs.
   // has_color_groups = 0 when the session has no raypath_color config (or the
   // ColorGateTable has no matching placements) → MSL color pass is skipped
@@ -2763,6 +2788,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
     auto* es = static_cast<ExitStats*>([exit_stats_buf_ contents]);
     es->count = 0u;
     es->w_sum = 0.0f;
+    es->tally_w = 0.0f;
+    es->tally_w2 = 0.0f;
   }
 
   // task-268.7: caller may supply `existing_cb` so transit_root + trace share
@@ -2897,6 +2924,8 @@ void MetalTraceBackend::Impl::WaitAndReadbackLayer() {
     auto* es = static_cast<ExitStats*>([exit_stats_buf_ contents]);
     last_stats.exit_count += es->count;
     last_stats.exit_w_sum += es->w_sum;
+    // This dispatch alone, for the (layer, ci) tally TraceLayer records next.
+    last_dispatch_stats_ = *es;
   }
 }
 
@@ -3009,6 +3038,14 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->pool_shape_count_this_batch_ = 0u;
   impl_->orientation_count_this_batch_ = 0u;
   impl_->emitted_ray_equivalent_delta_this_batch_ = 0.0;
+  impl_->ray_alloc_tally_.clear();
+  impl_->alloc_tally_on_ = false;
+  if (spec.ray_alloc != nullptr) {
+    impl_->ray_alloc_tally_.resize(spec.scene->ms_.size());
+    for (size_t mi = 0; mi < spec.scene->ms_.size(); mi++) {
+      impl_->ray_alloc_tally_[mi].assign(spec.scene->ms_[mi].setting_.size(), RayAllocationEntryTally{});
+    }
+  }
   // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally at the
   // single per-config entry point, BEFORE both the color-class clamp below
   // (~L2700) and EnsureFilterBuffers (~L2711, where the symmetry-group /
@@ -3261,7 +3298,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // corrections come from the one resolver; the corrections travel to the
     // gen / transit kernels as a per-dispatch scalar (both are per-ci dispatches).
     size_t crystal_cnt = ms_info.setting_.size();
-    const LayerRayAllocation alloc = ResolveLayerRayAllocation(impl_->spec.scene->ray_allocation_, ms_info);
+    const LayerRayAllocation alloc = ResolveLayerRayAllocation(
+        impl_->spec.scene->ray_allocation_, ms_info,
+        impl_->spec.ray_alloc != nullptr ? &impl_->spec.ray_alloc->q[impl_->ms_idx] : nullptr);
+    impl_->alloc_tally_on_ = alloc.adaptive;
     std::vector<double> carry(crystal_cnt, 0.0);
     auto crystal_ray_num = PartitionCrystalRayNum(alloc.partition_weights, total_ray_num, carry);
     if (first_ms) {
@@ -3329,8 +3369,25 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // Only meaningful on the first_ms/gen branch, but harmless to accumulate
     // unconditionally.
     size_t attempts_win_off = 0;
+    // Online ray-allocation tally for one (layer, ci): the dealt count is the
+    // partition's own number; Σw / Σw² come off the ExitStats of the dispatch
+    // WaitAndReadbackLayer just waited on, with this entry's own correction
+    // divided out (core/shared/ray_allocation_shared.hpp). last_dispatch_stats_
+    // is zeroed at the top of every ci so a ci that never dispatched (skipped
+    // below) records its dealt rays and nothing else, not the previous ci's sums.
+    auto record_alloc_tally = [&](size_t ci, size_t ci_n) {
+      if (!alloc.adaptive) {
+        return;
+      }
+      auto& entry = impl_->ray_alloc_tally_[impl_->ms_idx][ci];
+      entry.rays += ci_n;
+      const double inv_c = alloc.corrections[ci] > 0.0f ? 1.0 / static_cast<double>(alloc.corrections[ci]) : 0.0;
+      entry.sum_w += static_cast<double>(impl_->last_dispatch_stats_.tally_w) * inv_c;
+      entry.sum_w2 += static_cast<double>(impl_->last_dispatch_stats_.tally_w2) * inv_c * inv_c;
+    };
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       size_t ci_n = crystal_ray_num[ci];
+      impl_->last_dispatch_stats_ = ExitStats{};
       if (ci_n == 0) {
         continue;
       }
@@ -3452,6 +3509,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                      "(ci={}, pool_size={}); ci skipped",
                      transit_pool_max_tri, ci, impl_->pool_crystals_.size());
           ci_start += ci_n;
+          record_alloc_tally(ci, ci_n);
           continue;
         }
         // Monotone advance — mirrors gen_root's root_ray_count contract so
@@ -3498,6 +3556,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // counter_init. Single-ci configs hit this once per layer (still one
         // commit+wait pair, same wall-clock).
         impl_->WaitAndReadbackLayer();
+        record_alloc_tally(ci, ci_n);
         continue;
       }
 
@@ -3513,6 +3572,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // configs trigger this once per layer; the post-loop nil-check below is
       // a defensive safety net.
       impl_->WaitAndReadbackLayer();
+      record_alloc_tally(ci, ci_n);
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
@@ -3807,6 +3867,10 @@ float MetalTraceBackend::GetLastBatchEmittedRayEquivalent(size_t ray_num) const 
   // ray_num plus the first layer's Σ n_ci · (correction_ci − 1); exactly
   // ray_num under proportional allocation. See TraceBackend.
   return static_cast<float>(static_cast<double>(ray_num) + impl_->emitted_ray_equivalent_delta_this_batch_);
+}
+
+const RayAllocationTally& MetalTraceBackend::GetLastBatchRayAllocationTally() const {
+  return impl_->ray_alloc_tally_;
 }
 
 size_t MetalTraceBackend::GetLastBatchStochasticOrientationSampleCount() const {

@@ -265,6 +265,13 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   stochastic_sample_count_this_batch_ = 0;
   stochastic_orientation_sample_count_this_batch_ = 0;
   emitted_ray_equivalent_delta_this_batch_ = 0.0;
+  ray_alloc_tally_.clear();
+  if (spec.ray_alloc != nullptr) {
+    ray_alloc_tally_.resize(spec.scene->ms_.size());
+    for (size_t mi = 0; mi < spec.scene->ms_.size(); mi++) {
+      ray_alloc_tally_[mi].assign(spec.scene->ms_[mi].setting_.size(), RayAllocationEntryTally{});
+    }
+  }
 
   // Design 2 (task-engine-redirect-design2): build the placement-scoped color
   // gate table for this session's scene × raypath_color config. Missing
@@ -299,7 +306,8 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   // resolver, with a zeros carry (one session = one wavelength here, no
   // cross-wavelength accumulation).
   size_t crystal_cnt = ms_info.setting_.size();
-  const LayerRayAllocation alloc = ResolveLayerRayAllocation(spec_.scene->ray_allocation_, ms_info);
+  const LayerRayAllocation alloc = ResolveLayerRayAllocation(
+      spec_.scene->ray_allocation_, ms_info, spec_.ray_alloc != nullptr ? &spec_.ray_alloc->q[ms_idx_] : nullptr);
   std::vector<double> carry(crystal_cnt, 0.0);
   auto crystal_ray_num = PartitionCrystalRayNum(alloc.partition_weights, total_ray_num, carry);
   if (first_ms) {
@@ -421,7 +429,26 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                           host_inject,
                           alloc.corrections[ci] };
     BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
+    const size_t exits_before = outgoing_records.size();
     TraceCrystalBatch(rng_, crystal_spec, batch, buffers);
+    // Online ray-allocation tally for this (layer, ci): the records appended
+    // between the two size() reads are exactly this ci's true exits —
+    // TraceCrystalBatch appends to the shared vector in call order and nothing
+    // else writes it inside the loop — with this entry's own correction divided
+    // out (core/shared/ray_allocation_shared.hpp). The crystal_id check is the
+    // slice assumption made visible rather than trusted.
+    if (alloc.adaptive) {
+      auto& entry = ray_alloc_tally_[ms_idx_][ci];
+      entry.rays += ci_n;
+      const double inv_c = alloc.corrections[ci] > 0.0f ? 1.0 / static_cast<double>(alloc.corrections[ci]) : 0.0;
+      for (size_t i = exits_before; i < outgoing_records.size(); i++) {
+        assert(outgoing_records[i].crystal_id == static_cast<uint16_t>(crystal_id) &&
+               "outgoing_records slice is not this ci's — TraceCrystalBatch interleaved entries");
+        const double w = static_cast<double>(outgoing_records[i].weight) * inv_c;
+        entry.sum_w += w;
+        entry.sum_w2 += w * w;
+      }
+    }
   }
 
   // Exit seam (scrum-258.2): append this layer's rich outgoing records to
