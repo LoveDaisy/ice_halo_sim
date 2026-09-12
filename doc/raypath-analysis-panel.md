@@ -17,6 +17,24 @@
 > 五组修复没有单独成节复述，而是就地回写进 §2 第 2/3 条、§5、§7、§8——行文中用「2026-09-12 更新」
 > 标出落地版本，原设计阶段文字保留在旁边作对照。
 >
+> **2026-09-12 更新（C API v4.34，commit `4009157e`/`f201b601`/`dd3fc3b5`）——删除锥内计数早停
+> 旋钮**：owner 二次上手后认为专门的早停旋钮是多想了——分析本就受自己的光线预算约束，
+> 想早停直接按 Stop 按钮即可。整条链自顶向下对称删除：GUI 侧点选模式曾出现的一个提前结束输入框
+> 整体消失 → 请求结构体上对应的字段删除（BREAKING，`sizeof` 96→88）→ server 端对应的锥形早停
+> 状态位、命中计数与判定函数一并删除。此后**三档 ROI 都只受光线预算与 Stop 按钮约束**，不存在
+> 「到达某计数就自动结束」这件事（详见 §2 第 3 条与 §3.4 的更新）。同批顺带修复
+> `Server::Stop()`：Stop 之前若有未物化的批次会补一次 `DoSnapshot()`，Stop 后仍可读到部分结果
+> （原先会读到 Stop 之前最后一次发布的帧，往往是启动时的空帧）；配套地
+> `AdoptAnalysisPayloadIfNew` 判据从「generation 不同即为新」改为「generation 更大才为新」，
+> 修复 Stop 物化后 poller 读到旧 generation 时把面板选择清空的连带缺陷。
+>
+> **2026-09-12 更新（C API v4.35，commit `8622a2da`/`f93d1c67`/`a6af470c`/`d0510019`/`cc7c633f`）
+> ——finest 链记录改为常量上界**：per-worker trie 与 server 端直方图都从「随光线数/MS 深度无界
+> 增长」改为固定容量（`K_trie = k = 16384`，量测定值），溢出的能量归一个固定的 `other` 行、
+> 顶替行的不确定度报成 `error_bound`。GUI 结果列表新增「Cumulative %」列与该固定 `other` 行，
+> 状态行在记录发生截断时追加诊断（"; record full (N hits)"）。机制细节、常量取值依据与量测表见
+> 新增的 §3.6；诚实边界（哪类链会被低估、为何不在 `error_bound` 里）也在该节。
+>
 > **2026-09-12 更新（C API v4.36）——分析会话自带场景，不再依赖渲染提交**：
 > `LUMICE_StartRaypathAnalysis(server, scene, request)` 与 `LUMICE_CommitScene` 同构地吃一个
 > `LUMICE_Scene`；`ServerImpl::StartRaypathAnalysis` 用与 `CommitConfig` **同一个**解析器
@@ -125,9 +143,11 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    半径滑杆同轮改为**分析前即可拖动**、驱动预览圈半径（`RenderRadiusSlider` 对无结果/有结果两种
    状态取不同的锥角上限来源，见该函数注释）；分析后维持本条已有的 display-time 语义不变。光线预算
    （`infinite`/`ray_num`，v4.32，哨兵 `LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` 保留 v4.32 之前的
-   「用文档自己的 `ray_num`」行为）与锥落线目标（原常量 `kAnalysisConeStopTarget`，现改名面板可调的
-   `cone_stop_target`）也从常量变为请求参数；三者与 marker 状态一样归 `RaypathAnalysisSession`
-   session tier，不进文档 / `.lmc`。用户可见行为见 `doc/user-manual/06-raypath-analysis.md` §2/§3。
+   「用文档自己的 `ray_num`」行为）也从常量变为请求参数；它与 marker 状态一样归
+   `RaypathAnalysisSession` session tier，不进文档 / `.lmc`。**锥形 ROI 曾经有的一个提前结束
+   输入框（原本是面板常量，一度改成面板可调的请求参数）本身已在 v4.34 整条删除**（见顶部更新块
+   与 §3.4）——三档 ROI 此后都只受光线预算与 Stop 按钮约束，不存在按计数自动结束这件事。用户可见
+   行为见 `doc/user-manual/06-raypath-analysis.md` §2/§3。
 4. **总能量降序排序必有；其它排序方式可以有，但「能量 / 覆盖立体角」这种密度量 v1 不做。**
    理由：每个链 id 对应的累加器只需要是标量（Σ(Y·w)、计数），代价很低；密度排序需要给
    **每个** key 都配一张粗天球栅格才能算出「这条链覆盖了多大立体角」，存储与实现复杂度都
@@ -253,9 +273,10 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:86`，实现 `cha
   **as-built**：点积阈值做成员判定，`acos` 只用于分环，`double` 精度累加
   （`raypath_histogram_consumer.cpp`）。GUI 侧请求固定发送**整个**锥（`kAnalysisConeMaxRadiusDeg
   = 15°`，`kAnalysisConeRingCount = 30` 环即 0.5°/环，`src/gui/gui_constants.hpp:171-172`），
-  滑杆只改变显示时求和到第几环——三者是纯工程取值，不是裁决，改这三个常数即可调整精度/范围
-  （见该文件同名注释）。锥 ROI 有提前停止：落线数达到 `kAnalysisConeStopTarget = 200000`
-  （`src/gui/gui_constants.hpp:176`）即结束，不必跑满 `ray_num` 预算。
+  滑杆只改变显示时求和到第几环——两者是纯工程取值，不是裁决，改这两个常数即可调整精度/范围
+  （见该文件同名注释）。**锥 ROI 曾有提前停止**（落线数达到一个固定阈值即结束）；v4.34 起
+  整条早停链已删除（GUI 输入框 → 请求字段 → server 状态位，见顶部更新块），三档 ROI 现在都只受
+  光线预算与 Stop 按钮约束，不存在按计数自动结束这件事。
 - **可见区域**：复用 `ProjectExitToPixel`（`src/core/shared/projection_shared.h:243`）纯投影，
   落在画幅外的直接丢弃。**已证伪：实际** `ProjectExitToPixel` 只做投影，不含 `visible`/`front`
   语义——子任务 1 起草时的假设「该函数已含 visible 语义」被子任务 3 实现期修正：画幅内判定需要额外
@@ -273,6 +294,68 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:86`，实现 `cha
 （`src/server/server.hpp:264`）与 `RaypathChainSegment`（`:232`）承载这些字段；C 结构体侧
 `LUMICE_RaypathHistogramEntry`（`src/include/lumice.h`，「Raypath Analysis Run」一节）逐字节
 镜像。
+
+### 3.6 有界记录（Space-Saving，v4.35 as-built）
+
+设计阶段没有预料到的问题：链 id trie 与直方图行数都会随光线数、MS 深度**无界增长**——多层散射
+场景 200k 光线可以产生 83 万条 finest 链（§3.6 量测表 pc 场景），per-worker trie 与 server 端
+直方图都要为它们各自分配内存与约化耗时，这个增长与「每桶一张全分辨率图」的内存墙是不同性质的
+问题，但同样需要一个上界。
+
+**机制**：两层都改为固定容量，取值刻意相同（见下方「常量取值依据」）：
+
+- **记录侧（trie）**：`ChainIdInterningTable::kDefaultCapacity`（`src/core/chain_id_table.hpp:87`，
+  = 16384）是每个 worker 的 trie 容量。达到容量后，新链不再获得新 id，而是映射到一个固定的溢出
+  哨兵 id（`kOverflowChainId = 0xFFFFFFFE`，高位保留常量，不占用「id 从 1 起」的稠密假设）；已有
+  链不受影响。这是**先到先得**的截断，不是按能量排序的截断。
+- **读侧（Space-Saving 直方图）**：`kRaypathHistogramCapacity`（`src/server/raypath_histogram_consumer.hpp:78`，
+  = 16384）是 server 端保留的行数上界。当一条新链到达而表已满时，它**接管**当前能量最低的行——
+  继承该行的 `energy`/`count`/`ring_energy` 作为自己的不确定度基线，而不是清零重开——并把被接管
+  的能量记为自己的 `error_bound_`（真实能量落在 `[energy - error_bound, energy]`）。
+- **`other` 桶**：只装 trie 层的溢出哨兵光线（记录侧先到先得截断的产物），不是 Space-Saving 淘汰
+  的产物——被 Space-Saving 接管的能量已经算进接管行的 `error_bound`，不会重复计入 `other`。
+  `LUMICE_RaypathAnalysisInfo::other_energy`/`other_count` 是这个桶；`truncated_chain_count`
+  计的是**到达次数**（同一条被拒的链每次再来都会重新计数，因为它从未被记住），不是「有多少条
+  不同的链被截断」——这条语义在实施期被量测暴露后修正，`lumice.h`/`server.hpp`/GUI 文案已统一
+  措辞。`max_row_error` 是当前 symmetry 下所有行 `error_bound` 的最大值，0 表示这一帧从未发生
+  接管（等价于无界记录）。
+- **约化（P/B/D）与截断的交互**：约化发生在读侧，对合并进同一行的多个 finest 行，`error_bound`
+  按 Σ 传导（`ReadTimeReduction.MergedRowErrorIsTheOrbitSumAndRecordScalarsPassThrough`）——
+  一个 P|B|D 轨道如果有成员在 trie 满后才出现，整条轨道在合并行里都会体现出这部分低估。
+
+**常量取值依据（K_trie = k = 16384，量测定值，2026-09-12）**：量测场景——pc（plate `h=0.3` +
+column `h=2.5` 双层混合、`ms_prob=0.3`、200k 光线，与既往「双层场景」量级一致）与 halo22
+（`test/e2e/configs/halo_22.json`，本仓所有 e2e/GUI 参考场景的代表形状，200k 光线）：
+
+| K_trie | k | pc 首约化(sym0) | pc rss_run Δ | pc other % | halo22 截断 | halo22 rows P\|B\|D |
+|---|---|---|---|---|---|---|
+| ∞（无界基线） | ∞ | 1526 ms | +571 MB | 0 | — | 656 |
+| 8192 | 4096 | 2.9 ms | +36 MB | 29.0 | 19,064 次 | 364 |
+| **16384** | **16384** | **14–15 ms** | **+73 MB**（10 worker） | 22.5–23.0 | **0** | **654–661**（与无界基本恒等） |
+| 32768 | 32768 | 31 ms | +133 MB | 16.6 | 0 | — |
+
+裁定 16384/16384：① halo22 在该值下**完全无损**（`other_count==0`/`truncated==0`/
+`max_row_error==0`，AC6 的恒等断言由此成为结构性事实——什么都没切时，有界记录就是无界记录）；
+更小的档位做不到（8192/4096 已有 0.2% 进 `other`）。② pc 场景首约化从 1.5 s 降到 15 ms（约
+100×），内存增量从 +571 MB 降到 +73 MB（10 worker；单 worker 固定 seed 下仅 +22 MB，内存上界
+= worker_count × K_trie + 同量级的合并表 + k 行，与光线数、MS 深度无关）。③ 32768 再多买两行
+精确要多付约 60 MB，且首约化耗时翻倍，不值。④ 两个常量取同一个值，是为了避免出现「trie 无损而
+Space-Saving 已经淘汰」这种只在中间档位出现的半吊子状态（16384/8192 在 halo22 场景下正是如此）。
+
+**诚实边界（量测揭示，非事先预料）**：trie 层先到先得的截断，受害者是**多层链里能量占比很小、
+在 trie 满后才第一次出现的约化行**——例如一个双层 P|B|D 轨道有约 144 个 finest 成员、每个只占
+总能量的 ~0.008%，大半要到 trie 快满时才第一次出现，于是整条轨道被切掉一截，量测在 pc 场景
+top-20 行上观测到 mean\|err\| 8.1%、max\|err\| 78%（K_trie=16384 时）。**这部分低估不体现在
+`error_bound` 里**——`error_bound` 只界定 Space-Saving 层的接管不确定度，trie 层的先到先得截断
+只能从 `other` 的总量间接感知，没有逐行的量化。536.4 场景（双层、200k 光线）在正式常量下
+`other` 占比约 22–23%。单 finest 链占主导的场景（如本仓绝大多数单层 e2e/GUI 参考场景）不受
+影响，halo22 的完全恒等即是证据。
+
+**已知问题（code review Minor，未阻塞合入）**：`truncated_chain_count` 在 C API 侧从 `size_t`
+clamp 到 `int`（`INT_MAX`），注释未说明该截断；`kOverflowChainId` 与 `ChainIdMerger::kUnresolved`
+的哨兵值关系、以及 K_trie 与 k「建议同值」的约束，目前只靠注释维护，无编译期 `static_assert`
+强制；CONE ROI 下 `truncated_chain_count` 是全局无过滤计数，而 `other_energy`/`other_count` 是
+ROI 过滤后的子集，窄锥角场景两者量级可能差异很大。
 
 ## 4. 可复用地基清单
 
@@ -472,3 +555,24 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
 不能接受重跑等待的场景），值得先带着一个能用的东西去用户那里核实，而不是继续在
 没有产品问题答案的情况下推进技术选型。这个访谈**尚未进行**——本形态交付的是「能用的东西」本身，
 不是访谈结果；(ii) 的五条路线分析与访谈问题的完整记录另存于项目的需求追踪记录，供重启时使用。
+
+## 10. 与光线分配策略变化的交互面
+
+若未来光线分配从「按晶体种群比例均分光线数」改为按某种重要性权重自适应调整（每条光线额外乘一个
+权重校正因子，使期望能量不变），有四点会影响本面板，改动前应先核实：
+
+1. **计数列语义**：GUI「Rays」列与 `LUMICE_RaypathHistogramEntry::count` 是**样本数**（命中
+   次数），不是能量。`RaypathHistogramConsumer` 的能量累加 Σ(Y·w)（见 §3.3）对权重校正无偏——w
+   已经是校正后的光线权重——但同一条链的「样本数」会随分配策略系统性变化：一条链若所在晶体被
+   分配到更少的光线，即使它汇报的能量占比不变，样本数也会更少，GUI「+/-」列（相对统计噪声 =
+   1/√count）会随之显著上升。这是分配策略变化的正常影响，不是回归。
+2. **无早停可依赖**：§2 第 3 条与 §3.4 已记录，v4.34 起三档 ROI 都不再有「到达某计数即停」的
+   机制——分配策略的任何变化都不会影响分析「什么时候停」，只影响停下之后各行的相对样本数与噪声。
+3. **与有界记录（§3.6）的交互**：分配策略若让原本命中率极低的链获得系统性更多样本，这些链会
+   更早、更稳定地进入记录，降低它们被 trie 先到先得截断进 `other` 的概率；反过来，若某晶体的
+   采样份额被压得更低，它名下的链更可能连一次命中都拿不到，从而根本不出现在 finest 记录里——
+   这与「记录满被截断进 `other`」是两种不同的缺失（前者是 `other` 桶，后者是完全不可见，两者
+   都不会体现在 `error_bound` 里）。
+4. **分析会话独立提交（§2 第 3 条 v4.36 更新）**：分析提交的是**当前文档自己的 scene**，与渲染
+   提交共用同一个编码器（`BuildCommitSceneOrWarn`）——任何写进 config/scene 的分配策略字段都会
+   同样应用于分析会话，不需要为分析单独接线；分析与渲染在这一层没有分叉。
