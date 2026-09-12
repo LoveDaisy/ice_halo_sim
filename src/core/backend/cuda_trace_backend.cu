@@ -424,9 +424,20 @@ __device__ inline void FanColorClassLanes(float* d_class_lane_buf,
 // (lumice_trace.metal:743-811). `exit_world` is the world-space exit direction
 // (sky direction is -exit_world); writes to `d_xyz_buf` go through the shared
 // `AccumXyzToPixel` helper so single-source semantics with Metal stay tight.
-// `d_landed_weight` tallies only in-bounds primary writes; overlap dual-write
+// `landed_acc` tallies only in-bounds primary writes; overlap dual-write
 // (dual-fisheye opposite-hemisphere) does NOT bump landed_weight (matches
-// ScatterOutgoingToXyz Pass 2 / Metal lumice_trace.metal:788-810).
+// ScatterOutgoingToXyz Pass 2 / Metal lumice_trace.metal:788-810). It is a
+// per-thread REGISTER accumulator, not a device atomic: the kernel epilogue
+// warp-reduces it and adds one partial sum per warp into `d_landed_weight`,
+// the same shape as the ray-allocation tally below. A per-exit atomicAdd into
+// that single float measured a −1.7% deficit against the XYZ image on a 2M-ray
+// window — the scalar climbs to ~2·10⁶ inside one drain window, its ulp grows
+// to 0.25, and every exit weight below half an ulp (a first-order internal
+// reflection is ~0.04) is rounded away entirely. The XYZ pixels never saturate
+// (~15 per pixel), so the two accumulators drift apart by exactly the mass of
+// those small exits. Warp partials (~30) sit far above the ulp at any window
+// size the simulator produces, and the host folds each layer into a double
+// (TraceLayer), so neither side of the ledger loses the tail again.
 // task-358.2 (cuda-color-parity) Step 4: extended to also fan per-class Y-lane
 // after the XYZ atomic add, on each projected hit (primary + overlap-ring).
 // Overlap-ring hits are included to match CPU RenderConsumer's Pass 2
@@ -441,7 +452,7 @@ __device__ inline void FanColorClassLanes(float* d_class_lane_buf,
 constexpr uint32_t kAllocTallySlots = 64u;
 
 __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
-                                       float* __restrict__ d_landed_weight,
+                                       float& landed_acc,
                                        const float exit_world[3],
                                        float cmf_x,
                                        float cmf_y,
@@ -480,7 +491,7 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
   // function negates internally to the sky direction, matching
   // ScatterOutgoingToXyz which feeds the outgoing world dir `d`. Each returned
   // hit (primary + optional dual-fisheye overlap) is atomically added;
-  // d_landed_weight only bumps on bump_landed (primary, not overlap — parity
+  // landed_acc only bumps on bump_landed (primary, not overlap — parity
   // with ScatterOutgoingToXyz Pass 2 / Metal exit tail).
   // The exposure anchor sees EVERY emitted ray, including the ones the user's lens does not
   // image at all — that is what makes it a property of the sky rather than of the frame.
@@ -511,7 +522,7 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
           static_cast<uint32_t>(py) * static_cast<uint32_t>(proj.img_w) + static_cast<uint32_t>(px);
       AccumXyzToPixel(d_xyz_buf, pix_flat, cmf_x, cmf_y, cmf_z, w_emit);
       if (r.hits[hi].bump_landed) {
-        atomicAdd(d_landed_weight, w_emit);
+        landed_acc += w_emit;
       }
       // task-358.2 Step 4 (AC3): fan the ray's Y into every satisfied color
       // class at this projected pixel. Overlap-ring hits included (bump_landed
@@ -705,6 +716,8 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // d_xyz_buf may be nullptr only when ms_mode==1 (the ms_mode==0
                                        // branches below dereference it; ms_mode==1 branches don't).
                                        float* __restrict__ d_xyz_buf,
+                                       // One warp partial per atomicAdd (epilogue), never per exit —
+                                       // see EmitToDeviceXyz. nullptr skips the epilogue atomic.
                                        float* __restrict__ d_landed_weight,
                                        // 315.3: single POD carries all projection routing
                                        // (proj_type / r_scale / max_abs_dz / scale / rot / ...).
@@ -795,6 +808,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // is gated on the pointers, so a proportional dispatch pays no atomic.
   float tally_w_acc = 0.0f;
   float tally_w2_acc = 0.0f;
+  // In-bounds landed weight of this ray, same register-then-warp-reduce shape
+  // (see EmitToDeviceXyz for why it must not be a per-exit atomic).
+  float landed_acc = 0.0f;
   // K-shape: resolve this ray's polygon-slab pool region. `d_poly_n` /
   // `d_poly_d` are BASE pointers into the pool (Σ poly_cnt across all shapes);
   // adding `poly_off * {3|1}` produces the per-ray effective pointers.
@@ -1001,7 +1017,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             // each projected hit; d_class_lane_buf may be nullptr / a 4B dummy
             // when class_count==0 (kernel skips the inner loop). task-358.3:
             // this_mask now carries only Design-2 colour bits (Fork-C retired).
-            EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+            EmitToDeviceXyz(d_xyz_buf, landed_acc, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
                             proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
                             tally_w_acc, tally_w2_acc);
@@ -1049,7 +1065,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                               d_color_bit_map, path_rec, rec_len, d_poly_fn,
                                               gate_slot_e, poly_off, exit_world, crystal_config_id);
             }
-            EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+            EmitToDeviceXyz(d_xyz_buf, landed_acc, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
                             proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
                             tally_w_acc, tally_w2_acc);
@@ -1204,7 +1220,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               const float cmf_x = d_wl_pool[wl_idx].cmf_x;
               const float cmf_y = d_wl_pool[wl_idx].cmf_y;
               const float cmf_z = d_wl_pool[wl_idx].cmf_z;
-              EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+              EmitToDeviceXyz(d_xyz_buf, landed_acc, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
                               proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
                             tally_w_acc, tally_w2_acc);
@@ -1246,7 +1262,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                                 d_color_bit_map, path_rec, rec_len, d_poly_fn,
                                                 gate_slot_r, poly_off, exit_world, crystal_config_id);
               }
-              EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
+              EmitToDeviceXyz(d_xyz_buf, landed_acc, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
                               proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
                             tally_w_acc, tally_w2_acc);
@@ -1269,8 +1285,9 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     from_poly = hit_poly;
   }
 
-  // Online ray-allocation tally epilogue: one warp reduction and one atomic per
-  // warp instead of two atomics per exit. Every lane that passed the
+  // Warp-reduction epilogue for the three per-ray register sums (ray-allocation
+  // tally Σw / Σw², landed weight): one shuffle reduction and one atomic per
+  // warp instead of one per exit. Every lane that passed the
   // `tid < n_roots` guard reaches this point (the bounce loop only breaks, never
   // returns), and the lanes that did NOT pass it are exactly the warp's top
   // `32 − n_active` lanes — blockDim must be a multiple of 32 for this to hold
@@ -1280,29 +1297,43 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
   // scheduler left the warp's divergence). __shfl_down_sync on that mask
   // reconverges the named lanes; a read from a lane above n_active is
   // undefined by contract and is dropped, never added.
-  if (d_tally_w != nullptr) {
+  {
     const uint32_t lane = threadIdx.x & 31u;
     const uint32_t warp_base = tid - lane;
     const uint32_t n_active = min(32u, n_roots - warp_base);
     const unsigned mask = (n_active >= 32u) ? 0xffffffffu : ((1u << n_active) - 1u);
     float sw = tally_w_acc;
     float sw2 = tally_w2_acc;
+    // The landed-weight ledger rides the same reduction: it is the third
+    // per-ray register sum this kernel keeps, and the only one whose single
+    // destination address is read back as a physical quantity (see
+    // EmitToDeviceXyz). Always reduced — every dispatch lands rays.
+    float sl = landed_acc;
     for (uint32_t off = 16u; off > 0u; off >>= 1u) {
       const float ow = __shfl_down_sync(mask, sw, off);
       const float ow2 = __shfl_down_sync(mask, sw2, off);
+      const float ol = __shfl_down_sync(mask, sl, off);
       if (lane + off < n_active) {
         sw += ow;
         sw2 += ow2;
+        sl += ol;
       }
     }
-    // Spread the per-warp atomics over kAllocTallySlots addresses (host sums
-    // them): one address for every warp of a 262144-ray dispatch still
-    // serialised 8192 atomics on it and measured −3.5%; 64 slots cut that to
-    // ~128 per address, under the noise floor.
     if (lane == 0u) {
-      const uint32_t slot = (warp_base >> 5u) & (kAllocTallySlots - 1u);
-      atomicAdd(d_tally_w + slot, sw);
-      atomicAdd(d_tally_w2 + slot, sw2);
+      if (d_landed_weight != nullptr) {
+        atomicAdd(d_landed_weight, sl);
+      }
+      // Spread the per-warp tally atomics over kAllocTallySlots addresses (host
+      // sums them): one address for every warp of a 262144-ray dispatch still
+      // serialised 8192 atomics on it and measured −3.5%; 64 slots cut that to
+      // ~128 per address, under the noise floor. The landed scalar above keeps
+      // its single address: one atomic per warp is already 30-60× fewer than
+      // the per-exit form it replaced, and the drain reads exactly one float.
+      if (d_tally_w != nullptr) {
+        const uint32_t slot = (warp_base >> 5u) & (kAllocTallySlots - 1u);
+        atomicAdd(d_tally_w + slot, sw);
+        atomicAdd(d_tally_w2 + slot, sw2);
+      }
     }
   }
 }
@@ -2267,12 +2298,14 @@ struct CudaTraceBackend::Impl {
   // and zeros it, but the simulator now drains on display cadence (a whole window
   // of batches), not per batch.
   float*   d_xyz_buf_       = nullptr;  // alloc_xyz_w_ * alloc_xyz_h_ * 3 floats, atomicAdd target
-  float*   d_landed_weight_ = nullptr;  // 1 float, atomicAdd target (running total)
-  // Session-lifetime snapshot of the previous TraceLayer's `d_landed_weight_`
-  // value so LayerStats::exit_w_sum reports each layer's contribution as a
-  // DELTA rather than the cumulative session total. Zeroed in BeginSession
-  // alongside `d_landed_weight_`; refreshed at the end of every TraceLayer.
-  float    layer_landed_weight_prev_ = 0.0f;
+  float*   d_landed_weight_ = nullptr;  // 1 float, one atomicAdd per warp; holds ONE layer
+  // Host-side running total of `d_landed_weight_` over the current drain window.
+  // TraceLayer reads the device scalar back after every layer (it already does,
+  // for LayerStats::exit_w_sum), folds it in here and zeroes the device side, so
+  // the float on the device only ever holds one layer's worth (≤ one dispatch of
+  // warp partials) and the cross-layer sum lives in a double. Reset in lock-step
+  // with the twin accumulators (BeginSession shape change, ReadbackXyzAccum).
+  double   window_landed_weight_ = 0.0;
   // scrum-312: dims the persistent d_xyz_buf_ was actually allocated for. Unlike
   // img_w_/img_h_ (per-session, cleared by Reset), these survive across sessions
   // so ReadbackXyzAccum — which drains BETWEEN sessions — can release-safe-verify
@@ -2501,6 +2534,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     // S2 device-fused XYZ accumulation buffers.
     cudaFree(d_xyz_buf_);      d_xyz_buf_ = nullptr;
     cudaFree(d_landed_weight_); d_landed_weight_ = nullptr;
+    window_landed_weight_ = 0.0;
     alloc_xyz_w_ = 0u;  // scrum-312: buffer freed → clear its remembered dims
     alloc_xyz_h_ = 0u;
     // task-358.2 Step 4 (AC3): per-class Y-lane accumulator (class_count_ *
@@ -4000,8 +4034,10 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // S2 device-fused XYZ accumulation: allocate the W*H*3 device buffer +
     // landed-weight scalar and zero them. Sized to render.resolution_; the
     // ms_mode==0 kernel emit gate atomicAdds (cmf * w) into d_xyz_buf_ and
-    // adds the in-bounds weight into d_landed_weight_. ReadbackXyzAccum D2H
-    // copies them and zeros for the next batch.
+    // adds the in-bounds weight, one warp partial at a time, into
+    // d_landed_weight_. ReadbackXyzAccum D2H copies the image and zeros it for
+    // the next window; the landed scalar is folded into `window_landed_weight_`
+    // by every TraceLayer and only the double crosses to the consumer.
     if (spec.render == nullptr) {
       throw BackendUnavailableError("CudaTraceBackend::BeginSession: spec.render is null");
     }
@@ -4043,8 +4079,9 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // atomicAdd new-dims pixel indices out of bounds (memory corruption). A
     // resolution change always rides a generation change, whose flush already
     // drained the prior window, so re-zeroing is correct. Mirrors the Metal
-    // EnsureImage shape-change reset (312.4 review-Major). d_landed_weight_ is the
-    // twin accumulator — reset it in lock-step so the two never mix resolutions.
+    // EnsureImage shape-change reset (312.4 review-Major). d_landed_weight_ (and
+    // the host double it feeds) is the twin accumulator — reset it in lock-step
+    // so the two never mix resolutions.
     const bool xyz_dims_changed = (impl_->d_xyz_buf_ == nullptr) ||
                                   (impl_->alloc_xyz_w_ != impl_->img_w_) ||
                                   (impl_->alloc_xyz_h_ != impl_->img_h_);
@@ -4063,7 +4100,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
                 "BeginSession cudaMemset d_xyz_buf");
       CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
                 "BeginSession cudaMemset d_landed_weight");
-      impl_->layer_landed_weight_prev_ = 0.0f;  // per-layer delta baseline
+      impl_->window_landed_weight_ = 0.0;
       impl_->alloc_xyz_w_ = impl_->img_w_;
       impl_->alloc_xyz_h_ = impl_->img_h_;
     }
@@ -4846,24 +4883,24 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->h_cont_count_ = 0u;
   }
 
-  // Read this layer's contribution to the session-wide `d_landed_weight_`
-  // accumulator (device-fused XYZ path) so LayerStats::exit_w_sum reflects
-  // per-layer weight — mirrors Metal's ExitStats.w_sum (metal_trace_backend.mm
-  // :2818). Without this, callers relying on `GetLayerStats().exit_w_sum`
-  // (parity harness / K-shape filter parity battery) see a hardcoded 0 and
-  // treat every dispatch as inert. Delta accounting keeps multi-layer
-  // sessions consistent with Metal, which resets its per-layer buffer.
+  // Read this layer's landed weight off `d_landed_weight_` (device-fused XYZ
+  // path) so LayerStats::exit_w_sum reflects per-layer weight — mirrors Metal's
+  // ExitStats.w_sum (metal_trace_backend.mm :2818). Without this, callers
+  // relying on `GetLayerStats().exit_w_sum` (parity harness / K-shape filter
+  // parity battery) see a hardcoded 0 and treat every dispatch as inert. The
+  // device scalar is then zeroed and the layer folded into the host double
+  // (see `window_landed_weight_`): the float never accumulates past one layer,
+  // and the drain hands out the double. The synchronous cudaMemcpy on the NULL
+  // stream orders after the kernels on `stream_` (created blocking), and the
+  // memset that follows it orders before the next layer's launch the same way.
   float layer_lw = 0.0f;
   if (impl_->d_landed_weight_ != nullptr) {
-    float lw_cum = 0.0f;
-    ck_reset(cudaMemcpy(&lw_cum, impl_->d_landed_weight_, sizeof(float),
+    ck_reset(cudaMemcpy(&layer_lw, impl_->d_landed_weight_, sizeof(float),
                         cudaMemcpyDeviceToHost),
              "TraceLayer landed_weight readback");
-    layer_lw = lw_cum - impl_->layer_landed_weight_prev_;
-    if (layer_lw < 0.0f) {
-      layer_lw = 0.0f;  // guard against float noise / external ReadbackXyzAccum reset
-    }
-    impl_->layer_landed_weight_prev_ = lw_cum;
+    ck_reset(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
+             "TraceLayer landed_weight reset");
+    impl_->window_landed_weight_ += static_cast<double>(layer_lw);
   }
   return std::make_unique<CudaLayerHandle>(cont_count_for_handle,
                                            LayerStats{impl_->h_exit_count_, layer_lw});
@@ -5207,9 +5244,10 @@ void CudaTraceBackend::ReadbackAnchorBuffer(std::vector<float>& anchor_y) {
             "ReadbackAnchorBuffer cudaMemset d_anchor_buf");
 }
 
-// scrum-312 third-clock drain: copies the PERSISTENT cross-batch d_xyz_buf_ +
-// d_landed_weight_ accumulator to host, accumulates landed_weight into the running
-// scalar, and zeros the device buffers to start the next drain window clean. The
+// Third-clock drain: copies the PERSISTENT cross-batch d_xyz_buf_ to host, adds
+// the window's landed weight (`window_landed_weight_`, folded per layer by
+// TraceLayer) into the running scalar, and zeros both to start the next drain
+// window clean. The
 // simulator calls this on display cadence (a whole window of batches), not per
 // batch, and possibly BETWEEN sessions. Draining twice with no accumulation in
 // between returns zeros on the second call (buffers cleared after the first read).
@@ -5248,10 +5286,14 @@ void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight)
   CheckCuda(cudaMemcpy(xyz.data, impl_->d_xyz_buf_, pix * 3u * sizeof(float),
                        cudaMemcpyDeviceToHost),
             "ReadbackXyzAccum D2H d_xyz_buf");
+  // The window's landed weight is the host double TraceLayer folded every layer
+  // into; the device float is zero after each layer, so anything still on it
+  // could only be a layer whose readback never ran, and is read once here rather
+  // than left to leak into the next window.
   float lw = 0.0f;
   CheckCuda(cudaMemcpy(&lw, impl_->d_landed_weight_, sizeof(float), cudaMemcpyDeviceToHost),
             "ReadbackXyzAccum D2H d_landed_weight");
-  landed_weight += lw;
+  landed_weight += static_cast<float>(impl_->window_landed_weight_ + static_cast<double>(lw));
   // Reset the accumulator so the NEXT drain window starts from zero (scrum-312:
   // this is now the per-window reset — BeginSession no longer zeroes; a second
   // drain with no intervening accumulation returns zeros).
@@ -5259,6 +5301,7 @@ void CudaTraceBackend::ReadbackXyzAccum(XyzImageData& xyz, float& landed_weight)
             "ReadbackXyzAccum cudaMemset d_xyz_buf");
   CheckCuda(cudaMemset(impl_->d_landed_weight_, 0, sizeof(float)),
             "ReadbackXyzAccum cudaMemset d_landed_weight");
+  impl_->window_landed_weight_ = 0.0;
 }
 
 // Mirror MetalTraceBackend::IsCompatible. 315.3/315.4: the device-fused emit
