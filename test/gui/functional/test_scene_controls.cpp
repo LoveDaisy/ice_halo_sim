@@ -31,6 +31,7 @@ namespace {
 const char* const kAltitude = "**/##Altitude_input";
 const char* const kDiameter = "**/##Diameter_input";
 const char* const kRays = "**/##Rays(M)_input";
+const char* const kRaysSlider = "**/##Rays(M)_slider";
 const char* const kMaxHits = "**/##Max hits_input";
 
 // Owns a real server for the length of one case.
@@ -193,13 +194,13 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_state.sim.infinite);
       IM_CHECK(!IsDisabled(ctx->ItemInfo(kRays)));
 
-      // The declared domain, as literals.
+      // The declared domain (gui/ray_num_domain.hpp), as literals: 0.1 M to 100 000 M (1e11 rays).
       ctx->ItemInputValue(kRays, 0.1f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 0.1f);
-      ctx->ItemInputValue(kRays, 100.0f);
+      ctx->ItemInputValue(kRays, 100000.0f);
       ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 100.0f);
+      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 100000.0f);
 
       gui::g_state.sim.infinite = true;
       ctx->Yield(3);
@@ -209,6 +210,46 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       gui::g_state.sim.infinite = false;
       ctx->Yield(3);
       IM_CHECK(!IsDisabled(ctx->ItemInfo(kRays)));
+    };
+  }
+
+  // The same two bounds reached by the SLIDER rather than the input box. The input path above
+  // never touches the mapping: it writes the number and the trailing clamp keeps it. The slider
+  // is a kLog track over six decades, and a stop on it is only the bound because the widget hands
+  // the extreme back through LogNormToValueSnapped — the mapping is unit-tested, what needs a live
+  // frame is that the real widget path reaches the snap (the Range slider's sqrt twin in
+  // test_edit_modal.cpp is the precedent). A drag far past either end clamps at that end whatever
+  // the slider's on-screen width. The start value is mid-travel and NOT a bound, so an ImGui that
+  // ignored the drag would read as a miss rather than as a pass.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "scene_controls", "dragging_the_ray_total_to_a_stop_stores_the_exact_bound");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 5.0f;
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists(kRaysSlider));
+
+      ctx->ItemDragWithDelta(kRaysSlider, ImVec2(2000.0f, 0.0f));
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 100000.0f);
+
+      ctx->ItemDragWithDelta(kRaysSlider, ImVec2(-2000.0f, 0.0f));
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 0.1f);
+
+      // And the law between the stops, from the live widget rather than the mapping's own unit
+      // test. ItemDragWithDelta presses at the item's CENTRE (norm 0.5 — ImGui jumps the grab to
+      // the press), then drags a quarter of the track: norm ~0.75, which is ~3 000 M under kLog
+      // (0.1 x 1e6^0.75) and ~75 000 M under kLinear. A decade either side of the kLog figure is
+      // asked for, so this reads which law runs and not ImGui's grab geometry.
+      const float track_w = ctx->ItemInfo(kRaysSlider).RectFull.GetWidth();
+      IM_CHECK_GT(track_w, 40.0f);
+      ctx->ItemDragWithDelta(kRaysSlider, ImVec2(track_w * 0.25f, 0.0f));
+      ctx->Yield(2);
+      IM_CHECK_GT(gui::g_state.sim.ray_num_millions, 300.0f);
+      IM_CHECK_LT(gui::g_state.sim.ray_num_millions, 30000.0f);
     };
   }
 
