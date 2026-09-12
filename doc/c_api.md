@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 438        // ABI version, encoded major*100 + minor (v4.38)
+#define LUMICE_API_VERSION 439        // ABI version, encoded major*100 + minor (v4.39)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -38,10 +38,30 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 438, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 439, "Lumice header too old for this integration");
 ```
 
 It is bumped on every BREAKING change to the public symbol set or struct layout.
+
+**v4.39 is such a break.** A fifth annotation family — the view-distance circles, circles of
+constant angular distance from the camera's **optical axis**, the axis-referenced twin of
+`angular_dist` (which is referenced to the sun) — grows two structs at their tails, so callers
+recompile. `LUMICE_RenderParam` gains `view_dist[]` / `view_dist_count` / `view_dist_line` /
+`view_dist_label` after `paper` (sizeof 4904 → 6452), mirroring the `angular_dist` four field for
+field; `LUMICE_AnnotationRequest` gains `view_dist_deg` / `view_dist_count` after `marker_count`
+(128 → 144), and its labels come back with kind `LUMICE_ANNOTATION_VIEW_DIST` (4). The JSON keys
+are `grid.view_dist`, `grid.view_dist_line` (default true) and `grid.view_dist_label` (default
+false), shaped exactly like the `angular_dist` three, and absent keys leave the family off, so a
+document written before v4.39 renders as it did. Nothing is removed or reordered. Two things are
+deliberately **not** there. There is no `reference_dir_view`: the centre is the view's own
+forward (elevation / azimuth / roll), which core already derives for the front-hemisphere clip, so
+the request determines it and a second direction field would be a second copy of it — and it is
+independent of `lens_shift` by construction, since a shifted lens moves the axis's *pixel*, not
+the axis, and the circles follow the axis. And the zero-initialised `LUMICE_RenderParam` caveat
+the other three line switches carry applies here too: `view_dist_line` reads 0 in a zeroed struct
+where the JSON default is true, so set it or go through JSON. Both structs now carry an exact-size
+`static_assert` in the header, so the next tail append is a compile error until the version is
+bumped with it.
 
 **v4.13 is such a break.** `LUMICE_CrystalParam` gained a field appended at the end of the
 struct: `int sync_group[LUMICE_SHAPE_SCALAR_COUNT]`, alongside ten new `LUMICE_SHAPE_SCALAR_*`
