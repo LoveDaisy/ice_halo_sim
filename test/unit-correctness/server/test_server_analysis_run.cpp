@@ -498,12 +498,14 @@ TEST_F(ServerAnalysisRun, RenderStopStillReadsAsIdleWithNoData) {
 // preference was honoured for a render, so the CPU reading is the session's doing.
 // ---------------------------------------------------------------------------
 TEST(ServerAnalysisRunGpu, AnalysisForcesCpuUnderGpuPreference) {
+  // The whole body sits inside the platform guard: on a build with no GPU backend `kGpu` has no
+  // value to take, and a GTEST_SKIP() alone does not stop the compiler from reading the lines
+  // after it (the CI legs without Metal or CUDA are exactly the ones that compile this TU).
+#if defined(__APPLE__) || defined(LUMICE_CUDA_ENABLED)
 #if defined(__APPLE__)
   const BackendKind kGpu = BackendKind::kMetal;
-#elif defined(LUMICE_CUDA_ENABLED)
-  const BackendKind kGpu = BackendKind::kCuda;
 #else
-  GTEST_SKIP() << "no GPU backend in this build; the CPU-route half is covered by the fixture above";
+  const BackendKind kGpu = BackendKind::kCuda;
 #endif
   Logger probe{ "ServerAnalysisRunGpu" };
   if (!ResolveGpuRoute(kGpu, probe)) {
@@ -531,6 +533,9 @@ TEST(ServerAnalysisRunGpu, AnalysisForcesCpuUnderGpuPreference) {
   EXPECT_EQ(server.GetActiveBackend(), kGpu) << "the preference was not overwritten";
   EXPECT_FALSE(server.AcquireResultFrame()->raypath_histogram_result_.has_value());
   server.Stop();
+#else
+  GTEST_SKIP() << "no GPU backend in this build; the CPU-route half is covered by the fixture above";
+#endif
 }
 
 }  // namespace

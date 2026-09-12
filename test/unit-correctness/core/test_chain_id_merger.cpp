@@ -183,8 +183,10 @@ TEST(ChainIdMerger, EffectiveSeedIsVerbatimWhenFixedAndDistinctWhenZero) {
 
 // E: the bound, its ruler, and the merger's view of the sentinel.
 TEST(ChainIdTableBound, CapacityIsTheRulerNewKeysPastItGetTheSentinelAndEarlierChainsStay) {
-  constexpr uint32_t kOverflow = ChainIdInterningTable::kOverflowChainId;
-  constexpr uint32_t kRoot = ChainIdInterningTable::kRootChainId;
+  // `static` so the capture-less lambda below can name them on MSVC too (C3493: a block-scope
+  // constexpr still counts as a capture there; GCC/Clang let a non-odr-use through).
+  static constexpr uint32_t kOverflow = ChainIdInterningTable::kOverflowChainId;
+  static constexpr uint32_t kRoot = ChainIdInterningTable::kRootChainId;
   // Red state first: the same stream of 6 distinct keys against capacity 3
   // and capacity 5 must overflow at the 4th and the 6th key respectively. If
   // the bound were not in force both would intern all six.
