@@ -146,6 +146,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_label_viewport_clamp.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_ink_transfer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_contrast_headroom.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_lens_fov_default.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"

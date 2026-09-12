@@ -9,6 +9,7 @@
 #include "config/config_compare.hpp"
 #include "core/math.hpp"
 #include "util/color_space.hpp"
+#include "util/lens_fov_default.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
@@ -163,7 +164,6 @@ void to_json(nlohmann::json& j, const LensParam& l) {
 }
 
 void from_json(const nlohmann::json& j, LensParam& l) {
-  constexpr int kErrCodeMissingKey = 403;
   constexpr int kErrCodeInvalidValue = 404;
   constexpr float kHalfShortEdge = 12.0f;  // half short edge of 35mm film (24mm / 2)
 
@@ -216,7 +216,17 @@ void from_json(const nlohmann::json& j, LensParam& l) {
         break;
     }
   } else {
-    throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "missing key [fov] or [f]", j);
+    // Neither key: the default doc/configuration.md's lens "Defaults" section has published all
+    // along, taken from the one function the GUI's import path also calls (util/lens_fov_default.hpp)
+    // so both readers load this document at the same angle. Warn-and-default rather than the
+    // reject this branch used to be, and for the reason RenderConfig::Tone below gives for its own
+    // fallback: the value chosen here reproduces exactly what the documentation promised, so
+    // refusing the whole config would cost more than it protects. The warning is the half that
+    // matters — the author never wrote the angle, and this is the one line that says which one
+    // they got.
+    l.fov_ = LensDefaultFovDegrees(l.type_ == LensParam::kGlobe);
+    LOG_WARNING("lens: neither \"fov\" nor \"f\" given; using the default fov={:.0f} degrees for this lens type",
+                l.fov_);
   }
 
   // Validate fov range (skip Rectangular which uses fov=0 for full-sky)
