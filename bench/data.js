@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789252146464,
+  "lastUpdate": 1789252148343,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "985357aace8cb86e666f1c4e317f08c847f2af51",
-          "message": "Merge pull request #256 from LoveDaisy/fix/pyramid-closed-form-geometry-defects\n\nfix(core): close the closed-form pyramid's structural geometry defects",
-          "timestamp": "2026-08-07T14:54:11+08:00",
-          "tree_id": "08e78fc2e34f33e8a8b828d75ac37a0294dd0cad",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/985357aace8cb86e666f1c4e317f08c847f2af51"
-        },
-        "date": 1786086324448,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 79.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.2,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 92.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "6b3c6b4ca3743e19c327b64957e7c30aea188970",
           "message": "Merge pull request #257 from LoveDaisy/feat/config-default-semantics\n\nMake core's implicit config defaults into written contracts (prob / axis type / absent axis)",
           "timestamp": "2026-08-07T15:41:10+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "35235a01c6962917a905abe105b458ee0ba444ab",
+          "message": "Merge pull request #354 from LoveDaisy/feat/ray-num-slider-100b-log-scale\n\nfeat(gui): Rays(M) slider spans 0.1..100 000 M on a kLog track, one domain for both rows",
+          "timestamp": "2026-09-13T06:17:09+08:00",
+          "tree_id": "8c31257305277f134a3473abfb64eca3bdbdbc3a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/35235a01c6962917a905abe105b458ee0ba444ab"
+        },
+        "date": 1789252147861,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.7,
             "unit": "%"
           }
         ]
