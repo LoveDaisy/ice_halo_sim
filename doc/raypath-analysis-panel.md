@@ -594,9 +594,9 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
    都不会体现在 `error_bound` 里）。
 4. **分析会话独立提交（§2 第 3 条 v4.36 更新）——但 `adaptive` 在这条路径上不生效，这是有意的
    设计边界**：分析提交的是**当前文档自己的 scene**，与渲染提交共用同一个编码器
-   （`BuildCommitSceneOrWarn`），编码器层面没有分叉：GUI 今天没有 `ray_allocation` 这个字段
-   （一期不暴露，导入的 JSON 里带它也不会进文档），所以经 GUI 提交的两条路径都不带它；经 C API
-   直接递 JSON scene 的调用者，两条路径都会原样带上它。分叉在下一层：`q` 从来不写进
+   （`BuildCommitSceneOrWarn`），编码器层面没有分叉：GUI 文档里的 `sim.ray_allocation`
+   （Simulation 面板的 `Adaptive ray allocation` 复选框，经 `LUMICE_SceneSetRayAllocation` 写入）
+   两条路径都会带上它，经 C API 直接递 JSON scene 的调用者也一样——但分析会话仍然不消费它。分叉在下一层：`q` 从来不写进
    `SceneConfig`，它由一个 per-scene 的 `RayAllocationOnline` 对象（累计统计 + 每批所用的不可变
    快照）交付给 worker，而这个对象只在 `CommitConfig`（渲染提交）里绑定到 `SimBatch`
    （`src/server/server.cpp`，`ServerImpl::active_ray_alloc_`）；`StartRaypathAnalysis` **不**绑定

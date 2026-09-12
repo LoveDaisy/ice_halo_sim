@@ -449,7 +449,10 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 > 拼错的取值不是错误——加载器会告警
 > （`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`）
 > 并当作该键不存在处理；这是安全的默认，但也正是作者想要摆脱的那张噪声图，所以要看日志。
-> 该模式目前是纯文档设置，GUI 没有对应控件；引擎侧的权威实现是 `ResolveLayerRayAllocation`
+> 在 GUI 里该模式就是 Simulation 面板的 `Adaptive ray allocation` 复选框，保存进 `.lmc`，也写进每一份
+> 导出的 config——而那里的**文档**默认是 `adaptive`（新文档、控件出现前保存的 `.lmc`、不带该键导入的
+> config 打开后都视为勾选），与上面「缺键默认 proportional」不是一回事：GUI 总是显式写出该键，
+> 所以经 GUI 产出的 config 从不依赖缺键默认。引擎侧的权威实现是 `ResolveLayerRayAllocation`
 > （唯一决定一层按 `p` 还是按 `q` 分配的地方）、`ComputeAdaptiveRayAllocationWeights`
 > （Neyman 公式及其下限）与 `RayAllocationOnline`（累计统计与每批所用 `q` 的快照），都在
 > `src/core/simulator.hpp`；三个后端共同写入的统计量定义在
