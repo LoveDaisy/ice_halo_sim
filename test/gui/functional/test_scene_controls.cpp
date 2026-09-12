@@ -235,6 +235,39 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The allocation switch is reachable from the panel, edits the document field, and — being a
+  // SimConfig field the reconciler auto-diffs — dirties the document without a MarkDirty of its
+  // own. Both directions are clicked so a checkbox wired to a copy of the field, or one that only
+  // ever set it, would show. The fresh document's state is asserted first: a new document (and an
+  // .lmc saved before the key existed, which reads the same factory value) opens with the switch
+  // ON, which is the GUI default the user manual describes.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "toggling_adaptive_ray_allocation_dirties_the_document");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ScopedServer server;
+      IM_CHECK(server.ok());
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.5f;
+      IM_CHECK(gui::g_state.sim.ray_allocation_adaptive);  // the fresh document's default
+      gui::DoRun(/*user_initiated=*/true);                 // the synchronous commit is what populates the baseline
+      IM_CHECK(gui::g_state.last_committed_state.has_value());
+      gui::g_state.dirty = false;  // DoRun does not touch dirty; pin a known pre-edit baseline
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.dirty);
+
+      ctx->ItemClick("**/Adaptive ray allocation");
+      ctx->Yield();
+      IM_CHECK(!gui::g_state.sim.ray_allocation_adaptive);
+      IM_CHECK(gui::g_state.dirty);
+
+      ctx->ItemClick("**/Adaptive ray allocation");
+      ctx->Yield();
+      IM_CHECK(gui::g_state.sim.ray_allocation_adaptive);
+      // Teardown is the guard's; see ScopedServer for why it cannot be written here.
+    };
+  }
+
   // P83. The int slider is a different widget family from the float ones above and reads its bounds
   // from the same registry, so it gets the same treatment: literals, at both ends.
   {

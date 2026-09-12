@@ -697,6 +697,10 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "sim.ray_num_millions", true, Kind::kFloatSlider },
     { "sim.max_hits", true, Kind::kIntSlider },
     { "sim.infinite", true, Kind::kCheckbox },
+    // v4.37. Serialized as a WORD ("adaptive" | "proportional", core's spelling) while its control
+    // edits a bool — the same value-vs-control split sim_resolution has below. Registered as a
+    // checkbox because the Simulation panel edits it with one.
+    { "sim.ray_allocation", true, Kind::kCheckbox },
     { "renderer.lens_type", true, Kind::kCombo },
     { "renderer.fov", true, Kind::kFloatSlider },
     { "renderer.elevation", true, Kind::kFloatSlider },

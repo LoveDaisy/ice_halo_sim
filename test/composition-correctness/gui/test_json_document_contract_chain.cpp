@@ -31,6 +31,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -746,6 +747,50 @@ TEST(JsonImportContractChain, AJsonSunAzimuthOfZeroIsNotWorthMentioning) {
     }
     EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
         << "nothing was lost, so there is nothing to report: " << light_source << " -> "
+        << PeekImportComplexFilterWarning();
+    ClearImportComplexFilterWarning();
+  }
+  ClearImportComplexFilterWarning();
+}
+
+// scene.ray_allocation now has a home in the document (SimConfig::ray_allocation_adaptive), so a
+// CLI-authored config carrying it is READ — the old behaviour was to drop it in silence, without
+// even the WarnUnsupportedByDesign notice the fields with nowhere to go get. Three things pinned:
+// both spellings land where core would put them; a recognised value is silent (the control arm
+// without which "no warning" is unfalsifiable); and ABSENCE means the GUI DOCUMENT default
+// (adaptive), which is deliberately not core's own default for an absent key (proportional): the
+// moment a config is opened here it is a GUI document, and the GUI always writes the key back out,
+// so core's absent-key default is never consulted on this road. The absent row is seeded off the
+// expected value so a reader that never wrote the field is visibly wrong, not accidentally right.
+TEST(JsonImportContractChain, AJsonSceneRayAllocationIsImportedAndAbsenceMeansTheGuiDefault) {
+  struct Row {
+    const char* spelled;  // nullptr = key absent
+    bool expected_adaptive;
+    const char* label;
+  };
+  const Row kRows[] = {
+    { "adaptive", true, "adaptive" },
+    { "proportional", false, "proportional" },
+    { nullptr, SimConfig{}.ray_allocation_adaptive, "<absent>" },
+  };
+  ASSERT_TRUE(SimConfig{}.ray_allocation_adaptive)
+      << "premise: the GUI document default is adaptive; if this moved, the <absent> row's meaning moved with it";
+  for (const Row& row : kRows) {
+    nlohmann::json doc = nlohmann::json::parse(DocWithParts(kWellFormedLightSource, kWellFormedRender, ""));
+    if (row.spelled) {
+      doc["scene"]["ray_allocation"] = row.spelled;
+    }
+    ClearImportComplexFilterWarning();
+    GuiState scratch;
+    scratch.sim.ray_allocation_adaptive = !row.expected_adaptive;  // seed off the expectation
+    if (!DeserializeFromJson(doc.dump(), scratch)) {
+      // Non-fatal per row: the absent row is last and matters most.
+      ADD_FAILURE() << row.label << ": the import rejected the document outright";
+      continue;
+    }
+    EXPECT_EQ(scratch.sim.ray_allocation_adaptive, row.expected_adaptive) << row.label;
+    EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
+        << row.label << ": the key has a home now, so nothing was lost and nothing is worth a notice; got: "
         << PeekImportComplexFilterWarning();
     ClearImportComplexFilterWarning();
   }

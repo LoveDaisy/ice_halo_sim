@@ -102,6 +102,16 @@ static_assert(sizeof(kToneJsonNames) / sizeof(kToneJsonNames[0]) == kToneCount, 
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "2:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
+// scene.ray_allocation wire spellings for SimConfig::ray_allocation_adaptive, on BOTH the .lmc and
+// the CLI-JSON path, mirroring core's vocabulary (doc/configuration.md). One codec pair so the two
+// serializers cannot drift from each other. An unrecognised spelling reads as proportional — the
+// same conservative side core itself falls to (with a warning) at commit; the GUI never writes one.
+static const char* RayAllocationJsonName(bool adaptive) {
+  return adaptive ? "adaptive" : "proportional";
+}
+static bool RayAllocationFromJsonName(const std::string& spelled) {
+  return spelled == "adaptive";
+}
 
 
 // ========== Shared helpers ==========
@@ -2331,6 +2341,17 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneSetSimParams failed");
     return nullptr;
   }
+  // Written on BOTH intents: the commit arm so the run allocates the way the document says, the
+  // export arm so the exported config reproduces it — the key means the same thing on either
+  // road, which is why it is not in test_scene_commit_chain.cpp's divergence table. Always
+  // explicit, never omitted: omitting it would hand the decision to core's own default
+  // (proportional), which is not the GUI document default (SimConfig).
+  if (LUMICE_SceneSetRayAllocation(scene.get(), state.sim.ray_allocation_adaptive ?
+                                                    LUMICE_RAY_ALLOCATION_ADAPTIVE :
+                                                    LUMICE_RAY_ALLOCATION_PROPORTIONAL) != LUMICE_OK) {
+    GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneSetRayAllocation failed");
+    return nullptr;
+  }
 
   // task-342.3 Step 3: raypath color classes. Reuses `crystal_pool_to_core` built above so
   // ref.crystal_pool_id (GUI pool index) resolves to the same scene crystal id the scattering
@@ -2782,6 +2803,14 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       }
     }
     state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
+    // The key has a home in the document now (SimConfig::ray_allocation_adaptive), so it is read,
+    // not WarnUnsupportedByDesign'd. Absent → the GUI document default (SimConfig's factory value),
+    // which is deliberately not core's proportional default: see the field's comment.
+    if (js.contains("ray_allocation") && js["ray_allocation"].is_string()) {
+      state.sim.ray_allocation_adaptive = RayAllocationFromJsonName(js["ray_allocation"].get<std::string>());
+    } else {
+      state.sim.ray_allocation_adaptive = SimConfig{}.ray_allocation_adaptive;
+    }
 
     // 0 is core's own "pool disabled", which is what BuildScene commits unconditionally, so only a
     // request for a pool is worth a word.
@@ -3206,6 +3235,7 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   sim["ray_num_millions"] = state.sim.ray_num_millions;
   sim["max_hits"] = state.sim.max_hits;
   sim["infinite"] = state.sim.infinite;
+  sim["ray_allocation"] = RayAllocationJsonName(state.sim.ray_allocation_adaptive);
   root["sim"] = sim;
 
   // Renderer (copy model: single renderer embedded directly)
@@ -3433,6 +3463,10 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     state.sim.ray_num_millions = js.value("ray_num_millions", SimConfig{}.ray_num_millions);
     state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
     state.sim.infinite = js.value("infinite", SimConfig{}.infinite);
+    // A document saved before the key existed lands on SimConfig's factory value, as `infinite` and
+    // `max_hits` do; no schema bump (file_io.hpp: the counter moves only when data needs migrating).
+    state.sim.ray_allocation_adaptive = RayAllocationFromJsonName(
+        js.value("ray_allocation", std::string(RayAllocationJsonName(SimConfig{}.ray_allocation_adaptive))));
   }
 
   // Renderer (copy model).
