@@ -351,7 +351,7 @@ top-20 行上观测到 mean\|err\| 8.1%、max\|err\| 78%（K_trie=16384 时）�
 `other` 占比约 22–23%。单 finest 链占主导的场景（如本仓绝大多数单层 e2e/GUI 参考场景）不受
 影响，halo22 的完全恒等即是证据。
 
-**已知问题（code review Minor，未阻塞合入）**：`truncated_chain_count` 在 C API 侧从 `size_t`
+**已知局限（v4.35 落地时点记录）**：`truncated_chain_count` 在 C API 侧从 `size_t`
 clamp 到 `int`（`INT_MAX`），注释未说明该截断；`kOverflowChainId` 与 `ChainIdMerger::kUnresolved`
 的哨兵值关系、以及 K_trie 与 k「建议同值」的约束，目前只靠注释维护，无编译期 `static_assert`
 强制；CONE ROI 下 `truncated_chain_count` 是全局无过滤计数，而 `other_energy`/`other_count` 是
