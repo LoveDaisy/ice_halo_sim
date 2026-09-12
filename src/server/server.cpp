@@ -401,37 +401,23 @@ class ServerImpl {
   // Which kind of run the current session is. Written by the two entry points that
   // (re)start a run — CommitConfig (→ kRender) and StartRaypathAnalysis (→ kAnalysis) —
   // after their Stop() has joined the previous run's workers; read by GenerateScene
-  // (the CPU-forcing half of the route decision) and ConsumeData (the cone stop
-  // target), and by the mutual-exclusion guards at both entry points. Atomic for the
-  // same reason analysis_roi_target_reached_ below is: control thread writes, worker
-  // threads read, and a plain member would rest on Stop()'s join being a
+  // (the CPU-forcing half of the route decision), by Stop() (the analysis-only
+  // materialisation below), and by the mutual-exclusion guards at both entry points.
+  // Atomic for the same reason the analysis budget fields below are: control thread
+  // writes, worker threads read, and a plain member would rest on Stop()'s join being a
   // happens-before that every future edit of this file preserves.
   enum class SessionMode { kRender, kAnalysis };
   std::atomic<SessionMode> mode_{ SessionMode::kRender };
 
-  // The cone ROI's early stop (RaypathHistogramConsumer::RoiTargetReached), carried from
-  // ConsumeData (which observes it after a batch is counted) to GenerateScene (whose loop
-  // condition reads it). This is the WHOLE mechanism, and it is deliberately not Stop():
-  // the natural-completion path — the producer stops enqueueing, the consumer drains, and
-  // GetStatus() infers kIdle from its four predicates while has_ever_consumed_ stays true —
-  // is what makes the run read as kCompleted with a valid frame. Stop() resets
-  // has_ever_consumed_ and would make the same run read as kIdle with no data.
-  // Cleared by StartRaypathAnalysis for each new analysis session — and that is the ONLY
-  // clear: the switch back to a render (CommitConfig's was_analysis branch) leaves it as
-  // the analysis left it. Both the write and the read are therefore gated on
-  // mode_ == kAnalysis, so a render session never sees it whatever its value; a second
-  // clearing point on the way out would be a second implementation of the same rule.
-  std::atomic_bool analysis_roi_target_reached_{ false };
-
   // The analysis run's own ray budget (RaypathAnalysisRequest::ray_num_), carried from
   // StartRaypathAnalysis (control thread) to GenerateScene's budget ingest point (worker
-  // thread) — the same write/read pair, and the same reason for atomics, as the flag
+  // thread) — the same write/read pair, and the same reason for atomics, as mode_
   // above. Two atomics rather than one optional because an optional is not lock-free
   // and the pair is only ever read under mode_ == kAnalysis, after both stores: the
   // flag says whether the value applies, the value is the budget (kInfSize = unlimited).
   // Written by StartRaypathAnalysis for every analysis session, on both branches, so a
   // session that inherits the scene's budget cannot read the previous session's
-  // override; never read by a render session (the gate is kAnalysis, as for the flag).
+  // override; never read by a render session (the gate is kAnalysis).
   std::atomic<size_t> analysis_ray_num_override_{ 0 };
   std::atomic_bool analysis_ray_num_overridden_{ false };
 
@@ -1128,9 +1114,6 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
   // The render's image must not be readable off an analysis session's frame, not even
   // flagged stale: the first frame of this session is empty until its first batch.
   PublishEmptyFrame();
-  // New session, new stop flag: the previous analysis' "target reached" must not end this
-  // one before its first batch.
-  analysis_roi_target_reached_.store(false, std::memory_order_release);
   // The session's ray budget: the request's own when it carries one, the scene's otherwise.
   // Value before flag, so a reader that sees the flag sees the value it belongs to.
   if (request.ray_num_.has_value()) {
@@ -1511,6 +1494,23 @@ void ServerImpl::Stop() {
     start_cv_.wait(lk, [this] { return active_workers_.load() == 0; });
   }
   auto t1 = std::chrono::steady_clock::now();
+
+  // Analysis session: publish what the stop leaves behind. An analysis run has no way to
+  // end other than its ray budget or this call, and its result is a histogram that is
+  // worth reading at whatever point it was stopped — so the batches consumed since the
+  // last poll must not be skipped by the snapshot_dirty_ reset below (which never
+  // publishes them: DoSnapshot() is the only materialisation point, and a cleared dirty
+  // flag makes it a no-op). What the frame carries is raypath_histogram_result_ — the
+  // C API's `present` — not has_valid_data_: that flag is re-stamped live by
+  // AcquireResultFrame from has_ever_consumed_, so after the reset below it reads false,
+  // exactly as GetSimLifecycle() reads kIdle. A stopped analysis is idle with a readable
+  // partial result; it is not "completed".
+  // Render sessions are deliberately untouched: their Stop() contract (a stop reads as
+  // idle with no data, doc/capi-lifecycle-architecture.md §7.1) is what the GUI's
+  // re-simulate paths rest on. No lock is held here; DoSnapshot() takes its own two.
+  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis) {
+    DoSnapshot();
+  }
 
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
@@ -1930,24 +1930,6 @@ void ServerImpl::ConsumeData() {
             emitted += chunk_count;
           } while (emitted < exit_count);
         }
-        // Analysis session: the cone ROI's stop target. Observed here, after the batch
-        // has been counted and under the same consumer_mutex_ the counter is written
-        // under; GenerateScene's loop reads the flag. Both consume paths above land here,
-        // so the check is path-independent (a forced-CPU session only ever takes the
-        // whole-batch path, but nothing here needs to know that).
-        if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis &&
-            !analysis_roi_target_reached_.load(std::memory_order_acquire)) {
-          for (const auto& c : consumers_) {
-            if (const auto* hc = dynamic_cast<const RaypathHistogramConsumer*>(c.get())) {
-              if (hc->RoiTargetReached()) {
-                ILOG_INFO(logger_, "ConsumeData: cone ROI stop target reached ({} rays in cone); producer will stop",
-                          hc->LiveRoiHitCount());
-                analysis_roi_target_reached_.store(true, std::memory_order_release);
-              }
-              break;
-            }
-          }
-        }
         auto t_consume = std::chrono::steady_clock::now();
         snapshot_dirty_ = true;
         has_ever_consumed_ = true;
@@ -2167,14 +2149,7 @@ void ServerImpl::GenerateScene() {
   // seen gone, and never again. Re-armed here rather than in Start() because this is the
   // only writer, and this is the entry point of the Run() the flag describes.
   fallback_queue_invalidated_.store(false, std::memory_order_release);
-  // The cone stop target ends the loop the same way a finite budget does: this producer
-  // simply stops enqueueing, and completion is inferred downstream — see the flag.
-  // Gated on kAnalysis exactly as the write in ConsumeData is: the flag outlives the
-  // analysis session that raised it (nothing on the way back to a render clears it), and
-  // read bare here it ended the NEXT render session before its first batch — zero batches,
-  // has_ever_consumed_ never true, a frame with no data and a GUI stuck on "Simulating".
-  while ((per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) &&
-         !(kAnalysis && analysis_roi_target_reached_.load(std::memory_order_acquire))) {
+  while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
     const bool backend_active = ReadBackendActive();
     // Shrinking the grain only sizes the batches queued FROM HERE ON, and by the time a
     // fallback is noticed the queue is already full of batches sized for the GPU

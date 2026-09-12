@@ -31,19 +31,18 @@
 #include "server/raypath_histogram_consumer.hpp"  // FormatRaypathChainDisplay (the truncation fixture premise)
 #include "server/server.hpp"
 
-static_assert(LUMICE_API_VERSION >= 433, "the analysis run needs the v4.33 header (symmetry is a read parameter)");
+static_assert(LUMICE_API_VERSION >= 434, "the analysis run needs the v4.34 header (no cone stop target)");
 
 // The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
 // offsets, so a field inserted in the middle (which keeps the size) is caught as well as
 // one appended; the Python side pins the same numbers, so either side moving turns one of
 // the two red before the library writes past a Python buffer.
 static_assert(sizeof(LUMICE_AnnotationView) == 48, "LUMICE_AnnotationView layout changed; update capi_runner.py");
-static_assert(sizeof(LUMICE_RaypathAnalysisRequest) == 96, "LUMICE_RaypathAnalysisRequest layout changed");
+static_assert(sizeof(LUMICE_RaypathAnalysisRequest) == 88, "LUMICE_RaypathAnalysisRequest layout changed");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, frame_view) == 4, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_center) == 52, "");
-static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_stop_target) == 72, "");
-static_assert(offsetof(LUMICE_RaypathAnalysisRequest, infinite) == 80, "");
-static_assert(offsetof(LUMICE_RaypathAnalysisRequest, ray_num) == 88, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, infinite) == 72, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisRequest, ray_num) == 80, "");
 static_assert(sizeof(LUMICE_RaypathChainSegment) == 264, "LUMICE_RaypathChainSegment layout changed");
 static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 5600, "LUMICE_RaypathHistogramEntry layout changed");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, chain_len) == 2112, "");
@@ -129,18 +128,23 @@ bool WaitForCompletedAndDrained(LUMICE_Server* server, int timeout_ms) {
   return false;
 }
 
-bool WaitForFirstRays(LUMICE_Server* server, int timeout_ms) {
+// The live ray count past `above`: true once the run has traced more than that many rays.
+bool WaitForRayCountAbove(LUMICE_Server* server, LUMICE_RayCount above, int timeout_ms) {
   using clock = std::chrono::steady_clock;
   const auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
   while (clock::now() < deadline) {
     LUMICE_RayCount n = 0;
     EXPECT_EQ(LUMICE_GetSimRayCount(server, &n), LUMICE_OK);
-    if (n > 0) {
+    if (n > above) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   return false;
+}
+
+bool WaitForFirstRays(LUMICE_Server* server, int timeout_ms) {
+  return WaitForRayCountAbove(server, 0, timeout_ms);
 }
 
 int ActiveBackend(LUMICE_Server* server) {
@@ -480,11 +484,13 @@ TEST_F(CApiRaypathAnalysis, RequestRayBudgetOverridesTheSceneAndTheSentinelKeeps
 }
 
 // The other direction of the same field: a FINITE scene, a request for an unlimited run. The
-// only thing that can end it is the cone's stop target (as ConeEchoAndRings shows for an
-// infinite scene), and the proof the budget was the request's rather than the scene's is that
-// more rays were traced than the scene's 1000 allow — a run on the scene's budget stops at
-// exactly 1000 whether or not the target was reached.
-TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilTheConeTarget) {
+// only thing that can end it is LUMICE_StopServer (v4.34: there is no cone stop target), and the
+// proof the budget was the request's rather than the scene's is that more rays were traced than
+// the scene's 1000 allow — a run on the scene's budget stops at exactly 1000. The same sequence
+// is the C API's statement of the v4.34 stop contract: the frame acquired after LUMICE_StopServer
+// returns carries the histogram consumed up to the stop, not the empty frame the session opened
+// with, and the run then reads as idle (a stop is a reset, not a completion).
+TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilStopped) {
   ASSERT_EQ(CommitJson(server_, Halo22Json("1000")), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   LUMICE_RaypathAnalysisRequest req = Cone();
@@ -494,11 +500,12 @@ TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilTheCon
   req.cone_center[2] = std::sin(lat);
   req.cone_radius_rad = 2.5f * 3.14159265f / 180.0f;
   req.cone_ring_count = 5;
-  req.cone_stop_target = 300;
   req.infinite = 1;
   req.ray_num = 7;  // ignored under infinite, and would be a smaller budget still if it were read
   ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
-  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000)) << "the stop target must end the unlimited run";
+  ASSERT_TRUE(WaitForRayCountAbove(server_, 1000, 30000)) << "an unlimited run must outlive the scene's 1000";
+  LUMICE_StopServer(server_);
+  EXPECT_EQ(Lifecycle(server_), LUMICE_LIFECYCLE_IDLE) << "a stop is a reset, not a completion";
   LUMICE_ResultFrame* frame = nullptr;
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
   LUMICE_StatsResult stats{};
@@ -506,18 +513,21 @@ TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilTheCon
   EXPECT_GT(stats.sim_ray_num, 1000u) << "past the scene's budget: the run was the request's";
   LUMICE_RaypathAnalysisInfo info{};
   ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
-  ASSERT_GE(info.entry_count, 1);
+  EXPECT_EQ(info.present, 1) << "the stopped run's frame is still an analysis frame";
+  ASSERT_GE(info.entry_count, 1) << "the histogram accumulated up to the stop must be readable";
   std::vector<LUMICE_RaypathHistogramEntry> entries(static_cast<size_t>(info.entry_count) + 1);
   ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, entries.data(), info.entry_count + 1), LUMICE_OK);
   LUMICE_RayCount landed = 0;
   for (int i = 0; i < info.entry_count; i++) {
     landed += entries[static_cast<size_t>(i)].count;
   }
-  EXPECT_GE(landed, 300u) << "and it ended because the cone target was reached";
+  EXPECT_GT(landed, 0u) << "rays landed in the cone before the stop are in the frame";
   LUMICE_ReleaseResultFrame(frame);
 }
 
-// The cone request round-trips its echo fields and ring split through the getters.
+// The cone request round-trips its echo fields and ring split through the getters. The scene is
+// unlimited and the request carries its own finite budget, so the run ends on that budget alone
+// (v4.34: a cone has no stop of its own).
 TEST_F(CApiRaypathAnalysis, ConeEchoAndRings) {
   ASSERT_EQ(CommitJson(server_, Halo22Json("\"infinite\"")), LUMICE_OK);
   LUMICE_StopServer(server_);
@@ -530,9 +540,10 @@ TEST_F(CApiRaypathAnalysis, ConeEchoAndRings) {
   req.cone_center[2] = std::sin(lat);
   req.cone_radius_rad = 2.5f * 3.14159265f / 180.0f;
   req.cone_ring_count = 5;
-  req.cone_stop_target = 300;
+  req.infinite = 0;
+  req.ray_num = 40000;
   ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
-  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000)) << "the stop target must end an infinite run";
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000)) << "the request's own budget must end the run";
 
   LUMICE_ResultFrame* frame = nullptr;
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
@@ -559,7 +570,9 @@ TEST_F(CApiRaypathAnalysis, ConeEchoAndRings) {
     EXPECT_NEAR(s, e.energy, 1e-12 * e.energy) << e.display;
     total += e.count;
   }
-  EXPECT_GE(total, 300u);
+  // A 2.5° cone on the halo's brightest arc gathers a few hundred of 40000 rays (262 measured
+  // on the reference run); 100 is the floor, so the ring split above is exercised on real rows.
+  EXPECT_GE(total, 100u);
   EXPECT_STREQ(entries[0].display, "3-5") << "the 22° path leads in the cone";
   LUMICE_ReleaseResultFrame(frame);
 }

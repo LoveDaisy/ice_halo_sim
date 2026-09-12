@@ -201,12 +201,10 @@ struct RaypathRoiSpec {
   // kInFrame: the frame whose lens / view / visible / front decide membership.
   RenderConfig frame_config_;
   // kCone: world-space centre direction (normalised at construction; a zero
-  // vector is rejected), angular radius, ring count, and the number of
-  // in-cone rays after which RoiTargetReached() turns true (0 = never).
+  // vector is rejected), angular radius and ring count.
   float cone_center_[3]{ 0.0f, 0.0f, 1.0f };
   float cone_radius_rad_ = 0.0f;
   int cone_ring_count_ = 1;
-  size_t cone_stop_target_ = 0;
 };
 
 // What Server::StartRaypathAnalysis takes: the ROI and the ray budget. There is
@@ -545,9 +543,10 @@ class Server {
    *            SetPreferredBackend and LUMICE_TRACE_BACKEND (SetAnalysisForceCpu); the
    *            preference itself is left untouched, so a later render session still
    *            honours it;
-   *          - a cone ROI with a non-zero stop target ends the run early, through the same
-   *            natural-completion path a finite ray_num takes (never through Stop(), which
-   *            would read the result as "no data").
+   *          - the run ends on its ray budget (RaypathAnalysisRequest::ray_num_) or on
+   *            Stop(), in every ROI mode; a Stop() publishes the histogram accumulated up
+   *            to it before resetting, so the partial result stays readable through
+   *            AcquireResultFrame() (the run then reads as kIdle, not kCompleted).
    *          The result is read through AcquireResultFrame():
    *          ResultFrame::raypath_histogram_result_.
    * @return Error::ServerError when a RENDER run is in progress (GetSimLifecycle() ==

@@ -385,8 +385,8 @@ TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
   }
 }
 
-// The analysis panel's request parameters (ray_num_millions / infinite / cone_stop_target, and
-// the ray_budget_initialized latch) are session-tier tool state — gui_state_tiers.hpp registers
+// The analysis panel's request parameters (ray_num_millions / infinite, and the
+// ray_budget_initialized latch) are session-tier tool state — gui_state_tiers.hpp registers
 // the whole `analysis` struct as kSession — and must not be in the document. Not a row in the
 // probe table above, whose proposition is the opposite one (the field survives). The readout is
 // against a FRESH GuiState's defaults, not against `before`'s values: a serializer that wrote the
@@ -398,22 +398,18 @@ TEST(DocumentRoundtripChain, AnalysisRequestParamsAreSessionOnlyNotInTheDocument
   before.analysis.ray_num_millions = 42.5f;
   before.analysis.infinite = true;
   before.analysis.ray_budget_initialized = true;
-  before.analysis.cone_stop_target = 777;
   const GuiState::RaypathAnalysisSession fresh{};
   ASSERT_NE(before.analysis.ray_num_millions, fresh.ray_num_millions) << "the probe must move off the default";
   ASSERT_NE(before.analysis.infinite, fresh.infinite);
-  ASSERT_NE(before.analysis.cone_stop_target, fresh.cone_stop_target);
 
   const std::string json = SerializeGuiStateJson(before);
   EXPECT_EQ(json.find("ray_budget"), std::string::npos) << "the session field's name is in the document text";
-  EXPECT_EQ(json.find("cone_stop_target"), std::string::npos) << "the session field's name is in the document text";
 
   GuiState after = MinimalDocument();
   ASSERT_TRUE(DeserializeGuiStateJson(json, after));
   EXPECT_FLOAT_EQ(after.analysis.ray_num_millions, fresh.ray_num_millions);
   EXPECT_EQ(after.analysis.infinite, fresh.infinite);
   EXPECT_EQ(after.analysis.ray_budget_initialized, fresh.ray_budget_initialized);
-  EXPECT_EQ(after.analysis.cone_stop_target, fresh.cone_stop_target);
 }
 
 // E1 — the aspect preset is spelled on disk the way files already on disk spell it, for every

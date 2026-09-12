@@ -262,20 +262,19 @@ class LUMICE_RaypathAnalysisRequest(ctypes.Structure):
         ("cone_center",       ctypes.c_float * 3),
         ("cone_radius_rad",   ctypes.c_float),
         ("cone_ring_count",   ctypes.c_int),
-        ("cone_stop_target",  ctypes.c_ulonglong),
-        # No symmetry field (v4.33): it is a parameter of the read, below.
-        ("infinite",          ctypes.c_int),        # v4.32; at 80 since v4.33
-        ("ray_num",           ctypes.c_ulonglong),  # v4.32
+        # No cone stop target (removed in v4.34) and no symmetry field (v4.33): the run's length
+        # is its budget below or LUMICE_StopServer, and the symmetry is a parameter of the read.
+        ("infinite",          ctypes.c_int),        # v4.32; at 72 since v4.34
+        ("ray_num",           ctypes.c_ulonglong),  # v4.32; at 80 since v4.34
     ]
 
 
-# Still 96: the int `chain_id_symmetry` removed in v4.33 sat where `infinite` now does, and the
-# 4 bytes `infinite` vacated are padding before the 8-aligned `ray_num`.
-assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 96, (
+# 88 since v4.34: `cone_stop_target` (8 bytes at 72) is gone, `infinite` moved up into its place,
+# and the 4 bytes after `infinite` are padding before the 8-aligned `ray_num`.
+assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 88, (
     "LUMICE_RaypathAnalysisRequest size mismatch — verify lumice.h field layout"
 )
-for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("cone_stop_target", 72), ("infinite", 80),
-                       ("ray_num", 88)):
+for _name, _offset in (("frame_view", 4), ("cone_center", 52), ("infinite", 72), ("ray_num", 80)):
     assert getattr(LUMICE_RaypathAnalysisRequest, _name).offset == _offset, (
         f"LUMICE_RaypathAnalysisRequest.{_name} offset drift — the mirror and lumice.h disagree"
     )
@@ -998,8 +997,9 @@ def run_raypath_analysis_capi(
 
     The lifecycle lumice.h describes, verbatim: create → commit `config_path` (which starts
     the render run every commit starts) → LUMICE_StopServer → LUMICE_StartRaypathAnalysis →
-    wait for the drain signal → read one frame → destroy. The scene's ray_num is the run's
-    budget (an "infinite" config only ends through a cone stop target, else this times out).
+    wait for the drain signal → read one frame → destroy. The scene's own finite ray_num is
+    the run's budget (an "infinite" config has no end but LUMICE_StopServer, which this helper
+    never calls, so it would time out here).
 
     `chain_id_symmetry` is the P/B/D bit set the READ reduces the recorded chains under
     (v4.33) — passed to both frame getters, as the header requires. Default P|B|D, which is

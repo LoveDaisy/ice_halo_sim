@@ -1,7 +1,7 @@
 // RaypathHistogramConsumer: synthetic SimData batches (no simulation) pin the
-// three ROI modes, the cross-worker merge, the exact ring split, the stop
-// counter and the sort order; one real-Simulator scene pins that the top
-// chain of a 22° halo is the 22° raypath.
+// three ROI modes, the cross-worker merge, the exact ring split and the sort
+// order; one real-Simulator scene pins that the top chain of a 22° halo is the
+// 22° raypath.
 //
 //   AC1  Full-sky / in-frame / cone energy and count against hand sums; the
 //        ring split is exact: the consumer's ring prefix sums equal a filter
@@ -13,7 +13,8 @@
 //        recording at its finest and ReduceRaypathHistogram under P|B|D, is
 //        the reduced form of face path 3->5 computed by Crystal::ReduceRaypath
 //        — no platform-dependent literal.
-//   AC4  Cone stop target: the live hit count and RoiTargetReached().
+//   AC4  (removed with the cone stop target in v4.34; the in-ROI ray count it
+//        exposed is now read as the Σ count over the snapshot's entries.)
 //   AC5  Ties on energy order by display string.
 // Also: an id space per producer (two workers' local ids collide, chains do
 // not), batches without chain ids are ignored, a never-delivered id is dropped
@@ -99,6 +100,17 @@ RaypathHistogramResult Snapshot(RaypathHistogramConsumer& c) {
   return std::get<RaypathHistogramResult>(r);
 }
 
+// The number of rays counted into the ROI: Σ count over the entries, which is the
+// only place the consumer keeps it (a ray is counted iff it is in the ROI and its
+// chain id resolves).
+size_t RoiHitCount(RaypathHistogramConsumer& c) {
+  size_t n = 0;
+  for (const auto& e : Snapshot(c).entries_) {
+    n += e.count_;
+  }
+  return n;
+}
+
 const RaypathHistogramEntry* Find(const RaypathHistogramResult& r, const std::string& display) {
   for (const auto& e : r.entries_) {
     if (e.display_ == display) {
@@ -147,8 +159,7 @@ TEST(RaypathHistogramConsumer, OneRayOneChainFullSky) {
   EXPECT_EQ(r.entries_[0].count_, 1u);
   EXPECT_DOUBLE_EQ(r.entries_[0].energy_, Y(550.0f, 0.5f));
   EXPECT_TRUE(r.entries_[0].ring_energy_.empty());
-  EXPECT_EQ(c.LiveRoiHitCount(), 1u);
-  EXPECT_FALSE(c.RoiTargetReached());
+  EXPECT_EQ(RoiHitCount(c), 1u);
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +200,7 @@ TEST(RaypathHistogramConsumer, FullSkyAccumulatesPerChainAcrossBatchesAndWavelen
   EXPECT_EQ(cc->chain_[0].segment, (Seg{ 3, 5 }));
   EXPECT_EQ(cc->chain_[1].crystal_id, 2u);
   EXPECT_EQ(cc->chain_[1].segment, (Seg{ 4 }));
-  EXPECT_EQ(c.LiveRoiHitCount(), 5u);
+  EXPECT_EQ(RoiHitCount(c), 5u);
   // Energy-descending: A carries the most (Y at 550 is the CMF peak).
   EXPECT_EQ(r.entries_[0].display_, "crystal1(3-5)");
 }
@@ -367,7 +378,7 @@ TEST(RaypathHistogramConsumer, ConeMembershipAndRingSplitAreExact) {
   ASSERT_EQ(r.entries_.size(), 2u);
 
   // Membership: 6 in, 3 out.
-  EXPECT_EQ(c.LiveRoiHitCount(), 6u);
+  EXPECT_EQ(RoiHitCount(c), 6u);
   const auto* e1 = Find(r, "crystal1(3-5)");
   const auto* e2 = Find(r, "crystal1(1-2)");
   ASSERT_NE(e1, nullptr);
@@ -478,7 +489,7 @@ TEST(RaypathHistogramConsumer, BatchesWithoutChainIdsAreIgnoredAndUnknownIdsDrop
   no_ids.outgoing_d_ = { 0, 0, 1 };
   no_ids.outgoing_w_ = { 1.0f };
   c.Consume(no_ids);
-  EXPECT_EQ(c.LiveRoiHitCount(), 0u);
+  EXPECT_EQ(RoiHitCount(c), 0u);
 
   Batch b(1);
   b.AddChain(1, 0, 1, { 3, 5 }).AddRay(1, 1.0f, 0, 0, 1).AddRay(42, 1.0f, 0, 0, 1);
@@ -486,59 +497,7 @@ TEST(RaypathHistogramConsumer, BatchesWithoutChainIdsAreIgnoredAndUnknownIdsDrop
   auto r = Snapshot(c);
   ASSERT_EQ(r.entries_.size(), 1u);
   EXPECT_EQ(r.entries_[0].count_, 1u);
-  EXPECT_EQ(c.LiveRoiHitCount(), 1u) << "a dropped ray is not an ROI hit";
-}
-
-// ---------------------------------------------------------------------------
-// AC4: the cone stop target.
-// ---------------------------------------------------------------------------
-TEST(RaypathHistogramConsumer, ConeStopTargetCountsOnlyInConeRays) {
-  RaypathRoiSpec roi;
-  roi.mode_ = RaypathRoiMode::kCone;
-  roi.cone_radius_rad_ = 0.3f;
-  roi.cone_ring_count_ = 2;
-  roi.cone_stop_target_ = 3;
-  RaypathHistogramConsumer c(roi);
-  auto batch = [](int in, int out) {
-    Batch b(1);
-    b.AddChain(1, 0, 1, { 3, 5 });
-    for (int i = 0; i < in; i++) {
-      b.AddRay(1, 1.0f, 0.1f, 0.0f, 1.0f);
-    }
-    for (int i = 0; i < out; i++) {
-      b.AddRay(1, 1.0f, 1.0f, 0.0f, 0.0f);
-    }
-    return b;
-  };
-  c.Consume(batch(1, 5).data);
-  EXPECT_EQ(c.LiveRoiHitCount(), 1u);
-  EXPECT_FALSE(c.RoiTargetReached());
-  c.Consume(batch(1, 0).data);
-  EXPECT_EQ(c.LiveRoiHitCount(), 2u);
-  EXPECT_FALSE(c.RoiTargetReached());
-  c.Consume(batch(0, 7).data);
-  EXPECT_FALSE(c.RoiTargetReached()) << "out-of-cone rays do not advance the target";
-  c.Consume(batch(2, 0).data);
-  EXPECT_EQ(c.LiveRoiHitCount(), 4u);
-  EXPECT_TRUE(c.RoiTargetReached()) << "reached at >= target";
-  c.Reset();
-  EXPECT_EQ(c.LiveRoiHitCount(), 0u);
-  EXPECT_FALSE(c.RoiTargetReached());
-
-  // target 0 = never.
-  roi.cone_stop_target_ = 0;
-  RaypathHistogramConsumer never(roi);
-  never.Consume(batch(10, 0).data);
-  EXPECT_EQ(never.LiveRoiHitCount(), 10u);
-  EXPECT_FALSE(never.RoiTargetReached());
-
-  // Full sky never reports a target either, whatever the count.
-  auto fs = FullSky();
-  fs.cone_stop_target_ = 1;
-  RaypathHistogramConsumer full(fs);
-  full.Consume(batch(10, 0).data);
-  EXPECT_EQ(full.LiveRoiHitCount(), 10u);
-  EXPECT_FALSE(full.RoiTargetReached());
+  EXPECT_EQ(RoiHitCount(c), 1u) << "a dropped ray is not an ROI hit";
 }
 
 // ---------------------------------------------------------------------------
@@ -814,7 +773,7 @@ TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
     c.Consume(sd);
   }
   ASSERT_GT(delivered, 10000u);
-  EXPECT_EQ(c.LiveRoiHitCount(), delivered);
+  EXPECT_EQ(RoiHitCount(c), delivered);
   const auto finest = Snapshot(c);
   // Positive control on the reduction: recorded at the finest, the 22° path
   // is spread over its orbit (six prism-face rotations at least), so the
@@ -965,18 +924,11 @@ TEST_F(Halo22, ConeOnThe22DegreeRingRanksThe22DegreePathFirst) {
   SunlightDir(above, roi.cone_center_);
   roi.cone_radius_rad_ = 2.5f * math::kDegreeToRad;
   roi.cone_ring_count_ = 5;
-  roi.cone_stop_target_ = 200;
   RaypathHistogramConsumer c(roi, BuildRaypathReduceContext(*scene_));
-  size_t batches_until_target = 0;
   for (const auto& sd : batches) {
-    if (!c.RoiTargetReached()) {
-      batches_until_target++;
-    }
     c.Consume(sd);
   }
-  EXPECT_TRUE(c.RoiTargetReached()) << "only " << c.LiveRoiHitCount() << " rays in the cone";
-  EXPECT_GE(c.LiveRoiHitCount(), 200u);
-  EXPECT_LT(batches_until_target, batches.size()) << "the target must be reached before the last batch";
+  EXPECT_GE(RoiHitCount(c), 200u) << "the cone on the halo's brightest arc gathers rays from every batch";
 
   auto r = ReduceRaypathHistogram(Snapshot(c), kSymAll);
   ASSERT_GE(r.entries_.size(), 1u);

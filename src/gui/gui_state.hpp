@@ -1599,9 +1599,6 @@ struct GuiState {
     float ray_num_millions = 5.0f;
     bool infinite = false;
     bool ray_budget_initialized = false;
-    // CONE mode's early-stop target, sent as the request's cone_stop_target: the run ends once
-    // this many rays have landed in the cone. 0 = no early stop (the ray budget alone decides).
-    int cone_stop_target = static_cast<int>(kAnalysisConeStopTarget);
     // "The next left click on the preview picks the cone centre." Armed by the panel's button in
     // CONE mode, disarmed by the click that consumes it, by Esc, and by leaving CONE mode — never
     // left armed across a mode switch, or a later click would write a centre no mode reads.

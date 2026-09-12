@@ -3920,7 +3920,6 @@ LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE
       req.roi_.cone_center_[2] = c[2];
       req.roi_.cone_radius_rad_ = request->cone_radius_rad;
       req.roi_.cone_ring_count_ = request->cone_ring_count;
-      req.roi_.cone_stop_target_ = static_cast<size_t>(request->cone_stop_target);
       break;
     }
     default:

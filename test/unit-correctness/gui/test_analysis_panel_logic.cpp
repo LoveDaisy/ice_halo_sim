@@ -527,24 +527,14 @@ TEST(AnalysisPanelLogic, RequestCarriesTheFullConeAndTheSessionBudget) {
   EXPECT_FLOAT_EQ(req.cone_center[2], -0.9f);
   EXPECT_NEAR(req.cone_radius_rad, kAnalysisConeMaxRadiusDeg * 3.14159265f / 180.0f, 1e-6f);
   EXPECT_EQ(req.cone_ring_count, kAnalysisConeRingCount);
-  EXPECT_EQ(req.cone_stop_target, kAnalysisConeStopTarget) << "the session's default is the constant";
   // The budget is the session's, explicit — never the scene-default sentinel — and to the ray.
   EXPECT_EQ(req.infinite, 0);
   EXPECT_EQ(req.ray_num, 12500000u);
 
-  // The session's stop target and an unlimited budget reach the request as such.
-  state.analysis.cone_stop_target = 12345;
+  // An unlimited budget reaches the request as such.
   state.analysis.infinite = true;
   const LUMICE_RaypathAnalysisRequest cone2 = BuildAnalysisRequest(state, 100, 100);
-  EXPECT_EQ(cone2.cone_stop_target, 12345u);
   EXPECT_EQ(cone2.infinite, 1);
-  // A stop target of 0 is "no early stop", and a negative one (unreachable through the input,
-  // whose floor is 0) is clamped to the same rather than wrapping to a huge unsigned target.
-  state.analysis.cone_stop_target = 0;
-  EXPECT_EQ(BuildAnalysisRequest(state, 100, 100).cone_stop_target, 0u);
-  state.analysis.cone_stop_target = -1;
-  EXPECT_EQ(BuildAnalysisRequest(state, 100, 100).cone_stop_target, 0u);
-  state.analysis.cone_stop_target = static_cast<int>(kAnalysisConeStopTarget);
   state.analysis.infinite = false;
 
   state.analysis.roi_mode = LUMICE_RAYPATH_ROI_IN_FRAME;

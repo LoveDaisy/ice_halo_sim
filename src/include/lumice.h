@@ -320,7 +320,17 @@ extern "C" {
 // old "crystal1(3-5)" text was the interning table's diagnostic form; it never leaves core now.
 // LUMICE_RaypathHistogramEntry's layout is unchanged (LUMICE_RAYPATH_DISPLAY_MAX still covers the
 // longest text the new format can need — its derivation is at the constant).
-#define LUMICE_API_VERSION 433
+//
+// BREAKING (v4.34): LUMICE_RaypathAnalysisRequest loses `cone_stop_target` and with it the cone
+// early stop as a mechanism — `infinite` moves up (offset 80 -> 72), `ray_num` moves up (88 -> 80),
+// sizeof shrinks (96 -> 88), recompile: a v4.33 caller's `infinite` would land in the new
+// trailing padding and its request would ask for zero rays. An analysis run's length is now
+// decided by exactly two things in every ROI mode: its own ray budget (`infinite` / `ray_num`) and
+// LUMICE_StopServer. A run stopped that way keeps what it accumulated: the frame published after
+// LUMICE_StopServer returns carries the histogram consumed up to the stop (before v4.34 a stop
+// could discard the batches consumed since the last poll, leaving the pre-stop frame in place).
+// Nothing else moved.
+#define LUMICE_API_VERSION 434
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -2005,20 +2015,19 @@ typedef struct LUMICE_RaypathAnalysisRequest_ {
   // direction in this API uses (the direction light TRAVELS: altitude = asin(-z), the zenith is
   // z = -1 — LUMICE_UnprojectPixel below returns one). Need not be normalized; a zero vector is
   // rejected. `cone_radius_rad` must be positive. `cone_ring_count` splits [0, radius] into
-  // that many equal angular-distance rings, 1..LUMICE_MAX_RAYPATH_CONE_RINGS. `cone_stop_target`
-  // ends the run once that many rays have landed in the cone; 0 = no early stop (the scene's
-  // ray_num budget alone decides).
+  // that many equal angular-distance rings, 1..LUMICE_MAX_RAYPATH_CONE_RINGS. There is no
+  // per-cone stop (removed in v4.34): the run's length is the ray budget below, or
+  // LUMICE_StopServer, in every ROI mode.
   float cone_center[3];
   float cone_radius_rad;
   int cone_ring_count;
-  LUMICE_RayCount cone_stop_target;
 
   // No symmetry here (v4.33): the run records every chain unreduced, and the symmetry is a
   // parameter of the READ — see LUMICE_FrameGetRaypathAnalysis.
 
   // ADDED v4.32: THIS run's own ray budget, independent of the committed scene's ray_num /
   // infinite (LUMICE_SceneSetSimParams) and in the same representation: `infinite` 1 means
-  // unlimited (the run ends on LUMICE_StopServer, or on `cone_stop_target` in CONE mode), 0 means
+  // unlimited (the run ends on LUMICE_StopServer), 0 means
   // `ray_num` is the total across every wavelength (distributed per wavelength as the scene's own
   // budget is). LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT ignores `ray_num` and traces the scene's
   // own budget — the behaviour before v4.32. Any other `infinite` is rejected with

@@ -1,6 +1,6 @@
 // The analysis run as a lifecycle of the live Server (Server::StartRaypathAnalysis):
 // mutual exclusion with the render run in both directions, the forced CPU route, the
-// cone stop target's early completion, and the result frame's histogram field.
+// manual stop that keeps the accumulated result, and the result frame's histogram field.
 //
 // Driven through lumice::Server (the C++ surface the C API wraps 1:1) on the 22° halo
 // scene of test/e2e/configs/halo_22.json, with TWO workers on the CPU route — the first
@@ -14,14 +14,14 @@
 //   AC2  AnalysisForcesCpuUnderGpuPreference: GetActiveBackend() reads CPU, and the
 //        histogram is non-empty — a GPU-routed run would leave it empty, since only the
 //        legacy CPU path carries chain ids.
-//   Step 3  ConeStopTargetCompletesThroughNaturalCompletion: an unbounded ray_num run ends
-//        on its own once the cone has its rays, and reads kCompleted with a valid frame;
-//        the control case beside it shows what Stop() would have made of the same run.
+//   Step 3  AnalysisManualStopPreservesAccumulatedResults: an unbounded run has no end of
+//        its own (there is no cone stop target); Stop() ends it, the run reads kIdle, and
+//        the frame published by that Stop() carries the histogram consumed up to it.
 //   Step 4  the frame's raypath_histogram_result_ is set in an analysis session and
 //        nullopt again after the next render commit.
-//   RenderAfter{ConeStopped,FullSky}AnalysisProducesAFrame: the render that follows an
-//        analysis traces rays and carries an image — the cone-stopped case is the one
-//        whose early-stop flag is still up at the switch, the full-sky case the control.
+//   RenderAfterStoppedAnalysisProducesAFrame: the render that follows a stopped analysis
+//        traces rays and carries an image — the session switch itself leaves nothing
+//        behind that could keep the next render from producing.
 
 #include <gtest/gtest.h>
 
@@ -81,13 +81,12 @@ RaypathAnalysisRequest FullSkyRequest() {
 }
 
 // A cone on the 22° ring straight above the sun (altitude 20 + 23), radius 2.5°.
-RaypathAnalysisRequest ConeOnHaloRequest(size_t stop_target) {
+RaypathAnalysisRequest ConeOnHaloRequest() {
   RaypathAnalysisRequest req;
   req.roi_.mode_ = RaypathRoiMode::kCone;
   SunlightDir(20.0f + 23.0f, 0.0f, req.roi_.cone_center_);
   req.roi_.cone_radius_rad_ = 2.5f * kDegToRad;
   req.roi_.cone_ring_count_ = 5;
-  req.roi_.cone_stop_target_ = stop_target;
   return req;
 }
 
@@ -205,7 +204,11 @@ TEST_F(ServerAnalysisRun, AnalysisInProgressRestartsWithNewRoi) {
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   ASSERT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning);
 
-  const Error ok = server_.StartRaypathAnalysis(ConeOnHaloRequest(100));
+  // The new request carries its own finite budget, so the restarted run ends by itself
+  // on an unlimited scene.
+  RaypathAnalysisRequest cone = ConeOnHaloRequest();
+  cone.ray_num_ = 20000;
+  const Error ok = server_.StartRaypathAnalysis(cone);
   EXPECT_FALSE(ok) << ok.message;
   ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
   auto frame = server_.AcquireResultFrame();
@@ -272,39 +275,49 @@ TEST_F(ServerAnalysisRun, AnalysisWithoutCommitIsInvalidConfig) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 3: the cone stop target ends an UNBOUNDED run by itself, and the run reads
-// kCompleted with a valid frame whose cone has at least the target's rays. The control
-// case shows the same run ended by Stop() instead: kIdle, no data — which is why the
-// mechanism must not be Stop().
+// Step 3: an UNBOUNDED analysis run has no end of its own — Stop() is the only way to
+// end it, and a stop is a reset (kIdle), not a completion. What the stop must NOT do is
+// discard what the run accumulated: Stop() publishes the batches consumed since the
+// last poll before it resets, so the frame acquired afterwards carries the histogram
+// as it stood at the stop. The frame is acquired only AFTER Stop() returns and
+// without any poll in between, so the assertion is on the stop's own publication, not
+// on a snapshot some earlier read happened to take — without it the session's opening
+// empty frame (no histogram at all) would still be the published one. has_valid_data_
+// is NOT the oracle here: AcquireResultFrame re-stamps it from the live
+// has_ever_consumed_, which the stop resets, so it reads false on a stopped analysis
+// just as GetSimLifecycle() reads kIdle; the result travels in
+// raypath_histogram_result_ (the C API's `present`), which is what is asserted.
 // ---------------------------------------------------------------------------
-TEST_F(ServerAnalysisRun, ConeStopTargetCompletesThroughNaturalCompletion) {
+TEST_F(ServerAnalysisRun, AnalysisManualStopPreservesAccumulatedResults) {
   ASSERT_FALSE(server_.CommitConfig(Halo22Config("infinite")));
   server_.Stop();
-  constexpr size_t kTarget = 200;
-  ASSERT_FALSE(server_.StartRaypathAnalysis(ConeOnHaloRequest(kTarget)));
+  ASSERT_FALSE(server_.StartRaypathAnalysis(ConeOnHaloRequest()));
+  ASSERT_TRUE(WaitForFirstRays(server_, 5000));
+  ASSERT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning);
 
-  // An infinite run with no stop target would sit in kRunning until the timeout, so
-  // reaching the end at all is the assertion; 30 s is far above the measured time.
-  const auto t0 = std::chrono::steady_clock::now();
-  const SimLifecycle lc = WaitForRunToEnd(server_, 30000);
-  const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  ASSERT_EQ(lc, SimLifecycle::kCompleted) << "ended in " << secs << " s as lifecycle " << static_cast<int>(lc);
-
-  auto frame = server_.AcquireResultFrame();
-  EXPECT_TRUE(frame->has_valid_data_);
-  ASSERT_TRUE(frame->raypath_histogram_result_.has_value());
-  const auto& r = *frame->raypath_histogram_result_;
-  EXPECT_EQ(r.roi_mode_, RaypathRoiMode::kCone);
-  EXPECT_GE(TotalCount(r), kTarget);
+  server_.Stop();
+  EXPECT_EQ(server_.GetSimLifecycle(), SimLifecycle::kIdle) << "Stop() is a reset, not a completion";
   // The producer stopped: the live count is finite and stays put.
   const size_t rays_at_end = server_.GetLiveSimRayCount();
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   EXPECT_EQ(server_.GetLiveSimRayCount(), rays_at_end);
+
+  auto frame = server_.AcquireResultFrame();
+  EXPECT_FALSE(frame->has_valid_data_) << "the live flag mirrors kIdle; the result is carried by the histogram";
+  ASSERT_TRUE(frame->raypath_histogram_result_.has_value()) << "the stop published the data consumed before it";
+  const auto& r = *frame->raypath_histogram_result_;
+  EXPECT_EQ(r.roi_mode_, RaypathRoiMode::kCone);
+  EXPECT_GT(TotalCount(r), 0u) << "the histogram accumulated up to the stop is readable";
   // And the histogram is the 22° halo's: its top chain is one layer through crystal 1.
   ASSERT_FALSE(r.entries_.empty());
   ASSERT_EQ(r.entries_[0].chain_.size(), 1u);
   EXPECT_EQ(r.entries_[0].chain_[0].crystal_id, 1u);
   EXPECT_EQ(r.entries_[0].ring_energy_.size(), 5u);
+  // The stats consumer was published by the same stop: its count is what the live
+  // counter read, not zero.
+  ASSERT_TRUE(frame->stats_result_.has_value());
+  EXPECT_GT(frame->stats_result_->sim_ray_num_, 0u);
+  EXPECT_LE(frame->stats_result_->sim_ray_num_, rays_at_end);
 }
 
 // ---------------------------------------------------------------------------
@@ -314,12 +327,11 @@ TEST_F(ServerAnalysisRun, ConeStopTargetCompletesThroughNaturalCompletion) {
 // server's alone: a render session that follows an analysis session traces rays, and
 // its frame carries the image.
 //
-// Two cases, one predicate each, and the pair is the diagnosis: the cone-stopped
-// analysis is the one whose early-stop flag (analysis_roi_target_reached_) is up when the
-// session ends, and the whole-sky analysis is the one that can never raise it
-// (RaypathHistogramConsumer::RoiTargetReached is kCone-only). A render that traces
-// nothing after the first and everything after the second puts the first divergence
-// on that flag, not on the session switch as such.
+// An analysis session is left behind in exactly one way now that a cone has no stop of
+// its own: Stop() (a run that ends on its budget takes the same switch, through
+// CommitConfig's was_analysis branch, with nothing extra to leave behind). A render that
+// traced nothing after it would put the divergence on the session switch itself — the
+// was_analysis branch and the empty frame it publishes — which is what this guards.
 //
 // What "traces nothing" reads as at this layer: GenerateScene's loop never runs, so no
 // batch is ever queued or consumed, and the lifecycle settles as kIdle — the producer-
@@ -327,19 +339,15 @@ TEST_F(ServerAnalysisRun, ConeStopTargetCompletesThroughNaturalCompletion) {
 // that has no valid data. (The GUI reads that as "Simulating forever": its sim_state
 // leaves kSimulating on COMPLETED only, and nothing ever completes.)
 // ---------------------------------------------------------------------------
-void RenderAfterAnalysisProducesAFrame(Server& server, const RaypathAnalysisRequest& request) {
+TEST_F(ServerAnalysisRun, RenderAfterStoppedAnalysisProducesAFrame) {
+  Server& server = server_;
   ASSERT_FALSE(server.CommitConfig(Halo22Config("infinite")));
   server.Stop();
-  ASSERT_FALSE(server.StartRaypathAnalysis(request));
-  if (request.roi_.mode_ == RaypathRoiMode::kCone) {
-    // The cone target ends the unbounded run by itself, with the early-stop flag up.
-    ASSERT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
-  } else {
-    // A whole-sky analysis of an unbounded run has no end of its own: Stop() it once it
-    // has data, which is the other way an analysis session can be left behind.
-    ASSERT_TRUE(WaitForFirstRays(server, 5000));
-    server.Stop();
-  }
+  ASSERT_FALSE(server.StartRaypathAnalysis(ConeOnHaloRequest()));
+  // An unbounded analysis has no end of its own: Stop() it once it has data.
+  ASSERT_TRUE(WaitForFirstRays(server, 5000));
+  server.Stop();
+  ASSERT_EQ(server.GetSimLifecycle(), SimLifecycle::kIdle);
 
   // The second Run.
   ASSERT_FALSE(server.CommitConfig(Halo22Config(20000)));
@@ -355,19 +363,11 @@ void RenderAfterAnalysisProducesAFrame(Server& server, const RaypathAnalysisRequ
   EXPECT_EQ(frame->stats_result_->sim_ray_num_, 20000u) << "the whole budget was traced";
 }
 
-TEST_F(ServerAnalysisRun, RenderAfterConeStoppedAnalysisProducesAFrame) {
-  RenderAfterAnalysisProducesAFrame(server_, ConeOnHaloRequest(200));
-}
-
-// The control: the same sequence through the ROI mode that cannot raise the flag.
-TEST_F(ServerAnalysisRun, RenderAfterFullSkyAnalysisProducesAFrame) {
-  RenderAfterAnalysisProducesAFrame(server_, FullSkyRequest());
-}
-
-TEST_F(ServerAnalysisRun, ControlStopReadsAsIdleWithNoData) {
+// The boundary of the analysis-only stop rule: a RENDER session's Stop() still reads as
+// idle with no data (doc/capi-lifecycle-architecture.md §7.1) — the contract the GUI's
+// re-simulate paths rest on, which the analysis branch in Stop() must not widen.
+TEST_F(ServerAnalysisRun, RenderStopStillReadsAsIdleWithNoData) {
   ASSERT_FALSE(server_.CommitConfig(Halo22Config("infinite")));
-  server_.Stop();
-  ASSERT_FALSE(server_.StartRaypathAnalysis(FullSkyRequest()));
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   server_.Stop();
   EXPECT_EQ(server_.GetSimLifecycle(), SimLifecycle::kIdle) << "Stop() is a reset, not a completion";

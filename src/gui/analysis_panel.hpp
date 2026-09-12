@@ -203,11 +203,10 @@ void EnsureDefaultAnalysisRayBudget(GuiState& state);
 
 // The LUMICE_RaypathAnalysisRequest for the session's ROI. IN_FRAME takes the preview view on the
 // canvas_w x canvas_h canvas; CONE takes the picked centre with the FULL cone
-// (kAnalysisConeMaxRadiusDeg / kAnalysisConeRingCount, and the session's cone_stop_target) — the
-// slider is applied at display time, never here, and so is the symmetry (the request has none;
-// v4.33). The ray budget is the session's own (ray_num_millions / infinite), always explicit: the
-// GUI never sends LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT, because it already holds the value the
-// sentinel would stand for.
+// (kAnalysisConeMaxRadiusDeg / kAnalysisConeRingCount) — the slider is applied at display time,
+// never here, and so is the symmetry (the request has none; v4.33). The ray budget is the session's own
+// (ray_num_millions / infinite), always explicit: the GUI never sends LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT, because
+// it already holds the value the sentinel would stand for.
 LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int canvas_w, int canvas_h);
 
 // ---- Exclude this raypath ------------------------------------------------------------------------

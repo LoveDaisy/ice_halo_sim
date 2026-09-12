@@ -537,6 +537,10 @@ When a commit succeeds, the following sequence occurs
    - Shuts down `scene_queue_` and `data_queue_` (unblocks workers).
    - Calls `Simulator::Stop()` on each worker.
    - Waits for `active_workers_ == 0`.
+   - Analysis session only (`mode_ == kAnalysis`): one `DoSnapshot()`, so the batches
+     consumed since the last poll are published before the flags below discard them —
+     a stopped analysis keeps its partial histogram readable. A render session skips
+     this: its stop reads as idle with no data, as the next two bullets say.
    - Under `consumer_mutex_`: `snapshot_dirty_ = false`,
      `has_ever_consumed_ = false`.
    - Under `status_mutex_`: `status_ = kIdle`.

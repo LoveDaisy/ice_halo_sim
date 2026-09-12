@@ -75,7 +75,6 @@ def _cone_request(altitude_deg: float, radius_deg: float = 2.0, rings: int = 4) 
     req.cone_center[2] = z
     req.cone_radius_rad = math.radians(radius_deg)
     req.cone_ring_count = rings
-    req.cone_stop_target = 0  # the scene's ray budget alone, so the three runs are comparable
     return req
 
 

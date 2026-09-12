@@ -58,17 +58,6 @@ class RaypathHistogramConsumer : public IConsume {
   Result GetResult() const override;
   void Reset() override;
 
-  // Live (un-snapshotted) number of rays counted into the ROI so far. Same
-  // thread contract as StatsConsumer::LiveSimRays(): the caller holds the
-  // server's consumer mutex, under which Consume() mutates the counter.
-  size_t LiveRoiHitCount() const { return roi_hit_count_; }
-
-  // kCone with a non-zero cone_stop_target_: whether LiveRoiHitCount() has
-  // reached it. Always false in the other modes — their run length is the
-  // ray budget the server already enforces, not this consumer's business.
-  // Same thread contract as LiveRoiHitCount().
-  bool RoiTargetReached() const;
-
   const RaypathRoiSpec& Roi() const { return roi_; }
 
  private:
@@ -99,7 +88,6 @@ class RaypathHistogramConsumer : public IConsume {
 
   ChainIdMerger merger_;
   std::unordered_map<uint32_t, Entry> live_;
-  size_t roi_hit_count_ = 0;
   std::vector<RaypathHistogramEntry> snapshot_entries_;
 
   // One-shot diagnostics: the data contract is either honoured for the whole

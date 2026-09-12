@@ -171,20 +171,12 @@ constexpr float kCameraTiltDeg = 15.0f;
 constexpr float kAnalysisConeMaxRadiusDeg = 15.0f;
 constexpr int kAnalysisConeRingCount = 30;  // 0.5 degrees per ring
 constexpr float kAnalysisConeDefaultRadiusDeg = 2.0f;
-// Early stop for a CONE analysis: enough rays landed in the cone to answer "what is here", so the
-// run ends there instead of tracing the scene's whole budget (0 would mean no early stop).
-constexpr LUMICE_RayCount kAnalysisConeStopTarget = 200000;
 // The panel's own Rays(M) input bounds — the same domain as sim.ray_num_millions's
 // (field_editor_registry.cpp), repeated here because this field is session-tier, not a document
 // field the registry governs. Two constants, one meaning: a budget the document may ask for, the
 // analysis may ask for too.
 constexpr float kAnalysisRayNumMinMillions = 0.1f;
 constexpr float kAnalysisRayNumMaxMillions = 100.0f;
-// The CONE early-stop input's ceiling: two orders of magnitude past the default, so the range
-// never clips a target a user might reasonably ask for. An engineering value, not a ruling.
-constexpr int kAnalysisConeStopTargetMax = 5000000;
-static_assert(kAnalysisConeStopTarget <= static_cast<LUMICE_RayCount>(kAnalysisConeStopTargetMax),
-              "the default stop target must lie inside the input's range");
 static_assert(kAnalysisConeRingCount >= 1 && kAnalysisConeRingCount <= LUMICE_MAX_RAYPATH_CONE_RINGS,
               "the cone ring count must be a request the C API accepts (it rejects, not truncates)");
 static_assert(kAnalysisConeDefaultRadiusDeg > 0.0f && kAnalysisConeDefaultRadiusDeg <= kAnalysisConeMaxRadiusDeg,

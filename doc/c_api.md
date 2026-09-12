@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 413        // ABI version, encoded major*100 + minor (v4.13)
+#define LUMICE_API_VERSION 434        // ABI version, encoded major*100 + minor (v4.34)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -788,12 +788,13 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
    `LUMICE_ERR_SERVER` and interrupt nothing.
 3. `LUMICE_StartRaypathAnalysis` with a request: `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
    `_IN_FRAME` (membership in `frame_view`, a `LUMICE_AnnotationView`) or `_CONE` (`cone_center`,
-   `cone_radius_rad`, `cone_ring_count`, and `cone_stop_target` — the number of in-cone rays after
-   which the run ends on its own; 0 = the scene's `ray_num` alone). The request names no
+   `cone_radius_rad`, `cone_ring_count`). A cone has no stop of its own (v4.34): in every mode
+   the run ends on its ray budget or on `LUMICE_StopServer`. The request names no
    symmetry (v4.33): the run records every chain unreduced, and the P/B/D reduction is a
    parameter of the read (step 4). The run's ray budget is the request's
-   own (v4.32): `infinite = 1` traces until stopped (or until `cone_stop_target` in CONE mode),
-   `infinite = 0` traces `ray_num` rays in total across every wavelength, and
+   own (v4.32): `infinite = 1` traces until stopped — and a run ended by `LUMICE_StopServer`
+   keeps what it accumulated: the frame acquired after the stop returns carries the histogram
+   consumed up to it (v4.34), so a partial result is readable — `infinite = 0` traces `ray_num` rays in total across every wavelength, and
    `infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` traces the committed scene's own
    `ray_num` / `infinite` — the behaviour before v4.32. A zero-initialized request asks for
    **zero** rays, not for the scene's budget; set the field. Any other `infinite` is

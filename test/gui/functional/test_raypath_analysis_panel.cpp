@@ -186,7 +186,8 @@ bool PickBannerVisible(ImGuiTestContext* ctx) {
   return info.Window != nullptr && info.Window->WasActive;
 }
 
-bool RunPointAnalysisToCompletion(ImGuiTestContext* ctx) {
+// Point mode, a centre picked on the preview, Analyze pressed: the run is in progress on return.
+bool StartPointAnalysis(ImGuiTestContext* ctx) {
   ctx->SetRef(kWindowRef);
   ctx->ItemClick("Point");
   ctx->ItemClick(kPickButton);
@@ -199,6 +200,13 @@ bool RunPointAnalysisToCompletion(ImGuiTestContext* ctx) {
   ctx->ItemClick(kAnalyzeButton);
   ctx->SetRef("");
   IM_CHECK_RETV(gui::g_state.analysis.started, false);
+  return true;
+}
+
+// A Point analysis on a FINITE budget (the scene's, seeded into the panel): it ends by itself
+// on that budget, the only end a run has apart from Stop.
+bool RunPointAnalysisToCompletion(ImGuiTestContext* ctx) {
+  IM_CHECK_RETV(StartPointAnalysis(ctx), false);
   IM_CHECK_RETV(
       DriveUntil(
           ctx, [] { return !gui::g_state.analysis_run_in_progress && gui::g_state.analysis_result.payload != nullptr; },
@@ -207,20 +215,53 @@ bool RunPointAnalysisToCompletion(ImGuiTestContext* ctx) {
   return true;
 }
 
+// A Point analysis on an UNLIMITED budget, ended from the window's own Stop once the list has
+// rows: the in-progress flag falls, and the list stays — non-empty, never older than what was
+// on show. This is the user's way of ending a cone analysis (there is no cone stop target).
+bool RunPointAnalysisThenStop(ImGuiTestContext* ctx) {
+  IM_CHECK_RETV(StartPointAnalysis(ctx), false);
+  IM_CHECK_RETV(gui::g_state.analysis.infinite, false);
+  IM_CHECK_RETV(DriveUntil(
+                    ctx,
+                    [] {
+                      return gui::g_state.analysis_result.payload != nullptr &&
+                             !gui::g_state.analysis_result.payload->entries.empty();
+                    },
+                    30),
+                false);
+  const auto partial = gui::g_state.analysis_result.payload;
+  ctx->SetRef(kWindowRef);
+  IM_CHECK_RETV(ctx->ItemInfo(ICON_FA_STOP " Stop").ID != 0, false);
+  ctx->ItemClick(ICON_FA_STOP " Stop");
+  ctx->SetRef("");
+  IM_CHECK_RETV(!gui::g_state.analysis.started, false);
+  // The picture stays the render's, so sim_state returns to kDone once the async stop drains.
+  IM_CHECK_RETV(
+      DriveUntil(
+          ctx, [] { return !gui::g_state.analysis_run_in_progress && gui::g_state.sim_state == SimState::kDone; }, 20),
+      false);
+  IM_CHECK_RETV(gui::g_state.analysis_result.payload != nullptr, false);
+  IM_CHECK_RETV(!gui::g_state.analysis_result.payload->entries.empty(), false);
+  IM_CHECK_RETV(gui::g_state.analysis_result.payload->snapshot_generation >= partial->snapshot_generation, false);
+  return true;
+}
+
 // The owner's own sequence: Run, Analyze, Run again — and the second Run RENDERS. This is the
 // one path through the panel that nothing above drives (every case so far ends on the analysis
-// or on the slider), and the one that went black: a cone-ROI analysis that ends on its stop
-// target leaves the server's early-stop flag up, and a render session that read the flag
-// unconditionally traced nothing — no batch, no frame, a preview stuck on "Simulating" until a
-// backend switch rebuilt the server. The server case that pins the mechanism is
-// ServerAnalysisRun.RenderAfterConeStoppedAnalysisProducesAFrame; this one pins the user's view
-// of it: sim_state reaches kDone and a texture goes up.
+// or on the slider), and the one that once went black: a cone-ROI analysis left a server-side
+// flag up at the session switch, and the render session after it traced nothing — no batch, no
+// frame, a preview stuck on "Simulating" until a backend switch rebuilt the server. That flag
+// (the cone stop target's) no longer exists; what this case guards now is the session switch
+// itself — that a stopped analysis leaves nothing behind that keeps the next render from
+// producing. The server case that pins the mechanism is
+// ServerAnalysisRun.RenderAfterStoppedAnalysisProducesAFrame; this one pins the user's view of
+// it: sim_state reaches kDone and a texture goes up.
 //
-// The precondition is that the analysis ends on its CONE TARGET, not on the ray budget: the
-// panel's target is kAnalysisConeStopTarget rays in the cone, which a 0.1 M-ray budget never
-// reaches, so the render whose scene the analysis inherits is an unbounded one, stopped by hand
-// once it has put a picture up (the pick needs a live preview). The run after the analysis is
-// then made finite so that "it rendered" can be read as kDone rather than as "never ended".
+// The analysis is an UNLIMITED one, ended from the window's Stop (RunPointAnalysisThenStop): the
+// render whose scene it inherits is an unbounded one, stopped by hand once it has put a picture
+// up (the pick needs a live preview), so the panel's seeded budget is unlimited too. The run
+// after the analysis is then made finite so that "it rendered" can be read as kDone rather than
+// as "never ended".
 //
 // `exclude` adds the owner's step in between: select the top chain, press "Exclude this
 // raypath", so the second Run commits a document with a filter in it. The bug does not need it
@@ -232,12 +273,12 @@ bool RunAfterAnalysisRenders(ImGuiTestContext* ctx, bool exclude, bool gpu) {
   gui::DoStop();
   IM_CHECK_RETV(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 20), false);
   OpenWindow(ctx);
-  IM_CHECK_RETV(RunPointAnalysisToCompletion(ctx), false);
-  // Positive control on the precondition: an unbounded analysis can only have COMPLETED (not
-  // merely stopped) by reaching its cone target, i.e. with the early-stop flag raised.
+  IM_CHECK_RETV(RunPointAnalysisThenStop(ctx), false);
+  // The analysis was stopped, not completed (a stop is a reset, so the server reads idle), and
+  // the list on show is the cone's.
   LUMICE_SimLifecycleResult after_analysis{};
   LUMICE_GetSimLifecycle(gui::g_server, &after_analysis);
-  IM_CHECK_RETV(after_analysis.lifecycle == static_cast<int>(LUMICE_LIFECYCLE_COMPLETED), false);
+  IM_CHECK_RETV(after_analysis.lifecycle == static_cast<int>(LUMICE_LIFECYCLE_IDLE), false);
   IM_CHECK_RETV(gui::g_state.analysis_result.payload->roi_mode == LUMICE_RAYPATH_ROI_CONE, false);
 
   if (exclude) {
@@ -608,8 +649,8 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
   }
 
   // The request's parameters are the panel's own session inputs: Rays(M) / Infinite rays open
-  // with the document's values and then move independently of them; Stop at appears in Point
-  // mode at the constant's default; editing any of the three starts nothing and dirties nothing.
+  // with the document's values and then move independently of them; editing either starts
+  // nothing and dirties nothing.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "request_params_are_session_inputs_seeded_once");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -620,26 +661,16 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_state.analysis.ray_budget_initialized);
       IM_CHECK_FLOAT_NEAR(gui::g_state.analysis.ray_num_millions, gui::g_state.sim.ray_num_millions, 1e-6f);
       IM_CHECK_EQ(gui::g_state.analysis.infinite, gui::g_state.sim.infinite);
-      IM_CHECK_EQ(gui::g_state.analysis.cone_stop_target, static_cast<int>(gui::kAnalysisConeStopTarget));
       LUMICE_SimLifecycleResult before{};
       LUMICE_GetSimLifecycle(gui::g_server, &before);
       const SimState sim_state_before = gui::g_state.sim_state;
 
       ctx->SetRef(kWindowRef);
       IM_CHECK(ctx->ItemInfo("##Rays(M)_input").ID != 0);
-      // Stop at is a Point-mode input: absent in Whole sky.
-      IM_CHECK(ctx->ItemInfo("##Stop at_input", ImGuiTestOpFlags_NoError).ID == 0);
       ctx->ItemInputValue("##Rays(M)_input", 2.5f);
       ctx->Yield(2);
       IM_CHECK_FLOAT_NEAR(gui::g_state.analysis.ray_num_millions, 2.5f, 1e-4f);
       IM_CHECK_FLOAT_NEAR(gui::g_state.sim.ray_num_millions, 0.1f, 1e-6f);  // the document's Rays is not the panel's
-
-      ctx->ItemClick("Point");
-      ctx->Yield(1);
-      IM_CHECK(ctx->ItemInfo("##Stop at_input").ID != 0);
-      ctx->ItemInputValue("##Stop at_input", 12345);
-      ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.analysis.cone_stop_target, 12345);
 
       ctx->ItemClick("Infinite rays");
       ctx->Yield(1);

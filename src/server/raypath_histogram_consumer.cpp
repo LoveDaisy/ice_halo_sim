@@ -170,7 +170,6 @@ void RaypathHistogramConsumer::Consume(const SimData& data) {
       }
       e.ring_energy_[static_cast<size_t>(ring)] += y;
     }
-    roi_hit_count_ += 1;
   }
 }
 
@@ -208,13 +207,8 @@ void RaypathHistogramConsumer::Reset() {
   live_.clear();
   snapshot_entries_.clear();
   merger_.Clear();
-  roi_hit_count_ = 0;
   logged_unresolved_ = false;
   logged_delta_contract_ = false;
-}
-
-bool RaypathHistogramConsumer::RoiTargetReached() const {
-  return roi_.mode_ == RaypathRoiMode::kCone && roi_.cone_stop_target_ > 0 && roi_hit_count_ >= roi_.cone_stop_target_;
 }
 
 // ---- Read-time reduction ----------------------------------------------------

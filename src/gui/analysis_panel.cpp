@@ -17,7 +17,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
-#include "gui/panels.hpp"  // SliderWithInput / SliderIntWithInput
+#include "gui/panels.hpp"  // SliderWithInput
 #include "gui/raypath_segments.hpp"
 #include "gui/semantic_colors.hpp"
 #include "gui/server_poller.hpp"
@@ -430,7 +430,6 @@ LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int ca
       std::copy(state.analysis.cone_center_dir, state.analysis.cone_center_dir + 3, req.cone_center);
       req.cone_radius_rad = kAnalysisConeMaxRadiusDeg * kDeg2Rad;
       req.cone_ring_count = kAnalysisConeRingCount;
-      req.cone_stop_target = static_cast<LUMICE_RayCount>(std::max(state.analysis.cone_stop_target, 0));
       break;
     default:
       break;
@@ -799,8 +798,8 @@ void RenderRoiControls(GuiState& state) {
   }
 }
 
-// The request's parameters that are not the region: the ray budget, and in CONE mode the early
-// stop. Session state, sent with the next Analyze — editing them starts nothing, like the region.
+// The request's parameters that are not the region: the ray budget. Session state, sent with the
+// next Analyze — editing it starts nothing, like the region.
 void RenderRequestParamsControls(GuiState& state) {
   auto& a = state.analysis;
   EnsureDefaultAnalysisRayBudget(state);
@@ -811,7 +810,7 @@ void RenderRequestParamsControls(GuiState& state) {
   PushLabelColumnItemWidth();
   Checkbox("Infinite rays", &a.infinite);
   if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Trace until stopped (or, for a point, until 'Stop at' rays have landed).");
+    ImGui::SetTooltip("Trace until stopped.");
   }
   ImGui::PopItemWidth();
   ImGui::BeginGroup();
@@ -823,16 +822,6 @@ void RenderRequestParamsControls(GuiState& state) {
     ImGui::SetTooltip(
         "Total rays the analysis traces across all wavelengths, in millions.\n"
         "Starts from the document's Rays; independent of it from then on.");
-  }
-  if (a.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
-    ImGui::BeginGroup();
-    SliderIntWithInput("Stop at", &a.cone_stop_target, 0, kAnalysisConeStopTargetMax);
-    ImGui::EndGroup();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-          "End the run once this many rays have landed in the cone.\n"
-          "0 = no early stop; the ray budget alone decides.");
-    }
   }
 }
 
