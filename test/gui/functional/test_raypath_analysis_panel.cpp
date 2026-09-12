@@ -52,6 +52,30 @@ const char* const kHalo22Json = R"({
               "resolution": [64, 64], "view": {"elevation": 42}}]
 })";
 
+// Plate + column in two scattering layers, ms_prob 0.3: the scene whose chains cross layers, so
+// its list carries multi-layer rows — the ones whose `display` holds the " -> " joiner. Mirrors
+// test/e2e/configs/raypath_analysis_pc_two_layer.json (the e2e layer reads the file; gui_test
+// inlines its scenes, as kHalo22Json above).
+const char* const kPcTwoLayerJson = R"({
+  "crystal": [{"id": 1, "type": "prism", "shape": {"height": 0.3},
+               "axis": {"zenith": {"type": "gauss", "mean": 90, "std": 0.5},
+                        "azimuth": {"type": "uniform", "mean": 0, "std": 360},
+                        "roll": {"type": "uniform", "mean": 0, "std": 360}}},
+              {"id": 2, "type": "prism", "shape": {"height": 2.5},
+               "axis": {"zenith": {"type": "gauss", "mean": 0, "std": 0.5},
+                        "azimuth": {"type": "uniform", "mean": 0, "std": 360},
+                        "roll": {"type": "uniform", "mean": 0, "std": 360}}}],
+  "filter": [],
+  "scene": {"light_source": {"type": "sun", "altitude": 20.0, "spectrum": "D65"},
+            "ray_num": 200000, "max_hits": 7,
+            "scattering": [{"prob": 0.3, "entries": [{"crystal": 1, "proportion": 10},
+                                                     {"crystal": 2, "proportion": 10}]},
+                           {"prob": 0.0, "entries": [{"crystal": 1, "proportion": 10},
+                                                     {"crystal": 2, "proportion": 10}]}]},
+  "render": [{"ev_mode": "absolute", "id": 1, "lens": {"type": "fisheye_equal_area", "fov": 120},
+              "resolution": [64, 64], "view": {"elevation": 20}}]
+})";
+
 // Same shape as test_gui_sim_smoke.cpp's guard, for the same reason: IM_CHECK returns out of
 // the case, and a server left running would be inherited by the next one.
 struct ScopedServerGuard {
@@ -88,13 +112,13 @@ bool DriveUntil(ImGuiTestContext* ctx, Pred pred, int timeout_s) {
 // for the GPU backend the way the Settings box does: DoRun reconstructs the server for it
 // (Metal here; where no device is available ResolveGpuBackend falls back to CPU, as in
 // test_color_window.cpp's GPU case), so the CPU server created below is only ever the seed.
-bool BringUpHaloScene(ImGuiTestContext* ctx, bool infinite, bool gpu = false) {
+bool BringUpScene(ImGuiTestContext* ctx, const char* scene_json, bool infinite, bool gpu) {
   ResetTestState();
   gui::g_server = LUMICE_CreateServer();
   IM_CHECK_RETV(gui::g_server != nullptr, false);
   gui::ResetServerConstructionTrackers();  // the seed is a CPU server; make the tracker say so
   LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
-  IM_CHECK_RETV(gui::DeserializeFromJson(kHalo22Json, gui::g_state), false);
+  IM_CHECK_RETV(gui::DeserializeFromJson(scene_json, gui::g_state), false);
   gui::g_state.renderer.sim_resolution_index = 0;
   gui::g_state.sim.infinite = infinite;
   gui::g_state.sim.ray_num_millions = 0.1f;
@@ -110,6 +134,79 @@ bool BringUpHaloScene(ImGuiTestContext* ctx, bool infinite, bool gpu = false) {
     IM_CHECK_RETV(gui::g_preview_vp.active, false);
   }
   return true;
+}
+
+bool BringUpHaloScene(ImGuiTestContext* ctx, bool infinite, bool gpu = false) {
+  return BringUpScene(ctx, kHalo22Json, infinite, gpu);
+}
+
+// Read the analysis window's live rectangle out of the default framebuffer and write it as a PNG,
+// the way functional/test_theme_scan.cpp's ExportRegion does (same flip, same Retina scale, same
+// clip to the framebuffer). Not compared against anything here — the file is for a human's eyes.
+bool SaveWindowPng(ImGuiTestContext* ctx, const char* window_ref, const std::string& path) {
+  ImGuiWindow* win = ctx->GetWindowByRef(window_ref);
+  IM_CHECK_RETV(win != nullptr, false);
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const float fb_w = io.DisplaySize.x * sx;
+  const float fb_h = io.DisplaySize.y * sy;
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const float x0 = std::max(0.0f, (win->Pos.x - vp_pos.x) * sx);
+  const float y0 = std::max(0.0f, (win->Pos.y - vp_pos.y) * sy);
+  const float x1 = std::min(fb_w, (win->Pos.x - vp_pos.x + win->Size.x) * sx);
+  const float y1 = std::min(fb_h, (win->Pos.y - vp_pos.y + win->Size.y) * sy);
+  g_fullframe_capture.Reset();
+  g_fullframe_capture.rect_x = static_cast<int>(std::lround(x0));
+  g_fullframe_capture.rect_y = static_cast<int>(std::lround(fb_h - y1));
+  g_fullframe_capture.rect_w = static_cast<int>(std::lround(x1 - x0));
+  g_fullframe_capture.rect_h = static_cast<int>(std::lround(y1 - y0));
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield(1);
+  }
+  IM_CHECK_RETV(g_fullframe_capture.done.load(), false);
+  IM_CHECK_RETV(g_fullframe_capture.width > 0 && g_fullframe_capture.height > 0, false);
+  const std::vector<unsigned char> rgb = lumice::test::StripAlpha(
+      g_fullframe_capture.pixels.data(), g_fullframe_capture.width, g_fullframe_capture.height);
+  IM_CHECK_RETV(
+      lumice::test::SavePng(path.c_str(), rgb.data(), g_fullframe_capture.width, g_fullframe_capture.height, 3), false);
+  ctx->LogInfo("[raypath_analysis] window %s -> %s (%dx%d)", window_ref, path.c_str(), g_fullframe_capture.width,
+               g_fullframe_capture.height);
+  return true;
+}
+
+// The result list is a ScrollY table, i.e. a child window, and only a row the table has on
+// screen is findable by label (a clipped item never reports its label to the engine; the engine's
+// own scroll-and-retry fallback pans the window given as ref, not the child inside it). So: pan
+// the table's child a page at a time until the label resolves or the child is at its end.
+// Returns the item's id, 0 when no row carries the label at any scroll position.
+ImGuiID FindListRowScrolling(ImGuiTestContext* ctx, const std::string& label) {
+  ImGuiWindow* analysis = ctx->GetWindowByRef(kWindowRef);
+  IM_CHECK_RETV(analysis != nullptr, 0);
+  ImGuiWindow* table_child = nullptr;
+  for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows) {
+    if (w->ParentWindow == analysis && std::strstr(w->Name, "##analysis_rows") != nullptr) {
+      table_child = w;
+      break;
+    }
+  }
+  IM_CHECK_RETV(table_child != nullptr, 0);
+  const std::string path = "**/" + label;
+  table_child->Scroll.y = 0.0f;
+  ctx->Yield(2);
+  while (true) {
+    const ImGuiID id = ctx->ItemInfo(path.c_str(), ImGuiTestOpFlags_NoError).ID;
+    if (id != 0) {
+      return id;
+    }
+    if (table_child->Scroll.y >= table_child->ScrollMax.y) {
+      return 0;
+    }
+    table_child->Scroll.y =
+        std::min(table_child->ScrollMax.y, table_child->Scroll.y + table_child->InnerRect.GetHeight());
+    ctx->Yield(2);
+  }
 }
 
 void OpenWindow(ImGuiTestContext* ctx) {
@@ -1412,6 +1509,68 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kModified);
       IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
       IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) != nullptr);
+    };
+  }
+
+  // The chain label on screen. Core formats a multi-layer chain as "(3-5) -> (1-3)" — the C API
+  // contract, ASCII on purpose because the body font has no U+2192 — and the list draws that
+  // text through JoinerForDisplay, which redraws the joiner as the ICON_FA_ARROW_RIGHT glyph.
+  // Two things have to be true of a real multi-layer row, and the unit truth table can show
+  // neither: the row's label in the ImGui tree IS the rewritten text (so the render path goes
+  // through the function, not around it), and the rewritten text has no "?" — the fallback ImGui
+  // draws for a codepoint the atlas lacks, which is what the arrow WOULD be if it were U+2192.
+  // The first multi-layer row is used, not the first row: which chain carries the most energy is
+  // the scene's business (on this scene the top rows are single-layer), not this label's.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "chain_label_shows_arrow_glyph_not_qmark");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpScene(ctx, kPcTwoLayerJson, /*infinite=*/false, /*gpu=*/false));
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Whole sky");
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      ctx->ItemClick(kAnalyzeButton);
+      ctx->SetRef("");
+      IM_CHECK(DriveUntil(
+          ctx, [] { return !gui::g_state.analysis_run_in_progress && gui::g_state.analysis_result.payload != nullptr; },
+          60));
+      const auto& view = gui::g_state.analysis_result;
+      IM_CHECK_EQ(view.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+      const LUMICE_RaypathHistogramEntry* multi = nullptr;
+      for (const auto& e : view.payload->entries) {
+        if (e.chain_len >= 2) {
+          multi = &e;
+          break;
+        }
+      }
+      IM_CHECK(multi != nullptr);
+      const std::string raw = multi->display;
+      IM_CHECK(raw.find(" -> ") != std::string::npos);
+      // The production rewrite of the production text.
+      const std::string label = gui::JoinerForDisplay(raw);
+      IM_CHECK(label.find(ICON_FA_ARROW_RIGHT) != std::string::npos);
+      IM_CHECK(label.find(" -> ") == std::string::npos);
+      IM_CHECK(label.find('?') == std::string::npos);
+      IM_CHECK(raw.find('?') == std::string::npos);
+      // And a row on screen carries exactly that label — found by it, under the window, with the
+      // list panned to it (on this scene the first multi-layer row sits below the first page).
+      ctx->SetRef(kWindowRef);
+      const ImGuiID row_id = FindListRowScrolling(ctx, label);
+      IM_CHECK(row_id != 0);
+      // The raw text is NOT what is drawn: with the row on screen, no item carries the ASCII form.
+      IM_CHECK(ctx->ItemInfo(("**/" + raw).c_str(), ImGuiTestOpFlags_NoError).ID == 0);
+      // Selecting by the drawn label records the raw text — the selection is the entry's
+      // contract text, the label only its presentation.
+      ctx->ItemClick(row_id);
+      IM_CHECK(gui::g_state.analysis.selected_entry.has_value());
+      IM_CHECK_STR_EQ(gui::g_state.analysis.selected_entry->c_str(), raw.c_str());
+      ctx->SetRef("");
+      // A picture of the window for a human to look at (the atlas assertions live in
+      // functional/test_body_font_glyph_coverage.cpp; this is the frame they add up to).
+      ctx->MouseMoveToPos(ImVec2(2.0f, 2.0f));
+      ctx->Yield(2);
+      IM_CHECK(SaveWindowPng(ctx, kWindowRef, GuiTestTempPath("chain_label_arrow.png").string()));
     };
   }
 }

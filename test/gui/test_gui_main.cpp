@@ -654,6 +654,7 @@ int main(int argc, char** argv) {
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
   RegisterThemeCoverageTests(engine);
+  RegisterBodyFontGlyphCoverageTests(engine);
   RegisterThemeScanTests(engine);
   RegisterExportParityTests(engine);
   RegisterPreviewExportParityTests(engine);
