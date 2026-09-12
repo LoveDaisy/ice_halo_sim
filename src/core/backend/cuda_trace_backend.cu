@@ -435,6 +435,11 @@ __device__ inline void FanColorClassLanes(float* d_class_lane_buf,
 // landed_weight. Zero-cost when color_params.color_class_count == 0 (single
 // branch skip inside FanColorClassLanes) so the existing physical-filter path
 // pays nothing when no raypath_color config is present.
+// Online ray-allocation tally: how many addresses the per-warp partial sums of one
+// (layer, ci) dispatch are spread over (a power of two; the epilogue masks with
+// it). Device layout per ci: [w × kAllocTallySlots][w² × kAllocTallySlots].
+constexpr uint32_t kAllocTallySlots = 64u;
+
 __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
                                        float* __restrict__ d_landed_weight,
                                        const float exit_world[3],
@@ -459,18 +464,17 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
                                        // MSL AccumAnchorY helper.
                                        float* __restrict__ d_anchor_buf,
                                        const lm_proj::ProjParams& anchor_proj,
-                                       // Online ray-allocation tally of THIS dispatch's (layer, ci)
+                                       // Online ray-allocation tally of THIS ray
                                        // (core/shared/ray_allocation_shared.hpp): Σw and Σw² of every
-                                       // ray handed to the image, in-bounds or not — the statistic is
-                                       // a property of the scene, not of the frame. Both nullptr on a
-                                       // proportional dispatch (one branch, no atomic); the host divides
-                                       // the dispatch's correction out after readback.
-                                       float* __restrict__ d_tally_w,
-                                       float* __restrict__ d_tally_w2) {
-  if (d_tally_w != nullptr) {
-    atomicAdd(d_tally_w, w_emit);
-    atomicAdd(d_tally_w2, w_emit * w_emit);
-  }
+                                       // exit handed to the image, in-bounds or not — the statistic is
+                                       // a property of the scene, not of the frame. Per-thread REGISTER
+                                       // accumulators the kernel epilogue reduces per warp: two
+                                       // single-address atomics here measured −45% on the single-crystal
+                                       // bench scene, where nearly every ray is an image-bound exit.
+                                       float& tally_w_acc,
+                                       float& tally_w2_acc) {
+  tally_w_acc += w_emit;
+  tally_w2_acc += w_emit * w_emit;
   // 315.3: single-source projection via lm_proj::ProjectExitToPixel (shared
   // with host CPU scatter_accum.hpp + Metal). Pass the WORLD exit dir — the
   // function negates internally to the sky direction, matching
@@ -775,14 +779,22 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        float* __restrict__ d_anchor_buf,
                                        lm_proj::ProjParams anchor_proj,
                                        // Online ray-allocation tally slots of this (layer, ci)
-                                       // dispatch — host pre-offsets both by ci; nullptr on a
-                                       // proportional dispatch. See EmitToDeviceXyz.
+                                       // dispatch — kAllocTallySlots floats each, host pre-offsets
+                                       // both by ci; nullptr on a proportional dispatch. See the
+                                       // epilogue at the end of this kernel.
                                        float* __restrict__ d_tally_w,
                                        float* __restrict__ d_tally_w2) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
   }
+  // Online ray-allocation tally (core/shared/ray_allocation_shared.hpp),
+  // accumulated in registers along the ray's path by EmitToDeviceXyz and folded
+  // into d_tally_w / d_tally_w2 once per warp in the epilogue at the end of this
+  // kernel. Always accumulated (two FMAs per exit); only the epilogue's atomic
+  // is gated on the pointers, so a proportional dispatch pays no atomic.
+  float tally_w_acc = 0.0f;
+  float tally_w2_acc = 0.0f;
   // K-shape: resolve this ray's polygon-slab pool region. `d_poly_n` /
   // `d_poly_d` are BASE pointers into the pool (Σ poly_cnt across all shapes);
   // adding `poly_off * {3|1}` produces the per-ray effective pointers.
@@ -992,7 +1004,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
                             proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
-                            d_tally_w, d_tally_w2);
+                            tally_w_acc, tally_w2_acc);
             // task-358.3 (renamed from capture_component): capture the mid-exit
             // ray's (this_mask, weight) for the CPU parity harness.
             if (capture_ray_mask != 0u) {
@@ -1040,7 +1052,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
                             proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
-                            d_tally_w, d_tally_w2);
+                            tally_w_acc, tally_w2_acc);
             // task-358.3 (renamed from capture_component): final-layer capture
             // (mirror of the ms_mode==1 branch).
             if (capture_ray_mask != 0u) {
@@ -1195,7 +1207,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
                               proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
-                            d_tally_w, d_tally_w2);
+                            tally_w_acc, tally_w2_acc);
               // task-358.3 (renamed from capture_component): per-bounce mid-
               // exit capture.
               if (capture_ray_mask != 0u) {
@@ -1237,7 +1249,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
                               proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj,
-                            d_tally_w, d_tally_w2);
+                            tally_w_acc, tally_w2_acc);
               // task-358.3 (renamed from capture_component): final-layer capture
               // on the per-bounce refracted exit (gated by capture_ray_mask).
               if (capture_ray_mask != 0u) {
@@ -1255,6 +1267,42 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
     dir[2] = dir[2] - 2.0f * cos_theta * nrm[2];
     w = w_refl;
     from_poly = hit_poly;
+  }
+
+  // Online ray-allocation tally epilogue: one warp reduction and one atomic per
+  // warp instead of two atomics per exit. Every lane that passed the
+  // `tid < n_roots` guard reaches this point (the bounce loop only breaks, never
+  // returns), and the lanes that did NOT pass it are exactly the warp's top
+  // `32 − n_active` lanes — blockDim is 256, so a warp is 32 consecutive tids —
+  // which lets every lane compute the warp's active mask from n_roots alone
+  // rather than from __activemask() (whose answer depends on where the
+  // scheduler left the warp's divergence). __shfl_down_sync on that mask
+  // reconverges the named lanes; a read from a lane above n_active is
+  // undefined by contract and is dropped, never added.
+  if (d_tally_w != nullptr) {
+    const uint32_t lane = threadIdx.x & 31u;
+    const uint32_t warp_base = tid - lane;
+    const uint32_t n_active = min(32u, n_roots - warp_base);
+    const unsigned mask = (n_active >= 32u) ? 0xffffffffu : ((1u << n_active) - 1u);
+    float sw = tally_w_acc;
+    float sw2 = tally_w2_acc;
+    for (uint32_t off = 16u; off > 0u; off >>= 1u) {
+      const float ow = __shfl_down_sync(mask, sw, off);
+      const float ow2 = __shfl_down_sync(mask, sw2, off);
+      if (lane + off < n_active) {
+        sw += ow;
+        sw2 += ow2;
+      }
+    }
+    // Spread the per-warp atomics over kAllocTallySlots addresses (host sums
+    // them): one address for every warp of a 262144-ray dispatch still
+    // serialised 8192 atomics on it and measured −3.5%; 64 slots cut that to
+    // ~128 per address, under the noise floor.
+    if (lane == 0u) {
+      const uint32_t slot = (warp_base >> 5u) & (kAllocTallySlots - 1u);
+      atomicAdd(d_tally_w + slot, sw);
+      atomicAdd(d_tally_w2 + slot, sw2);
+    }
   }
 }
 
@@ -1846,14 +1894,27 @@ struct CudaTraceBackend::Impl {
   double emitted_ray_equivalent_delta_this_batch_ = 0.0;
   // Online ray-allocation tally of this session (GetLastBatchRayAllocationTally),
   // [mi][ci]; sized at BeginSession only when spec.ray_alloc is non-null. The
-  // device side is `d_alloc_tally_`: 2 × K floats (Σw at [ci], Σw² at [K + ci]),
-  // K = alloc_tally_cap_ ≥ the largest per-layer entry count, zeroed ONCE per
-  // layer before the ci loop and read back at the layer's existing D2H sync —
-  // no per-ci synchronisation is added for it (unlike Metal, whose per-ci wait
-  // already exists). Grown on demand like the cont buffers.
+  // device side is `d_alloc_tally_`: per entry ci a [Σw × kAllocTallySlots] block
+  // followed by a [Σw² × kAllocTallySlots] block (the kernel epilogue spreads its
+  // per-warp atomics over the slots; the host sums them), K = alloc_tally_cap_ ≥
+  // the largest per-layer entry count, zeroed ONCE per layer before the ci loop
+  // and read back at the layer's existing D2H sync — no per-ci synchronisation
+  // is added for it (unlike Metal, whose per-ci wait already exists). Grown on
+  // demand like the cont buffers.
   RayAllocationTally ray_alloc_tally_;
   float*  d_alloc_tally_   = nullptr;
   size_t  alloc_tally_cap_ = 0;
+  // The device slots are CUMULATIVE across layers and batches — a per-layer
+  // memset measured ~80µs of stream time on a 2.3ms layer (−4%). Instead the
+  // host keeps the last readback (`h_alloc_tally_prev_`, pinned so the copy is
+  // an async D2H that rides the layer's existing sync) and takes the delta; the
+  // slots are zeroed (one async memset, host copy of prev cleared) only when a
+  // slot passes kAllocTallyResetAt (2^28: ulp 32 against a per-dispatch slot
+  // increment of ~1e5–1e7, i.e. a delta error under 1e-5, and a reset every
+  // ~16 dispatches at worst). `h_alloc_tally_` is the pinned landing buffer.
+  float*  h_alloc_tally_ = nullptr;       // pinned, 2 × cap × kAllocTallySlots
+  std::vector<float> h_alloc_tally_prev_;  // same layout, last readback
+  static constexpr float kAllocTallyResetAt = 268435456.0f;  // 2^28
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
   // True iff any (layer, ci) crystal param in `pool_scene_` carries a
@@ -2445,6 +2506,8 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     class_lane_pix_capacity_ = 0;
     cudaFree(d_anchor_buf_); d_anchor_buf_ = nullptr;
     cudaFree(d_alloc_tally_); d_alloc_tally_ = nullptr;
+    cudaFreeHost(h_alloc_tally_); h_alloc_tally_ = nullptr;
+    h_alloc_tally_prev_.clear();
     alloc_tally_cap_ = 0;
     ray_alloc_tally_.clear();
 
@@ -3225,8 +3288,13 @@ void CudaTraceBackend::Impl::EnsureAllocTallyBuffer(size_t entries) {
   cudaDeviceSynchronize();  // a prior layer's trace may still add into the old slots.
   cudaFree(d_alloc_tally_);
   d_alloc_tally_ = nullptr;
-  ck(cudaMalloc(&d_alloc_tally_, 2 * entries * sizeof(float)), "cudaMalloc d_alloc_tally");
-  ck(cudaMemset(d_alloc_tally_, 0, 2 * entries * sizeof(float)), "cudaMemset d_alloc_tally");
+  cudaFreeHost(h_alloc_tally_);
+  h_alloc_tally_ = nullptr;
+  const size_t floats = 2 * entries * kAllocTallySlots;
+  ck(cudaMalloc(&d_alloc_tally_, floats * sizeof(float)), "cudaMalloc d_alloc_tally");
+  ck(cudaMemset(d_alloc_tally_, 0, floats * sizeof(float)), "cudaMemset d_alloc_tally");
+  ck(cudaHostAlloc(&h_alloc_tally_, floats * sizeof(float), cudaHostAllocDefault), "cudaHostAlloc h_alloc_tally");
+  h_alloc_tally_prev_.assign(floats, 0.0f);
   alloc_tally_cap_ = entries;
 }
 
@@ -4146,12 +4214,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   ck_reset(cudaMemset(impl_->d_exit_count_, 0, sizeof(uint32_t)), "cudaMemset d_exit_count");
   ck_reset(cudaMemset(impl_->d_cont_count_[out_slot], 0, sizeof(uint32_t)),
            "cudaMemset d_cont_count_[out_slot]");
-  // Online ray-allocation tally slots: zeroed once per layer (every ci of the
-  // layer adds into its own pair), read back at this layer's D2H sync below.
-  if (alloc.adaptive) {
-    ck_reset(cudaMemsetAsync(impl_->d_alloc_tally_, 0, 2 * impl_->alloc_tally_cap_ * sizeof(float), impl_->stream_),
-             "cudaMemsetAsync d_alloc_tally");
-  }
+  // Online ray-allocation tally slots: NOT zeroed here — cumulative on the
+  // device, delta'd on the host at this layer's D2H sync below (see
+  // h_alloc_tally_prev_ for why).
 
   // Layer-0 root rays must start with an all-zero carried color-class mask.
   // d_root_component_ is reused across per-batch BeginSession cycles and the
@@ -4567,8 +4632,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         impl_->anchor_proj_params_,
         // Online ray-allocation tally: this ci's (Σw, Σw²) slots, or nullptr on a
         // proportional layer (the kernel then skips the two atomics).
-        alloc.adaptive ? impl_->d_alloc_tally_ + ci : nullptr,
-        alloc.adaptive ? impl_->d_alloc_tally_ + impl_->alloc_tally_cap_ + ci : nullptr);
+        alloc.adaptive ? impl_->d_alloc_tally_ + (2 * ci) * kAllocTallySlots : nullptr,
+        alloc.adaptive ? impl_->d_alloc_tally_ + (2 * ci + 1) * kAllocTallySlots : nullptr);
     ck_reset(cudaGetLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -4606,6 +4671,17 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     cudaEventRecord(impl_->ev_end_kernel_, impl_->stream_);
   }
 
+  // Online ray-allocation tally readback: an ASYNC D2H into pinned memory
+  // enqueued ahead of the synchronous 4B readback below, so it completes under
+  // that same wait — no new sync point, no synchronous copy of its own (a second
+  // cudaMemcpy here measured ~20µs per layer).
+  const size_t tally_floats = alloc.adaptive ? 2 * impl_->alloc_tally_cap_ * kAllocTallySlots : 0;
+  if (alloc.adaptive) {
+    ck_reset(cudaMemcpyAsync(impl_->h_alloc_tally_, impl_->d_alloc_tally_, tally_floats * sizeof(float),
+                             cudaMemcpyDeviceToHost, impl_->stream_),
+             "alloc tally readback");
+  }
+
   // 4B readback (synchronous on the default stream — also the first sync
   // point that surfaces async kernel errors: check the return value).
   ck_reset(cudaMemcpy(&impl_->h_exit_count_, impl_->d_exit_count_, sizeof(uint32_t),
@@ -4613,22 +4689,41 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   cudaEventRecord(impl_->ev_end_d2h_, impl_->stream_);
   cudaEventSynchronize(impl_->ev_end_d2h_);
 
-  // Online ray-allocation tally readback, riding the sync point above (no new
-  // one): 2 × K floats, then each ci's dealt count from the partition and its
-  // (Σw, Σw²) with this entry's own correction divided out
-  // (core/shared/ray_allocation_shared.hpp).
+  // Online ray-allocation tally: each ci's dealt count from the partition and
+  // its (Σw, Σw²) as the delta of the cumulative device slots since the last
+  // readback, with this entry's own correction divided out
+  // (core/shared/ray_allocation_shared.hpp). The slots are reset once any of
+  // them passes kAllocTallyResetAt — see h_alloc_tally_prev_.
   if (alloc.adaptive) {
-    std::vector<float> h_tally(2 * impl_->alloc_tally_cap_, 0.0f);
-    ck_reset(cudaMemcpy(h_tally.data(), impl_->d_alloc_tally_, h_tally.size() * sizeof(float),
-                        cudaMemcpyDeviceToHost),
-             "alloc tally readback");
     auto& layer_tally = impl_->ray_alloc_tally_[impl_->ms_layer_idx_];
+    bool reset_slots = false;
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       auto& entry = layer_tally[ci];
       entry.rays += crystal_ray_num[ci];
       const double inv_c = alloc.corrections[ci] > 0.0f ? 1.0 / static_cast<double>(alloc.corrections[ci]) : 0.0;
-      entry.sum_w += static_cast<double>(h_tally[ci]) * inv_c;
-      entry.sum_w2 += static_cast<double>(h_tally[impl_->alloc_tally_cap_ + ci]) * inv_c * inv_c;
+      double sum_w = 0.0;
+      double sum_w2 = 0.0;
+      for (uint32_t slot = 0; slot < kAllocTallySlots; slot++) {
+        const size_t iw = (2 * ci) * kAllocTallySlots + slot;
+        const size_t iw2 = (2 * ci + 1) * kAllocTallySlots + slot;
+        sum_w += static_cast<double>(impl_->h_alloc_tally_[iw]) - static_cast<double>(impl_->h_alloc_tally_prev_[iw]);
+        sum_w2 +=
+            static_cast<double>(impl_->h_alloc_tally_[iw2]) - static_cast<double>(impl_->h_alloc_tally_prev_[iw2]);
+        reset_slots = reset_slots || impl_->h_alloc_tally_[iw] > Impl::kAllocTallyResetAt ||
+                      impl_->h_alloc_tally_[iw2] > Impl::kAllocTallyResetAt;
+      }
+      entry.sum_w += std::max(0.0, sum_w) * inv_c;
+      entry.sum_w2 += std::max(0.0, sum_w2) * inv_c * inv_c;
+    }
+    if (reset_slots) {
+      // Stream-ordered before the next dispatch's kernel, so nothing is lost:
+      // every add so far is in this readback, every add from here on lands in
+      // the zeroed slots, and prev restarts at zero with them.
+      ck_reset(cudaMemsetAsync(impl_->d_alloc_tally_, 0, tally_floats * sizeof(float), impl_->stream_),
+               "cudaMemsetAsync d_alloc_tally (reset)");
+      std::fill(impl_->h_alloc_tally_prev_.begin(), impl_->h_alloc_tally_prev_.end(), 0.0f);
+    } else {
+      std::copy(impl_->h_alloc_tally_, impl_->h_alloc_tally_ + tally_floats, impl_->h_alloc_tally_prev_.begin());
     }
   }
 

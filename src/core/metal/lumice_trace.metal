@@ -439,10 +439,12 @@ struct WlEntry {
 //   tally_w / tally_w2: the online ray-allocation tally
 //                       (core/shared/ray_allocation_shared.hpp): Σw and Σw² over
 //                       the rays handed to the IMAGE only — the two device-fused
-//                       exit tails, never the continuation write — and only when
-//                       prm.alloc_tally != 0 (an adaptive dispatch); a
-//                       proportional dispatch skips both adds. The host divides
-//                       this dispatch's correction out after readback.
+//                       exit tails, never the continuation write. Accumulated in
+//                       registers per ray and added ONCE per SIMD-group in the
+//                       kernel epilogue, only when prm.alloc_tally != 0 (an
+//                       adaptive dispatch); a proportional dispatch never touches
+//                       them. The host divides this dispatch's correction out
+//                       after readback.
 struct ExitStats {
   atomic_uint  count;
   atomic_float w_sum;
@@ -741,6 +743,15 @@ kernel void trace_layer_kernel(
   gate_stream.global_idx = tid;
   gate_stream.slot       = 0u;
 
+  // Online ray-allocation tally, accumulated in REGISTERS along the ray's path
+  // and folded into exit_stats once per SIMD-group at the kernel's end (see
+  // the epilogue). Not an atomic per exit: two more single-address float
+  // atomics beside count / w_sum measured −23% on the single-crystal bench
+  // scene, where nearly every ray is an image-bound exit and every lane then
+  // serialises on the same 16 bytes. The register form costs two FMAs per exit.
+  float tally_w_acc  = 0.0f;
+  float tally_w2_acc = 0.0f;
+
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
     if (to_face == kInvalidId) { break; }
     // Contract split (K-shape pool):
@@ -992,10 +1003,8 @@ kernel void trace_layer_kernel(
               atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
               // Online ray-allocation tally: this ray reached the image.
-              if (prm.alloc_tally != 0u) {
-                atomic_fetch_add_explicit(&exit_stats->tally_w, cw, memory_order_relaxed);
-                atomic_fetch_add_explicit(&exit_stats->tally_w2, cw * cw, memory_order_relaxed);
-              }
+              tally_w_acc  += cw;
+              tally_w2_acc += cw * cw;
             }
           }
           // filter_fail: implicit drop (no buffer write, no atomic counter
@@ -1122,10 +1131,8 @@ kernel void trace_layer_kernel(
             atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
             atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
             // Online ray-allocation tally: this ray reached the image.
-            if (prm.alloc_tally != 0u) {
-              atomic_fetch_add_explicit(&exit_stats->tally_w, cw, memory_order_relaxed);
-              atomic_fetch_add_explicit(&exit_stats->tally_w2, cw * cw, memory_order_relaxed);
-            }
+            tally_w_acc  += cw;
+            tally_w2_acc += cw * cw;
           }
           // filter_fail: implicit drop — no pixel write, no diagnostic counter bump.
         }
@@ -1147,6 +1154,21 @@ kernel void trace_layer_kernel(
     rec_csum += float(path[k]);
   }
   rec_sink[tid] = rec_csum;
+
+  // Online ray-allocation tally epilogue: one SIMD-group reduction and one
+  // atomic per SIMD-group instead of two atomics per exit. Every lane that
+  // passed the `tid < num_rays` guard reaches this point (the hit loop only
+  // breaks, never returns), so the group's active lanes are exactly the rays
+  // this dispatch traced; simd_sum reduces over the active lanes. Gated on
+  // alloc_tally so a proportional dispatch pays nothing here either.
+  if (prm.alloc_tally != 0u) {
+    float group_w  = simd_sum(tally_w_acc);
+    float group_w2 = simd_sum(tally_w2_acc);
+    if (simd_is_first()) {
+      atomic_fetch_add_explicit(&exit_stats->tally_w, group_w, memory_order_relaxed);
+      atomic_fetch_add_explicit(&exit_stats->tally_w2, group_w2, memory_order_relaxed);
+    }
+  }
 }
 
 // ===================== Device root-gen (task-260.2) ==========================
