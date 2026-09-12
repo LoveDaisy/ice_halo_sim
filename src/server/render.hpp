@@ -345,6 +345,41 @@ class RenderConsumer : public IConsume {
   // one call rather than one per line.
   void RebuildHorizonAnnotation();
 
+  // The annotation layers of one snapshot, made blend-ready: each line family's per-line masks
+  // paired with that line's linear colour and opacity, the horizon's fixed appearance, and the
+  // marker rings. Built by BuildAnnotationLayers() once per snapshot from the masks this class
+  // already holds and from config_'s appearance fields — never from the exposure — and consumed
+  // per pixel by CompositeAnnotations(). The two are the ONE implementation of "draw the
+  // annotations on this pixel", called from both of PostSnapshot's frame paths (the fused pixel
+  // loop and the zero-exposure exit); the type exists so that pair can pass its state between
+  // them without either path rebuilding it its own way.
+  struct LineLayer {
+    const uint8_t* mask;
+    float rgb[3];
+    float alpha;
+  };
+  struct MarkerLayer {
+    annotation::CanvasPoint point;
+    float rgb[3];
+  };
+  struct AnnotationLayers {
+    bool paint_outline = false;
+    float outline_rgb[3]{ 0.0f, 0.0f, 0.0f };
+    std::vector<LineLayer> grid;          // parallels then meridians, under the circles
+    std::vector<LineLayer> angular_dist;  // the sun circles
+    std::vector<MarkerLayer> markers;     // the rings, on top of everything
+    float marker_alpha = 0.0f;
+    float marker_radius_px = 0.0f;
+    bool paint_marker = false;
+    // Per-pixel scratch for the ring test, one byte per marker, sized once so the pixel loop
+    // allocates nothing. Written by CompositeAnnotations before it is read, every pixel.
+    std::vector<uint8_t> on_marker_ring;
+  };
+  AnnotationLayers BuildAnnotationLayers() const;
+  // Composite every layer onto `rgb` (linear, this pixel's colour with its background already in)
+  // in the fixed layer order. Reads horizon_mask_ and the layers' masks at pixel `i`.
+  void CompositeAnnotations(AnnotationLayers& layers, int i, bool print_mode, float rgb[3]) const;
+
   // Draw the cached label anchors' text into snapshot_image_buffer_. Called at the END of
   // PostSnapshot, after the fused per-pixel loop has written its final sRGB bytes — deliberately
   // NOT inside that loop. The loop is a per-pixel, register-only, byte-exact chain
