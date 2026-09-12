@@ -38,13 +38,22 @@ the defect had no machine signal for as long as it lived; this file is that
 signal. Revert the fix and the ``cpu_backend_route`` rows below read ~+1.7%
 against a 0.1% tolerance.
 
-Tolerance. After the fix the cross-backend spread of ``R`` measured ≤0.005%
-across every single-wavelength scene used here (worst row −0.004%). The
-tolerance is 0.1%: ~24× above the measured spread, ~17× below the defect it
-exists to catch. It is deliberately not tighter — legacy's own ``R`` sits
-+0.019% above the closed-form constant because its ``total_intensity_`` is
-also an fp32 running sum (over a much shorter window), and that is accepted
-behaviour, not a defect.
+Tolerance. After the fix the cross-backend spread of ``R`` on the rows below
+is −0.004% or better at 2M rays and −0.029% on the 10M-ray ``parhelion`` rows
+(stable to 0.002% across seeds — a fixed offset, not noise). The tolerance is
+0.1%: ~3.4× above the worst measured spread, ≥10× below the smallest red-state
+signature the fix's revert produces on the rows that can see it (+1.74% on
+``cpu_backend_route``, −1.04% on ``parhelion``). It is deliberately not
+tighter — legacy's own ``R`` drifts above the closed-form constant with ray
+count (+0.019% at 2M, +0.38% at 10M) because its ``total_intensity_`` is also
+an fp32 running sum, and that is accepted behaviour, not a defect; the row
+compares the two backends' drift, not either one against the constant.
+
+Not every row reddens on the revert. The defect scales with how much weight
+the window accumulates, so the 400k-ray and 20k-ray rows read +0.003% and
++0.043% under the old code and stay green; they are here for the session
+shapes they cover (filter + random geometry; per-layer fold), and the 2M/10M
+rows are the ones that carry the red.
 
 Scene selection. Only single-wavelength configs: under a D65 spectrum ``R``
 becomes ``sum(cmf_y * w) / sum(w)``, which varies ~1% between seeds on legacy
@@ -78,7 +87,7 @@ CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 _TIMEOUT = 900  # parhelion.json is 10M rays; the legacy arm is the slow one
 
 # |R_cuda / R_legacy - 1| bound. See the module docstring for the derivation
-# (measured post-fix spread ≤ 0.005%, defect signature +1.74%).
+# (measured post-fix spread ≤ 0.03%, revert signature ≥ 1.0% on the 2M/10M rows).
 _T_R_RATIO_TOL = 0.001
 
 _CUDA_AVAILABLE = (

@@ -22,8 +22,11 @@ to 0), which is also how the row was calibrated.
 Thresholds are the battery's own (``_T_RAW_CORR_DS`` / ``_T_ENERGY_TOL`` as in
 ``test_cuda_exit_seam_parity.py``): the two arms sample different roots, so
 the comparison is subject to the same Monte-Carlo divergence as any
-cuda-vs-legacy row, not to a byte-exact bar. Measured on the fixed code:
-ds_corr 0.9954, energy ratio 1.0003.
+cuda-vs-legacy row, not to a byte-exact bar. Measured on the fixed code
+through this harness: ds_corr 1.0000 (rounded), energy ratio 1.0000 (host_Y
+2.61237e8 vs dev_Y 2.61242e8); the CLI probe that found the defect read
+0.9954 / 1.0003 on the same config through 8-bit JPEGs. Under the revert both
+read 0.
 
 Requires:
   - ``LUMICE_CUDA_ENABLED=ON`` build with the CUDA toolchain.

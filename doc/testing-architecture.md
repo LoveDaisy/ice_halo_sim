@@ -449,6 +449,29 @@ conservation double gate is a deliberate scrum-267.3 reinforcement and must not 
 This battery is also what lets a future CUDA backend distinguish "kernel is wrong" from "both
 backends agree and are both wrong".
 
+Item 2 above is coarser than it reads. As implemented in the CUDA battery it compares **one**
+ledger across the two backends — the Y channel of each side's pixel buffer — and tolerates ±5%,
+because two samplers legitimately land different rays. Every backend keeps a **second** ledger of
+the same energy: `snapshot_intensity`, the scalar the C API exposes and the exposure pipeline
+normalises by, summed from the same exit weights along a different code path. Nothing in the
+battery read that scalar, so a backend whose two ledgers disagreed with *each other* had no
+signal: the CUDA `landed_weight` tally was a single fp32 device scalar accumulated across the
+whole drain window, dropping sub-ulp exit weights once the sum reached ~2e6, and its scalar
+ledger sat a deterministic +1.74% off its own image ledger while all five items above stayed
+green (the image ledger was the correct one). `test_cuda_energy_accounting_parity.py` adds
+the missing shape of measurement: **per-backend ledger self-consistency**,
+`R = sum(Y) / snapshot_intensity` compared cuda-vs-legacy on single-wavelength scenes, where
+`R` is a constant and there is no sampling term to hide behind, so the tolerance is 0.1%
+rather than 5%. A differential row still — but the quantity differenced is a ratio each
+backend forms from its own two tallies, not a tally compared across backends, and that is what
+lets it see an error the cross-backend energy ratio is built to forgive.
+`test_cuda_hostgen_fallback_parity.py` is a second row the same audit found missing for a
+different reason: the `LUMICE_DISABLE_DEVICE_GEN=1` host root-gen path is a production path
+no parity test had ever run, and it rendered all black — a defect no cuda-vs-legacy row can
+see, because every row ran the device-gen arm. The row is the same one-shot CLI check that
+found the defect, fixed in place: both arms on cuda, one under the knob, held to the battery's
+own corr / energy thresholds.
+
 #### §4.2.1 A differential test is structurally blind to drift its two sides share
 
 The battery above guards against a *metric* that masks a bug. There is a second blind spot, and
