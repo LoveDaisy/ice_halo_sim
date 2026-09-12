@@ -699,10 +699,10 @@ The render configuration defines the renderer parameters.
 - `fov`: 90.0 (degrees); `globe` defaults to 30.0
 
 **Note**:
-- `fov` is the **full diagonal field of view** in degrees. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections).
+- `fov` is the **full field of view covering the output image's short edge** (`min(width, height)`) in degrees — not the diagonal. For `rectangular` and `dual_*` types, `fov` is ignored (these are always full-sky projections). ⚠️ Computing `fov` from the diagonal instead gives a smaller apparent halo than intended: for example, a 3600×2400 linear render authored with a diagonal-based `fov = 120°` reproduces the framing of a short-edge-based `fov ≈ 87°` — a 22° halo comes out at roughly half its expected radius. Always derive `fov` (or `f`, below) from the short edge. The GUI preview shader uses the identical convention (`src/gui/preview_renderer.cpp`'s `linearInverse` / `fisheyeInverse`, `short_edge = min(u_resolution.x, u_resolution.y)`), so the same document renders at the same apparent size in the GUI and the CLI.
 - `fisheye_orthographic` and `dual_fisheye_orthographic` are capped at **180°** (the projection formula `r = f·sin(θ)` aliases past θ=90°); values above 180 are rejected.
 - `dual_fisheye_orthographic` does not support the `overlap` parameter (silently ignored with a VERBOSE log entry).
-- You can use `f` (focal length in mm, based on 35mm film) instead of `fov`. The program converts `f` to `fov` using the correct formula for each projection model:
+- You can use `f` (focal length in mm, based on 35mm film) instead of `fov`. In the formulas below, `d = 12mm` is half the short edge of the 35mm-film-equivalent frame (35mm film's short edge is 24mm) — the same short-edge convention `fov` itself uses. The program converts `f` to `fov` using the correct formula for each projection model:
   - Linear: `fov = 2·atan(d/f)`
   - Equal area: `fov = 4·arcsin(d/(2f))`
   - Equidistant: `fov = 2d/f` (radians → degrees)
