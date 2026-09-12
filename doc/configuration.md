@@ -430,6 +430,7 @@ The scene configuration defines the simulation scene, including the light source
   "light_source": { ... },
   "ray_num": <integer or "infinite">,
   "max_hits": <integer>,
+  "ray_allocation": <"proportional" | "adaptive">,
   "scattering": [ ... ]
 }
 ```
@@ -441,6 +442,7 @@ The scene configuration defines the simulation scene, including the light source
 | `light_source` | object | yes | - | Inline light source configuration (see below) |
 | `ray_num` | integer or string | yes | - | **Total** rays across all spectrum wavelengths; use `"infinite"` for continuous simulation |
 | `max_hits` | integer | yes | - | Maximum number of hits |
+| `ray_allocation` | string | no | `"proportional"` | How each scattering layer's rays are dealt across its entries. `"proportional"` deals by `proportion` — sampling share and energy share are one knob. `"adaptive"` runs a short CPU pilot pass at commit time, derives a per-entry sampling share `q_i ∝ p_i·√E[e²]` (Neyman allocation), deals rays by `q_i` and scales every ray born into entry *i* by `(p_i/ΣP)/(q_i/ΣQ)`, so the **expected image is unchanged** and only its variance moves. See the note below. |
 | `scattering` | array | yes | - | Scattering configuration array |
 
 > **`ray_num` is the total across all wavelengths.**
@@ -460,6 +462,36 @@ The scene configuration defines the simulation scene, including the light source
 > wavelengths in the spectrum. The two bundled configs with discrete spectra
 > (`examples/config_example.json`, `test/e2e/configs/color.json`) were migrated
 > as part of task-323 and produce bit-equivalent trace output (PSNR unchanged).
+
+> **`ray_allocation` decides how many rays an entry gets; `proportion` still says how much
+> energy it carries.** The `proportion` of a scattering entry is, and remains, an *energy
+> share*: the fraction of the layer's light that entry contributes to the image. Under the
+> default `"proportional"` mode that same number also sets the entry's *sampling share* —
+> the fraction of the layer's rays dealt to it — which is the variance-optimal choice only
+> when every entry's per-ray energy statistics agree. They do not when a low-`proportion`
+> entry carries a high-energy raypath (a filtered arc at `"proportion": 1` next to an
+> unfiltered `100`): dealt 1% of the rays, each carrying far more energy than the rest, that
+> entry's contribution converges slowest and its halo comes out grainy.
+>
+> `"adaptive"` separates the two knobs. When the scene is committed for rendering, a pilot
+> pass traces the scene on the CPU (a few hundred thousand rays, doubled up to three times
+> until each entry's estimate settles; it blocks the commit for a few seconds at most) and tallies each
+> entry's per-ray energy. From that tally each entry is given a sampling share
+> `q_i ∝ p_i·√E[e²_i]`, floored at `0.01/K` of a uniform deal (K = the number of entries with
+> `proportion > 0`) so no live entry is ever starved; an entry with `proportion: 0` stays at
+> zero. Rays are then dealt by `q_i`, and every ray born into entry *i* has its weight
+> multiplied by `(p_i/ΣP)/(q_i/ΣQ)` — the image's expectation is exactly what `proportion`
+> says, and only the noise distribution changes. The pilot is re-run only when something its
+> tally can depend on changes (crystals, filters, proportions, light source, …); editing
+> `ray_num` alone reuses the previous shares. It is also a *render*-commit step only: a raypath
+> analysis session (`doc/raypath-analysis-panel.md` §10) never runs it and always deals by
+> `proportion`. A misspelled value is not an error — the loader warns
+> (`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`) and
+> behaves as if the key were absent, which is the safe default but also the noisy image the
+> author was trying to leave, so check the log. The mode is a document setting with no GUI
+> control today; the engine-side owners are `ResolveLayerRayAllocation` (the one place that
+> decides whether a layer deals by `p` or by `q`) and `ComputeAdaptiveRayAllocationWeights`
+> (the Neyman formula and its floor), both in `src/core/simulator.hpp`.
 
 #### light_source (Light Source Configuration)
 

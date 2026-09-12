@@ -572,14 +572,18 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
 
 ## 10. 与光线分配策略变化的交互面
 
-若未来光线分配从「按晶体种群比例均分光线数」改为按某种重要性权重自适应调整（每条光线额外乘一个
-权重校正因子，使期望能量不变），有四点会影响本面板，改动前应先核实：
+`scene.ray_allocation`（`doc/configuration.md`「scene」节）现在提供两种分配策略：默认的
+`"proportional"` 按晶体种群比例（`proportion`）均分光线数；`"adaptive"` 在渲染提交时跑一段 CPU
+pilot，按 Neyman 重要性权重 `q_i ∝ p_i·√E[e²]` 重新分配各条目的光线数，并给每条光线乘一个权重
+校正因子 `(p_i/ΣP)/(q_i/ΣQ)`，使期望能量不变、只有方差移动（`ResolveLayerRayAllocation` /
+`ComputeAdaptiveRayAllocationWeights`，`src/core/simulator.hpp`）。它与本面板的交互面有四点：
 
 1. **计数列语义**：GUI「Rays」列与 `LUMICE_RaypathHistogramEntry::count` 是**样本数**（命中
    次数），不是能量。`RaypathHistogramConsumer` 的能量累加 Σ(Y·w)（见 §3.3）对权重校正无偏——w
-   已经是校正后的光线权重——但同一条链的「样本数」会随分配策略系统性变化：一条链若所在晶体被
-   分配到更少的光线，即使它汇报的能量占比不变，样本数也会更少，GUI「+/-」列（相对统计噪声 =
-   1/√count）会随之显著上升。这是分配策略变化的正常影响，不是回归。
+   已经是校正后的光线权重——但同一条链的「样本数」会随分配策略系统性变化：当
+   `ray_allocation: "adaptive"` 让一条链所在的晶体分配到更少的光线，即使它汇报的能量占比不变，
+   样本数也会更少，GUI「+/-」列（相对统计噪声 = 1/√count）会随之显著上升；反之被分到更多光线的
+   晶体，其链的「Rays」上升、「+/-」下降。这是分配策略变化的正常影响，不是回归。
 2. **无早停可依赖**：§2 第 3 条与 §3.4 已记录，v4.34 起三档 ROI 都不再有「到达某计数即停」的
    机制——分配策略的任何变化都不会影响分析「什么时候停」，只影响停下之后各行的相对样本数与噪声。
 3. **与有界记录（§3.6）的交互**：分配策略若让原本命中率极低的链获得系统性更多样本，这些链会
@@ -587,9 +591,21 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
    采样份额被压得更低，它名下的链更可能连一次命中都拿不到，从而根本不出现在 finest 记录里——
    这与「记录满被截断进 `other`」是两种不同的缺失（前者是 `other` 桶，后者是完全不可见，两者
    都不会体现在 `error_bound` 里）。
-4. **分析会话独立提交（§2 第 3 条 v4.36 更新）**：分析提交的是**当前文档自己的 scene**，与渲染
-   提交共用同一个编码器（`BuildCommitSceneOrWarn`）——任何写进 config/scene 的分配策略字段都会
-   同样应用于分析会话，不需要为分析单独接线；分析与渲染在这一层没有分叉。
+4. **分析会话独立提交（§2 第 3 条 v4.36 更新）——但 `adaptive` 在这条路径上不生效，这是有意的
+   设计边界**：分析提交的是**当前文档自己的 scene**，与渲染提交共用同一个编码器
+   （`BuildCommitSceneOrWarn`），编码器层面没有分叉：GUI 今天没有 `ray_allocation` 这个字段
+   （一期不暴露，导入的 JSON 里带它也不会进文档），所以经 GUI 提交的两条路径都不带它；经 C API
+   直接递 JSON scene 的调用者，两条路径都会原样带上它。分叉在下一层：pilot——唯一把 `q_i` 写进
+   `ScatteringSetting::crystal_ray_alloc_weight_` 的步骤——只在
+   `CommitConfig`（渲染提交）里运行（`src/server/server.cpp`，`ServerImpl::CommitConfig` 中
+   `Simulator::RunRayAllocationPilot` 的唯一调用点）；`StartRaypathAnalysis` **不会**运行它。于是
+   分析会话的每一层都因为存在未交付（哨兵值 `-1`）的权重而被 `ResolveLayerRayAllocation` 判为
+   按 `p` 分配，校正因子恒为 1.0——与 `"proportional"` 逐位等价，并且这一回退**不打日志**。理由
+   （`server.cpp` 该处注释原文的意思）：分析会话不产出图像，而降低图像方差是 `adaptive` 存在的
+   唯一理由，对分析会话不成立。因此，上面第 1 点与第 3 点描述的样本数迁移只在**渲染**会话里
+   发生；同一份 `"adaptive"` 文档的分析面板看到的仍然是按 `proportion` 分配下的计数，与渲染
+   预览的噪声形态可能不一致——这不是分叉缺陷，而是两条提交路径对同一字段的既定分工。若将来
+   要让分析会话也按 `q` 分配，改的是 `StartRaypathAnalysis` 是否调用 pilot，而不是编码器。
 
 ### 10.1 固定 seed 下分析结果的可复现性（2026-09-12，`Simulator::Run()` 入口重播 `rng_`）
 
