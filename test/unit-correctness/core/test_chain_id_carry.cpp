@@ -620,8 +620,13 @@ TEST(ChainIdFold, SymmetryReducesSegmentToTheFilterCanonicalForm) {
   // Control: kSymNone keeps them apart.
   ChainIdInterningTable raw_table;
   auto raw_ctx = MakeChainIdLayerContext(raw_table, crystal, 1, axis, FilterConfig::kSymNone);
-  EXPECT_NE(InternRayChainId(raw_ctx, buf, 0), InternRayChainId(raw_ctx, buf, 1));
-  EXPECT_EQ(raw_table.EntryAt(1).segment, path_a);
+  // Two statements, not two arguments of one EXPECT: the ids are handed out in interning order,
+  // and the order in which a call's arguments are evaluated is unspecified (GCC on x86_64 went
+  // right to left and interned path_b first, so EntryAt(1) held path_b there).
+  const uint32_t raw_a = InternRayChainId(raw_ctx, buf, 0);
+  const uint32_t raw_b = InternRayChainId(raw_ctx, buf, 1);
+  EXPECT_NE(raw_a, raw_b);
+  EXPECT_EQ(raw_table.EntryAt(raw_a).segment, path_a);
 }
 
 // ===========================================================================
