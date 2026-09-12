@@ -578,14 +578,18 @@ class Server {
    *            AcquireResultFrame() (the run then reads as kIdle, not kCompleted).
    *          The result is read through AcquireResultFrame():
    *          ResultFrame::raypath_histogram_result_.
+   * @param scene_json The document to analyse, in the same JSON grammar CommitConfig takes
+   *        (crystal / filter / scene / render). Parsed before anything is stopped: a document
+   *        this call rejects changes nothing.
+   * @param request The ROI and the ray budget.
    * @return Error::ServerError when a RENDER run is in progress (GetSimLifecycle() ==
    *         kRunning in a render session): AC1 of the analysis run — the caller must Stop()
    *         first or wait for the render to complete; this call never interrupts it silently.
    *         Calling it while an ANALYSIS run is in progress is allowed and restarts the
-   *         analysis with the new request. Error::InvalidConfig when nothing has been
-   *         committed yet (there is no scene to trace).
+   *         analysis with the new request and scene. A rejected `scene_json` returns what
+   *         CommitConfig would return for it — MissingField / InvalidJson / InvalidConfig.
    */
-  Error StartRaypathAnalysis(const RaypathAnalysisRequest& request);
+  Error StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request);
 
   /**
    * @brief The trace backend this server's Simulator ACTUALLY runs on, as opposed to the

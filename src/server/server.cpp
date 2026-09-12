@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -75,8 +76,9 @@ class ServerImpl {
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
   // The analysis run (see Server::StartRaypathAnalysis for the contract). Same
-  // Stop → rebuild consumers → Start shape as CommitConfig, on the committed scene.
-  Error StartRaypathAnalysis(const RaypathAnalysisRequest& request);
+  // Stop → rebuild consumers → Start shape as CommitConfig, on the scene `scene_json`
+  // carries — its own submission, not the last render commit's.
+  Error StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request);
   // See Server::GetActiveBackend. Structural kCpu in an analysis session; the
   // Simulator's own published answer otherwise.
   BackendKind GetActiveBackend() const;
@@ -155,6 +157,25 @@ class ServerImpl {
   }
 
  private:
+  // The one owner of "a JSON document becomes a ConfigManager, or a return code". Both
+  // submission entry points — CommitConfig (a render) and StartRaypathAnalysis (an analysis)
+  // — parse through here, so the four failure shapes map onto the Error vocabulary in exactly
+  // one place: nlohmann::json::out_of_range → MissingField, any other json exception →
+  // InvalidJson, std::exception → InvalidConfig, anything else → InvalidConfig. `validate`
+  // runs inside the same try on the parsed document (CommitConfig builds its colour tables
+  // there, which throw std::invalid_argument on a config error); nullptr for no extra step.
+  // On failure `*out` is untouched — the parse lands in a local first and is only moved into
+  // `out` once every step has passed — and so is every other member, status_ included: a
+  // rejected document is a return code, not a state. (CommitConfig used to write
+  // status_ = kError here. No projection ever read that value as anything but "not running",
+  // and while a session's workers were still tracing it made GetSimLifecycle report the run
+  // as over until the next Stop()/Start() rewrote it — a lie about a live run, and one the
+  // analysis path now reaches on purpose: a rejected scene over an analysis in flight must
+  // leave that analysis readable as in flight.) `caller` prefixes the log line so the two
+  // entry points stay distinguishable in a log.
+  Error ParseConfigManager(const nlohmann::json& config_json, const char* caller,
+                           const std::function<void(const ConfigManager&)>& validate, ConfigManager* out);
+
   // task-268.7: single-engine orchestration — server now runs exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
   // along with the 12-worker queue-per-Simulator pattern; num_workers is reserved
@@ -342,27 +363,38 @@ class ServerImpl {
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
-  // Active scene and generation counter for batch staleness detection
+  // Active scene and generation counter for batch staleness detection. The scene the
+  // workers trace is the most recent SUBMISSION, whichever kind: CommitConfig (a render)
+  // and StartRaypathAnalysis (an analysis) both bind it, under scene_mutex_, together with
+  // scene_generation_ and committed_epoch_ below. GenerateScene reads it without asking
+  // which kind bound it — that is the point, an analysis traces the document it was handed —
+  // so nothing may read this field as "the last RENDER's scene"; config_manager_ is that.
   std::shared_ptr<const SceneConfig> active_scene_;
   // Snapshot of renderers paired with active_scene_ (task 252.3, TraceBackend seam).
   // Set in CommitConfig under scene_mutex_ in lockstep with active_scene_, then
   // attached to every SimBatch emitted by GenerateScene. Stays nullptr if no
-  // CommitConfig has yet succeeded; consumers tolerate null.
+  // CommitConfig has yet succeeded; consumers tolerate null. An analysis submission
+  // binds it null too: it has no render output, and the forced CPU route reads no renderer.
   std::shared_ptr<const std::vector<RenderConfig>> active_renders_;
   // Design 2 (task-engine-redirect-design2): snapshot of raypath_color paired
   // with active_scene_ / active_renders_. Updated inside the same scene_mutex_
   // critical section so a concurrent CommitConfig cannot tear the
   // (scene, renders, raypath_color) triple. Null → no color configured (AC3
-  // zero-cost path).
+  // zero-cost path). An analysis submission binds it null as well, and not as an
+  // economy: the simulator builds the colour gate table from (raypath_color, scene) on
+  // every batch, and a colour config left over from the last render can name a crystal
+  // the analysis's scene does not have — that is a throw on a worker thread.
   std::shared_ptr<const RaypathColorConfig> active_raypath_color_;
   std::atomic<uint64_t> scene_generation_{ 0 };
   // Published lifecycle epoch (the backend-owned truth authority). Distinct from
   // scene_generation_ (an internal batch-staleness key): keeping them separate
   // keeps the externally-published epoch from being polluted by batch-scheduling
-  // details. ++ inside CommitConfig's scene_mutex_ critical section (next to
-  // scene_generation_) on the accumulator-reset action — every successful commit
-  // is reset-causing today, so every success ++s. A future "continue-same-config"
-  // path (append rays without reset) must skip this ++. See plan §2 decision 3.
+  // details. ++ inside the scene_mutex_ critical section (next to scene_generation_)
+  // of BOTH submission entry points — CommitConfig and StartRaypathAnalysis — on the
+  // accumulator-reset action: every successful submission is reset-causing today, so
+  // every success ++s, and an analysis is a submission of its own scene, not a re-run of
+  // the last render's. A future "continue-same-config" path (append rays without reset)
+  // must skip this ++. See plan §2 decision 3.
   std::atomic<uint64_t> committed_epoch_{ 0 };
   // Highest epoch whose data the CONSUMER has fully drained. Read
   // via DrainedEpoch() / LUMICE_GetDrainStatus; "current epoch is drained" is
@@ -820,6 +852,31 @@ void WarnLowContrastHeadroom(Logger& logger, const std::map<IdType, RenderConfig
 
 }  // namespace
 
+Error ServerImpl::ParseConfigManager(const nlohmann::json& config_json, const char* caller,
+                                     const std::function<void(const ConfigManager&)>& validate, ConfigManager* out) {
+  ConfigManager parsed;
+  try {
+    parsed = config_json.get<ConfigManager>();
+    if (validate) {
+      validate(parsed);
+    }
+  } catch (const nlohmann::json::out_of_range& e) {
+    ILOG_ERROR(logger_, "{}: Missing field: {}", caller, e.what());
+    return Error::MissingField(e.what());
+  } catch (const nlohmann::json::exception& e) {
+    ILOG_ERROR(logger_, "{}: JSON parsing error: {}", caller, e.what());
+    return Error::InvalidJson(e.what());
+  } catch (const std::exception& e) {
+    ILOG_ERROR(logger_, "{}: Configuration error: {}", caller, e.what());
+    return Error::InvalidConfig(e.what());
+  } catch (...) {
+    ILOG_ERROR(logger_, "{}: Unknown error", caller);
+    return Error::InvalidConfig("Unknown configuration error");
+  }
+  *out = std::move(parsed);
+  return Error::Success();
+}
+
 Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reused) {
   auto commit_start = std::chrono::steady_clock::now();
   ILOG_DEBUG(logger_, "CommitConfig: entry");
@@ -836,24 +893,24 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
   // Parse into a temporary first so that a parse failure leaves the running server untouched.
   ConfigManager new_config;
-  // task-339.3: runtime color-class table (default = empty → no raypath_color,
-  // pre-336 behavior bit-for-bit). Declared outside the try so it survives to
+  // Runtime color-class table (default = empty → no raypath_color, the pre-colour
+  // behavior bit-for-bit). Declared outside the parse so it survives to
   // the reuse-judgment / consumer construction below.
   ColorClassTable class_table;
-  // task-339.4: the parsed composite mode. Declared outside the try so it
+  // The parsed composite mode. Declared outside the parse so it
   // survives to the member assignment below, mirroring class_table.
   CompositeMode composite_mode = CompositeMode::kDominant;
-  try {
-    new_config = config_json.get<ConfigManager>();
-    // task-339.2/339.3/339.4: color-class schema build path. BuildColorClassTable
-    // resolves id → ci (setting_[] slot) using new_config.scene_ and may throw
-    // std::invalid_argument on any config error (unknown combine, missing
-    // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
-    // combine:"all" ban) — that lands in the std::exception catch below →
-    // Error::InvalidConfig. class_table feeds directly into the RenderConsumer
-    // (per-class Y-lane accumulation) and into the compositor
-    // (CompositeColorClassesLinear); no legacy per-bit adapter layer.
-    ColorGateTable color_gate_table = BuildColorGateTable(new_config.raypath_color_, new_config.scene_);
+  // The render's own validation step, run inside ParseConfigManager's try on the parsed
+  // document so its throws map onto the same Error vocabulary as the parse itself.
+  // Color-class schema build path. BuildColorClassTable
+  // resolves id → ci (setting_[] slot) using the scene and may throw
+  // std::invalid_argument on any config error (unknown combine, missing
+  // (crystal,filter) pair, degenerate duplicate, out-of-range summand,
+  // combine:"all" ban) — that lands in the std::exception catch → Error::InvalidConfig.
+  // class_table feeds directly into the RenderConsumer (per-class Y-lane accumulation)
+  // and into the compositor (CompositeColorClassesLinear); no legacy per-bit adapter layer.
+  const auto build_colour_tables = [this, &class_table, &composite_mode](const ConfigManager& parsed) {
+    ColorGateTable color_gate_table = BuildColorGateTable(parsed.raypath_color_, parsed.scene_);
     // task-gui-feedback-affordances Step 5 (AC1): carry the component-bit
     // overflow count (predicates that hit `kNoBit`) out so the GUI DoRun path
     // can surface a "coloring degraded" modal via LUMICE_GetColorOverflowInfo.
@@ -870,36 +927,11 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     last_color_symmetry_group_overflow_.store(0, std::memory_order_release);
     last_color_or_summand_overflow_.store(0, std::memory_order_release);
     last_color_class_overflow_.store(0, std::memory_order_release);
-    class_table = BuildColorClassTable(new_config.raypath_color_, new_config.scene_, color_gate_table);
-    composite_mode = ParseCompositeMode(new_config.raypath_color_.mode_);
-  } catch (const nlohmann::json::out_of_range& e) {
-    ILOG_ERROR(logger_, "CommitConfig: Missing field: {}", e.what());
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::MissingField(e.what());
-  } catch (const nlohmann::json::exception& e) {
-    ILOG_ERROR(logger_, "CommitConfig: JSON parsing error: {}", e.what());
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::InvalidJson(e.what());
-  } catch (const std::exception& e) {
-    ILOG_ERROR(logger_, "CommitConfig: Configuration error: {}", e.what());
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::InvalidConfig(e.what());
-  } catch (...) {
-    ILOG_ERROR(logger_, "CommitConfig: Unknown error");
-    {
-      std::lock_guard<std::mutex> lock(status_mutex_);
-      status_ = ServerStatus::kError;
-    }
-    return Error::InvalidConfig("Unknown configuration error");
+    class_table = BuildColorClassTable(parsed.raypath_color_, parsed.scene_, color_gate_table);
+    composite_mode = ParseCompositeMode(parsed.raypath_color_.mode_);
+  };
+  if (const Error err = ParseConfigManager(config_json, "CommitConfig", build_colour_tables, &new_config)) {
+    return err;
   }
 
   // The one rule of doc/print-mode-subtractive-ink.md §7, applied to the config that is about to
@@ -1071,43 +1103,44 @@ void ServerImpl::PublishEmptyFrame() {
   StorePublished(std::move(empty));
 }
 
-// The analysis run. Same lifecycle as a render commit — Stop, swap the consumer set,
-// Start — on the scene the last CommitConfig left in config_manager_. What makes it an
-// analysis session is three per-Simulator properties (chain ids on, CPU forced) plus
-// mode_, which GenerateScene / ConsumeData / the two entry guards read. Everything
-// else — queues, threads, epoch, the drain signal, AcquireResultFrame — is the one
-// lifecycle this server has, unchanged.
-Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
+// The analysis run. Same lifecycle as a render commit — parse, Stop, swap the consumer
+// set, bind the scene, Start — on the scene `scene_json` carries: the analysis is a
+// submission of its own document, not a re-run of whatever the last CommitConfig left in
+// config_manager_ (which it never touches — the next render commit still judges consumer
+// reuse against the last RENDER). What makes it an analysis session is three per-Simulator
+// properties (chain ids on, CPU forced) plus mode_, which GenerateScene / ConsumeData / the
+// two entry guards read. Everything else — queues, threads, epoch, the drain signal,
+// AcquireResultFrame — is the one lifecycle this server has, unchanged.
+Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request) {
   ILOG_DEBUG(logger_, "StartRaypathAnalysis: entry");
 
   // Mutual exclusion with the render run, this direction. Deliberately NOT "Stop the
   // render and go ahead": a caller that wants that says so by calling Stop() first. A
   // running ANALYSIS is not refused — the same call with a new ROI restarts it, which is
-  // how a caller changes the cone without a Stop() round-trip.
+  // how a caller changes the cone without a Stop() round-trip. Checked before the parse so
+  // a rejected request leaves the server untouched, as CommitConfig's guard does.
   if (mode_.load(std::memory_order_acquire) == SessionMode::kRender && GetSimLifecycle() == SimLifecycle::kRunning) {
     ILOG_WARN(logger_, "StartRaypathAnalysis: rejected — a render run is in progress; Stop() it first");
     return Error::ServerError("render run in progress; stop it before starting analysis");
   }
-  // The one check the consumer cannot make for us: is there a scene at all? Every
-  // successful CommitConfig bumps committed_epoch_ under scene_mutex_ alongside
-  // active_scene_, so "epoch 0" is "nothing committed". ROI validation (zero centre,
-  // non-positive radius, ring count < 1) is the consumer constructor's, and it degrades
-  // with a log line rather than failing — the request still names a well-defined ROI.
-  if (committed_epoch_.load(std::memory_order_acquire) == 0) {
-    ILOG_ERROR(logger_, "StartRaypathAnalysis: no scene committed");
-    return Error::InvalidConfig("no scene committed; commit a config before starting analysis");
-  }
 
-  // The scene facts the read-time reduction needs, captured from the scene this run will
-  // trace: the same active_scene_ GenerateScene reads, under the same lock. Taken before
-  // Stop() only so the lock order here matches every other reader's (scene_mutex_ alone).
-  RaypathReduceContext reduce_ctx;
-  {
-    std::lock_guard<std::mutex> lock(scene_mutex_);
-    if (active_scene_) {
-      reduce_ctx = BuildRaypathReduceContext(*active_scene_);
-    }
+  // The scene this run traces, parsed into a local so that a rejected document changes
+  // nothing — not the session in flight, not the scene the workers hold. The full
+  // ConfigManager, not just its scene section, through the same owner CommitConfig parses
+  // with: one grammar, one error mapping. No colour tables and none of the render's output
+  // diagnostics (print-mode, contrast headroom): an analysis has no render output for them
+  // to be about. ROI validation (zero centre, non-positive radius, ring count < 1) is the
+  // consumer constructor's, and it degrades with a log line rather than failing — the
+  // request still names a well-defined ROI.
+  ConfigManager new_config;
+  if (const Error err = ParseConfigManager(scene_json, "StartRaypathAnalysis", nullptr, &new_config)) {
+    return err;
   }
+  // The scene facts the read-time reduction needs, from the scene this run will trace — the
+  // one bound below, which GenerateScene reads. Not from active_scene_: that is the previous
+  // submission's until the bind, and a reduce context for a different scene than the one
+  // traced would canonicalise chains by the wrong crystals' D parameters.
+  RaypathReduceContext reduce_ctx = BuildRaypathReduceContext(new_config.scene_);
 
   Stop();
   mode_.store(SessionMode::kAnalysis, std::memory_order_release);
@@ -1147,11 +1180,22 @@ Error ServerImpl::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
             "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified); roi_mode={} (chains recorded "
             "unreduced; symmetry is applied when the result is read)",
             static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), static_cast<int>(request.roi_.mode_));
-  // The scene is unchanged, so scene_generation_ / committed_epoch_ / active_scene_ stay as
-  // the last commit left them: GenerateScene will trace the same scene, and the batches it
-  // queues carry the current generation. NOT bumping the epoch is deliberate — the epoch
-  // names the committed CONFIG (an accumulator-reset key readers compare against), and
-  // that has not changed; a reader's "is this the frame of my commit" test keeps its answer.
+  // Bind the scene this session traces — the same three writes, under the same lock, on
+  // the same reset action as CommitConfig's bind (see the fields' declarations for why an
+  // analysis advances the epoch: it is a submission of its own scene, and a reader's "is
+  // this the frame of my commit" test must say no to an analysis frame). Stop() above has
+  // drained every worker, so no in-flight batch reads a half-updated triple, and
+  // PublishDrainedEpochIfSettled's invariant (the epoch only moves past a drained one)
+  // holds for the same reason it does in CommitConfig. renders and raypath_color are bound
+  // null on purpose — their declarations say why.
+  {
+    std::lock_guard<std::mutex> lock(scene_mutex_);
+    active_scene_ = std::make_shared<const SceneConfig>(new_config.scene_);
+    active_renders_.reset();
+    active_raypath_color_.reset();
+    scene_generation_.fetch_add(1);
+    committed_epoch_.fetch_add(1, std::memory_order_release);
+  }
   Start();
   return Error::Success();
 }
@@ -2419,11 +2463,11 @@ Error Server::CommitConfig(const std::string& config_str) {
   }
 }
 
-Error Server::StartRaypathAnalysis(const RaypathAnalysisRequest& request) {
+Error Server::StartRaypathAnalysis(const nlohmann::json& scene_json, const RaypathAnalysisRequest& request) {
   if (!impl_) {
     return Error::ServerNotReady();
   }
-  return impl_->StartRaypathAnalysis(request);
+  return impl_->StartRaypathAnalysis(scene_json, request);
 }
 
 BackendKind Server::GetActiveBackend() const {

@@ -3886,8 +3886,9 @@ bool AnnotationViewEnumsValid(const LUMICE_AnnotationView& v) {
 }  // namespace
 
 
-LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request) {
-  if (!server || !request) {
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                             const LUMICE_RaypathAnalysisRequest* request) {
+  if (!server || !scene || !request) {
     return LUMICE_ERR_NULL_ARG;
   }
   ns::RaypathAnalysisRequest req;
@@ -3937,7 +3938,9 @@ LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE
   } else {
     return LUMICE_ERR_INVALID_VALUE;
   }
-  const ns::Error err = server->server_->StartRaypathAnalysis(req);
+  // The same document LUMICE_CommitScene hands the server (scene->root): the two entry
+  // points share one grammar and one parser, so a scene that commits analyses, and vice versa.
+  const ns::Error err = server->server_->StartRaypathAnalysis(scene->root, req);
   return MapErrorCode(err.code);
 }
 

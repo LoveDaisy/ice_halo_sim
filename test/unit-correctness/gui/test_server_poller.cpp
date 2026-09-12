@@ -886,16 +886,20 @@ TEST(ServerPollerAnalysis, MaterializesOncePerGenerationCarriesForwardAndFencesO
   DetachGlobals();
   LiveServer srv;
   ASSERT_TRUE(srv.Run(kHaloJson));
-  // A completed render is the state an analysis starts from (the C API refuses over a live one).
+  // A completed render is the state the app analyses from (the C API refuses over a live one);
+  // the analysis is then a submission of its own, handed the same scene.
   LUMICE_StopServer(srv);
   LUMICE_RaypathAnalysisRequest req{};
   req.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
   req.infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT;  // the scene's 40000, not zero rays
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(srv, &req), LUMICE_OK);
-  // Not WaitForDrained alone: an analysis keeps the render's epoch (server.cpp — same scene, same
-  // epoch), so "drained_epoch == epoch" is already true from the render that just completed and
-  // would return before a single analysis batch landed. The lifecycle leaving RUNNING is the
-  // analysis's own edge.
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(kHaloJson, &scene), LUMICE_OK);
+  const LUMICE_ErrorCode started = LUMICE_StartRaypathAnalysis(srv, scene, &req);
+  LUMICE_SceneDestroy(scene);
+  ASSERT_EQ(started, LUMICE_OK);
+  // The lifecycle leaving RUNNING is the analysis's own edge; the drain below is the second half
+  // of "the numbers are final". (The analysis mints an epoch of its own — v4.36 — so the drain
+  // alone would also do now; the two-step wait is kept because it names the edge being waited on.)
   ASSERT_TRUE(WaitFor(
       [&srv] {
         LUMICE_SimLifecycleResult lc{};

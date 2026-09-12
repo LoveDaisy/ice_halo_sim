@@ -344,7 +344,17 @@ extern "C" {
 // and the largest `error_bound` over the frame's rows (0 = no eviction happened, the record
 // is exact). Nothing is removed or reordered; a run that never overflows either bound reads
 // exactly as it did in v4.34, with the four new fields 0.
-#define LUMICE_API_VERSION 435
+//
+// BREAKING (v4.36): LUMICE_StartRaypathAnalysis takes the scene to analyse, as a LUMICE_Scene
+// between `server` and `request` — the same handle LUMICE_CommitScene takes — and needs no
+// LUMICE_CommitScene before it. Recompile: a v4.35 caller's `request` pointer would be read as the
+// scene. Semantics: the analysis is a submission of its own document. It advances the lifecycle
+// epoch as a commit does, so a frame of it is never mistaken for the last render's; it does not
+// touch the render's committed config, so the LUMICE_CommitScene after it judges consumer reuse
+// against the last render, exactly as it would have with no analysis in between. The
+// "no scene committed" rejection (LUMICE_ERR_INVALID_CONFIG) is gone with the requirement; a
+// scene the server cannot use is rejected with the code LUMICE_CommitScene would give it.
+#define LUMICE_API_VERSION 436
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1954,20 +1964,29 @@ LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float
 // structure in, one result kind out of the same LUMICE_ResultFrame.
 //
 // Lifecycle, stated once here:
-//   1. LUMICE_CommitScene the scene to analyse (that starts a render run, as it always does).
-//   2. LUMICE_StopServer, or wait for the render to complete — an analysis cannot start over a
-//      render in progress (LUMICE_ERR_SERVER), and a render commit cannot start over an
-//      analysis in progress (LUMICE_ERR_SERVER). Neither silently interrupts the other.
-//   3. LUMICE_StartRaypathAnalysis with a request. The run traces the committed scene on the
-//      CPU (see below), to the scene's ray_num budget — an "infinite" budget runs until
+//   1. Build the scene to analyse — LUMICE_SceneFromJson / _FromJsonFile, or the ConfigScratch
+//      route — exactly as for LUMICE_CommitScene. No commit is needed first (v4.36): the
+//      analysis is a submission of its own, and a server that has never committed anything
+//      analyses just the same.
+//   2. If a render is in progress, LUMICE_StopServer or wait for it to complete — an analysis
+//      cannot start over a render in progress (LUMICE_ERR_SERVER), and a render commit cannot
+//      start over an analysis in progress (LUMICE_ERR_SERVER). Neither silently interrupts the
+//      other.
+//   3. LUMICE_StartRaypathAnalysis with the scene and a request. The run traces that scene on
+//      the CPU (see below), to the scene's ray_num budget — an "infinite" budget runs until
 //      LUMICE_StopServer, exactly as a render would — or, for a cone ROI with a stop target,
-//      until that many rays have landed in the cone, whichever comes first.
+//      until that many rays have landed in the cone, whichever comes first. The scene is read
+//      at the call and deep-copied; the handle stays the caller's, as with LUMICE_CommitScene.
 //   4. Poll LUMICE_GetSimLifecycle / LUMICE_GetDrainStatus as for a render; read the result
 //      through LUMICE_AcquireResultFrame + LUMICE_FrameGetRaypathAnalysisInfo /
 //      LUMICE_FrameGetRaypathAnalysis. Partial results are readable while the run is in
-//      progress, like a render's, and are final once the epoch reports drained.
+//      progress, like a render's, and are final once the epoch reports drained. The run
+//      advances the lifecycle epoch like a commit does: it is a submission, and a frame of it
+//      is never mistaken for the last render's.
 //   5. The next LUMICE_CommitScene is a render run again: the analysis-session properties
-//      below are withdrawn, and its frames carry no histogram.
+//      below are withdrawn, and its frames carry no histogram. What the analysis submitted
+//      does not carry over into it — a commit after an analysis behaves exactly as a commit
+//      after the previous commit would have.
 //
 // CPU, always. The chain ids the histogram is built from exist on the legacy CPU path only
 // (v1 — doc/raypath-analysis-panel.md §2 ruling 1), so the analysis run forces that route
@@ -2130,14 +2149,18 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
   double max_row_error;
 } LUMICE_RaypathAnalysisInfo;
 
-// Start an analysis run on the committed scene (lifecycle above). Returns LUMICE_ERR_NULL_ARG for a
-// NULL server / request; LUMICE_ERR_INVALID_VALUE for an unknown roi_mode, a CONE request with a
-// non-positive radius, a zero centre, a ring count outside 1..LUMICE_MAX_RAYPATH_CONE_RINGS, an
-// IN_FRAME request whose frame_view has an unknown lens_type / visible, or an `infinite` outside
-// its three spellings; LUMICE_ERR_INVALID_CONFIG when no scene has been committed;
-// LUMICE_ERR_SERVER when a render run is in progress (AC1 — stop it first). Calling it while an
-// ANALYSIS run is in progress restarts the analysis with the new request.
-LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request);
+// Start an analysis run on `scene` (lifecycle above; v4.36 — the scene is the call's own, no
+// prior LUMICE_CommitScene is needed). Returns LUMICE_ERR_NULL_ARG for a NULL server / scene /
+// request; LUMICE_ERR_INVALID_VALUE for an unknown roi_mode, a CONE request with a non-positive
+// radius, a zero centre, a ring count outside 1..LUMICE_MAX_RAYPATH_CONE_RINGS, an IN_FRAME
+// request whose frame_view has an unknown lens_type / visible, or an `infinite` outside its three
+// spellings; for a scene the server cannot use, what LUMICE_CommitScene returns for the same scene
+// (LUMICE_ERR_MISSING_FIELD / LUMICE_ERR_INVALID_JSON / LUMICE_ERR_INVALID_CONFIG), with nothing
+// stopped or replaced; LUMICE_ERR_SERVER when a render run is in progress (AC1 — stop it first).
+// Calling it while an ANALYSIS run is in progress restarts the analysis with the new scene and
+// request.
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                             const LUMICE_RaypathAnalysisRequest* request);
 
 // Frame-level view of the analysis result under `chain_id_symmetry` (a LUMICE_RAYPATH_SYMMETRY_*
 // bit set, 0..7). Every field but `entry_count` is independent of the symmetry; `entry_count` is

@@ -88,6 +88,19 @@ LUMICE_ErrorCode CommitJson(LUMICE_Server* server, const std::string& json) {
   return err;
 }
 
+// The analysis's twin of CommitJson (v4.36): the scene is the call's own, built and destroyed
+// around it exactly as the commit's is — LUMICE_StartRaypathAnalysis deep-copies what it needs.
+LUMICE_ErrorCode StartAnalysis(LUMICE_Server* server, const std::string& json,
+                               const LUMICE_RaypathAnalysisRequest* request) {
+  LUMICE_Scene* scene = nullptr;
+  if (auto err = LUMICE_SceneFromJson(json.c_str(), &scene); err != LUMICE_OK) {
+    return err;
+  }
+  const auto err = LUMICE_StartRaypathAnalysis(server, scene, request);
+  LUMICE_SceneDestroy(scene);
+  return err;
+}
+
 // The scene's own budget, as every request here asked for before the field existed (v4.32): a
 // zero-initialized `infinite` would be "0 rays", so the sentinel is set explicitly, as the header
 // says it must be.
@@ -178,54 +191,139 @@ class CApiRaypathAnalysis : public ::testing::Test {
 // ---------------------------------------------------------------------------
 TEST_F(CApiRaypathAnalysis, RequestValidation) {
   LUMICE_RaypathAnalysisRequest req = FullSky();
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(nullptr, &req), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, nullptr), LUMICE_ERR_NULL_ARG);
-
-  // Nothing committed yet: the request is fine, the server has no scene.
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_CONFIG);
+  const std::string halo = Halo22Json("1000");
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(halo.c_str(), &scene), LUMICE_OK);
+  EXPECT_EQ(LUMICE_StartRaypathAnalysis(nullptr, scene, &req), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, nullptr, &req), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, scene, nullptr), LUMICE_ERR_NULL_ARG);
+  LUMICE_SceneDestroy(scene);
 
   req.roi_mode = 7;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
 
-  // The ray budget's `infinite` has exactly three spellings (v4.32). The three legal ones reach the
-  // scene check (no scene committed -> INVALID_CONFIG, i.e. the request itself passed); the rest
-  // are rejected before it.
-  for (const int legal : { 0, 1, LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT }) {
-    req = FullSky();
-    req.infinite = legal;
-    EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_CONFIG) << "infinite = " << legal;
-  }
+  // The ray budget's `infinite` has exactly three spellings (v4.32); the rest are rejected
+  // before anything else is looked at. (The three legal ones each start a run in the cases
+  // below — RequestRayBudgetOverridesTheSceneAndTheSentinelKeepsIt and
+  // RequestInfiniteBudgetOutlivesAFiniteSceneUntilStopped — so they are not re-driven here.)
   for (const int illegal : { 2, -2, 0xFF }) {
     req = FullSky();
     req.infinite = illegal;
-    EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE) << "infinite = " << illegal;
+    EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE) << "infinite = " << illegal;
   }
 
   req = Cone();
   req.cone_radius_rad = 0.0f;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
   req = Cone();
   req.cone_center[2] = 0.0f;  // zero vector
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
   req = Cone();
   req.cone_ring_count = 0;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
   req = Cone();
   req.cone_ring_count = LUMICE_MAX_RAYPATH_CONE_RINGS + 1;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
 
   req = FullSky();
   req.roi_mode = LUMICE_RAYPATH_ROI_IN_FRAME;
   req.frame_view.width = 64;
   req.frame_view.height = 64;
   req.frame_view.lens_type = LUMICE_LENS_TYPE_GLOBE + 1;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
   req.frame_view.lens_type = LUMICE_LENS_TYPE_LINEAR;
   req.frame_view.visible = 3;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
   req.frame_view.visible = LUMICE_VISIBLE_FULL;
   req.frame_view.width = 0;
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(StartAnalysis(server_, halo, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(Lifecycle(server_), LUMICE_LIFECYCLE_IDLE) << "none of the rejections started anything";
+}
+
+// A scene the server cannot use is rejected with the code LUMICE_CommitScene gives it, after
+// the request's own validation, and with nothing stopped or replaced. LUMICE_SceneFromJson
+// validates what it parses, so the scene is built through the scratch route: a scattering
+// entry naming a crystal the scene does not have is a config error the server's parse
+// reports, not one the scene builder sees.
+TEST_F(CApiRaypathAnalysis, ARejectedSceneIsTheCommitsCodeAndChangesNothing) {
+  LUMICE_Scene* dangling = LUMICE_SceneCreate();
+  ASSERT_NE(dangling, nullptr);
+  ASSERT_EQ(LUMICE_SceneSetLightSource(dangling, 20.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.0f;
+  layer.entry_count = 1;
+  layer.entries[0].crystal_id = 99;
+  layer.entries[0].proportion = 10.0f;
+  layer.entries[0].filter_id = -1;
+  int layer_id = -1;
+  ASSERT_EQ(LUMICE_SceneAddScatterLayer(dangling, &layer, &layer_id), LUMICE_OK);
+
+  // Positive control for the code: the commit says the same.
+  EXPECT_EQ(LUMICE_CommitScene(server_, dangling, nullptr), LUMICE_ERR_INVALID_CONFIG);
+  LUMICE_RaypathAnalysisRequest req = FullSky();
+  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, dangling, &req), LUMICE_ERR_INVALID_CONFIG);
+  // The request is validated first: a bad request over a bad scene is the request's code.
+  req.roi_mode = 7;
+  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, dangling, &req), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(Lifecycle(server_), LUMICE_LIFECYCLE_IDLE);
+
+  // Over an analysis in flight: the rejection leaves it in flight, at its own epoch.
+  req = FullSky();
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("\"infinite\""), &req), LUMICE_OK);
+  ASSERT_TRUE(WaitForFirstRays(server_, 5000));
+  LUMICE_SimLifecycleResult before{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &before), LUMICE_OK);
+  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, dangling, &req), LUMICE_ERR_INVALID_CONFIG);
+  LUMICE_SimLifecycleResult after{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &after), LUMICE_OK);
+  EXPECT_EQ(after.lifecycle, LUMICE_LIFECYCLE_RUNNING) << "the analysis in flight was not stopped";
+  EXPECT_EQ(after.epoch, before.epoch) << "a rejected scene must not mint an epoch";
+  LUMICE_SceneDestroy(dangling);
+}
+
+// ---------------------------------------------------------------------------
+// AC4: the scene is the call's own. No LUMICE_CommitScene before the analysis; the commit
+// after it renders; and the render's own mutual exclusion is unchanged by the new argument
+// (RenderInProgressIsServerError below keeps that half).
+// ---------------------------------------------------------------------------
+TEST_F(CApiRaypathAnalysis, AnalysisNeedsNoPriorCommitAndTheCommitAfterItRenders) {
+  LUMICE_SimLifecycleResult lc{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  ASSERT_EQ(lc.epoch, 0u) << "positive control: nothing submitted yet";
+  const LUMICE_RaypathAnalysisRequest req = FullSky();
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &req), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.epoch, 1u) << "the analysis is a submission of its own: it minted the epoch";
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  EXPECT_EQ(ActiveBackend(server_), LUMICE_BACKEND_CPU);
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  LUMICE_RaypathAnalysisInfo info{};
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
+  EXPECT_EQ(info.present, 1);
+  ASSERT_GE(info.entry_count, 1);
+  std::vector<LUMICE_RaypathHistogramEntry> entries(static_cast<size_t>(info.entry_count) + 1);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, entries.data(), info.entry_count + 1), LUMICE_OK);
+  EXPECT_STREQ(entries[0].display, "3-5") << "the 22-degree path of the handed scene";
+  LUMICE_StatsResult stats{};
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(stats.sim_ray_num, 40000u) << "the handed scene's budget";
+  LUMICE_ReleaseResultFrame(frame);
+
+  // The commit after it is a render, on its own budget, with an image and no histogram.
+  ASSERT_EQ(CommitJson(server_, Halo22Json("2000")), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.epoch, 2u);
+  ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
+  EXPECT_EQ(info.present, 0) << "a render frame carries no histogram";
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(stats.sim_ray_num, 2000u);
+  LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_NE(renders[0].img_buffer, nullptr) << "the render's image";
+  LUMICE_ReleaseResultFrame(frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,12 +334,12 @@ TEST_F(CApiRaypathAnalysis, RenderInProgressIsServerError) {
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   ASSERT_EQ(Lifecycle(server_), LUMICE_LIFECYCLE_RUNNING);
   const LUMICE_RaypathAnalysisRequest req = FullSky();
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_ERR_SERVER);
+  EXPECT_EQ(StartAnalysis(server_, Halo22Json("\"infinite\""), &req), LUMICE_ERR_SERVER);
   EXPECT_EQ(Lifecycle(server_), LUMICE_LIFECYCLE_RUNNING) << "the render was not interrupted";
   EXPECT_EQ(ActiveBackend(server_), LUMICE_BACKEND_CPU);
 
   LUMICE_StopServer(server_);
-  EXPECT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  EXPECT_EQ(StartAnalysis(server_, Halo22Json("\"infinite\""), &req), LUMICE_OK);
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   EXPECT_EQ(ActiveBackend(server_), LUMICE_BACKEND_CPU);
   int fell_back = 1;
@@ -265,7 +363,7 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   ASSERT_EQ(CommitJson(server_, Halo22Json("40000")), LUMICE_OK);
   LUMICE_StopServer(server_);
   const LUMICE_RaypathAnalysisRequest req = FullSky();
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &req), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
 
   LUMICE_ResultFrame* frame = nullptr;
@@ -429,7 +527,7 @@ TEST_F(CApiRaypathAnalysis, InfoSnapshotGenerationIsStableWithinAFrameAndGrowsAc
   ASSERT_EQ(CommitJson(server_, Halo22Json("40000")), LUMICE_OK);
   LUMICE_StopServer(server_);
   const LUMICE_RaypathAnalysisRequest req = FullSky();
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &req), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
 
   LUMICE_ResultFrame* a = nullptr;
@@ -448,7 +546,7 @@ TEST_F(CApiRaypathAnalysis, InfoSnapshotGenerationIsStableWithinAFrameAndGrowsAc
 
   // A second analysis session publishes at least one further snapshot; whatever the count, the
   // counter it carries is past the one above.
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &req), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &a), LUMICE_OK);
   LUMICE_RaypathAnalysisInfo ic{};
@@ -474,7 +572,7 @@ TEST_F(CApiRaypathAnalysis, RequestRayBudgetOverridesTheSceneAndTheSentinelKeeps
   LUMICE_RaypathAnalysisRequest own = FullSky();
   own.infinite = 0;
   own.ray_num = 10000;
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &own), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &own), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   LUMICE_ResultFrame* frame = nullptr;
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
@@ -489,7 +587,7 @@ TEST_F(CApiRaypathAnalysis, RequestRayBudgetOverridesTheSceneAndTheSentinelKeeps
   // Same server, same scene, the sentinel: the scene's own 40000 — so the override did not
   // write itself into the scene, and a session without one does not inherit the last one.
   const LUMICE_RaypathAnalysisRequest scene_default = FullSky();
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &scene_default), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &scene_default), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
   ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
@@ -524,7 +622,7 @@ TEST_F(CApiRaypathAnalysis, RequestInfiniteBudgetOutlivesAFiniteSceneUntilStoppe
   req.cone_ring_count = 5;
   req.infinite = 1;
   req.ray_num = 7;  // ignored under infinite, and would be a smaller budget still if it were read
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("1000"), &req), LUMICE_OK);
   ASSERT_TRUE(WaitForRayCountAbove(server_, 1000, 30000)) << "an unlimited run must outlive the scene's 1000";
   LUMICE_StopServer(server_);
   EXPECT_EQ(Lifecycle(server_), LUMICE_LIFECYCLE_IDLE) << "a stop is a reset, not a completion";
@@ -564,7 +662,7 @@ TEST_F(CApiRaypathAnalysis, ConeEchoAndRings) {
   req.cone_ring_count = 5;
   req.infinite = 0;
   req.ray_num = 40000;
-  ASSERT_EQ(LUMICE_StartRaypathAnalysis(server_, &req), LUMICE_OK);
+  ASSERT_EQ(StartAnalysis(server_, Halo22Json("\"infinite\""), &req), LUMICE_OK);
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000)) << "the request's own budget must end the run";
 
   LUMICE_ResultFrame* frame = nullptr;

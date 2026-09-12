@@ -1,6 +1,9 @@
 // The analysis run as a lifecycle of the live Server (Server::StartRaypathAnalysis):
 // mutual exclusion with the render run in both directions, the forced CPU route, the
-// manual stop that keeps the accumulated result, and the result frame's histogram field.
+// manual stop that keeps the accumulated result, the result frame's histogram field, and
+// the scene being the call's own — an analysis needs no CommitConfig before it, traces the
+// document it is handed rather than the last render's, and a document it rejects changes
+// nothing.
 //
 // Driven through lumice::Server (the C++ surface the C API wraps 1:1) on the 22° halo
 // scene of test/e2e/configs/halo_22.json, with TWO workers on the CPU route — the first
@@ -144,7 +147,7 @@ TEST_F(ServerAnalysisRun, RenderInProgressRejectsAnalysis) {
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   ASSERT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning);
 
-  const Error err = server_.StartRaypathAnalysis(FullSkyRequest());
+  const Error err = server_.StartRaypathAnalysis(Halo22Config("infinite"), FullSkyRequest());
   EXPECT_EQ(err.code, ErrorCode::kServerError) << err.message;
   // The refusal changed nothing: the render is still the run in progress, and its frame is
   // still a render frame.
@@ -153,7 +156,7 @@ TEST_F(ServerAnalysisRun, RenderInProgressRejectsAnalysis) {
 
   server_.Stop();
   EXPECT_EQ(server_.GetSimLifecycle(), SimLifecycle::kIdle);
-  const Error ok = server_.StartRaypathAnalysis(FullSkyRequest());
+  const Error ok = server_.StartRaypathAnalysis(Halo22Config("infinite"), FullSkyRequest());
   EXPECT_FALSE(ok) << ok.message;
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   EXPECT_EQ(server_.GetActiveBackend(), BackendKind::kCpu);
@@ -167,8 +170,11 @@ TEST_F(ServerAnalysisRun, RenderInProgressRejectsAnalysis) {
 TEST_F(ServerAnalysisRun, AnalysisInProgressRejectsCommit) {
   ASSERT_FALSE(server_.CommitConfig(Halo22Config("infinite")));
   server_.Stop();
+  const uint64_t epoch_after_render = server_.CommittedEpoch();
+  ASSERT_FALSE(server_.StartRaypathAnalysis(Halo22Config("infinite"), FullSkyRequest()));
+  // The analysis is a submission: it minted an epoch of its own, past the render's.
   const uint64_t epoch_before = server_.CommittedEpoch();
-  ASSERT_FALSE(server_.StartRaypathAnalysis(FullSkyRequest()));
+  EXPECT_EQ(epoch_before, epoch_after_render + 1);
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   ASSERT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning);
 
@@ -200,7 +206,7 @@ TEST_F(ServerAnalysisRun, AnalysisInProgressRejectsCommit) {
 TEST_F(ServerAnalysisRun, AnalysisInProgressRestartsWithNewRoi) {
   ASSERT_FALSE(server_.CommitConfig(Halo22Config("infinite")));
   server_.Stop();
-  ASSERT_FALSE(server_.StartRaypathAnalysis(FullSkyRequest()));
+  ASSERT_FALSE(server_.StartRaypathAnalysis(Halo22Config("infinite"), FullSkyRequest()));
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   ASSERT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning);
 
@@ -208,7 +214,7 @@ TEST_F(ServerAnalysisRun, AnalysisInProgressRestartsWithNewRoi) {
   // on an unlimited scene.
   RaypathAnalysisRequest cone = ConeOnHaloRequest();
   cone.ray_num_ = 20000;
-  const Error ok = server_.StartRaypathAnalysis(cone);
+  const Error ok = server_.StartRaypathAnalysis(Halo22Config("infinite"), cone);
   EXPECT_FALSE(ok) << ok.message;
   ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
   auto frame = server_.AcquireResultFrame();
@@ -225,7 +231,7 @@ TEST_F(ServerAnalysisRun, AnalysisInProgressRestartsWithNewRoi) {
 TEST_F(ServerAnalysisRun, CommitThenStopThenAnalysisIsAccepted) {
   ASSERT_FALSE(server_.CommitConfig(Halo22Config(20000)));
   server_.Stop();
-  const Error ok = server_.StartRaypathAnalysis(FullSkyRequest());
+  const Error ok = server_.StartRaypathAnalysis(Halo22Config(20000), FullSkyRequest());
   EXPECT_FALSE(ok) << ok.message;
   ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
   auto frame = server_.AcquireResultFrame();
@@ -249,7 +255,7 @@ TEST_F(ServerAnalysisRun, FrameRightAfterASessionSwitchCarriesNoResidue) {
   const uint64_t generation = server_.AcquireResultFrame()->snapshot_generation_;
 
   server_.Stop();
-  ASSERT_FALSE(server_.StartRaypathAnalysis(FullSkyRequest()));
+  ASSERT_FALSE(server_.StartRaypathAnalysis(Halo22Config(20000), FullSkyRequest()));
   {
     auto frame = server_.AcquireResultFrame();
     EXPECT_TRUE(frame->render_results_.empty()) << "the render's image is gone from the analysis session";
@@ -267,11 +273,121 @@ TEST_F(ServerAnalysisRun, FrameRightAfterASessionSwitchCarriesNoResidue) {
   }
 }
 
-// Nothing committed yet: there is no scene to analyse.
-TEST_F(ServerAnalysisRun, AnalysisWithoutCommitIsInvalidConfig) {
-  const Error err = server_.StartRaypathAnalysis(FullSkyRequest());
-  EXPECT_EQ(err.code, ErrorCode::kInvalidConfig) << err.message;
-  EXPECT_EQ(server_.GetSimLifecycle(), SimLifecycle::kIdle);
+// ---------------------------------------------------------------------------
+// The scene is the call's own. Three propositions, each a case: no CommitConfig is needed
+// before an analysis; the analysis traces the scene it is handed, not the last render's;
+// and a scene it rejects leaves the server exactly as it was.
+// ---------------------------------------------------------------------------
+
+// A server that has never committed anything analyses: the scene comes with the call. The
+// first epoch this server ever mints is the analysis's.
+TEST_F(ServerAnalysisRun, AnalysisWithoutPriorCommitSucceeds) {
+  ASSERT_EQ(server_.CommittedEpoch(), 0u) << "positive control: nothing submitted yet";
+  const Error ok = server_.StartRaypathAnalysis(Halo22Config(20000), FullSkyRequest());
+  EXPECT_FALSE(ok) << ok.message;
+  EXPECT_EQ(server_.CommittedEpoch(), 1u) << "the analysis is a submission: it minted the epoch";
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  auto frame = server_.AcquireResultFrame();
+  ASSERT_TRUE(frame->raypath_histogram_result_.has_value());
+  EXPECT_GT(TotalCount(*frame->raypath_histogram_result_), 0u);
+  ASSERT_TRUE(frame->stats_result_.has_value());
+  EXPECT_EQ(frame->stats_result_->sim_ray_num_, 20000u) << "the handed scene's budget";
+
+  // And the render that follows is an ordinary first commit: it traces and carries an image.
+  ASSERT_FALSE(server_.CommitConfig(Halo22Config(20000)));
+  EXPECT_EQ(server_.CommittedEpoch(), 2u);
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  frame = server_.AcquireResultFrame();
+  EXPECT_TRUE(frame->has_valid_data_);
+  EXPECT_FALSE(frame->raypath_histogram_result_.has_value());
+  EXPECT_EQ(frame->render_results_.size(), 1u);
+}
+
+// The analysis traces the document it is handed, not the one the last render committed.
+// The two documents differ in the one thing the histogram names directly — the crystal's
+// id — and in a colour config the render carried that names a crystal the analysed scene
+// does not have. The second half is the load-bearing one: the simulator builds its colour
+// gate table from (raypath_color, scene) on every batch, and a render's colour config left
+// bound over an analysis of a different scene would throw on the worker thread. There is
+// no ASSERT for "did not throw"; the run completing with the right crystal in its top row
+// is that assertion.
+TEST_F(ServerAnalysisRun, AnalysisTracesTheSceneItIsHandedNotTheLastRenders) {
+  nlohmann::json render_doc = Halo22Config(20000);
+  render_doc["raypath_color"] = {
+    { "mode", "dominant" },
+    { "classes",
+      nlohmann::json::array({ { { "color", { 1.0f, 0.0f, 0.0f } },
+                                { "match", nlohmann::json::array({ { { "layer", 0 }, { "crystal", 1 } } }) } } }) }
+  };
+  ASSERT_FALSE(server_.CommitConfig(render_doc));
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  server_.Stop();
+
+  // Same halo, but the crystal is id 7 — and there is no crystal 1 for the render's colour
+  // class to name.
+  nlohmann::json analysis_doc = Halo22Config(20000);
+  analysis_doc["crystal"][0]["id"] = 7;
+  analysis_doc["scene"]["scattering"][0]["entries"][0]["crystal"] = 7;
+  const Error ok = server_.StartRaypathAnalysis(analysis_doc, FullSkyRequest());
+  ASSERT_FALSE(ok) << ok.message;
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  auto frame = server_.AcquireResultFrame();
+  ASSERT_TRUE(frame->raypath_histogram_result_.has_value());
+  const auto& r = *frame->raypath_histogram_result_;
+  ASSERT_FALSE(r.entries_.empty());
+  ASSERT_EQ(r.entries_[0].chain_.size(), 1u);
+  EXPECT_EQ(r.entries_[0].chain_[0].crystal_id, 7u) << "the analysed scene's crystal, not the render's";
+  EXPECT_GT(TotalCount(r), 0u);
+
+  // The render's bookkeeping survived the analysis untouched: the next commit of the
+  // render's own document is judged against it and renders as before.
+  ASSERT_FALSE(server_.CommitConfig(render_doc));
+  ASSERT_EQ(WaitForRunToEnd(server_, 30000), SimLifecycle::kCompleted);
+  frame = server_.AcquireResultFrame();
+  EXPECT_TRUE(frame->has_valid_data_);
+  EXPECT_EQ(frame->render_results_.size(), 1u);
+}
+
+// A document the parser rejects changes nothing: not the epoch, not the lifecycle, and
+// not a session in flight. The three failure shapes each map onto their own code — the
+// same three CommitConfig returns, since the two share the parser — and each is tried
+// against a running analysis so "untouched" includes "not stopped".
+TEST_F(ServerAnalysisRun, ARejectedSceneLeavesTheServerUntouched) {
+  ASSERT_FALSE(server_.StartRaypathAnalysis(Halo22Config("infinite"), FullSkyRequest()));
+  ASSERT_TRUE(WaitForFirstRays(server_, 5000));
+  const uint64_t epoch = server_.CommittedEpoch();
+
+  struct Shape {
+    const char* name;
+    nlohmann::json doc;
+    ErrorCode code;
+  };
+  nlohmann::json missing = Halo22Config(20000);
+  missing["scene"].erase("light_source");
+  nlohmann::json wrong_type = Halo22Config(20000);
+  wrong_type["scene"]["max_hits"] = "seven";
+  nlohmann::json bad_value = Halo22Config(20000);
+  bad_value["crystal"][0]["type"] = "dodecahedron";
+  const Shape kShapes[] = {
+    { "a missing field", missing, ErrorCode::kMissingField },
+    { "a field of the wrong type", wrong_type, ErrorCode::kInvalidJson },
+    { "a value the config rejects", bad_value, ErrorCode::kInvalidConfig },
+  };
+  for (const Shape& shape : kShapes) {
+    SCOPED_TRACE(shape.name);
+    const Error err = server_.StartRaypathAnalysis(shape.doc, FullSkyRequest());
+    EXPECT_EQ(err.code, shape.code) << err.message;
+    EXPECT_EQ(server_.CommittedEpoch(), epoch) << "a rejected scene must not mint an epoch";
+    EXPECT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning) << "the analysis in flight was not stopped";
+  }
+  // The positive control for the code mapping: the same three documents get the same
+  // three codes from CommitConfig.
+  server_.Stop();
+  for (const Shape& shape : kShapes) {
+    SCOPED_TRACE(shape.name);
+    EXPECT_EQ(server_.CommitConfig(shape.doc).code, shape.code);
+  }
+  EXPECT_EQ(server_.CommittedEpoch(), epoch);
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +407,7 @@ TEST_F(ServerAnalysisRun, AnalysisWithoutCommitIsInvalidConfig) {
 TEST_F(ServerAnalysisRun, AnalysisManualStopPreservesAccumulatedResults) {
   ASSERT_FALSE(server_.CommitConfig(Halo22Config("infinite")));
   server_.Stop();
-  ASSERT_FALSE(server_.StartRaypathAnalysis(ConeOnHaloRequest()));
+  ASSERT_FALSE(server_.StartRaypathAnalysis(Halo22Config("infinite"), ConeOnHaloRequest()));
   ASSERT_TRUE(WaitForFirstRays(server_, 5000));
   ASSERT_EQ(server_.GetSimLifecycle(), SimLifecycle::kRunning);
 
@@ -343,7 +459,7 @@ TEST_F(ServerAnalysisRun, RenderAfterStoppedAnalysisProducesAFrame) {
   Server& server = server_;
   ASSERT_FALSE(server.CommitConfig(Halo22Config("infinite")));
   server.Stop();
-  ASSERT_FALSE(server.StartRaypathAnalysis(ConeOnHaloRequest()));
+  ASSERT_FALSE(server.StartRaypathAnalysis(Halo22Config("infinite"), ConeOnHaloRequest()));
   // An unbounded analysis has no end of its own: Stop() it once it has data.
   ASSERT_TRUE(WaitForFirstRays(server, 5000));
   server.Stop();
@@ -400,7 +516,7 @@ TEST(ServerAnalysisRunGpu, AnalysisForcesCpuUnderGpuPreference) {
   EXPECT_FALSE(server.BackendFellBack());
 
   server.Stop();
-  ASSERT_FALSE(server.StartRaypathAnalysis(FullSkyRequest()));
+  ASSERT_FALSE(server.StartRaypathAnalysis(Halo22Config(20000), FullSkyRequest()));
   EXPECT_EQ(server.GetActiveBackend(), BackendKind::kCpu) << "the analysis session forces CPU";
   EXPECT_FALSE(server.BackendFellBack()) << "a forced route is not a fallback";
   ASSERT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
