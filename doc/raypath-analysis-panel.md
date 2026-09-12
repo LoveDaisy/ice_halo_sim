@@ -576,3 +576,37 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
 4. **分析会话独立提交（§2 第 3 条 v4.36 更新）**：分析提交的是**当前文档自己的 scene**，与渲染
    提交共用同一个编码器（`BuildCommitSceneOrWarn`）——任何写进 config/scene 的分配策略字段都会
    同样应用于分析会话，不需要为分析单独接线；分析与渲染在这一层没有分叉。
+
+### 10.1 固定 seed 下分析结果的可复现性（2026-09-12，`Simulator::Run()` 入口重播 `rng_`）
+
+分配策略的任何对照实验都会拿「固定 `sim_seed` ⇒ 单 worker ⇒ 确定性」这条 server 构造期契约
+（`src/server/server.cpp` ServerImpl 构造函数，`worker_count = 1` 处的注释）当尺子：同一 seed
+跑两次、比总能量与各行。在此之前这把尺子在**同一个 server 的第二个及之后的会话上是坏的**，
+现象是「固定 seed 下总能量落在不止一个值上」（首次记录为两个值、比值 0.959——那只是观测到的
+两种前序历史，不是机制）。
+
+- **根因（层与行，由两态完整序列逐项 diff 取证，不是从比值反推）**：`Simulator::Run()` 入口
+  只重播了 thread-local 全局采样单例 `RandomNumberGenerator::GetInstance().SetSeed(seed_)`，
+  **worker 自己的 `rng_`（波长抽样、晶体形状/朝向、散射抉择全走它）只在构造时按 seed 初始化，
+  从不在 Run() 入口重播**。于是一个 Simulator 的第一个 Run() 用 seed 的新鲜流，第二个及之后的
+  Run() 从上一会话停下的位置继续。诊断 diff 的形状：两态各 1563 批、每批 `ray_num=128`、
+  `root_ray_count`/`ray_seg_count` 逐批一致、`ConsumeData` 无任何 discard——**结构完全相同**，
+  分叉在序列第 1 行（Run() 入口 `rng_` 的下一次抽样值），随后首批波长即不同。
+  `Stop()` 的队列排空时序（`Queue::Shutdown` 的静默丢弃）被这份 diff 明确**排除**。
+- **修法（单一 owner）**：`Simulator::Run()` 入口、与全局单例同一处同一条件 `if (seed_ != 0)`
+  下补 `rng_.SetSeed(seed_)`——这里本来就是「one Run() is one session」的落点（同处已有
+  `chain_id_table_.Clear()`、per-Run 后端创建；GPU 后端在自己那一侧早已 per-Run 重置 RNG，
+  这是 legacy CPU 路缺的那一半）。`seed_ == 0` 分支一行未动，多 worker 路径的 Σenergy 分布
+  实测修前后不变（halo22 同一 server 连续 10 次：mean 5.243e6/σ 2.06e5 → 5.258e6/σ 1.90e5）。
+- **契约现在的形状**：固定 seed 的 server 上，**每一个**会话（首次分析；render 跑完 + Stop 后的
+  分析；分析后紧接的分析）都逐位复现同一结果——`unit_correctness_test`
+  `ServerAnalysisRunFixedSeed.AnalysisIsBitIdenticalAcrossSessionsOfOneServer` 与 e2e slow
+  `test_fixed_seed_analysis_is_bit_identical_across_ten_sessions_of_one_server[halo_22|pc_two_layer]`
+  （同一 server 连续 10 次，finest 全行 `==`）钉住。「两次会话之间夹一次 render」也在契约内：
+  render 与分析的 Run() 各自从同一个种子起步，互不影响。
+- **对分配策略对照实验（crystal-ray-allocation 一线）的意义**：在此修复之前，凡「同一 server
+  对象上先跑过任何会话再做固定 seed 比较」的测量都可能落在不同的确定性值上，差幅在 halo22 /
+  plate+column 双层两个场景上实测为 4–7%（5.256e6 vs 4.960e6；4.998e6 vs 5.231e6）——与分配
+  策略本身要量的效应同量级。此前只取「总能量相同的 run」做对比的做法（有界记录量测时的口径）
+  在修复后不再需要；修复之前做出的任何跨会话固定 seed 对照，若其结论依赖绝对能量而非行间相对
+  比例，须在修复后的二进制上重跑。

@@ -207,7 +207,11 @@ typedef struct LUMICE_ServerConfig_ {
 
 **Notes**:
 - Zero-initialized struct (`= {0}`) is equivalent to default behavior (auto worker count, random seed)
-- When `sim_seed != 0`, the server forces `num_workers = 1` to ensure deterministic ray tracing results
+- When `sim_seed != 0`, the server forces `num_workers = 1` to ensure deterministic ray tracing results.
+  The determinism is per run, for EVERY run of the server's life: each `LUMICE_CommitScene` /
+  `LUMICE_StartRaypathAnalysis` session re-seeds the worker from `sim_seed` at its start, so the tenth
+  session of one server reproduces the first bit for bit (the worker's RNG used to be seeded at
+  construction only, which made every session after the first continue the previous one's stream).
 - `sim_seed == 0` is "random" but **not fully unseeded** since 260.6: the root-ray PCG stream derives its
   `effective_seed_` from a global atomic counter (reproducible per process by `Simulator` construction order),
   while the host `rng_` used for crystal geometry stays `time ^ thread_id` random. So "0 = random" holds at the
