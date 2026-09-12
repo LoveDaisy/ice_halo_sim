@@ -114,10 +114,17 @@ RenderConfig MakeLabelConfig(LabelSwitches on, LineSwitches lines = {}, float li
 // The sun 20 deg up, which is where the angular-distance circles are centred. Its default (0) is
 // on the horizon and would put the 22 deg circle half below it; nothing here depends on the exact
 // value beyond the circle being fully inside the frame.
+//
+// All three fields, spelled out, like every sibling fixture in this directory. This used to write
+// `altitude_` alone into a default-constructed SunParam, back when the struct had no member
+// initializers, and the azimuth the circles were centred on was therefore whatever the stack held
+// — usually a denormal that rounds to the same pixels as 0, occasionally a NaN, which the overlay's
+// direction normalizer maps to the zenith. Two arms of one case then drew their circle around two
+// different points, and the difference between them read as one line switch reaching another
+// family's line. SunParam now zero-initializes itself, so the old spelling would be well-defined
+// today; the explicit triple is kept so the fixture does not depend on that.
 SunParam MakeSun() {
-  SunParam sun;
-  sun.altitude_ = 20.0f;
-  return sun;
+  return SunParam{ 20.0f, 0.0f, 0.5f };
 }
 
 // One ray straight up, for the reason test_render_consumer_horizon.cpp states: PostSnapshot takes

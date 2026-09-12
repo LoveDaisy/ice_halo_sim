@@ -2169,7 +2169,7 @@ static bool ConfigHasFilter(const ConfigScratch& c, int id) {
 static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScratch* out) {
   // Light source: required, and so are its `type` / `altitude` / `spectrum` keys (core
   // LightSourceConfig::from_json reads all three with .at()). A `type` other than "sun" is
-  // rejected rather than mirrored: core only logs and leaves its SunParam uninitialized.
+  // rejected rather than mirrored: core only logs and leaves its SunParam at the all-zero default.
   {
     if (!scene.contains("light_source")) {
       return LUMICE_ERR_MISSING_FIELD;
