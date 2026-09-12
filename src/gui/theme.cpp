@@ -17,6 +17,21 @@ namespace {
 // "two places that must change together" hazard.
 constexpr float kBodyFontSizePx = 15.0f;
 
+// The General Punctuation block (U+2000-U+206F), added on top of ImGui's default range (Basic
+// Latin + Latin-1 Supplement, which already carries the guillemets U+00AB/U+00BB). Roboto
+// Medium's cmap, read with fontTools from the same TTF this file embeds, has 38 of the block's
+// codepoints — the en/em dashes, the curly quotes, the single angle quotes U+2039/U+203A, the
+// bullet and the ellipsis among them — so a block-wide range lands the glyphs the panels use
+// instead of the "?" fallback they drew until now. The Arrows block (U+2190-U+21FF) is NOT
+// added: that same cmap has none of it, so U+2192 would still rasterise to nothing, which is why
+// the analysis list draws its chain joiner with an icon (JoinerForDisplay, analysis_panel.cpp).
+constexpr ImWchar kGeneralPunctuationRange[] = { 0x2000, 0x206F, 0 };
+
+// The body font's glyph ranges. ImGui reads the array lazily, at io.Fonts->Build() — which the
+// renderer backend calls when it creates the font texture, well after AddBodyFont returned — so
+// the storage has to outlive the call: a function-local ImVector would already be gone by then.
+ImVector<ImWchar> g_body_glyph_ranges;
+
 // Adds Roboto Medium (embedded at build time) as the body font. Returns nullptr
 // on failure, leaving the caller to fall back rather than run with no font.
 ImFont* AddBodyFont(ImGuiIO& io, float size_px) {
@@ -25,11 +40,20 @@ ImFont* AddBodyFont(ImGuiIO& io, float size_px) {
   // stb rasterizer has no hinting, so subpixel positioning is what carries legibility.
   body_cfg.OversampleH = 3;
   body_cfg.OversampleV = 1;
+  // Built once: a rebuild would reallocate the array a font added by an earlier call still
+  // points at.
+  if (g_body_glyph_ranges.empty()) {
+    ImFontGlyphRangesBuilder ranges;
+    ranges.AddRanges(io.Fonts->GetGlyphRangesDefault());
+    ranges.AddRanges(kGeneralPunctuationRange);
+    ranges.BuildRanges(&g_body_glyph_ranges);
+  }
   // ImGui takes ownership of the buffer it rasterizes from and frees it with the
   // atlas, so hand it a copy rather than the const embedded array.
   void* body_buf = IM_ALLOC(kRobotoMediumSize);
   std::memcpy(body_buf, kRobotoMediumData, kRobotoMediumSize);
-  return io.Fonts->AddFontFromMemoryTTF(body_buf, static_cast<int>(kRobotoMediumSize), size_px, &body_cfg);
+  return io.Fonts->AddFontFromMemoryTTF(body_buf, static_cast<int>(kRobotoMediumSize), size_px, &body_cfg,
+                                        g_body_glyph_ranges.Data);
 }
 
 // Merges FontAwesome 6 Solid glyphs into the atlas of the font added last.

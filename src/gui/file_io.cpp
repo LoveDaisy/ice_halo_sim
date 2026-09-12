@@ -720,7 +720,7 @@ static std::string MillerRefusalReason(LUMICE_MillerConversionState state, int i
       // The four-index label is the crystal editor's own, so copying it into a document is the way
       // this is most often reached, and naming it is what turns the count into an instruction.
       reason +=
-          " -- the four-index form {h, k, i, l} the crystal editor shows is the same face written "
+          " — the four-index form {h, k, i, l} the crystal editor shows is the same face written "
           "differently, with i = -(h + k) derived rather than stored, so it is not written here";
     }
     return reason;

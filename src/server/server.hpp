@@ -504,6 +504,24 @@ enum class SimLifecycle {
   kCompleted,  ///< Finite run drained clean (incl. zero-output convergence)
 };
 
+// =============== Session Kind ===============
+/**
+ * @brief Which kind of run the CURRENT session is.
+ * @details Orthogonal to SimLifecycle (whether that session is running) and to
+ *          BackendKind (where it runs). Written by exactly the two entry points that
+ *          (re)start a run — CommitConfig (→ kRender) and StartRaypathAnalysis
+ *          (→ kAnalysis) — and by nothing else; a Stop() leaves it alone, so a stopped
+ *          analysis still reads kAnalysis until the next CommitConfig. Read back via
+ *          Server::GetSessionKind(). This is the one authority on "was the previous
+ *          session an analysis": CommitConfig's consumer-reuse decision reads it, and
+ *          a client that wants to predict that decision must read the same value rather
+ *          than keep a shadow of its own.
+ */
+enum class SessionKind {
+  kRender,    ///< A render run (CommitConfig); the default before any run
+  kAnalysis,  ///< A raypath-analysis run (StartRaypathAnalysis)
+};
+
 // =============== Server ===============
 class ServerImpl;
 
@@ -661,6 +679,17 @@ class Server {
    * @note Authoritative derivation; GetStatus()/QueryServerState are projections.
    */
   SimLifecycle GetSimLifecycle() const;
+
+  /**
+   * @brief Which kind of run the current session is (see SessionKind).
+   * @return kRender before any run, after every CommitConfig, and on a terminated server;
+   *         kAnalysis from StartRaypathAnalysis until the next CommitConfig — a Stop()
+   *         does not reset it. Cheap O(1) atomic read, same shape as GetActiveBackend().
+   * @note Read it BEFORE the CommitConfig whose reuse decision you want to predict: that
+   *       commit is what flips it back to kRender, so the value read after it no longer
+   *       says what the previous session was.
+   */
+  SessionKind GetSessionKind() const;
 
   /**
    * @brief Current lifecycle epoch (monotonic generation counter).

@@ -36,7 +36,7 @@ If the configuration has changed since your last run, Analyze still works and re
 
 ## 4. Reading the result list
 
-Each row is one distinct raypath — the full sequence of crystals and faces a group of rays went through, root to exit. A path through one crystal is written as its faces, `3-5` (entering face 3, exiting face 5). When a scattering layer holds more than one crystal, the crystal is named in front: `C1(3-5)`. With multiple scattering every layer is parenthesised and the layers are joined by ` -> `, root first: `(3-5) -> (1-3)`, or `C1(1-3) -> C4(3-5)` where the layers hold several crystals. The columns:
+Each row is one distinct raypath — the full sequence of crystals and faces a group of rays went through, root to exit. A path through one crystal is written as its faces, `3-5` (entering face 3, exiting face 5). When a scattering layer holds more than one crystal, the crystal is named in front: `C1(3-5)`. With multiple scattering every layer is parenthesised and the layers are joined by ` -> `, root first: `(3-5) -> (1-3)`, or `C1(1-3) -> C4(3-5)` where the layers hold several crystals. (On screen the list draws that joiner as a right-arrow icon; the text itself — what the CLI prints, what an exported filter is named, what the C API hands out — is the ASCII ` -> `.) The columns:
 
 | Column | Meaning |
 |--------|---------|

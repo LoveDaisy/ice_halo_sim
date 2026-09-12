@@ -6,6 +6,7 @@
 #include <map>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -651,6 +652,25 @@ std::string FormatSegmentRaypathText(const LUMICE_RaypathChainSegment& segment) 
   return out;
 }
 
+std::string JoinerForDisplay(std::string_view display) {
+  static constexpr std::string_view kCoreJoiner = " -> ";
+  static const std::string kGlyphJoiner = std::string(" ") + ICON_FA_ARROW_RIGHT + " ";
+  std::string out;
+  out.reserve(display.size());
+  size_t pos = 0;
+  while (pos < display.size()) {
+    const size_t found = display.find(kCoreJoiner, pos);
+    if (found == std::string_view::npos) {
+      out.append(display.substr(pos));
+      break;
+    }
+    out.append(display.substr(pos, found - pos));
+    out += kGlyphJoiner;
+    pos = found + kCoreJoiner.size();
+  }
+  return out;
+}
+
 bool ApplyExcludeSelectedRaypath(GuiState& state) {
   std::string why;
   if (EvaluateExcludeEligibility(state, &why) != ExcludeEligibility::kOk) {
@@ -1039,8 +1059,11 @@ void RenderResultList(GuiState& state) {
     // The id is the ORIGINAL index, so a re-sort moves the row and not the widget; the selection
     // itself is the chain's text, so it survives a re-read under another symmetry too.
     ImGui::PushID(idx);
+    // The label is the presentation (arrow glyph for the layer joiner); the selection stays the
+    // raw `display`, the text every other reader of the entry compares against.
+    const std::string label = JoinerForDisplay(e.display);
     const bool selected = state.analysis.selected_entry.has_value() && *state.analysis.selected_entry == e.display;
-    if (ImGui::Selectable(e.display, selected, ImGuiSelectableFlags_SpanAllColumns)) {
+    if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
       state.analysis.selected_entry = std::string(e.display);
     }
     ImGui::PopID();

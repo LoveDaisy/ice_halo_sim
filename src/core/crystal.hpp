@@ -75,6 +75,14 @@ constexpr int kCrystalGeomMaxFaces = 20;
 // shrinks CrystalGeom's by-value copy cost (face_vtx dominates its footprint).
 constexpr int kCrystalGeomMaxVtxPerFace = 12;
 
+// The prism-face rotational period every crystal family this engine builds
+// today shares (6 sides, hexagonal): Crystal::fn_period_ for both prism and
+// pyramid closed-form factories, and every call site that needs the period
+// without a live Crystal (FilterSpec::Create's GPU descriptor path, the
+// server's read-time raypath-histogram reduction). One symbol so those
+// copies cannot drift apart.
+constexpr int kHexagonalFnPeriod = 6;
+
 struct CrystalGeom {
   int face_cnt = 0;
   // Plane coefficients (a, b, c, d) so a·x + b·y + c·z + d ≤ 0 is the bounded
@@ -342,9 +350,9 @@ class Crystal {
 // reduces recorded finest chains under whatever symmetry the reader asks for, long after the
 // crystals of the run are gone. Crystal::ReduceRaypath forwards here with its own fn_period_.
 //
-// `fn_period` is the number of prism faces (6 for every crystal family the engine builds today
-// — the same constant filter_spec.cpp's GPU descriptor path pins as kFnPeriodHex); a negative
-// period means "no symmetry defined" and the input is returned as is, as is the input under
+// `fn_period` is the number of prism faces (6 for every crystal family the engine builds today —
+// kHexagonalFnPeriod above); a negative period means "no symmetry defined" and the input is
+// returned as is, as is the input under
 // symmetry == FilterConfig::kSymNone. `sigma_a` and `d_applicable` are the axis-derived D
 // parameters (detail::ComputeSigmaA / detail::IsDApplicable); D is applied only when both the D
 // bit is set and d_applicable is true.
@@ -394,6 +402,15 @@ bool IsDApplicableParams(DistributionType azimuth_type, float azimuth_full_range
 // Returns true if D symmetry is applicable for the given axis distribution.
 // Requires azimuth full-360° uniform AND roll mean at a multiple of 30°.
 bool IsDApplicable(const AxisDistribution& d);
+
+// The two D-symmetry parameters every symmetry-reduction call site derives from an axis
+// distribution, in the fixed order IsDApplicable() then (if applicable) ComputeSigmaA() —
+// shared so FilterSpec::Create and MakeChainIdLayerContext cannot drift against each other.
+struct DSymmetryParams {
+  bool d_applicable = false;
+  int sigma_a = 0;
+};
+DSymmetryParams DeriveDSymmetryParams(const AxisDistribution& d);
 }  // namespace detail
 
 

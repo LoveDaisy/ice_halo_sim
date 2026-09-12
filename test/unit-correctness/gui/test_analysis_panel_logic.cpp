@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "IconsFontAwesome6.h"
 #include "gui/analysis_panel.hpp"
 #include "gui/annotation_anchors.hpp"
 #include "gui/file_io.hpp"
@@ -800,6 +801,26 @@ TEST(AnalysisPanelLogic, FormatSegmentRaypathTextJoinsFacesWithDashes) {
   EXPECT_EQ(FormatSegmentRaypathText(seg), "3");
   seg.segment_len = 0;
   EXPECT_EQ(FormatSegmentRaypathText(seg), "");
+}
+
+// The four display forms the C API contract names (lumice.h at LUMICE_RaypathHistogramEntry,
+// doc/c_api.md): "3-5", "C1(3-5)", "(3-5) -> (1-3)", "C1(1-3) -> C4(3-5)". Only the layer joiner
+// is rewritten, to the icon between single spaces; a one-layer text passes through untouched,
+// and the joiner is found however many times it occurs.
+TEST(AnalysisPanelLogic, JoinerForDisplayRedrawsOnlyTheLayerJoiner) {
+  const std::string arrow = std::string(" ") + ICON_FA_ARROW_RIGHT + " ";
+  EXPECT_EQ(JoinerForDisplay(""), "");
+  EXPECT_EQ(JoinerForDisplay("3-5"), "3-5");
+  EXPECT_EQ(JoinerForDisplay("C1(3-5)"), "C1(3-5)");
+  EXPECT_EQ(JoinerForDisplay("(3-5) -> (1-3)"), "(3-5)" + arrow + "(1-3)");
+  EXPECT_EQ(JoinerForDisplay("C1(1-3) -> C4(3-5)"), "C1(1-3)" + arrow + "C4(3-5)");
+  EXPECT_EQ(JoinerForDisplay("C1(3-5) -> (1-3) -> (4)"), "C1(3-5)" + arrow + "(1-3)" + arrow + "(4)");
+  // The rewrite is a presentation: the ASCII joiner never survives it, and the icon never
+  // appears where there was no joiner.
+  EXPECT_EQ(JoinerForDisplay("(3-5) -> (1-3)").find(" -> "), std::string::npos);
+  EXPECT_EQ(JoinerForDisplay("3-5").find(ICON_FA_ARROW_RIGHT), std::string::npos);
+  // The dash between faces and the crystal prefix are not the joiner — only the spaced arrow is.
+  EXPECT_EQ(JoinerForDisplay("3->5"), "3->5");
 }
 
 TEST(AnalysisPanelLogic, ExcludeWritesOneFilterOutFilterBoundToEveryEntryOfTheCrystal) {

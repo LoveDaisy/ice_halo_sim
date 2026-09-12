@@ -1056,71 +1056,114 @@ def run_raypath_analysis_capi(
     ignore it (CPU is a session property), and `active_backend` in the result is what
     LUMICE_GetActiveBackend reported while the run was in progress, for the caller to assert on.
     Log lines are captured (the forced-CPU INFO line lives there).
+
+    The single-session spelling of `run_raypath_analysis_capi_sessions`.
     """
+    return run_raypath_analysis_capi_sessions(
+        config_path, request, sessions=1, sim_seed=sim_seed, num_workers=num_workers,
+        preferred_backend=preferred_backend, timeout_sec=timeout_sec, max_entries=max_entries,
+        chain_id_symmetry=chain_id_symmetry,
+    )[0]
+
+
+def run_raypath_analysis_capi_sessions(
+    config_path: str,
+    request: LUMICE_RaypathAnalysisRequest,
+    sessions: int,
+    sim_seed: int = 0,
+    num_workers: int = 0,
+    preferred_backend: int = LUMICE_BACKEND_CPU,
+    timeout_sec: int = 180,
+    max_entries: Optional[int] = 1024,
+    chain_id_symmetry: int = LUMICE_RAYPATH_SYMMETRY_ALL,
+) -> List[RaypathAnalysisResult]:
+    """Run `sessions` ANALYSIS runs of the same scene back to back on ONE server, one result each.
+
+    The authoritative implementation; `run_raypath_analysis_capi` is its `sessions=1` spelling and
+    does nothing this function does not. What the plural buys is the GUI's real shape: it keeps
+    one server for the life of the window, so every analysis after the first is a later session
+    of the same server, and a promise made about "a run" (the fixed-seed determinism contract,
+    say) is only checkable there. Every session is a full LUMICE_StartRaypathAnalysis → drain →
+    read cycle; the second and later calls go through the server's own Stop() of the previous
+    session, exactly as a caller's would. The parameters are those of the single-session form.
+    """
+    if sessions < 1:
+        raise ValueError(f"sessions must be >= 1, got {sessions}")
     lib = _load_lib()
     _ensure_log_callback_registered(lib)
 
     cfg = LUMICE_ServerConfig(num_workers=num_workers, sim_seed=sim_seed, preferred_backend=preferred_backend)
+    results: List[RaypathAnalysisResult] = []
     with _LogCapture() as lines:
         server = lib.LUMICE_CreateServerEx(ctypes.byref(cfg))
         if not server:
             raise RuntimeError("LUMICE_CreateServerEx returned NULL")
         try:
-            _start_raypath_analysis(lib, server, str(config_path), request)
-            active = ctypes.c_int(-1)
-            err = lib.LUMICE_GetActiveBackend(server, ctypes.byref(active))
-            if err != 0:
-                raise RuntimeError(f"GetActiveBackend failed err={err}")
-            _wait_drained(lib, server, timeout_sec)
-
-            info = LUMICE_RaypathAnalysisInfo()
-            stats = LUMICE_StatsResult()
-            with _result_frame(lib, server) as frame:
-                err = lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, chain_id_symmetry, ctypes.byref(info))
+            for _ in range(sessions):
+                first_line = len(lines)
+                _start_raypath_analysis(lib, server, str(config_path), request)
+                active = ctypes.c_int(-1)
+                err = lib.LUMICE_GetActiveBackend(server, ctypes.byref(active))
                 if err != 0:
-                    raise RuntimeError(f"FrameGetRaypathAnalysisInfo failed err={err}")
-                if not info.present:
-                    raise RuntimeError("the frame carries no analysis result")
-                if max_entries is None:
-                    max_entries = int(info.entry_count)
-                entries_c = (LUMICE_RaypathHistogramEntry * (max_entries + 1))()
-                err = lib.LUMICE_FrameGetRaypathAnalysis(frame, chain_id_symmetry, entries_c, max_entries)
-                if err != 0:
-                    raise RuntimeError(f"FrameGetRaypathAnalysis failed err={err}")
-                err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(stats))
-                if err != 0:
-                    raise RuntimeError(f"FrameGetStats failed err={err}")
-            # Copied out INSIDE the frame's lifetime by contract; the entries are value
-            # copies already, but reading them here keeps the rule uniform for every getter.
-            n = min(int(info.entry_count), max_entries)
-            entries = []
-            for i in range(n):
-                e = entries_c[i]
-                chain = [
-                    (int(e.chain[l].crystal_id), [int(e.chain[l].segment[f]) for f in range(e.chain[l].segment_len)])
-                    for l in range(e.chain_len)
-                ]
-                entries.append(RaypathHistogramEntry(
-                    display=e.display.decode("utf-8", "replace"),
-                    chain=chain,
-                    energy=float(e.energy),
-                    count=int(e.count),
-                    ring_energy=[float(e.ring_energy[r]) for r in range(e.ring_count)],
-                    error_bound=float(e.error_bound),
-                ))
-            return RaypathAnalysisResult(
-                roi_mode=int(info.roi_mode),
-                entries=entries,
-                active_backend=int(active.value),
-                sim_ray_num=int(stats.sim_ray_num),
-                log_lines=list(lines),
-                other_energy=float(info.other_energy),
-                other_count=int(info.other_count),
-                truncated_chain_count=int(info.truncated_chain_count),
-                max_row_error=float(info.max_row_error),
-            )
+                    raise RuntimeError(f"GetActiveBackend failed err={err}")
+                _wait_drained(lib, server, timeout_sec)
+                results.append(_read_raypath_analysis_frame(
+                    lib, server, int(active.value), max_entries, chain_id_symmetry, lines[first_line:]))
         finally:
             lib.LUMICE_DestroyServer(server)
+    return results
+
+
+def _read_raypath_analysis_frame(
+    lib, server, active_backend: int, max_entries: Optional[int], chain_id_symmetry: int, lines: List[str],
+) -> RaypathAnalysisResult:
+    """Acquire one frame and copy the analysis result out of it (see run_raypath_analysis_capi)."""
+    info = LUMICE_RaypathAnalysisInfo()
+    stats = LUMICE_StatsResult()
+    with _result_frame(lib, server) as frame:
+        err = lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, chain_id_symmetry, ctypes.byref(info))
+        if err != 0:
+            raise RuntimeError(f"FrameGetRaypathAnalysisInfo failed err={err}")
+        if not info.present:
+            raise RuntimeError("the frame carries no analysis result")
+        if max_entries is None:
+            max_entries = int(info.entry_count)
+        entries_c = (LUMICE_RaypathHistogramEntry * (max_entries + 1))()
+        err = lib.LUMICE_FrameGetRaypathAnalysis(frame, chain_id_symmetry, entries_c, max_entries)
+        if err != 0:
+            raise RuntimeError(f"FrameGetRaypathAnalysis failed err={err}")
+        err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(stats))
+        if err != 0:
+            raise RuntimeError(f"FrameGetStats failed err={err}")
+    # Copied out INSIDE the frame's lifetime by contract; the entries are value
+    # copies already, but reading them here keeps the rule uniform for every getter.
+    n = min(int(info.entry_count), max_entries)
+    entries = []
+    for i in range(n):
+        e = entries_c[i]
+        chain = [
+            (int(e.chain[l].crystal_id), [int(e.chain[l].segment[f]) for f in range(e.chain[l].segment_len)])
+            for l in range(e.chain_len)
+        ]
+        entries.append(RaypathHistogramEntry(
+            display=e.display.decode("utf-8", "replace"),
+            chain=chain,
+            energy=float(e.energy),
+            count=int(e.count),
+            ring_energy=[float(e.ring_energy[r]) for r in range(e.ring_count)],
+            error_bound=float(e.error_bound),
+        ))
+    return RaypathAnalysisResult(
+        roi_mode=int(info.roi_mode),
+        entries=entries,
+        active_backend=active_backend,
+        sim_ray_num=int(stats.sim_ray_num),
+        log_lines=list(lines),
+        other_energy=float(info.other_energy),
+        other_count=int(info.other_count),
+        truncated_chain_count=int(info.truncated_chain_count),
+        max_row_error=float(info.max_row_error),
+    )
 
 
 _BACKEND_MODES = ("legacy", "metal", "cpu_backend", "cuda")

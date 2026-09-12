@@ -26,6 +26,7 @@ add_executable(gui_test
     functional/test_shell_chrome.cpp
     functional/test_log_panel.cpp
     functional/test_theme_coverage.cpp
+    functional/test_body_font_glyph_coverage.cpp
     functional/test_theme_scan.cpp
     functional/test_overlay_controls.cpp
     functional/test_marker_panel.cpp

@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "gui/analysis_result.hpp"
 #include "gui/gui_state.hpp"
@@ -253,6 +254,18 @@ std::string ExcludeAppendNotice(const GuiState& state);
 
 // "3-5": the face sequence of one chain segment in the raypath grammar the filter editor uses.
 std::string FormatSegmentRaypathText(const LUMICE_RaypathChainSegment& segment);
+
+// The GUI's presentation of an entry's `display` text — the chain as core formats it, the C API
+// contract (lumice.h at LUMICE_RaypathHistogramEntry: layers joined by " -> "), the same bytes
+// the CLI prints. Every literal " -> " layer joiner is redrawn as an ICON_FA_ARROW_RIGHT glyph
+// framed by single spaces: the embedded body font (Roboto Medium) has no U+2192, so the core's
+// ASCII arrow is the one form that survives in every consumer, and this is the one place that
+// redraws it for the screen. A pure string rewrite, not a parse of the chain grammar — the
+// joiner is the only place a space occurs in the text, so there is nothing to disambiguate. No
+// other reader goes through it: the Exclude filter's name, `selected_entry` and the CLI all keep
+// the raw field. RenderResultList's row label is the only render-time caller. The glyph is the
+// one line to change should the owner prefer Roboto's own U+203A.
+std::string JoinerForDisplay(std::string_view display);
 
 // The exclusion itself, on an eligible selection, reaching every entry that uses the chain's
 // crystal (the histogram counted it wherever it was used). Entries with no filter get one: a

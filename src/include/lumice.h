@@ -354,7 +354,20 @@ extern "C" {
 // against the last render, exactly as it would have with no analysis in between. The
 // "no scene committed" rejection (LUMICE_ERR_INVALID_CONFIG) is gone with the requirement; a
 // scene the server cannot use is rejected with the code LUMICE_CommitScene would give it.
-#define LUMICE_API_VERSION 436
+//
+// BREAKING (v4.37): LUMICE_SimLifecycleResult gains `session_kind` (sizeof 16 -> 24), one of
+// LUMICE_SessionKind: which kind of run the CURRENT session is — LUMICE_SESSION_RENDER after
+// every LUMICE_CommitScene and before any run, LUMICE_SESSION_ANALYSIS from
+// LUMICE_StartRaypathAnalysis until the next commit (a Stop does not reset it). Pure append,
+// nothing removed or reordered; a value-initialised struct reads 0 = RENDER, which is also the
+// server's own default. Recompile: a v4.36 caller's struct is 8 bytes short of the write.
+// Why it exists: LUMICE_CommitScene's consumer-reuse decision refuses to reuse the previous
+// session's consumers when that session was an analysis, and a client that predicts the
+// decision (the GUI does, to know whether to stop its poller first) had no way to read that
+// term — it could only keep a shadow flag of its own, a second copy of the server's judgement.
+// This field is the server's copy, read back. Read it BEFORE the commit whose decision you
+// are predicting: the commit itself is what flips it back to RENDER.
+#define LUMICE_API_VERSION 437
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -417,14 +430,34 @@ typedef enum LUMICE_SimLifecycle_ {
   LUMICE_LIFECYCLE_COMPLETED,
 } LUMICE_SimLifecycle;
 
-// {lifecycle, epoch} snapshot of the backend lifecycle truth.
-//   lifecycle: one of LUMICE_SimLifecycle.
-//   epoch:     monotonic generation counter, ++ on each reset-causing commit.
-//              0 before any successful commit. Read back after a synchronous
-//              commit to learn the just-minted epoch.
+// Which kind of run the CURRENT session is. Orthogonal to LUMICE_SimLifecycle (whether
+// that session is running) and to LUMICE_BACKEND_* (where it runs). Written only by the
+// two calls that (re)start a run — LUMICE_CommitScene (-> RENDER) and
+// LUMICE_StartRaypathAnalysis (-> ANALYSIS); LUMICE_StopSimulation leaves it alone, so a
+// stopped analysis still reads ANALYSIS until the next commit. It is the server's own
+// "was the previous session an analysis" term of the consumer-reuse decision
+// LUMICE_CommitScene makes, exposed so a client predicting that decision reads the same
+// value instead of keeping a shadow of it.
+typedef enum LUMICE_SessionKind_ {
+  LUMICE_SESSION_RENDER = 0,
+  LUMICE_SESSION_ANALYSIS = 1,
+} LUMICE_SessionKind;
+
+// {lifecycle, epoch, session_kind} snapshot of the backend lifecycle truth.
+//   lifecycle:    one of LUMICE_SimLifecycle.
+//   epoch:        monotonic generation counter, ++ on each reset-causing commit.
+//                 0 before any successful commit. Read back after a synchronous
+//                 commit to learn the just-minted epoch.
+//   session_kind: one of LUMICE_SessionKind — the kind of the session that is
+//                 current at the time of the call, NOT "the kind at the last
+//                 commit". Sampled BEFORE a LUMICE_CommitScene it tells you what
+//                 that commit is about to replace; sampled after, it is RENDER.
+// The three reads are not one atomic snapshot of each other (they never were for
+// the first two); each is individually current.
 typedef struct LUMICE_SimLifecycleResult_ {
   int lifecycle;
   unsigned long long epoch;
+  int session_kind;
 } LUMICE_SimLifecycleResult;
 
 // {drained_epoch, current_epoch} snapshot of the CONSUMER-side drain contract.
@@ -1641,9 +1674,11 @@ LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* o
 // =============== State & Control ===============
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);
 
-// Read the explicit simulation lifecycle + current epoch (single-source truth).
-// LUMICE_QueryServerState is a projection of this. After a synchronous commit,
-// call this to read back the just-minted epoch (no commit-signature change).
+// Read the explicit simulation lifecycle + current epoch + session kind (single-source
+// truth). LUMICE_QueryServerState is a projection of this. After a synchronous commit,
+// call this to read back the just-minted epoch (no commit-signature change). Before a
+// commit, `session_kind` tells you whether the session it replaces was an analysis — the
+// term of the consumer-reuse decision a caller cannot otherwise observe.
 LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecycleResult* out);
 
 // Read the consumer-side drain status (see LUMICE_DrainResult for the contract).
@@ -2145,6 +2180,10 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
   // entry is; 0 means no row ever took a slot over and every entry is exact.
   double other_energy;
   LUMICE_RayCount other_count;
+  // Clamped from the internal size_t counter to INT_MAX rather than truncated by the narrowing
+  // cast — a run would need to overflow a chain's arrival count past ~2.1 billion for this to
+  // read anything other than the true count, but the clamp keeps that case a saturated (still
+  // meaningful) lower bound instead of a wrapped, misleading one.
   int truncated_chain_count;
   double max_row_error;
 } LUMICE_RaypathAnalysisInfo;

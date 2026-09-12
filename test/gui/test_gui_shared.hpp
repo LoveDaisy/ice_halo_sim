@@ -648,6 +648,7 @@ void RegisterModalLayoutTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine);
 void RegisterThemeCoverageTests(ImGuiTestEngine* engine);
+void RegisterBodyFontGlyphCoverageTests(ImGuiTestEngine* engine);
 void RegisterThemeScanTests(ImGuiTestEngine* engine);
 void RegisterExportParityTests(ImGuiTestEngine* engine);
 void RegisterPreviewExportParityTests(ImGuiTestEngine* engine);

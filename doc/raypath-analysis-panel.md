@@ -99,7 +99,7 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    `LUMICE_SetPreferredBackend` / `ResolveGpuRoute` 的既有强制路径，`src/server/server.cpp`
    的 `ResolveGpuRoute` 已经是「按显式选择路由，不是按能力探测静默降级」的先例），
    使得将来给 GPU 补上这条能力时，是「换一份实现」而不是「悄悄改变了语义」。
-   **as-built**：`ServerImpl::mode_`（`SessionMode::kAnalysis`，`src/server/server.cpp:409`）
+   **as-built**：`ServerImpl::mode_`（`SessionKind::kAnalysis`，`src/server/server.cpp`；枚举本身公开在 `server.hpp`，经 `Server::GetSessionKind()` / `LUMICE_GetSimLifecycle` 的 `session_kind` 读回，见 §10.2）
    进入分析会话；`ResolveGpuRoute(preferred_backend, logger_, force_cpu)`
    （`src/server/server.cpp:547`）与 `Simulator::CreateBackend`（`src/core/simulator.cpp:1012`）
    都在 env override 之前短路成 CPU；`Simulator::SetAnalysisForceCpu(bool)`
@@ -509,6 +509,20 @@ C 结构体里的 `chain[]`/`segment[]` 与 `display` 描述同一条链，前�
 `LUMICE_MAX_RAYPATH_CHAIN_LAYERS` / `LUMICE_MAX_RAYPATH_SEGMENT_LEN`(=64) /
 `LUMICE_RAYPATH_DISPLAY_MAX`(=3200) 的病态链，每次读帧时 WARN 一次），正常场景下两者互为镜像。
 
+**连接符的分工：core 给 ASCII，GUI 只在绘制时做呈现映射。** 层间连接符在 `display` 里是 ASCII
+` -> `，这是 C API 契约（`lumice.h` 在 `LUMICE_RaypathHistogramEntry` 处写明）、CLI 打印的原样、
+也是 Exclude 生成的 filter 名称（`"Exclude " + display`）里的字节——不放 U+2192，因为内嵌 body
+字体 Roboto Medium 的 cmap 没有这个字形（Arrows 块整块缺失，fontTools 一手核过），放了在 GUI 上
+只会渲染成 `?`。GUI 结果列表的行标签则经 `JoinerForDisplay`（`src/gui/analysis_panel.cpp`）把
+每个 ` -> ` 换成 FontAwesome 的 `ICON_FA_ARROW_RIGHT` 字形（前后各一个空格）再交给
+`ImGui::Selectable`；这是一个纯字符串重写（连接符是链文本里唯一含空格的位置，不需要解析链语法），
+**只有这一处调用**，`selected_entry` 的比较与写入、Exclude filter 名、CLI 都仍读原始 `display`。
+要换成 Roboto 自带的 `›`（U+203A），只改这个函数里的替换串。与此配套，body 字体的 glyph range 显式
+覆盖了 General Punctuation 块（`src/gui/theme.cpp`，`AddBodyFont`），所以面板文案里的 em-dash /
+`›` / `»` 不再是 `?`；`test/gui/functional/test_body_font_glyph_coverage.cpp` 直接问图集这些码点
+在不在，`test_raypath_analysis_panel.cpp` 的 `chain_label_shows_arrow_glyph_not_qmark` 在双层
+场景上验证屏幕上的行标签就是这个重写、点击后选中的仍是原始 ASCII。
+
 **symmetry 来源：「方案 A vs 方案 B」的问题已随对称性改为显示态而结构性消失（2026-09-12更新，
 commit `9efc4779`/`39557d8b`/`c8e271f5`/`b12da83a`）**。设计阶段 §2 第 2 条留了一个开放决策——默认
 方案 A：复用晶体上恰好一条 symmetry 的 filter；方案 B：会话级统一标志。子任务 2 实施期在 owner
@@ -576,3 +590,72 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
 4. **分析会话独立提交（§2 第 3 条 v4.36 更新）**：分析提交的是**当前文档自己的 scene**，与渲染
    提交共用同一个编码器（`BuildCommitSceneOrWarn`）——任何写进 config/scene 的分配策略字段都会
    同样应用于分析会话，不需要为分析单独接线；分析与渲染在这一层没有分叉。
+
+### 10.1 固定 seed 下分析结果的可复现性（2026-09-12，`Simulator::Run()` 入口重播 `rng_`）
+
+分配策略的任何对照实验都会拿「固定 `sim_seed` ⇒ 单 worker ⇒ 确定性」这条 server 构造期契约
+（`src/server/server.cpp` ServerImpl 构造函数，`worker_count = 1` 处的注释）当尺子：同一 seed
+跑两次、比总能量与各行。在此之前这把尺子在**同一个 server 的第二个及之后的会话上是坏的**，
+现象是「固定 seed 下总能量落在不止一个值上」（首次记录为两个值、比值 0.959——那只是观测到的
+两种前序历史，不是机制）。
+
+- **根因（层与行，由两态完整序列逐项 diff 取证，不是从比值反推）**：`Simulator::Run()` 入口
+  只重播了 thread-local 全局采样单例 `RandomNumberGenerator::GetInstance().SetSeed(seed_)`，
+  **worker 自己的 `rng_`（波长抽样、晶体形状/朝向、散射抉择全走它）只在构造时按 seed 初始化，
+  从不在 Run() 入口重播**。于是一个 Simulator 的第一个 Run() 用 seed 的新鲜流，第二个及之后的
+  Run() 从上一会话停下的位置继续。诊断 diff 的形状：两态各 1563 批、每批 `ray_num=128`、
+  `root_ray_count`/`ray_seg_count` 逐批一致、`ConsumeData` 无任何 discard——**结构完全相同**，
+  分叉在序列第 1 行（Run() 入口 `rng_` 的下一次抽样值），随后首批波长即不同。
+  `Stop()` 的队列排空时序（`Queue::Shutdown` 的静默丢弃）被这份 diff 明确**排除**。
+- **修法（单一 owner）**：`Simulator::Run()` 入口、与全局单例同一处同一条件 `if (seed_ != 0)`
+  下补 `rng_.SetSeed(seed_)`——这里本来就是「one Run() is one session」的落点（同处已有
+  `chain_id_table_.Clear()`、per-Run 后端创建；GPU 后端在自己那一侧早已 per-Run 重置 RNG，
+  这是 legacy CPU 路缺的那一半）。`seed_ == 0` 分支一行未动，多 worker 路径的 Σenergy 分布
+  实测修前后不变（halo22 同一 server 连续 10 次：mean 5.243e6/σ 2.06e5 → 5.258e6/σ 1.90e5）。
+- **契约现在的形状**：固定 seed 的 server 上，**每一个**会话（首次分析；render 跑完 + Stop 后的
+  分析；分析后紧接的分析）都逐位复现同一结果——`unit_correctness_test`
+  `ServerAnalysisRunFixedSeed.AnalysisIsBitIdenticalAcrossSessionsOfOneServer` 与 e2e slow
+  `test_fixed_seed_analysis_is_bit_identical_across_ten_sessions_of_one_server[halo_22|pc_two_layer]`
+  （同一 server 连续 10 次，finest 全行 `==`）钉住。「两次会话之间夹一次 render」也在契约内：
+  render 与分析的 Run() 各自从同一个种子起步，互不影响。
+- **对分配策略对照实验（crystal-ray-allocation 一线）的意义**：在此修复之前，凡「同一 server
+  对象上先跑过任何会话再做固定 seed 比较」的测量都可能落在不同的确定性值上，差幅在 halo22 /
+  plate+column 双层两个场景上实测为 4–7%（5.256e6 vs 4.960e6；4.998e6 vs 5.231e6）——与分配
+  策略本身要量的效应同量级。此前只取「总能量相同的 run」做对比的做法（有界记录量测时的口径）
+  在修复后不再需要；修复之前做出的任何跨会话固定 seed 对照，若其结论依赖绝对能量而非行间相对
+  比例，须在修复后的二进制上重跑。
+
+### 10.2 分析之后的第一次 Run：GUI 的重建谓词读回 server 的会话种类（2026-09-12，v4.37）
+
+现象是确定性的：任意 ROI 的 Analyze 完成后点 Run，`DoRun` 必打
+`[GUI] DoRun: predict/actual mismatch! GUI predicted reuse but server rebuilt.`，然后走安全网
+（补一次 `g_server_poller.Stop()`）。画面正常，但那句「This should never happen because the GUI
+comparison is a superset…」是假的。
+
+- **根因**：server 的 `can_reuse`（`src/server/server.cpp` `CommitConfig`）是四项合取
+  `!consumers_.empty() && !was_analysis && !class_table_changed && 逐渲染器布局相同`，其中
+  `was_analysis` 是 `mode_.exchange(kRender) == kAnalysis`——一个**会话级事实**，不是文档 diff。
+  GUI 的 `expect_rebuild`（`src/gui/app.cpp` `DoRun`）只由文档 diff 与「server 是否刚重建」组成，
+  没有任何一项能看见「上一个会话是分析」，于是这一项在 GUI 侧结构性缺席。
+- **修法（单一权威，不设影子）**：`ServerImpl` 私有的 `SessionMode` 提升为 `server.hpp` 公开的
+  `SessionKind`（同一个枚举，不是「私有枚举 + 公开镜像」两份），加只读 `Server::GetSessionKind()`；
+  `LUMICE_SimLifecycleResult` 纯追加 `session_kind`（`LUMICE_SESSION_RENDER` / `_ANALYSIS`，
+  `LUMICE_API_VERSION` 436 → 437）。`DoRun` 在函数顶部本来就为背压门读过一次
+  `LUMICE_GetSimLifecycle`（`lc0`），时机在本次 `CommitConfig` 把 `mode_` 拨回 `kRender` **之前**，
+  与 server 侧 `exchange` 读到的是同一个值——`expect_rebuild` 直接多一项
+  `lc0.session_kind == LUMICE_SESSION_ANALYSIS`，零新增调用、零新增状态。
+  ⛔ 不用 `g_state.analysis.started`：那是面板的**意图**，不是 server 判断的副本；用它等于把
+  server 的判断复制第二份，然后靠纪律维持两份一致。
+- **四项的覆盖状况（如实，写在 `app.cpp` 安全网分支上方的注释里）**：① `!consumers_.empty()`
+  由 `backend_reconstructed` / `!last_committed_state` 覆盖；② `!was_analysis` 由本次新增项覆盖；
+  ③ 逐渲染器布局由架构约束覆盖——`kSimCommit` 只提交一个渲染器，除分辨率外每个布局字段都是常量
+  （`file_io.cpp` `BuildScene`），`renderer_resim.Matches` 追踪的 `sim_resolution_index` 就是
+  全部 diff；④ `!class_table_changed`（raypath-color 结构性改变：类增减或 `combine_` /
+  `member_bits_` 变）——**未覆盖**：GUI 谓词不看色类结构，一次不带分辨率变化的结构性染色编辑
+  理论上仍可落进安全网分支。这不是本次观测到的问题、也不与 `was_analysis` 同根因，故不在这里修，
+  安全网分支保留并明确写成「只有第 ④ 项能到达」。它是已知边界，不是「四项全覆盖」。
+- **验收形状**：`gui_test` `raypath_analysis` 下三个 ROI（Point / Whole sky / In frame）各一条
+  「Analyze 自然完成 → Run」用例，用 `g_imgui_log_sink` 断言日志中无 `predict/actual mismatch`
+  且第二次 Run 出图；红态（去掉 `session_kind` 那一项）三条全红。C API 侧
+  `CApiRaypathAnalysis.AnalysisNeedsNoPriorCommitAndTheCommitAfterItRenders` 钉住 RENDER →
+  ANALYSIS →（完成后仍 ANALYSIS，Stop 不复位）→ commit 后 RENDER 的转换。

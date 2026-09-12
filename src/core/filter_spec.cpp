@@ -21,10 +21,8 @@ namespace lumice {
 
 namespace {
 
-constexpr int kFnPeriodHex = 6;
-
 // In-place P-canonical shift on the recorder buffer. Mirrors crystal.cpp PCanonicalShiftByPeriod
-// for hexagonal crystals (fn_period=6).
+// for hexagonal crystals (fn_period == kHexagonalFnPeriod).
 void PCanonicalShiftInPlace(uint8_t* data, size_t size) {
   int first_pri = -1;
   for (size_t i = 0; i < size; i++) {
@@ -37,7 +35,7 @@ void PCanonicalShiftInPlace(uint8_t* data, size_t size) {
     if (first_pri < 0) {
       first_pri = pri;
     }
-    pri = (pri + kFnPeriodHex - first_pri) % kFnPeriodHex + 3;
+    pri = (pri + kHexagonalFnPeriod - first_pri) % kHexagonalFnPeriod + 3;
     data[i] = static_cast<uint8_t>(pyr * 10 + pri);
   }
 }
@@ -75,7 +73,7 @@ void ReduceBuffer(uint8_t* data, size_t size, uint8_t symmetry, int sigma_a, boo
       }
       uint8_t pyr = x / 10;
       int pri0 = static_cast<int>(x % 10) - 3;
-      int new_pri0 = ((sigma_a - pri0) % kFnPeriodHex + kFnPeriodHex) % kFnPeriodHex;
+      int new_pri0 = ((sigma_a - pri0) % kHexagonalFnPeriod + kHexagonalFnPeriod) % kHexagonalFnPeriod;
       scratch[i] = static_cast<uint8_t>(pyr * 10 + new_pri0 + 3);
     }
     if (symmetry & FilterConfig::kSymP) {
@@ -379,8 +377,10 @@ struct TopSpecCreator {
 
 std::unique_ptr<FilterSpec> FilterSpec::Create(const FilterConfig& config, const Crystal& crystal,
                                                const AxisDistribution& axis_dist) {
-  bool d_applicable = detail::IsDApplicable(axis_dist);
-  int sigma_a = d_applicable ? detail::ComputeSigmaA(axis_dist.roll_dist.center) : 0;
+  // Same shared derivation MakeChainIdLayerContext uses (detail::DeriveDSymmetryParams).
+  auto d_params = detail::DeriveDSymmetryParams(axis_dist);
+  bool d_applicable = d_params.d_applicable;
+  int sigma_a = d_params.sigma_a;
   auto spec = std::visit(TopSpecCreator{ crystal, config.symmetry_, sigma_a, d_applicable }, config.param_);
   spec->action_ = config.action_;
   return spec;

@@ -25,6 +25,10 @@
 //   RenderAfterStoppedAnalysisProducesAFrame: the render that follows a stopped analysis
 //        traces rays and carries an image — the session switch itself leaves nothing
 //        behind that could keep the next render from producing.
+//   AnalysisIsBitIdenticalAcrossSessionsOfOneServer: the fixed-seed determinism contract
+//        holds for every session of one server, not only its first — a later analysis
+//        (after a render + Stop(), or after another analysis) reproduces the first row
+//        for row.
 
 #include <gtest/gtest.h>
 
@@ -33,6 +37,8 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <vector>
 
 #include "core/math.hpp"
 #include "server/server.hpp"
@@ -488,6 +494,93 @@ TEST_F(ServerAnalysisRun, RenderStopStillReadsAsIdleWithNoData) {
   server_.Stop();
   EXPECT_EQ(server_.GetSimLifecycle(), SimLifecycle::kIdle) << "Stop() is a reset, not a completion";
   EXPECT_FALSE(server_.AcquireResultFrame()->has_valid_data_);
+}
+
+// ---------------------------------------------------------------------------
+// The fixed-seed contract across sessions of ONE server. A non-zero sim_seed sizes the
+// server to a single worker precisely so that the run is deterministic (the constructor
+// says so: "deterministic CPU contract: fixed seed -> single worker"). That promise is only
+// worth anything if it holds for EVERY session the server runs, not just its first: the GUI
+// keeps one server for the life of the window, so every analysis a user starts after the
+// first render is a later session. The three sessions here are the shapes that matter — a
+// fresh server's first analysis; the analysis that follows a completed render and a Stop()
+// (the shape the defect was first seen in); and an analysis started straight after another
+// analysis — and every row of every one must agree bit for bit (== on the doubles, no
+// tolerance: this is a determinism contract, not a precision question).
+//
+// The defect this pins is deterministic, not a timing window, so two sessions are enough
+// to see it: the worker's own RNG was seeded once at construction and never re-seeded at
+// the start of a Run(), so the second session picked up the stream wherever the first
+// had left it. On the 22-degree scene it showed as a different total energy on every
+// session after the first, 100% of the time, whatever the preceding session was; the
+// three-session shape here is for coverage of the transitions, not for statistical power.
+// ---------------------------------------------------------------------------
+struct AnalysisFingerprint {
+  std::vector<std::tuple<std::string, double, size_t>> rows;  // (display, energy, count), finest
+  double other_energy = 0.0;
+  size_t other_count = 0;
+  uint64_t sim_ray_num = 0;
+  bool operator==(const AnalysisFingerprint& o) const {
+    return rows == o.rows && other_energy == o.other_energy && other_count == o.other_count &&
+           sim_ray_num == o.sim_ray_num;
+  }
+};
+
+AnalysisFingerprint FingerprintOf(const ResultFrame& frame) {
+  AnalysisFingerprint fp;
+  const RaypathHistogramResult& r = *frame.raypath_histogram_result_;
+  fp.rows.reserve(r.entries_.size());
+  for (const auto& e : r.entries_) {
+    fp.rows.emplace_back(e.display_, e.energy_, e.count_);
+  }
+  fp.other_energy = r.other_energy_;
+  fp.other_count = r.other_count_;
+  fp.sim_ray_num = frame.stats_result_ ? frame.stats_result_->sim_ray_num_ : 0u;
+  return fp;
+}
+
+double TotalEnergy(const AnalysisFingerprint& fp) {
+  double e = fp.other_energy;
+  for (const auto& row : fp.rows) {
+    e += std::get<1>(row);
+  }
+  return e;
+}
+
+AnalysisFingerprint RunAnalysisAndFingerprint(Server& server, const nlohmann::json& scene) {
+  const Error ok = server.StartRaypathAnalysis(scene, FullSkyRequest());
+  EXPECT_FALSE(ok) << ok.message;
+  EXPECT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
+  auto frame = server.AcquireResultFrame();
+  EXPECT_TRUE(frame->raypath_histogram_result_.has_value());
+  return FingerprintOf(*frame);
+}
+
+TEST(ServerAnalysisRunFixedSeed, AnalysisIsBitIdenticalAcrossSessionsOfOneServer) {
+  constexpr uint32_t kSeed = 1;
+  Server server(0, kSeed, BackendKind::kCpu);  // fixed seed: sized to one worker by the ctor
+  const nlohmann::json scene = Halo22Config(20000);
+
+  // Session 1: the fresh server's first run — the one the contract was always kept on.
+  const AnalysisFingerprint first = RunAnalysisAndFingerprint(server, scene);
+  ASSERT_FALSE(first.rows.empty());
+  ASSERT_EQ(first.sim_ray_num, 20000u);
+
+  // Session 2: after a completed render and a Stop() — the shape the defect was seen in.
+  ASSERT_FALSE(server.CommitConfig(scene));
+  ASSERT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
+  server.Stop();
+  const AnalysisFingerprint after_render = RunAnalysisAndFingerprint(server, scene);
+
+  // Session 3: straight after another analysis, no render in between.
+  const AnalysisFingerprint after_analysis = RunAnalysisAndFingerprint(server, scene);
+
+  EXPECT_EQ(after_render.rows.size(), first.rows.size());
+  EXPECT_EQ(after_analysis.rows.size(), first.rows.size());
+  EXPECT_EQ(TotalEnergy(after_render), TotalEnergy(first)) << "session 2 (after a render + Stop) drifted";
+  EXPECT_EQ(TotalEnergy(after_analysis), TotalEnergy(first)) << "session 3 (after an analysis) drifted";
+  EXPECT_TRUE(after_render == first) << "session 2 differs from session 1 row for row";
+  EXPECT_TRUE(after_analysis == first) << "session 3 differs from session 1 row for row";
 }
 
 // ---------------------------------------------------------------------------

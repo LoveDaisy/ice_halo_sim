@@ -513,6 +513,29 @@ TEST(RaypathHistogramConsumer, BatchesWithoutChainIdsAreIgnoredAndUnknownIdsDrop
   EXPECT_EQ(RoiHitCount(c), 1u) << "a dropped ray is not an ROI hit";
 }
 
+// A batch with zero outgoing rays must not be treated as a no-op batch when it
+// still carries newly-interned chain-id entries (every ray of that batch
+// continued into the next MS layer instead of exiting). Before the fix,
+// Consume() early-returned on `outgoing_chain_id_.empty()` alone and skipped
+// absorbing `chain_id_table_delta_`, so a later batch naming this batch's
+// chain as a parent found it orphaned and the child ray was silently dropped.
+TEST(RaypathHistogramConsumer, ZeroOutgoingBatchStillAbsorbsItsDeltaForALaterParentReference) {
+  RaypathHistogramConsumer c(FullSky());
+  Batch zero_outgoing(1);
+  zero_outgoing.AddChain(1, 0, 1, { 3, 5 });  // interned (e.g. a continuing ray), no ray exits this batch
+  c.Consume(zero_outgoing.data);
+  EXPECT_EQ(RoiHitCount(c), 0u) << "nothing exits the zero-outgoing batch itself";
+
+  Batch child(1);
+  child.AddChain(2, 1, 1, { 6 }).AddRay(2, 1.0f, 0, 0, 1);  // parent = chain 1, from the batch above
+  c.Consume(child.data);
+  auto r = Snapshot(c);
+  ASSERT_EQ(r.entries_.size(), 1u) << "the child chain's parent must resolve, not be judged orphaned";
+  EXPECT_EQ(r.entries_[0].display_, "crystal1(3-5)-crystal1(6)");
+  EXPECT_EQ(r.entries_[0].count_, 1u);
+  EXPECT_EQ(RoiHitCount(c), 1u);
+}
+
 // ---------------------------------------------------------------------------
 // AC5: energy descending, ties by display string ascending.
 // ---------------------------------------------------------------------------

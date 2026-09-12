@@ -1361,11 +1361,14 @@ TEST_F(ServerLifecycleApi, FullLifecycle) {
 // Completed, monotonic epoch (++ per reset-causing commit), Stop → Idle. Also
 // pins QueryServerState as a projection (COMPLETED → IDLE).
 TEST_F(ServerLifecycleApi, GetSimLifecycle) {
-  // Fresh server, no commit yet: IDLE, epoch 0.
+  // Fresh server, no commit yet: IDLE, epoch 0, and a RENDER session kind (the default
+  // before any run — the analysis transitions are pinned in test_c_api_raypath_analysis).
   LUMICE_SimLifecycleResult lc{};
+  lc.session_kind = LUMICE_SESSION_ANALYSIS;  // pre-poisoned: a call that never wrote the field would keep it
   ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
   EXPECT_EQ(lc.lifecycle, LUMICE_LIFECYCLE_IDLE);
   EXPECT_EQ(lc.epoch, 0u);
+  EXPECT_EQ(lc.session_kind, LUMICE_SESSION_RENDER);
 
   // First reset-causing commit: epoch must advance to 1. Right after commit the
   // run is RUNNING (or, on a very fast finish, already COMPLETED) — never IDLE,

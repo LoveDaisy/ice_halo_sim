@@ -362,7 +362,7 @@ Crystal Crystal::MakePrismClosedForm(float h, const float dist[6], const char* f
   }
   Crystal c;
   AdaptClosedFormPrismToCrystalGeom(r, h, c.cf_geom_);
-  c.fn_period_ = 6;
+  c.fn_period_ = kHexagonalFnPeriod;
   c.PopulateFromCfGeom();
   return c;
 }
@@ -398,7 +398,7 @@ Crystal Crystal::MakePyramidClosedForm(float upper_alpha, float lower_alpha, flo
   }
   Crystal c;
   AdaptClosedFormPyramidToCrystalGeom(r, c.cf_geom_);
-  c.fn_period_ = 6;
+  c.fn_period_ = kHexagonalFnPeriod;
   c.PopulateFromCfGeom();
   return c;
 }
@@ -748,6 +748,13 @@ bool IsDApplicable(const AxisDistribution& d) {
   // reason IsRollMeanAtMultipleOf30 gives above: the arguments are evaluated before either
   // conjunct has established a type, and the named accessors assert on it.
   return IsDApplicableParams(d.azimuth_dist.type, d.azimuth_dist.spread, d.roll_dist.center);
+}
+
+DSymmetryParams DeriveDSymmetryParams(const AxisDistribution& d) {
+  DSymmetryParams params;
+  params.d_applicable = IsDApplicable(d);
+  params.sigma_a = params.d_applicable ? ComputeSigmaA(d.roll_dist.center) : 0;
+  return params;
 }
 
 }  // namespace detail
