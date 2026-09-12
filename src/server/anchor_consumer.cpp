@@ -4,6 +4,7 @@
 
 #include "core/anchor_buffer.hpp"
 #include "core/color_util.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -69,6 +70,18 @@ void AnchorConsumer::AccumulateDevicePlane(const SimData& data) {
     // would then fire thousands of times; the cross-backend agreement test is what fails
     // loudly. Leaving the plane untouched keeps the scalar at 0, which reads as "no
     // anchor" rather than as a plausible wrong value.
+    //
+    // Reported ONCE per consumer, then counted. The per-batch objection above is to the
+    // volume, not to the signal: that agreement test is `-m slow` and no CI job runs it,
+    // so before this line the only place the defect could show was a developer's machine
+    // on the day they happened to run the slow leg. One line on the first batch puts it
+    // in every log of every affected run; the counter says how many batches it swallowed.
+    if (device_plane_size_mismatch_count_++ == 0) {
+      ILOG_ERROR(logger_,
+                 "device anchor plane has {} floats, expected {} ({}x{}); ignoring it for the whole run — "
+                 "L99_sky will read 0 and every relative-EV frame will be exposed against nothing",
+                 data.anchor_y_pixel_data_.size(), kAnchorPixels, kAnchorWidth, kAnchorHeight);
+    }
     return;
   }
   const float* src = data.anchor_y_pixel_data_.data();
@@ -91,6 +104,9 @@ void AnchorConsumer::PrepareSnapshot() {
 void AnchorConsumer::Reset() {
   std::memset(anchor_y_.get(), 0, kAnchorPixels * sizeof(float));
   snapshot_l99_sky_ = 0.0f;
+  // A reused consumer starts a new run, and the route (hence the backend that fills the
+  // plane) can differ from the last one: "once" means once per run, not once per object.
+  device_plane_size_mismatch_count_ = 0;
 }
 
 }  // namespace lumice

@@ -6,6 +6,7 @@
 
 #include "core/shared/projection_shared.h"
 #include "server/consumer.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -14,7 +15,14 @@ namespace lumice {
  * @details The THIRD kind of IConsume, alongside RenderConsumer and StatsConsumer, and it
  *          is the third kind for the same reason StatsConsumer is the second: it is a
  *          property of the SESSION, not of any renderer. Exactly one instance lives in
- *          `consumers_` no matter how many renderers the config declares.
+ *          `consumers_` no matter how many renderers the config declares — including
+ *          none: `"render": []` parses (config_manager.cpp iterates the array without
+ *          requiring a member), and such a session's `consumers_` is StatsConsumer plus
+ *          this. Nothing here reads a renderer, so the scalar is measured and published
+ *          exactly as it would be with one; a frame simply carries an anchor no renderer
+ *          consumes. The renderer-less session that exists BY DESIGN — the raypath
+ *          analysis run — deliberately builds no AnchorConsumer at all (server.cpp,
+ *          StartRaypathAnalysis), since nothing there is exposed.
  *
  *          That is not an economy, it is the contract. Every element of `consumers_` gets
  *          its own Consume() call on the same batch, so an anchor folded into
@@ -61,6 +69,11 @@ class AnchorConsumer : public IConsume {
   /// RenderConsumer::VisibleMaskForTest.
   const float* AnchorPlaneForTest() const { return anchor_y_.get(); }
 
+  /// How many device-fused batches AccumulateDevicePlane refused because their anchor plane
+  /// was not kAnchorWidth * kAnchorHeight floats. Only the first is logged (see the .cpp);
+  /// this is the rest of the evidence.
+  size_t DevicePlaneSizeMismatchCount() const { return device_plane_size_mismatch_count_; }
+
  private:
   // Host path: project this batch's outgoing rays into the anchor plane. One
   // ProjectExitToPixel call per ray against the fixed anchor params — the same single
@@ -74,6 +87,8 @@ class AnchorConsumer : public IConsume {
   std::unique_ptr<float[]> anchor_y_;
   lm_proj::ProjParams proj_params_;
   float snapshot_l99_sky_ = 0.0f;
+  size_t device_plane_size_mismatch_count_ = 0;
+  Logger logger_{ "Anchor" };
 };
 
 }  // namespace lumice

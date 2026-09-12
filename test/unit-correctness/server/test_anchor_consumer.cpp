@@ -20,10 +20,13 @@
 // such, rather than as evidence of the new property.
 
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "config/color_class_table.hpp"
@@ -35,6 +38,7 @@
 #include "server/anchor_consumer.hpp"
 #include "server/render.hpp"
 #include "server/server.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 namespace {
@@ -311,6 +315,60 @@ TEST(AnchorConsumer, VisibleIsNotAnAnchorInput) {
   (void)LegacyAnchorFor(data, upper);
   (void)LegacyAnchorFor(data, lower);
   EXPECT_FLOAT_EQ(AnchorFor(data), once);
+}
+
+// Captures everything the global sink receives for the object's lifetime — the same RAII shape
+// test_print_mode_colour_exclusions.cpp uses, for the same reason: GetSharedSink() is a
+// process-wide singleton, so an early return with the sink still attached would leave later
+// cases writing into a destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) { GetSharedSink()->add_sink(sink_); }
+  ~LogCapture() { GetSharedSink()->remove_sink(sink_); }
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
+
+int CountOccurrences(const std::string& text, const std::string& needle) {
+  int n = 0;
+  for (size_t pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + needle.size())) {
+    ++n;
+  }
+  return n;
+}
+
+// A device-fused batch whose anchor plane has the wrong size is refused, and the refusal is
+// reported once per run and counted per batch. The plane must stay untouched — the scalar reads
+// 0, "no anchor", not a plausible wrong number — and the second batch must add to the counter
+// without adding a second log line, since the point of logging at all is that the slow
+// cross-backend agreement test is the only other place this defect can surface.
+TEST(AnchorConsumer, WrongSizeDevicePlaneIsRefusedLoggedOnceAndCounted) {
+  constexpr const char* kNotice = "device anchor plane has";
+  SimData fused;
+  fused.curr_wl_ = kWl;
+  fused.xyz_pixel_data_.assign(12, 0.0f);  // marks the batch as device-fused
+  fused.anchor_y_pixel_data_.assign(static_cast<size_t>(kAnchorWidth) * kAnchorHeight / 2, 1.0f);
+
+  AnchorConsumer ac;
+  LogCapture capture;
+  ac.Consume(fused);
+  ac.Consume(fused);
+  ac.PrepareSnapshot();
+  EXPECT_FLOAT_EQ(ac.SnapshotL99Sky(), 0.0f);
+  EXPECT_EQ(ac.DevicePlaneSizeMismatchCount(), 2u);
+  EXPECT_EQ(CountOccurrences(capture.Text(), kNotice), 1) << capture.Text();
+
+  // Reset starts a new run; the next mismatch is news again.
+  ac.Reset();
+  ac.Consume(fused);
+  EXPECT_EQ(ac.DevicePlaneSizeMismatchCount(), 1u);
+  EXPECT_EQ(CountOccurrences(capture.Text(), kNotice), 2) << capture.Text();
 }
 
 }  // namespace
