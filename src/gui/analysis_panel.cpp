@@ -507,6 +507,10 @@ CrystalFilterCensus CensusForPoolCrystal(const GuiState& state, int pool_id) {
       if (!entry->filter_id.has_value()) {
         ++census.unfiltered;
       }
+      // else: entry->filter_id is set but out of bounds (FilterOfEntry's bounds check failed) —
+      // an id the pool does not hold cannot be resolved to Out or In, and is not "no filter"
+      // either, so it lands in neither bucket. Deliberate: this is not a state the census claims
+      // to describe, not an entry the loop forgot.
       continue;
     }
     if (existing->action != 1) {
@@ -638,37 +642,47 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
   if (e == nullptr || !pool.has_value()) {
     return false;
   }
+  const std::vector<EntryCard*> entries = EntriesForPoolCrystal(state, *pool);
+  if (entries.empty()) {
+    // Eligibility above permits a pool slot with no current entry (CensusForPoolCrystal's walk
+    // over an empty entries list default-constructs to any_in=false, so it never denies this
+    // state on its own) — a document edited between the analysis snapshot and this click could in
+    // principle leave the chain's crystal referenced by nothing. There is then nothing here to
+    // carry the exclusion, so — unlike the idempotent case below, where the exclusion already
+    // holds — nothing has actually happened.
+    return false;
+  }
   RaypathParams rp;
   rp.raypath_text = FormatSegmentRaypathText(e->chain[0]);
   // The chain in the filter editor's own OR-row form, so the export walks it exactly as it walks
   // a row typed there (one summand per ';'-separated alternative; this text never has one).
   const SumOfProducts rows = FromLegacyRaypath(rp);
 
-  // Every entry that uses the crystal: the histogram counted the crystal wherever it was used.
-  // Eligibility has established that none of them holds an In filter, so each is one of two
-  // cases, and an entry whose pool slot was already handled through a linked sibling is skipped.
-  std::vector<int> slots_done;
-  EntryCard* first_unfiltered = nullptr;
-  for (EntryCard* entry : EntriesForPoolCrystal(state, *pool)) {
-    const FilterConfig* existing = FilterOfEntry(state, *entry);
-    if (existing == nullptr) {
-      if (!entry->filter_id.has_value() && first_unfiltered == nullptr) {
-        first_unfiltered = entry;
+  // The same classification EvaluateExcludeEligibility/ExcludeAppendNotice already computed over
+  // this crystal — which pool slots hold a distinct Out filter, and how many entries hold none —
+  // drives the write loop below, so "which slots are already handled" has one authority instead
+  // of a second, hand-rolled dedup living here.
+  const CrystalFilterCensus census = CensusForPoolCrystal(state, *pool);
+
+  // Every distinct Out filter on this crystal: append. The name, the action and the symmetry are
+  // deliberately the FILTER's own, not the list's — this chain joins a filter that already governs
+  // other rows under those bits, and giving one OR row its own symmetry is not something the
+  // filter model can say (per-row In/Out and symmetry are out of scope, by decision). A row
+  // already in it is not added twice, and when every row is already there nothing is written at
+  // all, so a second click is a true no-op to the frame-tail reconciler and not a same-content
+  // write it has to diff.
+  for (int slot : census.out_slots) {
+    EntryCard* rep = nullptr;
+    for (EntryCard* entry : entries) {
+      if (entry->filter_id.has_value() && *entry->filter_id == slot) {
+        rep = entry;
+        break;
       }
-      continue;
     }
-    if (std::find(slots_done.begin(), slots_done.end(), *entry->filter_id) != slots_done.end()) {
-      continue;
+    if (rep == nullptr) {
+      continue;  // census was built from these same entries; this cannot happen
     }
-    slots_done.push_back(*entry->filter_id);
-    // An Out filter: append. The name, the action and the symmetry are deliberately the FILTER's
-    // own, not the list's — this chain joins a filter that already governs other rows under those
-    // bits, and giving one OR row its own symmetry is not something the filter model can say
-    // (per-row In/Out and symmetry are out of scope, by decision). A row already in it is not
-    // added twice, and when every row is already there nothing is written at all, so a second
-    // click is a true no-op to the frame-tail reconciler and not a same-content write it has to
-    // diff.
-    FilterConfig filter = *existing;
+    FilterConfig filter = state.filters[static_cast<size_t>(slot)];
     size_t added = 0;
     for (const SummandText& row : rows) {
       if (std::find(filter.param.begin(), filter.param.end(), row) == filter.param.end()) {
@@ -681,12 +695,19 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
                    rp.raypath_text, filter.name, *pool);
       continue;
     }
-    WriteFilterToPool(state, *entry, filter);  // in place: every entry sharing the slot sees it
+    WriteFilterToPool(state, *rep, filter);  // in place: every entry sharing the slot sees it
     GUI_LOG_INFO("[Analysis] appended raypath {} to filter \"{}\" on crystal pool {} ({} rows now)", rp.raypath_text,
                  filter.name, *pool, filter.param.size());
   }
 
-  if (first_unfiltered != nullptr) {
+  if (census.unfiltered > 0) {
+    EntryCard* first_unfiltered = nullptr;
+    for (EntryCard* entry : entries) {
+      if (!entry->filter_id.has_value()) {
+        first_unfiltered = entry;
+        break;
+      }
+    }
     FilterConfig filter;
     filter.name = std::string("Exclude ") + e->display;
     filter.action = 1;  // filter_out
