@@ -984,6 +984,29 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // render: it holds no RenderConsumer. `was_analysis` says so explicitly below rather
   // than leaning on the renderer-count comparison, which would let a zero-renderer
   // config (whose render set is also two consumers) reuse the histogram set by accident.
+  // scene.ray_allocation = adaptive: deliver q before the scene is published. Runs
+  // here — after Stop() has joined the workers, before the scene is moved into place
+  // — because the pass is synchronous on this thread and the previous scene is still
+  // readable as `config_manager_.scene_`, which is the debounce's whole comparison
+  // base: no separate snapshot is kept, the last committed scene IS the last pilot's
+  // input plus its output. CommitConfig is a high-frequency path (the GUI recommits
+  // every 70ms while a slider drags), so a pilot only runs when something its tally
+  // can depend on changed; otherwise the previous weights are carried forward. A
+  // previous scene that was proportional, or whose layer shape differs, cannot be
+  // carried forward and reads as changed — CopyForward says so by returning false.
+  // The other scene publisher, StartRaypathAnalysis, does not deliver q on purpose:
+  // an analysis session renders no image, and lower image variance is the only
+  // thing adaptive dealing buys, so its layers fall back to proportional there.
+  if (new_config.scene_.ray_allocation_ == SceneConfig::RayAllocationMode::kAdaptive) {
+    const bool reused = !RayAllocationPilotInputsChanged(config_manager_.scene_, new_config.scene_) &&
+                        CopyForwardRayAllocationWeights(config_manager_.scene_, new_config.scene_);
+    if (reused) {
+      ILOG_INFO(logger_, "CommitConfig: ray-allocation pilot inputs unchanged; reusing the previous weights");
+    } else {
+      Simulator::RunRayAllocationPilot(new_config.scene_, RayAllocationPilotBudget{});
+    }
+  }
+
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
