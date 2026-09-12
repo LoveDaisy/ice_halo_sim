@@ -78,6 +78,12 @@ struct ConfigScratch {
   // resampling. 0 = disabled (core derives a SimBatch-based default); else must be in
   // [1, kGeomClockMax=64] (validated at commit by core config_manager.cpp).
   int geom_clock;
+  // scene.ray_allocation, carried VERBATIM (the string as the document spelled it, or empty
+  // when absent) so that core's parse of the re-encoded document is the one that decides what it
+  // means — its enum table maps an unrecognized spelling onto proportional and warns, and
+  // decoding here would silently swallow that warning. Sized for the two legal values with room
+  // for a misspelling to survive the round trip and be reported.
+  char ray_allocation[32];
 
   // Scene: scattering
   LUMICE_ScatterLayer scattering[LUMICE_MAX_CONFIG_SCATTER_LAYERS];

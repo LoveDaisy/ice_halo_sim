@@ -1038,6 +1038,38 @@ std::string SceneJsonWithMarkerBlock(const std::function<void(nlohmann::json&)>&
 }
 }  // namespace
 
+// scene.ray_allocation through the handle. The CLI and the GUI both commit through
+// LUMICE_SceneFromJsonFile + LUMICE_CommitScene, so a key the handle's document → scratch →
+// document round trip drops is a key no product surface can set — and the drop is silent (core
+// reads proportional, the default, and warns about nothing). The handle carries the string
+// VERBATIM: which spellings mean what stays core's decision at commit, so a misspelling survives
+// to be reported there rather than being folded into the default here.
+TEST(SceneRayAllocation, TheKeySurvivesTheHandleRoundTripVerbatim) {
+  const auto round_trips = [](const char* spelled) {
+    nlohmann::json doc = nlohmann::json::parse(SceneJsonWithMarkerBlock([](nlohmann::json&) {}));
+    doc["scene"]["ray_allocation"] = spelled;
+    LUMICE_Scene* scene = nullptr;
+    ASSERT_EQ(LUMICE_SceneFromJson(doc.dump().c_str(), &scene), LUMICE_OK) << spelled;
+    ASSERT_NE(scene, nullptr);
+    const nlohmann::json out = nlohmann::json::parse(SceneToJsonString(scene));
+    LUMICE_SceneDestroy(scene);
+    ASSERT_TRUE(out["scene"].contains("ray_allocation")) << spelled;
+    EXPECT_EQ(out["scene"]["ray_allocation"].get<std::string>(), spelled);
+  };
+  for (const char* spelled : { "adaptive", "proportional", "adaptve" }) {
+    round_trips(spelled);
+  }
+  // Absent stays absent (the omit-when-default isomorphism every other scene scalar keeps), and a
+  // non-string value is a type error at the handle, not something to guess a meaning for.
+  nlohmann::json doc = nlohmann::json::parse(SceneJsonWithMarkerBlock([](nlohmann::json&) {}));
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.dump().c_str(), &scene), LUMICE_OK);
+  EXPECT_FALSE(nlohmann::json::parse(SceneToJsonString(scene))["scene"].contains("ray_allocation"));
+  LUMICE_SceneDestroy(scene);
+  doc["scene"]["ray_allocation"] = 1;
+  EXPECT_EQ(LUMICE_SceneFromJson(doc.dump().c_str(), &scene), LUMICE_ERR_INVALID_VALUE);
+}
+
 TEST(SceneRenderZenithNadir, StructValuesReachTheJsonKey) {
   SceneGuard g;
   int id = -1;

@@ -2,6 +2,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -854,6 +855,10 @@ nlohmann::json ConfigToJson(const ConfigScratch& c) {
   // geom_clock: emit only when set (mirrors core proj_config.cpp::to_json's `if (geom_clock_ != 0)`).
   if (c.geom_clock != 0) {
     scene["geom_clock"] = c.geom_clock;
+  }
+  // ray_allocation: emit only when the document carried it, verbatim (see ConfigScratch).
+  if (c.ray_allocation[0] != '\0') {
+    scene["ray_allocation"] = c.ray_allocation;
   }
 
   scene["scattering"] = json::array();
@@ -2216,6 +2221,18 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScr
   // in core config_manager.cpp at commit, matching the ray_num/max_hits convention here).
   if (scene.contains("geom_clock")) {
     out->geom_clock = scene.at("geom_clock").get<int>();
+  }
+
+  // ray_allocation: verbatim pass-through (see ConfigScratch::ray_allocation). Only its TYPE is
+  // checked here; which spellings mean what is core's decision, made at commit.
+  out->ray_allocation[0] = '\0';
+  if (scene.contains("ray_allocation")) {
+    const auto& ra = scene.at("ray_allocation");
+    if (!ra.is_string()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    const std::string spelled = ra.get<std::string>();
+    std::snprintf(out->ray_allocation, sizeof(out->ray_allocation), "%s", spelled.c_str());
   }
 
   // Scattering: required (core: j_scene.at("scattering")), and so is each layer's "entries"
