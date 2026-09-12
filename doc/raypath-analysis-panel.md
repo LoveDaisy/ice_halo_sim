@@ -62,11 +62,11 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    使得将来给 GPU 补上这条能力时，是「换一份实现」而不是「悄悄改变了语义」。
    **as-built**：`ServerImpl::mode_`（`SessionMode::kAnalysis`，`src/server/server.cpp:409`）
    进入分析会话；`ResolveGpuRoute(preferred_backend, logger_, force_cpu)`
-   （`src/server/server.cpp:531`）与 `Simulator::CreateBackend`（`src/core/simulator.cpp:931`
-   附近）都在 env override 之前短路成 CPU；`Simulator::SetAnalysisForceCpu(bool)`
-   （`src/core/simulator.hpp:111`）写这条会话属性，`Simulator::ActiveBackend()`
-   （`src/core/simulator.hpp:119`）发布解析后的实际后端，`LUMICE_GetActiveBackend`
-   （`src/include/lumice.h:2347`，`src/server/c_api.cpp:3319`）把它读出来给调用方核对「强制是否生效」。
+   （`src/server/server.cpp:547`）与 `Simulator::CreateBackend`（`src/core/simulator.cpp:1012`）
+   都在 env override 之前短路成 CPU；`Simulator::SetAnalysisForceCpu(bool)`
+   （`src/core/simulator.hpp:108`）写这条会话属性，`Simulator::ActiveBackend()`
+   （`src/core/simulator.hpp:116`）发布解析后的实际后端，`LUMICE_GetActiveBackend`
+   （`src/include/lumice.h:2448`，`src/server/c_api.cpp:3320`）把它读出来给调用方核对「强制是否生效」。
    GUI 侧**没有**为这条加任何可见提示或按钮禁用——Analyze 在 GPU 偏好会话下一样可点，只是内部
    静默走 CPU、可能比渲染慢；这是子任务 5 范围内的非目标（GUI 的 GPU 路径体验留给未来子任务）。
 2. **「光路」= 从光源到相机的完整链，不是单晶体内的一段。**
@@ -112,7 +112,7 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    **每个** key 都配一张粗天球栅格才能算出「这条链覆盖了多大立体角」，存储与实现复杂度都
    上升一个量级。v1 先把「总能量降序」这个最基本、最省资源的排序做对，密度排序留作明确的
    后续升级点（见 §8）。
-   **as-built**：`RaypathHistogramResult::entries_`（`src/server/server.hpp:244`）按能量降序，
+   **as-built**：`RaypathHistogramResult::entries_`（`src/server/server.hpp:282`）按能量降序，
    相等时按链字符串字典序（tie-break，`test_raypath_histogram_consumer.cpp` AC5 覆盖）；
    密度排序 v1 未做，见 §8。
 
@@ -176,13 +176,13 @@ interning 表把 `(父链 id, 本层 crystal_id, 本层约化后的 segment) →
 
 **as-built**：权威实现是新文件 `src/core/chain_id_table.{hpp,cpp}` 的
 `ChainIdInterningTable`（类声明 `src/core/chain_id_table.hpp:53`）——`Intern(parent, crystal_id,
-segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `chain_id_table.cpp:80`）
-沿父指针回溯打印，`Segments(uint32_t id)`（`:85`/`:70`）与 `PathToRoot(uint32_t id)`
-（`:89`/`:62`）共享同一个私有 walk（贯彻单一权威，子任务 3 落地时把两者的重复实现合并）。
+segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:86`，实现 `chain_id_table.cpp:80`）
+沿父指针回溯打印，`Segments(uint32_t id)`（`:92`/`:70`）与 `PathToRoot(uint32_t id)`
+（`:96`/`:62`）共享同一个私有 walk（贯彻单一权威，子任务 3 落地时把两者的重复实现合并）。
 
 **已知实现缺陷**：`sigma_a`/`d_applicable` 的推导逻辑在 `MakeChainIdLayerContext`
 （定义于 `src/core/simulator.cpp:859-869`，声明于 `src/core/trace_ops.hpp:94`）与
-`FilterSpec::Create`（`filter_spec.cpp:382-383`）两处字面重复，仅靠测试断言两者数值相等保证同步，
+`FilterSpec::Create`（`filter_spec.cpp:383-384`）两处字面重复，仅靠测试断言两者数值相等保证同步，
 未抽出共享函数（a56 的一个已知但未消解的小实例）。已登记为项目缺陷追踪的一条独立记账。
 
 链 id 只在光线穿过一层晶体、生成本层 raypath 之后，用该层约化后的 segment 去查/建表，
@@ -193,9 +193,9 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 **多 worker 合并（as-built）**：设计阶段的开放问题——per-worker 增量 vs 强制单 worker——
 裁定为 **per-worker 表 + 增量合并**：`SimData` 新增 `producer_effective_seed_`
 （`src/config/sim_data.hpp:254`）标记批次来源，`ChainIdMerger`（类声明
-`src/core/chain_id_table.hpp:130`）的 `Absorb(producer_key, delta)`
-（`:147`，实现 `chain_id_table.cpp:103`）把每个 worker 的本地 id 空间 remap 进一张合并表，
-返回 `AbsorbReport{orphaned, non_monotonic}`（`:135`）作为契约破坏的可观测见证。
+`src/core/chain_id_table.hpp:137`）的 `Absorb(producer_key, delta)`
+（`:154`，实现 `chain_id_table.cpp:103`）把每个 worker 的本地 id 空间 remap 进一张合并表，
+返回 `AbsorbReport{orphaned, non_monotonic}`（`:142`）作为契约破坏的可观测见证。
 `test/unit-correctness/core/test_chain_id_merger.cpp`（新）与
 `test/regression-sentinel/test_effective_seed_worker_count_invariant.py`（`-m slow`）
 用两个不同 seed 的 `Simulator` 验证合并集合等于两集合之并、先证明本地 id 确有冲突。
@@ -215,7 +215,7 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 新）。`Consume()` 先无条件 `Absorb` 整批 chain-id delta，再逐光线做 ROI 判定——顺序是刻意的：
 先吸收表增量、再筛选光线，避免「delta 非空但本批光线全被 ROI 过滤掉」导致 orphaned 引用。
 `server.hpp` 的 `Result` variant 新增第四 alternative `RaypathHistogramResult`
-（`src/server/server.hpp:251`），是纯加法扩展（全仓非穷尽 `std::visit` 无需补分支）。
+（`src/server/server.hpp:291`），是纯加法扩展（全仓非穷尽 `std::visit` 无需补分支）。
 两阶段快照协议（`PrepareSnapshot` / `GetResult`）与 `StatsConsumer` 同形。
 
 **已知实现缺陷（已登记为项目缺陷追踪的一条独立记账，未在本次收尾修复）**：`Consume()` 早退只判
@@ -249,7 +249,7 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:79`，实现 `cha
 每个链 id 对应的最小状态是：能量累加（Σ(Y·w)）、命中计数、（锥形 ROI 时）按环分桶的
 子累加器。这三类都是标量或定长小数组，不随分辨率或桶数线性增长——这正是本形态相对于
 「每桶一张全分辨率图」的内存优势的直接体现。**as-built**：`RaypathHistogramEntry`
-（`src/server/server.hpp:230`）与 `RaypathChainSegment`（`:225`）承载这些字段；C 结构体侧
+（`src/server/server.hpp:264`）与 `RaypathChainSegment`（`:232`）承载这些字段；C 结构体侧
 `LUMICE_RaypathHistogramEntry`（`src/include/lumice.h`，「Raypath Analysis Run」一节）逐字节
 镜像。
 
@@ -366,7 +366,7 @@ entry 共享）/ 多个 Out 槽位 / 还有未筛选子组分别措辞。实施�
   锥心从「点击时缓存的画布像素」改为每帧从方向正投影的 marker（见 §2 第 3 条 2026-09-12 更新），
   ROI 圈与 marker 同步重投影，不会再与转动后的画面脱节；用户手册的对应「已知限制」小节已删除。
 - **反投影走 C API 还是 `src/util/`**（未决问题，非裁决）——**已裁定：C API**。子任务 4 新增
-  `LUMICE_UnprojectPixel(view, px, py, out_dir[3])`（`src/include/lumice.h:2064`），签名从
+  `LUMICE_UnprojectPixel(view, px, py, out_dir[3])`（`src/include/lumice.h:2139`），签名从
   plan 字面的 `float px, py` 改为 `int px, py`（整数像素坐标）——用浮点签名会在 bridge 层复制一份
   `PixelToWorld` 内部换算，违反「反投影只有一个实现」的硬约束。11 个 lens 分支的
   forward∘inverse **精确相等**（无需容差）。函数没有搬进 `src/util/`：`PixelToWorld`
@@ -378,7 +378,7 @@ GUI 与 CLI 若都要打印一条链，打印的是**同一个字符串**，而�
 
 **2026-09-12 更新（commit `9efc4779`/`39557d8b`/`c8e271f5`/`b12da83a`）——权威实现搬家、格式改版**：
 权威实现从 `ChainIdInterningTable::Format` 搬到了 `FormatRaypathChainDisplay`
-（`src/server/raypath_histogram_consumer.cpp:249`，声明于同目录 `.hpp`）；
+（`src/server/raypath_histogram_consumer.cpp:250`，声明于同目录 `.hpp`）；
 `ChainIdInterningTable::Format`（`src/core/chain_id_table.cpp:80`）不再对外可见——它是记录侧内部
 的诊断格式，从不离开 core（`crystal1(3-5)` 这种写法是它的输出，仅供 core 内部调试用）。
 `RaypathHistogramConsumer::PrepareSnapshot` / `ReduceRaypathHistogram` 用 `FormatRaypathChainDisplay`
