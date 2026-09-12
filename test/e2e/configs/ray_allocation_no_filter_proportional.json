@@ -80,7 +80,7 @@
       "altitude": 20.0,
       "spectrum": "D65"
     },
-    "ray_num": 5000000,
+    "ray_num": 10000000,
     "max_hits": 7,
     "ray_allocation": "proportional",
     "scattering": [

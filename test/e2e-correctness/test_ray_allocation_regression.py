@@ -31,15 +31,29 @@ PSNR pairing would measure a large, legitimate change in noise distribution and
 say nothing about expected-image regression.
 
 PSNR threshold: calibrated by rendering each arm 3 times (the CLI has no seed
-argument, so runs differ naturally) and taking min over the 3×3 cross-mode
-pairs − 3 dB, the recipe test_raypath_equivalence.py uses.
-Calibration on 2026-09-12 (128×128, 5,000,000 rays, legacy CPU path):
-  proportional × adaptive : [36.05, 36.11, 36.04, 36.04, 36.17, 36.02, 36.00, 36.07, 36.09] dB
-  proportional × proportional (noise floor): [36.02, 36.08, 36.03] dB
-  adaptive × adaptive (noise floor):         [36.04, 36.04, 36.07] dB
-  min cross-mode = 36.00 dB → threshold 33.0 dB.
+argument, so runs differ naturally), taking min over the 3×3 cross-mode pairs,
+and placing the threshold about 1 dB under it, floored to 0.5 dB -- the
+`mean − max(4σ, 1.0 dB)` shape the GUI reference groups use, not
+test_raypath_equivalence.py's 3 dB margin: at 3 dB this ruler was measured to
+let a halving of the main crystal's share through (34.0 dB against a 33.0 dB
+floor at 5,000,000 rays), i.e. it could not see the regression it is for.
+Calibration on 2026-09-12 (128×128, 10,000,000 rays, legacy CPU path):
+  proportional × adaptive : [39.82, 39.73, 39.81, 39.97, 39.77, 39.95, 39.89, 39.82, 39.82] dB
+  proportional × proportional (noise floor): [39.73, 39.76, 39.90] dB
+  adaptive × adaptive (noise floor):         [39.85, 39.86, 39.78] dB
+  min cross-mode = 39.73 dB → threshold 38.5 dB.
 The cross-mode pairs sit inside the within-mode band, which is the claim.
-Pilot output on that scene (deterministic -- the pilot is seeded):
+Red / green samples for this ruler, same day, deliberately broken configs
+compared against the 3 proportional frames:
+  main crystal's proportion 100 → 50 (a 2× share error): 35.88–35.95 dB → RED.
+  the 10 % crystal's proportion 10 → 0 (dropped outright): 39.22–39.31 dB → still
+  GREEN -- an error confined to a 10 % share sits under this ruler's resolution at
+  this ray budget (doubling the rays was measured to buy ~0.5 dB more, not enough
+  to change that). That is why the mechanism test below exists: this PSNR pair
+  answers "is the expected image unchanged to within MC noise", not "did adaptive
+  do anything".
+Pilot output on that scene (deterministic -- the pilot is seeded; measured at
+5,000,000 rays, and the pilot's own budget does not depend on ray_num):
   p = 100/50/10 → q = 0.6354/0.3019/0.06276 (shares 0.6250/0.3125/0.0625 → at most
   3.4 % relative movement), i.e. the "q ≈ p" regime the scene was built for.
 
@@ -66,7 +80,7 @@ if HAS_PILLOW:
 CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 # See the module docstring for the calibration behind both numbers.
-ZERO_REGRESSION_PSNR_THRESHOLD = 33.0
+ZERO_REGRESSION_PSNR_THRESHOLD = 38.5
 MECHANISM_MIN_RELATIVE_SHARE_MOVE = 0.25
 
 PROPORTIONAL = "ray_allocation_no_filter_proportional"
