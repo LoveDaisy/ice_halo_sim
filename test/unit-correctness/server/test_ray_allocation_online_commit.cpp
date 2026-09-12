@@ -33,13 +33,13 @@
 // exactly the kind of assertion a loaded CI runner turns into a flake.
 
 #include <gtest/gtest.h>
-#include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/sinks/base_sink.h>
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <regex>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -51,22 +51,47 @@
 namespace lumice {
 namespace {
 
+// A sink that appends every formatted line to a string and hands the string
+// out under the SAME mutex the writes take. An ostream_sink_mt read through
+// `oss.str()` from the test thread races the worker threads that keep logging
+// while the run is live (the server's own lines land on those threads), and
+// that race read as an EMPTY capture once in CI — a truncated copy of a string
+// being reallocated underneath it.
+class CaptureSink : public spdlog::sinks::base_sink<std::mutex> {
+ public:
+  std::string Text() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return text_;
+  }
+  void Clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    text_.clear();
+  }
+
+ protected:
+  void sink_it_(const spdlog::details::log_msg& msg) override {
+    spdlog::memory_buf_t formatted;
+    formatter_->format(msg, formatted);
+    text_.append(formatted.data(), formatted.size());
+  }
+  void flush_() override {}
+
+ private:
+  std::string text_;
+};
+
 class LogCapture {
  public:
-  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) { GetSharedSink()->add_sink(sink_); }
+  LogCapture() : sink_(std::make_shared<CaptureSink>()) { GetSharedSink()->add_sink(sink_); }
   ~LogCapture() { GetSharedSink()->remove_sink(sink_); }
   LogCapture(const LogCapture&) = delete;
   LogCapture& operator=(const LogCapture&) = delete;
 
-  std::string Text() const { return oss_.str(); }
-  void Clear() {
-    oss_.str("");
-    oss_.clear();
-  }
+  std::string Text() const { return sink_->Text(); }
+  void Clear() { sink_->Clear(); }
 
  private:
-  std::ostringstream oss_;
-  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+  std::shared_ptr<CaptureSink> sink_;
 };
 
 // The two branches of CommitConfig's adaptive block, by the line each emits.
