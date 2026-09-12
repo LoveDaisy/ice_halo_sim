@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789247025580,
+  "lastUpdate": 1789248084796,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "5a8f8982aa3d6bf634f3f13b6cf53ccc29bce9a4",
-          "message": "Merge pull request #253 from LoveDaisy/refactor/user-defaults-write-surface-closure\n\nrefactor(gui): close the parallel user-defaults write surface (434)",
-          "timestamp": "2026-08-06T16:41:53+08:00",
-          "tree_id": "e39098a9bc1cf37fc4ce2c511b3cc4c9e248608f",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5a8f8982aa3d6bf634f3f13b6cf53ccc29bce9a4"
-        },
-        "date": 1786006346411,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 452681.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 583957,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 609164.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 353361.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4758,6 +4710,54 @@ window.BENCHMARK_DATA = {
             "value": 338599.7,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d5c230764f43779ffb32bc75e454ec07f2159a03",
+          "message": "Merge pull request #351 from LoveDaisy/fix/exposure-mode-combo-fixed-separation\n\ntest(gui): prove exposure-mode separation with an intensity probe, not a seed-dependent gap",
+          "timestamp": "2026-09-13T05:13:06+08:00",
+          "tree_id": "8da3f1ccd7d22ef20d6fff6dff9a5c615f8e013d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d5c230764f43779ffb32bc75e454ec07f2159a03"
+        },
+        "date": 1789248083352,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 474199.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 592907.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 384547.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 550630,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
           }
         ]
       }
