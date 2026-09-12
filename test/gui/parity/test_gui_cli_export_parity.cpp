@@ -1094,15 +1094,20 @@ ParityScene MakeLinesOnlyScene(const LinesOnlyScene& lines, const ParityScene& b
   return s;
 }
 
+// Pixel `p` of an interleaved RGB image packed 0xRRGGBB — the one definition of the packing that
+// ModeColor, AnnotationMembership and kLinesOnlyCanvasPacked all assume.
+inline uint32_t PackRgb(const unsigned char* rgb, size_t p) {
+  return (static_cast<uint32_t>(rgb[p * 3]) << 16) | (static_cast<uint32_t>(rgb[p * 3 + 1]) << 8) |
+         static_cast<uint32_t>(rgb[p * 3 + 2]);
+}
+
 // The most frequent byte triple of an RGB image, packed 0xRRGGBB. One pass over a hash map; the
 // frames here have under forty distinct colours.
 uint32_t ModeColor(const unsigned char* rgb, int w, int h) {
   std::unordered_map<uint32_t, int> counts;
   const size_t n_px = static_cast<size_t>(w) * h;
   for (size_t p = 0; p < n_px; ++p) {
-    const uint32_t key = (static_cast<uint32_t>(rgb[p * 3]) << 16) | (static_cast<uint32_t>(rgb[p * 3 + 1]) << 8) |
-                         static_cast<uint32_t>(rgb[p * 3 + 2]);
-    ++counts[key];
+    ++counts[PackRgb(rgb, p)];
   }
   uint32_t mode = 0;
   int best = -1;
@@ -1121,9 +1126,7 @@ std::vector<unsigned char> AnnotationMembership(const unsigned char* rgb, int w,
   const size_t n_px = static_cast<size_t>(w) * h;
   std::vector<unsigned char> mask(n_px, 0);
   for (size_t p = 0; p < n_px; ++p) {
-    const uint32_t key = (static_cast<uint32_t>(rgb[p * 3]) << 16) | (static_cast<uint32_t>(rgb[p * 3 + 1]) << 8) |
-                         static_cast<uint32_t>(rgb[p * 3 + 2]);
-    mask[p] = key != canvas ? 1 : 0;
+    mask[p] = PackRgb(rgb, p) != canvas ? 1 : 0;
   }
   return mask;
 }
