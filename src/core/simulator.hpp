@@ -50,6 +50,72 @@ struct SimBatch {
   std::shared_ptr<const RaypathColorConfig> raypath_color_;
 };
 
+// Landed-energy statistics of a pilot pass, per (layer, entry), in the layout of
+// SceneConfig::ms_. What Neyman allocation needs from a pilot is E[e²] per emitted
+// ray for each entry — Σ over the entry's true exits of w² divided by the rays the
+// entry was DEALT (exits included, silent rays counted as e = 0) — plus enough to say
+// how well that mean is known (Σw⁴ for its variance; the exit count for the
+// zero-hit case). Σw is carried for the report, not the formula.
+//
+// `rays` counts what PartitionCrystalRayNum dealt to the entry on this layer, which
+// on a continuation layer (mi > 0) is the re-dealt survivors of the layer above — so a
+// deep layer's counts are smaller than the top layer's by construction, and its
+// estimate converges later. That is the whole reason the pilot's budget is checked
+// per entry rather than as one ray total.
+struct RayAllocationPilotStats {
+  struct Entry {
+    double sum_w = 0.0;
+    double sum_w2 = 0.0;
+    double sum_w4 = 0.0;
+    size_t rays = 0;   // dealt to this (layer, entry)
+    size_t exits = 0;  // true exits (RaySeg::IsOutgoing) among them
+  };
+  std::vector<std::vector<Entry>> layers;  // [mi][ci], mirrors scene.ms_[mi].setting_[ci]
+
+  // Size to `scene` with every counter at zero. The accumulation hook indexes
+  // layers[mi][ci] unchecked, so this must be called with the scene the pilot traces.
+  void Reset(const SceneConfig& scene);
+};
+
+// The knobs of one pilot pass. Every default is the shipped value; a test narrows
+// them to make a scene converge (or fail to) on purpose.
+struct RayAllocationPilotBudget {
+  // Rays traced before the first convergence check. 0 = derive from the scene:
+  // max(kMinInitialRays, kRaysPerEntry × K), K the largest per-layer count of p_i > 0
+  // entries — a 3-entry scene starts at 300k, inside the 200k–500k band the design
+  // calibrated on (see the pilot's own comment for the calibration's shape).
+  size_t initial_rays = 0;
+  // Rays per SimulateOneWavelength call. Bounds the workspace (all_data is sized to
+  // chunk × (2·max_hits + 1) segments) and is the grain the spectrum is cycled at.
+  size_t chunk_rays = 8192;
+  // How many times an unconverged pilot doubles its cumulative budget before it
+  // accepts what it has: 3 → at most 8 × initial_rays in total. Bounded on purpose —
+  // an entry that cannot converge (a deep layer no ray reaches) must not turn
+  // CommitConfig into an unbounded trace.
+  int max_doublings = 3;
+  // Relative standard error the per-entry √E[e²] estimate has to reach. It is the
+  // quantity that enters q, so the check is on it and not on E[e²] (whose relative
+  // error is twice as large).
+  double target_rel_error = 0.2;
+  // An entry with zero exits has no variance to estimate; it is taken as resolved
+  // (to E[e²] = 0, which the ε floor then lifts) once it has been dealt this many
+  // rays without one exit.
+  size_t zero_hit_resolve_rays = 2000;
+
+  static constexpr size_t kMinInitialRays = 200'000;
+  static constexpr size_t kRaysPerEntry = 100'000;
+};
+
+// What one pilot pass did, for the log line and for tests. `stats` is the cumulative
+// tally every doubling added to — never reset between rounds.
+struct RayAllocationPilotReport {
+  size_t total_rays = 0;   // Σ rays dealt to layer 0 over every round
+  int doublings = 0;       // rounds past the first
+  bool converged = false;  // every p_i > 0 entry on every layer resolved
+  double elapsed_ms = 0.0;
+  RayAllocationPilotStats stats;
+};
+
 class Simulator {
  public:
   enum State {
@@ -142,6 +208,43 @@ class Simulator {
     all_data_observer_ctx_ = ctx;
   }
 
+  // The pilot pass of scene.ray_allocation = adaptive: trace `scene` on the legacy
+  // CPU path with the per-(layer, entry) tally above switched on, and write the
+  // Neyman weights ComputeAdaptiveRayAllocationWeights derives from it into every
+  // ScatteringSetting::crystal_ray_alloc_weight_ of `scene`. Every layer gets every
+  // entry written, so ResolveLayerRayAllocation's all-or-nothing "delivered" test
+  // passes for each of them.
+  //
+  // Forced CPU by construction, not by a switch: the pass runs on a one-shot
+  // Simulator built here and driven synchronously on the CALLER's thread through
+  // SimulateOneWavelength — the function that IS the legacy CPU path — so no
+  // TraceBackend can be selected and no worker thread is involved. Same intent as
+  // the analysis session's SetAnalysisForceCpu (doc/raypath-analysis-panel.md §2,
+  // ruling 1: the GPU's device-fused accumulation never surfaces per-ray records),
+  // reached one level lower because this pass has no Run() to switch.
+  //
+  // Reproducible: the pass seeds its own Simulator and the calling thread's
+  // thread-local RandomNumberGenerator (the one the orientation samplers read)
+  // from a fixed constant, so the same scene delivers the same q on every commit,
+  // whatever the user's seed. The thread-local reseed cannot reach a worker: each
+  // worker thread owns its own instance and Run() seeds it on entry.
+  //
+  // The pilot deals by p (a proportional copy of the scene is traced), so the
+  // tally is of the unmodified per-ray energies. Budget: `budget.initial_rays`
+  // (derived from the scene when 0), then, while any p_i > 0 entry on ANY layer is
+  // unresolved (RayAllocationEntryResolved), the cumulative budget is doubled and
+  // the tally continued — not restarted — up to `budget.max_doublings` times.
+  // Checking every layer subsumes the design's "size the budget by the deepest
+  // layer's survivors": the deepest layer is the last to resolve, and it is checked
+  // by the same predicate as the rest.
+  static RayAllocationPilotReport RunRayAllocationPilot(SceneConfig& scene, const RayAllocationPilotBudget& budget);
+
+  // Seed of the pilot's Simulator and of the calling thread's RandomNumberGenerator
+  // for the pass's duration. A constant rather than the user's seed on purpose: q
+  // is an input the render is then reproducible ON, and it must not itself move
+  // with the render's seed.
+  static constexpr uint32_t kRayAllocationPilotSeed = 0x537A110Cu;
+
  private:
   using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
   struct SimWorkspace {
@@ -171,10 +274,19 @@ class Simulator {
   // struct would make that call site express both meanings with one value. If a
   // further audit-only quantity ever joins it, group them into a batch-audit
   // struct rather than growing this parameter list again.
+  // `pilot_stats`: nullptr on every production call. Non-null switches the call
+  // into the ray-allocation pilot's tally mode: every (layer, entry)'s dealt-ray
+  // count and true-exit w / w² / w⁴ sums are accumulated into it (sized by
+  // RayAllocationPilotStats::Reset beforehand) and NO SimData is emplaced — the
+  // pass exists for the tally alone, and a batch nobody consumes would only sit
+  // in data_queue_. The accumulation sits at the same "true exit" collection point
+  // the batch's outgoing_w_ is built from, so what the pilot measures is exactly
+  // what a render of the same scene would hand the consumer.
   void SimulateOneWavelength(const SceneConfig& config, const RaypathColorConfig* raypath_color,
                              const WlParam& wl_param, float emitted_weight, size_t ray_num, CrystalCache& crystal_cache,
                              SimWorkspace& workspace, uint64_t generation,
-                             std::vector<std::vector<double>>& ray_alloc_carry);
+                             std::vector<std::vector<double>>& ray_alloc_carry,
+                             RayAllocationPilotStats* pilot_stats = nullptr);
 
   // Backend-routed wavelength step (TraceBackend seam, scrum-258.1 exit-seam).
   // Drives backend.BeginSession -> (TraceLayer -> Recombine)+ -> ReadbackExitRays
@@ -373,6 +485,52 @@ struct LayerRayAllocation {
 // therefore not "partly adaptive" — it is proportional, and stays so until every entry has a
 // weight.
 LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer);
+
+// The q one layer is dealt by, from its energy shares `p` (crystal_proportion_) and
+// the pilot's tally of the same layer (`stats.size() == p.size()`). Neyman allocation
+// with a floor:
+//   q_i = 0                                  if p_i <= 0   (a switched-off entry stays off)
+//   q_i = max(raw_i / Σraw, 0.01 / K)        otherwise, raw_i = p_i · √(Σw²_i / rays_i)
+// with K the number of p_i > 0 entries — the entries the floor is FOR; a p_i = 0 entry
+// is not a share the floor divides among. The floor is not a zero-hit special case:
+// Neyman on its own pushes a rare-but-ordinary-energy entry BELOW its proportional
+// share (E[e²] carries the hit rate once more than E[e] does), and an entry the pilot
+// saw no exit from would otherwise be dealt nothing for the rest of the run — a fixed
+// point nothing escapes (see the starvation test). 0.01/K keeps the main entries'
+// shares within 0.1% of Neyman while guaranteeing every live entry 1% of a uniform
+// deal. The vector is returned unnormalized past the floor: PartitionCrystalRayNum
+// and ComputeRayAllocationCorrection normalize whatever they are handed, and the
+// same Σ is what both see. An entry with rays_i == 0 has raw_i = 0 (nothing was
+// measured, so nothing is claimed); when every raw_i is 0 the live entries are
+// dealt uniformly at the floor.
+std::vector<float> ComputeAdaptiveRayAllocationWeights(const std::vector<float>& p,
+                                                       const std::vector<RayAllocationPilotStats::Entry>& stats);
+
+// Whether one entry's tally is good enough to stop tracing for it. Resolved when
+// the relative standard error of √(Σw²/rays) — half that of the mean of w² itself,
+// var(w²)/rays / mean(w²)² with var from Σw⁴ — is at or under `target_rel_error`;
+// or, with no exit at all, once `zero_hit_resolve_rays` rays have been dealt (the
+// estimate is then 0 and the floor decides). An entry dealt no rays is unresolved.
+bool RayAllocationEntryResolved(const RayAllocationPilotStats::Entry& entry, double target_rel_error,
+                                size_t zero_hit_resolve_rays);
+
+// The debounce of the pilot at CommitConfig. True when anything a pilot's tally can
+// depend on differs between the two scenes; false when only the fields the pilot is
+// indifferent to differ. Implemented by comparing the two scenes with the one
+// SceneConfig equality this tree has (config_compare.hpp) after masking exactly
+// those indifferent fields — ray_num_, geom_clock_, ray_allocation_ and the
+// crystal_ray_alloc_weight_ sentinels themselves — rather than by a second list
+// of the fields that DO matter. A scene field added later is therefore compared
+// by default, which errs toward one extra pilot, never toward a stale q.
+bool RayAllocationPilotInputsChanged(const SceneConfig& previous, const SceneConfig& next);
+
+// Carry the previous scene's delivered weights into `next`, layer for layer and
+// entry for entry. Returns false and writes nothing unless `previous` is fully
+// delivered (every entry of every layer at a weight >= 0) and has the same
+// (layer, entry) shape as `next` — the caller then runs a pilot instead. With
+// RayAllocationPilotInputsChanged false the shapes are equal by construction; the
+// check is what keeps this function safe to call on its own.
+bool CopyForwardRayAllocationWeights(const SceneConfig& previous, SceneConfig& next);
 
 // Single owner of the hit-loop buffer-pair capacity contract. The pair is a
 // producer/consumer ping-pong (buffer_data[0] holds a hit's input rays,
