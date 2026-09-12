@@ -17,10 +17,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "IconsFontAwesome6.h"
 #include "gui/analysis_panel.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/gui_logger.hpp"
+#include "gui/log_sink.hpp"
 #include "gui/raypath_segments.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "imgui_internal.h"
@@ -387,6 +390,85 @@ bool RunWholeSkyAnalysisToCompletion(ImGuiTestContext* ctx, bool* saw_simulating
 std::string TopChainDisplay() {
   const auto& view = gui::g_state.analysis_result;
   return view.payload->entries[static_cast<size_t>(view.display_order[0])].display;
+}
+
+// In-frame mode, Analyze pressed, driven until the run ends on the panel's finite budget. The
+// radio is gated on a live preview (analysis_panel.cpp), so the caller brings one up first.
+bool RunInFrameAnalysisToCompletion(ImGuiTestContext* ctx) {
+  IM_CHECK_RETV(gui::g_preview_vp.active, false);
+  ctx->SetRef(kWindowRef);
+  IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo("In frame")), false);
+  ctx->ItemClick("In frame");
+  IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)), false);
+  ctx->ItemClick(kAnalyzeButton);
+  ctx->SetRef("");
+  IM_CHECK_RETV(gui::g_state.analysis.started, false);
+  IM_CHECK_RETV(!gui::g_state.analysis.infinite, false);
+  IM_CHECK_RETV(
+      DriveUntil(
+          ctx, [] { return !gui::g_state.analysis_run_in_progress && gui::g_state.analysis_result.payload != nullptr; },
+          60),
+      false);
+  IM_CHECK_RETV(gui::g_state.analysis_result.payload->roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME, false);
+  return true;
+}
+
+// A sink of our own on the GUI logger for the duration of a case, so what DoRun logs can be read
+// back. gui_test does not attach one by itself: g_imgui_log_sink exists only under --log-panel,
+// and even then it is fed by the CORE log callback, not by the GUI logger DoRun writes to
+// (test_log_panel.cpp attaches its own for the same reason). Restores the sink list on the way
+// out — it is process-wide and gui_test is one process.
+struct ScopedGuiLogCapture {
+  std::shared_ptr<gui::ImGuiLogSink> sink;
+  std::vector<spdlog::sink_ptr> prev_sinks;
+
+  ScopedGuiLogCapture() : sink(std::make_shared<gui::ImGuiLogSink>()), prev_sinks(gui::GetGuiLogger().sinks()) {
+    gui::GetGuiLogger().sinks().push_back(sink);
+  }
+  ~ScopedGuiLogCapture() { gui::GetGuiLogger().sinks() = prev_sinks; }
+
+  bool Contains(const char* needle) const {
+    bool found = false;
+    sink->ForEachEntry(
+        [&](size_t, const gui::LogEntry& e) { found = found || e.message.find(needle) != std::string::npos; });
+    return found;
+  }
+};
+
+const char* const kMismatchNeedle = "predict/actual mismatch";
+
+// The Run after a COMPLETED analysis, from the top bar: it renders, and DoRun did not have to
+// fall back on its safety net. The net is the "predict/actual mismatch" branch — the GUI
+// predicted that the commit would reuse the previous session's consumers, the server rebuilt
+// them (it never reuses an analysis session's), and the poller was stopped late. DoRun avoids
+// it by reading the server's own session kind (LUMICE_GetSimLifecycle's session_kind) into its
+// rebuild predicate before the commit; this is the one layer that can see the two agree, and it
+// reads the warning's absence off a sink attached for the purpose. The capture is armed only
+// for the second Run, so the analysis's own logging cannot mask a warning it never printed —
+// and a probe line proves the sink is receiving before "absent" is read as "did not happen".
+bool RunAfterCompletedAnalysisHasNoRebuildMismatch(ImGuiTestContext* ctx) {
+  IM_CHECK_RETV(gui::g_state.sim_state == SimState::kDone, false);
+  IM_CHECK_RETV(!gui::g_state.analysis_run_in_progress, false);
+  LUMICE_SimLifecycleResult before_run{};
+  LUMICE_GetSimLifecycle(gui::g_server, &before_run);
+  IM_CHECK_RETV(before_run.session_kind == static_cast<int>(LUMICE_SESSION_ANALYSIS), false);
+
+  ScopedGuiLogCapture capture;
+  GUI_LOG_WARNING("[gui_test] log capture probe");
+  IM_CHECK_RETV(capture.Contains("log capture probe"), false);
+
+  const unsigned long long uploads_before = gui::g_state.texture_upload_count;
+  IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo("##TopBar/" ICON_FA_PLAY " Run")), false);
+  ctx->ItemClick("##TopBar/" ICON_FA_PLAY " Run");
+  IM_CHECK_RETV(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kSimulating; }, 10), false);
+  IM_CHECK_RETV(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 60), false);
+  IM_CHECK_RETV(
+      DriveUntil(ctx, [uploads_before] { return gui::g_state.texture_upload_count > uploads_before; }, 10), false);
+  LUMICE_SimLifecycleResult after_run{};
+  LUMICE_GetSimLifecycle(gui::g_server, &after_run);
+  IM_CHECK_RETV(after_run.session_kind == static_cast<int>(LUMICE_SESSION_RENDER), false);
+  IM_CHECK_RETV(!capture.Contains(kMismatchNeedle), false);
+  return true;
 }
 
 }  // namespace
@@ -1023,6 +1105,45 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedServerGuard guard;
       IM_CHECK(RunAfterAnalysisRenders(ctx, /*exclude=*/false, /*gpu=*/true));
+    };
+  }
+
+  // Run after a COMPLETED analysis, once per ROI, and DoRun's rebuild predicate agreed with the
+  // server — see RunAfterCompletedAnalysisHasNoRebuildMismatch. The three cases above end their
+  // analysis by Stop; these let it end on its budget, the other end a run has, and read the
+  // safety net's warning off the GUI logger instead of only the picture. One case per ROI
+  // because the ROI decides which consumer the analysis session builds, and the mismatch used
+  // to fire for every one of them.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "run_after_completed_point_analysis_no_mismatch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      IM_CHECK(RunPointAnalysisToCompletion(ctx));
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_CONE);
+      IM_CHECK(RunAfterCompletedAnalysisHasNoRebuildMismatch(ctx));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "run_after_completed_whole_sky_analysis_no_mismatch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, nullptr));
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+      IM_CHECK(RunAfterCompletedAnalysisHasNoRebuildMismatch(ctx));
+    };
+  }
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "run_after_completed_in_frame_analysis_no_mismatch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      IM_CHECK(RunInFrameAnalysisToCompletion(ctx));
+      IM_CHECK(RunAfterCompletedAnalysisHasNoRebuildMismatch(ctx));
     };
   }
 

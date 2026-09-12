@@ -99,7 +99,7 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    `LUMICE_SetPreferredBackend` / `ResolveGpuRoute` 的既有强制路径，`src/server/server.cpp`
    的 `ResolveGpuRoute` 已经是「按显式选择路由，不是按能力探测静默降级」的先例），
    使得将来给 GPU 补上这条能力时，是「换一份实现」而不是「悄悄改变了语义」。
-   **as-built**：`ServerImpl::mode_`（`SessionMode::kAnalysis`，`src/server/server.cpp:409`）
+   **as-built**：`ServerImpl::mode_`（`SessionKind::kAnalysis`，`src/server/server.cpp`；枚举本身公开在 `server.hpp`，经 `Server::GetSessionKind()` / `LUMICE_GetSimLifecycle` 的 `session_kind` 读回，见 §10.2）
    进入分析会话；`ResolveGpuRoute(preferred_backend, logger_, force_cpu)`
    （`src/server/server.cpp:547`）与 `Simulator::CreateBackend`（`src/core/simulator.cpp:1012`）
    都在 env override 之前短路成 CPU；`Simulator::SetAnalysisForceCpu(bool)`
@@ -610,3 +610,38 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
   策略本身要量的效应同量级。此前只取「总能量相同的 run」做对比的做法（有界记录量测时的口径）
   在修复后不再需要；修复之前做出的任何跨会话固定 seed 对照，若其结论依赖绝对能量而非行间相对
   比例，须在修复后的二进制上重跑。
+
+### 10.2 分析之后的第一次 Run：GUI 的重建谓词读回 server 的会话种类（2026-09-12，v4.37）
+
+现象是确定性的：任意 ROI 的 Analyze 完成后点 Run，`DoRun` 必打
+`[GUI] DoRun: predict/actual mismatch! GUI predicted reuse but server rebuilt.`，然后走安全网
+（补一次 `g_server_poller.Stop()`）。画面正常，但那句「This should never happen because the GUI
+comparison is a superset…」是假的。
+
+- **根因**：server 的 `can_reuse`（`src/server/server.cpp` `CommitConfig`）是四项合取
+  `!consumers_.empty() && !was_analysis && !class_table_changed && 逐渲染器布局相同`，其中
+  `was_analysis` 是 `mode_.exchange(kRender) == kAnalysis`——一个**会话级事实**，不是文档 diff。
+  GUI 的 `expect_rebuild`（`src/gui/app.cpp` `DoRun`）只由文档 diff 与「server 是否刚重建」组成，
+  没有任何一项能看见「上一个会话是分析」，于是这一项在 GUI 侧结构性缺席。
+- **修法（单一权威，不设影子）**：`ServerImpl` 私有的 `SessionMode` 提升为 `server.hpp` 公开的
+  `SessionKind`（同一个枚举，不是「私有枚举 + 公开镜像」两份），加只读 `Server::GetSessionKind()`；
+  `LUMICE_SimLifecycleResult` 纯追加 `session_kind`（`LUMICE_SESSION_RENDER` / `_ANALYSIS`，
+  `LUMICE_API_VERSION` 436 → 437）。`DoRun` 在函数顶部本来就为背压门读过一次
+  `LUMICE_GetSimLifecycle`（`lc0`），时机在本次 `CommitConfig` 把 `mode_` 拨回 `kRender` **之前**，
+  与 server 侧 `exchange` 读到的是同一个值——`expect_rebuild` 直接多一项
+  `lc0.session_kind == LUMICE_SESSION_ANALYSIS`，零新增调用、零新增状态。
+  ⛔ 不用 `g_state.analysis.started`：那是面板的**意图**，不是 server 判断的副本；用它等于把
+  server 的判断复制第二份，然后靠纪律维持两份一致。
+- **四项的覆盖状况（如实，写在 `app.cpp` 安全网分支上方的注释里）**：① `!consumers_.empty()`
+  由 `backend_reconstructed` / `!last_committed_state` 覆盖；② `!was_analysis` 由本次新增项覆盖；
+  ③ 逐渲染器布局由架构约束覆盖——`kSimCommit` 只提交一个渲染器，除分辨率外每个布局字段都是常量
+  （`file_io.cpp` `BuildScene`），`renderer_resim.Matches` 追踪的 `sim_resolution_index` 就是
+  全部 diff；④ `!class_table_changed`（raypath-color 结构性改变：类增减或 `combine_` /
+  `member_bits_` 变）——**未覆盖**：GUI 谓词不看色类结构，一次不带分辨率变化的结构性染色编辑
+  理论上仍可落进安全网分支。这不是本次观测到的问题、也不与 `was_analysis` 同根因，故不在这里修，
+  安全网分支保留并明确写成「只有第 ④ 项能到达」。它是已知边界，不是「四项全覆盖」。
+- **验收形状**：`gui_test` `raypath_analysis` 下三个 ROI（Point / Whole sky / In frame）各一条
+  「Analyze 自然完成 → Run」用例，用 `g_imgui_log_sink` 断言日志中无 `predict/actual mismatch`
+  且第二次 Run 出图；红态（去掉 `session_kind` 那一项）三条全红。C API 侧
+  `CApiRaypathAnalysis.AnalysisNeedsNoPriorCommitAndTheCommitAfterItRenders` 钉住 RENDER →
+  ANALYSIS →（完成后仍 ANALYSIS，Stop 不复位）→ commit 后 RENDER 的转换。

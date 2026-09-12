@@ -1272,8 +1272,17 @@ bool DoRun(bool user_initiated) {
   // view / switching the lens / toggling the hemisphere clip must not cause a poller Stop here.
   // `background` is excluded for the same reason (it changes nothing the simulation computes),
   // and is Revert-tracked separately — see gui_state.hpp's comment block.
+  // The last term is not a document diff at all but a session-level fact read straight off the
+  // server: CommitConfig never reuses the consumers of an analysis session (server.cpp,
+  // `was_analysis`), and the only authority on "was the session an analysis" is the server's own
+  // mode — `lc0` was sampled at the top of this function, BEFORE the commit below flips it back
+  // to RENDER, which is exactly the moment CommitConfig's exchange reads it. Reading it here is
+  // what keeps this predicate a superset of the server's decision (see the mismatch check after
+  // the commit) without a shadow flag of our own — `g_state.analysis.started` is an intent for
+  // the panel, not a copy of the server's judgement, and must not be used for this.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
-                        !g_state.last_committed_state->renderer_resim.Matches(g_state.renderer);
+                        !g_state.last_committed_state->renderer_resim.Matches(g_state.renderer) ||
+                        lc0.session_kind == LUMICE_SESSION_ANALYSIS;
 
   // Single handle commit path (327.4 / 399.5): all filter types — including multi-segment
   // raypath / multi-value EE (expanded to N simple + 1 complex) — go through LUMICE_Scene, so
@@ -1378,9 +1387,27 @@ bool DoRun(bool user_initiated) {
     g_state.stats_sim_ray_num = 0;
     g_state.stats_crystal_num = 0;
     g_state.stats_orientation_num = 0;
-    // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller
-    // was not stopped and may hold dangling pointers. This should never happen because
-    // the GUI comparison is a superset of the server's NeedsRebuild check.
+    // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller was not
+    // stopped and may hold dangling pointers. `expect_rebuild` is meant to be a superset of the
+    // server's `can_reuse` (server.cpp CommitConfig), which is the conjunction of four terms;
+    // how each one is covered, term by term, so this claim can be checked rather than believed:
+    //   1. `!consumers_.empty()` — consumers are empty only on a server that has never committed:
+    //      `backend_reconstructed` covers a server rebuilt this call, and
+    //      `!last_committed_state.has_value()` covers this process's first commit.
+    //   2. `!was_analysis` — `lc0.session_kind == LUMICE_SESSION_ANALYSIS` above, the server's own
+    //      mode read back before the commit flips it (this used to be the missing term: every
+    //      Run after an Analyze landed in this branch, deterministically).
+    //   3. per-renderer layout (`NeedsRebuild(RenderConfig)`: resolution / lens / lens_shift / view
+    //      / visible / front / overlap) — the kSimCommit scene submits ONE renderer whose every
+    //      layout field but the resolution is a constant (file_io.cpp BuildScene: fixed dual
+    //      equal-area full-sky texture, the view settings are shader uniforms), so
+    //      `renderer_resim.Matches` on `sim_resolution_index` is the whole of the diff.
+    //   4. `!class_table_changed` (a raypath-color class gained/lost or changed its
+    //      combine/member_bits) — NOT covered: nothing here looks at the color config's structure,
+    //      so a structural raypath-color edit committed without a resolution change can still
+    //      land in this branch. Known and left alone; this fallback is what carries it.
+    // So the branch is reachable through term 4 only. If it fires for another reason, a term
+    // has been added to `can_reuse` without an entry above.
     if (!expect_rebuild && !reused) {
       GUI_LOG_WARNING(
           "[GUI] DoRun: predict/actual mismatch! GUI predicted reuse but server rebuilt. "

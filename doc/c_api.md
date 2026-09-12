@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 436        // ABI version, encoded major*100 + minor (v4.36)
+#define LUMICE_API_VERSION 437        // ABI version, encoded major*100 + minor (v4.37)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -691,6 +691,57 @@ LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerSta
 - `LUMICE_OK`: success, state written to `*out`
 - `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
 
+#### LUMICE_GetSimLifecycle
+
+Reads the explicit simulation lifecycle — the single-source truth `LUMICE_QueryServerState`
+is a projection of — together with the current epoch and the kind of the current session.
+
+```c
+typedef enum LUMICE_SimLifecycle_ {
+  LUMICE_LIFECYCLE_IDLE = 0,      // never run, or reset (post-Stop) with no data consumed
+  LUMICE_LIFECYCLE_RUNNING,       // pending work / workers active
+  LUMICE_LIFECYCLE_COMPLETED,     // a finite run drained clean (incl. zero-output convergence)
+} LUMICE_SimLifecycle;
+
+typedef enum LUMICE_SessionKind_ {
+  LUMICE_SESSION_RENDER = 0,      // a render run (LUMICE_CommitScene); the default before any run
+  LUMICE_SESSION_ANALYSIS = 1,    // a raypath-analysis run (LUMICE_StartRaypathAnalysis)
+} LUMICE_SessionKind;
+
+typedef struct LUMICE_SimLifecycleResult_ {
+  int lifecycle;                  // one of LUMICE_SimLifecycle
+  unsigned long long epoch;       // monotonic, ++ on each reset-causing commit; 0 before any
+  int session_kind;               // one of LUMICE_SessionKind (v4.37)
+} LUMICE_SimLifecycleResult;
+
+LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecycleResult* out);
+```
+
+**Parameters**:
+- `server`: server handle pointer
+- `out`: pointer to receive `{lifecycle, epoch, session_kind}`
+
+**Return value**:
+- `LUMICE_OK`: success
+- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
+
+**`epoch`**: read back after a synchronous `LUMICE_CommitScene` to learn the epoch it just
+minted (the commit signature does not change). An analysis run advances it too.
+
+**`session_kind`** (v4.37): which kind of run the session that is **current at the time of the
+call** is — not "the kind at the last commit". It is written only by the two calls that
+(re)start a run, `LUMICE_CommitScene` (→ `RENDER`) and `LUMICE_StartRaypathAnalysis`
+(→ `ANALYSIS`); `LUMICE_StopServer` and completion leave it alone, so a finished or stopped
+analysis still reads `ANALYSIS` until the next commit. It is the server's own
+"was the previous session an analysis" term of the consumer-reuse decision `LUMICE_CommitScene`
+makes (an analysis session's consumers are never reused), exposed so a client that predicts that
+decision — the GUI does, to know whether to stop its poller before the commit — reads the same
+value instead of keeping a shadow flag of its own. Sample it **before** the commit whose decision
+you are predicting: the commit itself flips it back to `RENDER`.
+
+The three fields are each individually current, not one atomic snapshot of each other — the
+same property `lifecycle` and `epoch` have always had.
+
 #### LUMICE_GetDrainStatus
 
 Reads the consumer-side drain status: whether the current epoch's data has been fully
@@ -798,7 +849,9 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
    the code `LUMICE_CommitScene` would give it, with nothing stopped or replaced. The run
    advances the lifecycle epoch like a commit does — a frame of it is never mistaken for the
    last render's — and leaves the render's committed config alone, so the `LUMICE_CommitScene`
-   after it judges consumer reuse against the last render, as if no analysis had happened.
+   after it judges consumer reuse against the last render, as if no analysis had happened —
+   except that it never reuses an analysis session's consumers, and `LUMICE_GetSimLifecycle`'s
+   `session_kind` (v4.37) is how a caller reads that term before the commit.
    `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
    `_IN_FRAME` (membership in `frame_view`, a `LUMICE_AnnotationView`) or `_CONE` (`cone_center`,
    `cone_radius_rad`, `cone_ring_count`). A cone has no stop of its own (v4.34): in every mode
