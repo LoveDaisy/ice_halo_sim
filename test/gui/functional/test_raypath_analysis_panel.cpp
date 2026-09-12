@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -333,6 +334,59 @@ bool RunAfterAnalysisRenders(ImGuiTestContext* ctx, bool exclude, bool gpu) {
       DriveUntil(ctx, [uploads_before] { return gui::g_state.texture_upload_count > uploads_before; }, 10), false);
   IM_CHECK_RETV(gui::g_state.last_uploaded_texture_serial != serial_before, false);
   return true;
+}
+
+// Replace the app's server with one that has never committed anything, so that whatever the
+// next analysis traces cannot have come from a run this server saw.
+bool ReplaceServerWithAFreshOne(ImGuiTestContext* ctx) {
+  gui::g_server_poller.Stop();
+  if (gui::g_server != nullptr) {
+    LUMICE_StopServer(gui::g_server);
+    LUMICE_DestroyServer(gui::g_server);
+  }
+  gui::g_server = LUMICE_CreateServer();
+  IM_CHECK_RETV(gui::g_server != nullptr, false);
+  gui::ResetServerConstructionTrackers();
+  LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
+  ctx->Yield(1);
+  LUMICE_SimLifecycleResult lc{};
+  LUMICE_GetSimLifecycle(gui::g_server, &lc);
+  IM_CHECK_RETV(lc.epoch == 0u, false);
+  return true;
+}
+
+// Whole-sky mode, Analyze pressed, driven until the run ends on the panel's finite budget and
+// the list is on show. `saw_simulating` reports whether sim_state ever read kSimulating on the
+// way — the analysis must not be mistaken for a render, and that is only observable by sampling
+// every frame rather than by looking at the end state.
+bool RunWholeSkyAnalysisToCompletion(ImGuiTestContext* ctx, bool* saw_simulating) {
+  ctx->SetRef(kWindowRef);
+  ctx->ItemClick("Whole sky");
+  IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)), false);
+  ctx->ItemClick(kAnalyzeButton);
+  ctx->SetRef("");
+  IM_CHECK_RETV(gui::g_state.analysis.started, false);
+  IM_CHECK_RETV(!gui::g_state.analysis.infinite, false);
+  bool simulating = false;
+  IM_CHECK_RETV(DriveUntil(
+                    ctx,
+                    [&simulating] {
+                      simulating = simulating || gui::g_state.sim_state == SimState::kSimulating;
+                      return !gui::g_state.analysis_run_in_progress && gui::g_state.analysis_result.payload != nullptr;
+                    },
+                    60),
+                false);
+  if (saw_simulating != nullptr) {
+    *saw_simulating = simulating;
+  }
+  IM_CHECK_RETV(!gui::g_state.analysis_result.payload->entries.empty(), false);
+  IM_CHECK_RETV(!gui::g_state.analysis_result.display_order.empty(), false);
+  return true;
+}
+
+std::string TopChainDisplay() {
+  const auto& view = gui::g_state.analysis_result;
+  return view.payload->entries[static_cast<size_t>(view.display_order[0])].display;
 }
 
 }  // namespace
@@ -1075,6 +1129,168 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
           0);
       IM_CHECK_FLOAT_NEAR(gui::g_state.analysis_result.display_cumulative_pct.back(), 100.0, 1e-9);
       ctx->SetRef("");
+    };
+  }
+
+  // The analysis is a submission of the document itself (v4.36), and needs no Run before it.
+  // Three documents that could not be analysed before, one case each.
+  //
+  // An .lmc with a baked picture, opened and never run: the app reads it as kLoaded / kDone, a
+  // picture is on screen to pick on, and the server behind it has committed nothing — replaced
+  // by a fresh one after the save, so the run that baked the picture cannot be what the analysis
+  // traces. Point mode, a click on the halo, Analyze: the 22-degree path leads, and sim_state
+  // never read kSimulating on the way — the picture stayed the file's.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_loaded_lmc_analyses_without_a_run");
+    // The baked branch of DoOpen uploads the file's picture, a GL call, so it has to run on the
+    // render thread: the GuiFunc opens the file once the TestFunc has named it (the same shape
+    // test_file_ops.cpp uses for its baked-preview case).
+    static bool s_open_done = false;
+    static std::filesystem::path s_open_path;
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (!s_open_done && !s_open_path.empty()) {
+        gui::DoNew();
+        gui::DoOpen(s_open_path);
+        s_open_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      s_open_done = false;
+      s_open_path.clear();
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      // Saved the way the app saves: PerformSave refreshes the CPU copy of the picture from the
+      // server's frame before writing, which is what puts a baked texture into the file at all
+      // (the preview's live texture is the float XYZ one, which is never the saved copy).
+      const std::filesystem::path path = GuiTestTempPath("analysis_loaded_baked.lmc");
+      gui::g_state.current_file_path = path;
+      gui::g_state.save_texture = true;
+      gui::PerformSave();
+      IM_CHECK(std::filesystem::exists(path));
+      IM_CHECK(ReplaceServerWithAFreshOne(ctx));
+
+      s_open_path = path;
+      IM_CHECK(DriveUntil(ctx, [] { return s_open_done; }, 5));
+      ctx->Yield(2);
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kLoaded);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+      IM_CHECK(gui::g_preview_vp.active);
+      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) == nullptr);
+
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      ctx->SetRef("");
+      IM_CHECK(StartPointAnalysis(ctx));
+      bool saw_simulating = false;
+      IM_CHECK(DriveUntil(
+          ctx,
+          [&saw_simulating] {
+            saw_simulating = saw_simulating || gui::g_state.sim_state == SimState::kSimulating;
+            return !gui::g_state.analysis_run_in_progress && gui::g_state.analysis_result.payload != nullptr;
+          },
+          60));
+      IM_CHECK(!saw_simulating);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kLoaded);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_CONE);
+      IM_CHECK_GT(gui::g_state.analysis_result.payload->entries.size(), 0u);
+      IM_CHECK_STR_EQ(TopChainDisplay().c_str(), "3-5");
+      // The fresh server's only submission was the analysis: one epoch, the analysis's.
+      LUMICE_SimLifecycleResult lc{};
+      LUMICE_GetSimLifecycle(gui::g_server, &lc);
+      IM_CHECK_EQ(lc.epoch, 1u);
+      std::filesystem::remove(path);
+    };
+  }
+
+  // A document that never had a picture (kNone / kIdle, no preview): Analyze is enabled, the
+  // panel says there is no picture, the list fills from the configured scene, and nothing was
+  // rendered by it — then a Run from the top bar renders as it always did, and the notice goes.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_never_run_document_analyses_then_runs");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      ResetTestState();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      gui::ResetServerConstructionTrackers();
+      LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
+      IM_CHECK(gui::DeserializeFromJson(kHalo22Json, gui::g_state));
+      gui::g_state.renderer.sim_resolution_index = 0;
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.1f;
+      ctx->Yield(2);
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kNone);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kIdle);
+      IM_CHECK(!gui::g_preview_vp.active);
+      const char* notice = gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state);
+      IM_CHECK(notice != nullptr);
+      IM_CHECK(std::strstr(notice, "No rendered image") != nullptr);
+
+      OpenWindow(ctx);
+      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
+      bool saw_simulating = false;
+      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, &saw_simulating));
+      IM_CHECK(!saw_simulating);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kIdle);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+      IM_CHECK_STR_EQ(TopChainDisplay().c_str(), "3-5");
+      IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
+      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) != nullptr);
+
+      // The Run after it, from the top bar: it renders, and the notice is gone.
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("##TopBar/" ICON_FA_PLAY " Run")));
+      ctx->ItemClick("##TopBar/" ICON_FA_PLAY " Run");
+      IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kSimulating; }, 10));
+      IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 60));
+      IM_CHECK(DriveUntil(ctx, [uploads_before] { return gui::g_state.texture_upload_count > uploads_before; }, 10));
+      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) == nullptr);
+      // The analysis list is still on show: a render does not take it away.
+      IM_CHECK(gui::g_state.analysis_result.payload != nullptr);
+    };
+  }
+
+  // A rendered document, then an edit that changes what the sky looks like (kModified): Analyze
+  // stays enabled, the panel says the picture is of the previous configuration, and the list is
+  // the EDITED document's. The edit is the crystal itself — a randomly oriented column becomes a
+  // thin horizontal plate — so the top chain changes from the 22-degree path through the side
+  // faces to the straight pass through the basal faces, which is how "the edited document" is
+  // told apart from "the rendered one" without reading anything off the server but the list.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "an_edited_document_analyses_as_edited");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      // Positive control on the rendered document: the column's 22-degree path leads.
+      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, nullptr));
+      IM_CHECK_STR_EQ(TopChainDisplay().c_str(), "3-5");
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
+      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) == nullptr);
+
+      // The edit: a thin plate lying flat. Marked dirty by hand — the widgets' frame-tail
+      // reconcile is what does it in the app, and this edit did not go through a widget.
+      gui::g_state.crystals[0].height = 0.1f;
+      gui::g_state.crystals[0].zenith = gui::AxisDist{ gui::AxisDistType::kUniform, 0.0f, 0.0f };
+      gui::g_state.dirty = true;
+      IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kModified; }, 5));
+      const char* notice = gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state);
+      IM_CHECK(notice != nullptr);
+      IM_CHECK(std::strstr(notice, "previous configuration") != nullptr);
+      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
+
+      bool saw_simulating = false;
+      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, &saw_simulating));
+      IM_CHECK(!saw_simulating);
+      const std::string top = TopChainDisplay();
+      ctx->LogInfo("edited document's top chain: %s", top.c_str());
+      IM_CHECK_STR_EQ(top.c_str(), "1-2");
+      // The picture is still the column's, and still marked as the previous configuration's:
+      // the analysis rendered nothing and changed no intent.
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kModified);
+      IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
+      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) != nullptr);
     };
   }
 }

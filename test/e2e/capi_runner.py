@@ -624,9 +624,13 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_StopServer.restype = None
     lib.LUMICE_StopServer.argtypes = [ctypes.c_void_p]
 
-    # Raypath analysis run (v4.29).
+    # Raypath analysis run (v4.29; v4.36 takes the scene it analyses, like LUMICE_CommitScene).
     lib.LUMICE_StartRaypathAnalysis.restype = ctypes.c_int
-    lib.LUMICE_StartRaypathAnalysis.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RaypathAnalysisRequest)]
+    lib.LUMICE_StartRaypathAnalysis.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(LUMICE_RaypathAnalysisRequest),
+    ]
 
     # v4.33: both reads take the symmetry the entries are reduced under.
     lib.LUMICE_FrameGetRaypathAnalysisInfo.restype = ctypes.c_int
@@ -1003,6 +1007,26 @@ def _wait_drained(lib, server, timeout_sec: float) -> None:
         time.sleep(_DRAIN_POLL_SEC)
 
 
+def _start_raypath_analysis(lib, server, config_path: str, request) -> None:
+    """Parse `config_path` into a LUMICE_Scene handle and start an analysis run on it, then free the handle.
+
+    The analysis's twin of _commit_config (v4.36): the scene is the call's own, so no commit has to
+    precede it; LUMICE_StartRaypathAnalysis deep-copies what it needs and the handle stays caller-owned.
+    """
+    scene = ctypes.c_void_p()
+    err = lib.LUMICE_SceneFromJsonFile(str(config_path).encode("utf-8"), ctypes.byref(scene))
+    if err != 0:
+        raise RuntimeError(f"SceneFromJsonFile failed err={err} config={config_path}")
+    if not scene:
+        raise RuntimeError(f"SceneFromJsonFile returned a NULL handle for {config_path}")
+    try:
+        err = lib.LUMICE_StartRaypathAnalysis(server, scene, ctypes.byref(request))
+        if err != 0:
+            raise RuntimeError(f"StartRaypathAnalysis failed err={err}")
+    finally:
+        lib.LUMICE_SceneDestroy(scene)
+
+
 def run_raypath_analysis_capi(
     config_path: str,
     request: LUMICE_RaypathAnalysisRequest,
@@ -1015,11 +1039,11 @@ def run_raypath_analysis_capi(
 ) -> RaypathAnalysisResult:
     """Run one ANALYSIS run via the C API on a fresh server and copy the histogram out.
 
-    The lifecycle lumice.h describes, verbatim: create → commit `config_path` (which starts
-    the render run every commit starts) → LUMICE_StopServer → LUMICE_StartRaypathAnalysis →
-    wait for the drain signal → read one frame → destroy. The scene's own finite ray_num is
-    the run's budget (an "infinite" config has no end but LUMICE_StopServer, which this helper
-    never calls, so it would time out here).
+    The lifecycle lumice.h describes, verbatim: create → LUMICE_StartRaypathAnalysis on
+    `config_path` (v4.36: the scene is the call's own — no commit precedes it, and the server
+    this helper creates never commits anything) → wait for the drain signal → read one frame →
+    destroy. The scene's own finite ray_num is the run's budget (an "infinite" config has no end
+    but LUMICE_StopServer, which this helper never calls, so it would time out here).
 
     `chain_id_symmetry` is the P/B/D bit set the READ reduces the recorded chains under
     (v4.33) — passed to both frame getters, as the header requires. Default P|B|D, which is
@@ -1042,11 +1066,7 @@ def run_raypath_analysis_capi(
         if not server:
             raise RuntimeError("LUMICE_CreateServerEx returned NULL")
         try:
-            _commit_config(lib, server, str(config_path))
-            lib.LUMICE_StopServer(server)
-            err = lib.LUMICE_StartRaypathAnalysis(server, ctypes.byref(request))
-            if err != 0:
-                raise RuntimeError(f"StartRaypathAnalysis failed err={err}")
+            _start_raypath_analysis(lib, server, str(config_path), request)
             active = ctypes.c_int(-1)
             err = lib.LUMICE_GetActiveBackend(server, ctypes.byref(active))
             if err != 0:

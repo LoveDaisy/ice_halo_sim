@@ -13,6 +13,9 @@ AC3, three assertions on one scene:
     rings): the top chain's energy is far below the on-ring cone's — the measured ratio and
     the threshold derived from it are at the assertion.
 AC1 through ctypes: a render in progress refuses the analysis with LUMICE_ERR_SERVER.
+The scene is the call's own (v4.36): every run above starts on a server that never committed
+anything, and ``test_analysis_needs_no_commit_and_the_commit_after_it_renders`` says so
+explicitly — analysis first, then a commit that renders on its own budget.
 AC2 through ctypes: under a Metal preference the run reports the CPU and logs the forcing.
 The read-time symmetry (v4.33): the same run read under none / P / P|B / P|B|D conserves the
 sums, never gains rows as bits are added, and the 22° path's ORBIT — the whole of it at the
@@ -213,17 +216,50 @@ def test_render_in_progress_refuses_the_analysis():
     try:
         cr._commit_config(lib, server, _CONFIG)  # starts a render run; 200k rays is in progress for a while
         req = _full_sky_request()
-        err = lib.LUMICE_StartRaypathAnalysis(server, ctypes.byref(req))
-        assert err == 7, f"expected LUMICE_ERR_SERVER (7) while the render runs, got {err}"
-        lib.LUMICE_StopServer(server)
-        assert lib.LUMICE_StartRaypathAnalysis(server, ctypes.byref(req)) == 0
-        # And the other direction: a commit over the running analysis.
         scene = ctypes.c_void_p()
         assert lib.LUMICE_SceneFromJsonFile(_CONFIG.encode("utf-8"), ctypes.byref(scene)) == 0
         try:
+            err = lib.LUMICE_StartRaypathAnalysis(server, scene, ctypes.byref(req))
+            assert err == 7, f"expected LUMICE_ERR_SERVER (7) while the render runs, got {err}"
+            lib.LUMICE_StopServer(server)
+            assert lib.LUMICE_StartRaypathAnalysis(server, scene, ctypes.byref(req)) == 0
+            # And the other direction: a commit over the running analysis.
             assert lib.LUMICE_CommitScene(server, scene, None) == 7
         finally:
             lib.LUMICE_SceneDestroy(scene)
+    finally:
+        lib.LUMICE_DestroyServer(server)
+
+
+@pytest.mark.slow
+def test_analysis_needs_no_commit_and_the_commit_after_it_renders():
+    """AC4 (v4.36): a server that never committed analyses; the commit after it renders."""
+    lib = cr._load_lib()
+    server = lib.LUMICE_CreateServer()
+    assert server
+    try:
+        drain = cr.LUMICE_DrainResult()
+        assert lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain)) == 0
+        assert drain.current_epoch == 0, "positive control: nothing submitted yet"
+        cr._start_raypath_analysis(lib, server, _CONFIG, _full_sky_request())
+        assert lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain)) == 0
+        assert drain.current_epoch == 1, "the analysis is a submission of its own: it minted the epoch"
+        cr._wait_drained(lib, server, 180)
+        info = cr.LUMICE_RaypathAnalysisInfo()
+        with cr._result_frame(lib, server) as frame:
+            assert lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, cr.LUMICE_RAYPATH_SYMMETRY_ALL, ctypes.byref(info)) == 0
+        assert info.present == 1 and info.entry_count >= 1
+        # The commit after it: a render, with an image and no histogram, at the next epoch.
+        cr._commit_config(lib, server, _CONFIG)
+        assert lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain)) == 0
+        assert drain.current_epoch == 2
+        cr._wait_drained(lib, server, 180)
+        with cr._result_frame(lib, server) as frame:
+            assert lib.LUMICE_FrameGetRaypathAnalysisInfo(frame, cr.LUMICE_RAYPATH_SYMMETRY_ALL, ctypes.byref(info)) == 0
+            assert info.present == 0, "a render frame carries no histogram"
+            renders = (cr.LUMICE_RenderResult * 2)()
+            assert lib.LUMICE_FrameGetRender(frame, renders, 1) == 0
+            assert renders[0].img_buffer, "the render's image"
     finally:
         lib.LUMICE_DestroyServer(server)
 

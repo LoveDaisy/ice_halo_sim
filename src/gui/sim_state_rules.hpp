@@ -74,6 +74,22 @@ inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool ana
   return has_server && !IsBackendBusy(state, analysis_in_progress);
 }
 
+// The panel's notice that the picture on screen is not of the document the list describes —
+// the text to show, or nullptr when there is nothing to say. Two cases and they cannot both
+// hold: an intent of kNone (fresh / New / a JSON import / an .lmc with no baked picture) means no
+// picture of this document was ever made, and it reconciles to kIdle, which dirty never lifts
+// to kModified; kModified means there is a picture, of the configuration before the edit. A
+// notice, not a refusal: CanStartAnalysis does not read either.
+inline const char* AnalysisPictureNotice(RunIntent intent, GuiState::SimState state) {
+  if (intent == RunIntent::kNone) {
+    return "No rendered image for this document yet \xe2\x80\x94 the list describes the configured scene.";
+  }
+  if (IsModified(state)) {
+    return "Image is from a previous configuration \xe2\x80\x94 the list describes the current one.";
+  }
+  return nullptr;
+}
+
 }  // namespace lumice::gui
 
 #endif  // LUMICE_GUI_SIM_STATE_RULES_HPP

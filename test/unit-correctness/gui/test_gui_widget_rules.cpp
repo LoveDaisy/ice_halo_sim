@@ -115,6 +115,36 @@ TEST(SimStateRules, AnalyzeNeedsAServerAndAnIdleBackendOnly) {
   EXPECT_FALSE(CanStartAnalysis(true, GuiState::SimState::kSimulating, false));
 }
 
+// The picture notice beside it: said for a document that never had a picture (kNone, whatever
+// sim_state reconciles to) and for a picture of an earlier configuration (kModified under any
+// other intent); silent otherwise — and it never enters the button's verdict.
+TEST(SimStateRules, AnalysisPictureNoticeNamesTheTwoCasesAndNoOther) {
+  constexpr RunIntent kAll[] = { RunIntent::kNone,     RunIntent::kLoaded,  RunIntent::kRunning,
+                                 RunIntent::kStopping, RunIntent::kStopped, RunIntent::kRunCompleted };
+  for (RunIntent intent : kAll) {
+    for (GuiState::SimState s : kAllSimStates) {
+      const char* notice = AnalysisPictureNotice(intent, s);
+      if (intent == RunIntent::kNone) {
+        if (notice == nullptr) {
+          ADD_FAILURE() << "no notice for kNone, SimState=" << static_cast<int>(s);
+          continue;
+        }
+        EXPECT_NE(std::string(notice).find("No rendered image"), std::string::npos);
+      } else if (IsModified(s)) {
+        if (notice == nullptr) {
+          ADD_FAILURE() << "no notice for kModified, intent=" << static_cast<int>(intent);
+          continue;
+        }
+        EXPECT_NE(std::string(notice).find("previous configuration"), std::string::npos);
+      } else {
+        EXPECT_EQ(notice, nullptr) << "intent=" << static_cast<int>(intent) << " SimState=" << static_cast<int>(s);
+      }
+      // Whatever the notice says, the button's verdict is the backend's alone.
+      EXPECT_EQ(CanStartAnalysis(true, s, false), !IsBusy(s));
+    }
+  }
+}
+
 // ---- Zero-contribution layer notice (panels.cpp scattering-layer header) ----
 
 // The notice under a scattering layer's header says the layer produces no rays. Three different

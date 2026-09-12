@@ -16,6 +16,27 @@
 > `LUMICE_ProjectDirection` v4.31、请求携带自己的光线预算 v4.32、symmetry 从请求移到读取 v4.33）。
 > 五组修复没有单独成节复述，而是就地回写进 §2 第 2/3 条、§5、§7、§8——行文中用「2026-09-12 更新」
 > 标出落地版本，原设计阶段文字保留在旁边作对照。
+>
+> **2026-09-12 更新（C API v4.36）——分析会话自带场景，不再依赖渲染提交**：
+> `LUMICE_StartRaypathAnalysis(server, scene, request)` 与 `LUMICE_CommitScene` 同构地吃一个
+> `LUMICE_Scene`；`ServerImpl::StartRaypathAnalysis` 用与 `CommitConfig` **同一个**解析器
+> （`ParseConfigManager`，四种失败形状→`Error` 的唯一映射处）解析它，然后在同一把 `scene_mutex_`
+> 下、同一次重置动作上装订 `active_scene_` / `scene_generation_++` / `committed_epoch_++`——分析
+> 是一次自己的提交，帧带自己的 epoch，读者「这是不是我那次提交的帧」的判定对分析帧回答否；
+> `config_manager_`（渲染的 reuse 簿记）不被触碰，所以分析之后的下一次 `CommitConfig` 与没发生过
+> 分析时一样判 reuse。`active_renders_` / `active_raypath_color_` 在分析里**绑成 null**，不是省事：
+> 模拟器每批都用 (raypath_color, scene) 重建色门表，渲染留下的颜色配置若引用分析场景里没有的
+> crystal，会在 worker 线程上抛 `std::invalid_argument`（红态探针实测 terminate）。原「无已提交场景
+> → `LUMICE_ERR_INVALID_CONFIG`」的拒绝随要求一起消失；解析失败返回 `CommitScene` 会给的同一码，
+> 且只是返回码（旧 `status_ = kError` 写入已删：它让活运行读成结束，且没有任何消费者区分该值）。
+> GUI 侧：`CanStartAnalysis(has_server, sim_state, in_progress)` 只剩「后端不忙」；
+> `HasCommittedSceneForThisDocument` 删除；`DoAnalyze` 与 `DoRun` 共用同一个编码器
+> `BuildCommitSceneOrWarn`（`src/gui/app.{hpp,cpp}`）——AC「两者提交的 scene JSON 逐字节一致」靠
+> 单一实现保证，`test_scene_commit_chain.cpp` / `test_run_warning_chain.cpp` 各钉一半；
+> IN_FRAME 画幅在没有预览时取 `kSimResolutions[sim_resolution_index]` 而非 1×1，`needs_frame`
+> 门槛随之删除；面板新增状态行 `AnalysisPictureNotice`（`sim_state_rules.hpp`：kNone →「无图」、
+> kModified →「图来自旧配置」，只提示不拒绝）。打开带 baked 纹理的 `.lmc`（`RunIntent::kLoaded`）
+> 直接可分析，是本次的主场景（gui_test `a_loaded_lmc_analyses_without_a_run`）。
 
 ## 1. 问题与形态
 

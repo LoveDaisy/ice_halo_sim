@@ -911,16 +911,6 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       }
       ImGui::SetTooltip("%s", why);
     }
-    // What the list describes is the configured document, always; when the picture on screen is
-    // not of that document, say so here — not in a tooltip, and not as a reason to refuse. The
-    // two branches cannot both hold: kNone reconciles to kIdle, which dirty never lifts to
-    // kModified (app.cpp ReconcileSimState).
-    if (state.run_intent == RunIntent::kNone) {
-      ImGui::TextDisabled(
-          "No rendered image for this document yet \xe2\x80\x94 the list describes the configured scene.");
-    } else if (IsModified(state.sim_state)) {
-      ImGui::TextDisabled("Image is from a previous configuration \xe2\x80\x94 the list describes the current one.");
-    }
     if (state.analysis_result.payload) {
       ImGui::SameLine();
       ImGui::TextDisabled("%zu raypaths (%s)", state.analysis_result.payload->entries.size(),
@@ -944,6 +934,13 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       ImGui::TextColored(WarningTextColor(), ICON_FA_TRIANGLE_EXCLAMATION
                          " Centre has moved \xe2\x80\x94 press Analyze to update the list.");
     }
+  }
+  // What the list describes is the configured document, always; when the picture on screen is
+  // not of that document, say so here — a line of its own that needs no hover, not a tooltip,
+  // and not a reason to refuse (AnalysisPictureNotice says which two cases there are). Shown in
+  // progress too: the list filling in is still not the picture's.
+  if (const char* notice = AnalysisPictureNotice(state.run_intent, state.sim_state)) {
+    ImGui::TextDisabled("%s", notice);
   }
 }
 

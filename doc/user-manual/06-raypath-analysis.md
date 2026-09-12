@@ -4,7 +4,7 @@
 
 The Raypath Analysis window answers "which raypaths make the light in this region of the sky, and how much does each contribute". Unlike the main preview, it does not render a picture — it runs a dedicated, non-rendering pass that groups every outgoing ray by its full raypath and reports each group's share of the total energy.
 
-> **Prerequisite**: run the simulation at least once, so there is a committed scene to analyze. The window's Analyze button stays disabled until you do (and again after you change the config, until you run it again).
+> **No run is needed first.** Analyze submits the document as it is on the panels — the same scene a Run would render — so it works on a freshly opened `.lmc`, on a document you have never run, and on one you have edited since the last run. When the picture on screen is not of that document, a line under the button says so ("No rendered image for this document yet…" / "Image is from a previous configuration…"); the list always describes the configured scene. The only thing that keeps the button disabled is a run in progress.
 
 ## 1. Where it is
 
@@ -17,7 +17,7 @@ The **Region** row offers three modes:
 | Mode | What it analyzes |
 |------|-------------------|
 | **Whole sky** | Every ray that leaves the scene, in any direction. No spatial filtering. |
-| **In frame** | Only rays that land inside the picture as currently framed (same lens / view / visible / front settings the preview uses). Disabled when there is no preview on screen to define "the frame". |
+| **In frame** | Only rays that land inside the picture as currently framed (same lens / view / visible / front settings the preview uses). The choice needs a preview on screen; with the mode already selected and no preview, the frame is the document's own view at its simulation resolution. |
 | **Point** | A cone around a direction, shown on the preview as a marker. |
 
 **The Point marker**: switching to Point mode places the marker at the centre of the current view by default (if there is a preview to place it on, and no earlier pick to keep). It moves with the view every frame — projected from the direction it represents, not fixed to a screen position — so rotating or panning the view never leaves it behind. Hover over the marker for a hand cursor and drag it to a new spot to set the centre directly; the altitude/azimuth reading next to **Pick on preview** updates as you drag. Press **Pick on preview** instead for a banner across the top of the window ("Click on the preview to set the centre — Esc to cancel") and a crosshair cursor: click anywhere on the preview to move the marker there, or press Esc to cancel.
@@ -32,7 +32,7 @@ Press **Analyze**. A dedicated pass traces the scene and groups rays by raypath;
 
 **The analysis always runs on the CPU**, even if you have Metal or CUDA selected for rendering. This is deliberate, not a bug or a fallback you can turn off: the GPU trace path does not keep the per-ray bookkeeping this feature needs. There is no separate indicator for this in the window — Analyze simply may take longer than a GPU-accelerated render of the same scene would.
 
-If the configuration has changed since your last run, Analyze stays disabled until you press Run again — the analysis reports on the scene you last ran, not on unsaved edits.
+If the configuration has changed since your last run, Analyze still works and reports on the edited document — the picture on screen is the older one, and the line under the button says so until you Run again.
 
 ## 4. Reading the result list
 

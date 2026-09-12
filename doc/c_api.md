@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 435        // ABI version, encoded major*100 + minor (v4.35)
+#define LUMICE_API_VERSION 436        // ABI version, encoded major*100 + minor (v4.36)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -772,7 +772,8 @@ interest, sorted by energy. It shares the render run's lifecycle — the same
 exclude each other.
 
 ```c
-LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_RaypathAnalysisRequest* request);
+LUMICE_ErrorCode LUMICE_StartRaypathAnalysis(LUMICE_Server* server, const LUMICE_Scene* scene,
+                                             const LUMICE_RaypathAnalysisRequest* request);
 LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathAnalysisInfo* out);
 LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame, int chain_id_symmetry, LUMICE_RaypathHistogramEntry* out, int max_count);
 LUMICE_ErrorCode LUMICE_UnprojectPixel(const LUMICE_AnnotationView* view, int px, int py, float out_dir[3], int* out_valid);
@@ -782,11 +783,19 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
 ```
 
 **Lifecycle**:
-1. `LUMICE_CommitScene` the scene (this starts a render run, as it always does).
-2. `LUMICE_StopServer`, or wait for the render to complete. An analysis cannot start over a
-   render in progress and a commit cannot start over an analysis in progress: both return
-   `LUMICE_ERR_SERVER` and interrupt nothing.
-3. `LUMICE_StartRaypathAnalysis` with a request: `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
+1. Build the scene to analyse (`LUMICE_SceneFromJson` / `_FromJsonFile`, or the scratch route),
+   exactly as for `LUMICE_CommitScene`. No commit is needed first (v4.36): the analysis is a
+   submission of its own, and a server that has never committed anything analyses just the same.
+2. If a render is in progress, `LUMICE_StopServer` or wait for it to complete. An analysis
+   cannot start over a render in progress and a commit cannot start over an analysis in
+   progress: both return `LUMICE_ERR_SERVER` and interrupt nothing.
+3. `LUMICE_StartRaypathAnalysis` with the scene and a request. The scene is read at the call and
+   deep-copied (the handle stays the caller's); a scene the server cannot use is rejected with
+   the code `LUMICE_CommitScene` would give it, with nothing stopped or replaced. The run
+   advances the lifecycle epoch like a commit does — a frame of it is never mistaken for the
+   last render's — and leaves the render's committed config alone, so the `LUMICE_CommitScene`
+   after it judges consumer reuse against the last render, as if no analysis had happened.
+   `roi_mode` is `LUMICE_RAYPATH_ROI_FULL_SKY`,
    `_IN_FRAME` (membership in `frame_view`, a `LUMICE_AnnotationView`) or `_CONE` (`cone_center`,
    `cone_radius_rad`, `cone_ring_count`). A cone has no stop of its own (v4.34): in every mode
    the run ends on its ray budget or on `LUMICE_StopServer`. The request names no
@@ -795,12 +804,12 @@ LUMICE_ErrorCode LUMICE_GetActiveBackend(LUMICE_Server* server, int* out_backend
    own (v4.32): `infinite = 1` traces until stopped — and a run ended by `LUMICE_StopServer`
    keeps what it accumulated: the frame acquired after the stop returns carries the histogram
    consumed up to it (v4.34), so a partial result is readable — `infinite = 0` traces `ray_num` rays in total across every wavelength, and
-   `infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` traces the committed scene's own
+   `infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT` traces the submitted scene's own
    `ray_num` / `infinite` — the behaviour before v4.32. A zero-initialized request asks for
    **zero** rays, not for the scene's budget; set the field. Any other `infinite` is
    `LUMICE_ERR_INVALID_VALUE`. The scene is never edited by the run: the next
    `LUMICE_CommitScene` traces the document's own budget. Calling it while an analysis is
-   already in progress restarts the analysis with the new request.
+   already in progress restarts the analysis with the new scene and request.
 4. Poll as for a render; read through a frame. Both getters take `chain_id_symmetry`, a bit set
    of `LUMICE_RAYPATH_SYMMETRY_P` / `_B` / `_D` (0..7, else `LUMICE_ERR_INVALID_VALUE`; 0 is
    "no reduction"): the frame's recorded chains are reduced per layer under it — with that
