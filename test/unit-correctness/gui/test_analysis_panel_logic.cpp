@@ -665,13 +665,39 @@ TEST(AnalysisPanelLogic, ExcludeEligibilityDeniesEachReasonOnItsOwn) {
   edited.layers.pop_back();
   EXPECT_EQ(EvaluateExcludeEligibility(edited, &why), ExcludeEligibility::kCrystalNotInScene);
 
-  // One of the entries using pool 0 already has a filter.
+  // One of the entries using pool 0 already has a filter. What it does depends on the filter's
+  // action: an In filter (the default-constructed FilterConfig, action 0) denies — "keep only
+  // these" and "also drop this" do not compose — while an Out filter is the append case.
   GuiState filtered = state;
   filtered.filters.emplace_back();
+  filtered.filters[0].name = "keep";
   filtered.layers[1].entries[0].filter_id = 0;
-  EXPECT_EQ(EvaluateExcludeEligibility(filtered, &why), ExcludeEligibility::kEntryHasFilter);
+  EXPECT_EQ(EvaluateExcludeEligibility(filtered, &why), ExcludeEligibility::kEntryHasInFilter);
+  EXPECT_NE(why.find("In filter"), std::string::npos) << "the denial names the reason: " << why;
+  EXPECT_TRUE(ExcludeAppendNotice(filtered).empty()) << "nothing to append to when denied";
   EXPECT_FALSE(ApplyExcludeSelectedRaypath(filtered)) << "a denial writes nothing";
   EXPECT_EQ(filtered.filters.size(), 1u);
+  EXPECT_TRUE(filtered.filters[0].param.empty()) << "and the In filter is not touched";
+
+  filtered.filters[0].action = 1;  // the same filter, now Out
+  EXPECT_EQ(EvaluateExcludeEligibility(filtered, &why), ExcludeEligibility::kOk);
+  EXPECT_TRUE(why.empty());
+  const std::string notice = ExcludeAppendNotice(filtered);
+  EXPECT_NE(notice.find("\"keep\""), std::string::npos)
+      << "the OK tooltip says which filter the chain joins: " << notice;
+  // The crystal's other entry (layer 0) holds no filter: the tooltip says so, and the apply
+  // reaches both — the Out filter gains the row, the filter-less entry gets a fresh one.
+  EXPECT_NE(notice.find("1 entry without a filter gets a new one"), std::string::npos) << notice;
+  ASSERT_TRUE(ApplyExcludeSelectedRaypath(filtered));
+  ASSERT_EQ(filtered.filters.size(), 2u);
+  ASSERT_EQ(filtered.filters[0].param.size(), 1u);
+  EXPECT_EQ(filtered.filters[0].param[0].text, "1-2");
+  EXPECT_EQ(filtered.filters[0].name, "keep") << "extended in place";
+  EXPECT_EQ(filtered.filters[1].action, 1);
+  EXPECT_EQ(filtered.filters[1].RaypathText(), "1-2");
+  EXPECT_EQ(*filtered.layers[1].entries[0].filter_id, 0);
+  EXPECT_EQ(*filtered.layers[0].entries[1].filter_id, 1);
+  EXPECT_FALSE(filtered.layers[0].entries[0].filter_id.has_value()) << "pool 1's entry is not the crystal's";
 }
 
 TEST(AnalysisPanelLogic, FormatSegmentRaypathTextJoinsFacesWithDashes) {
@@ -716,8 +742,46 @@ TEST(AnalysisPanelLogic, ExcludeWritesOneFilterOutFilterBoundToEveryEntryOfTheCr
   ASSERT_TRUE(state.layers[1].entries[0].filter_id.has_value());
   EXPECT_EQ(*state.layers[1].entries[0].filter_id, 0);
   EXPECT_FALSE(state.layers[0].entries[0].filter_id.has_value());
-  // And now that the crystal has a filter, a second exclude is refused rather than stacked.
-  EXPECT_EQ(EvaluateExcludeEligibility(state, nullptr), ExcludeEligibility::kEntryHasFilter);
+  // Now that the crystal has an Out filter, a further exclude is still allowed: it extends that
+  // filter rather than stacking a second one. Idempotent first — the same chain again adds no
+  // row and touches no pool slot.
+  EXPECT_EQ(EvaluateExcludeEligibility(state, nullptr), ExcludeEligibility::kOk);
+  const std::string notice = ExcludeAppendNotice(state);
+  EXPECT_NE(notice.find("Exclude 1-2"), std::string::npos) << notice;
+  EXPECT_NE(notice.find("Shared with 1 other entry"), std::string::npos) << "two entries share the slot: " << notice;
+  ASSERT_TRUE(ApplyExcludeSelectedRaypath(state));
+  ASSERT_EQ(state.filters.size(), 1u);
+  EXPECT_EQ(state.filters[0].param.size(), 1u) << "the same chain is not added twice";
+  EXPECT_EQ(state.filters[0].RaypathText(), "3-5");
+
+  // A different chain of the same crystal: one more OR row on the same filter, whose name,
+  // action and symmetry stay what they were — even though the list has since been re-read under
+  // different bits (P|B|D here), the row joins the filter's own P|B.
+  auto p2 = MakePayload(2, LUMICE_RAYPATH_ROI_FULL_SKY, { 5.0 });
+  p2->entries[0].chain[0].crystal_id = 1;
+  p2->entries[0].chain[0].segment_len = 3;
+  p2->entries[0].chain[0].segment[0] = 3;
+  p2->entries[0].chain[0].segment[1] = 1;
+  p2->entries[0].chain[0].segment[2] = 5;
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p2));
+  state.analysis_result.entries_symmetry =
+      LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
+  state.analysis.selected_entry = "1-2";
+  ASSERT_TRUE(ApplyExcludeSelectedRaypath(state));
+  ASSERT_EQ(state.filters.size(), 1u) << "extended, not stacked";
+  const FilterConfig& g = state.filters[0];
+  ASSERT_EQ(g.param.size(), 2u);
+  EXPECT_EQ(g.param[0].text, "3-5");
+  EXPECT_EQ(g.param[1].text, "3-1-5");
+  EXPECT_EQ(g.action, 1);
+  EXPECT_EQ(g.name, f.name) << "the filter keeps its name";
+  EXPECT_TRUE(g.sym_p && g.sym_b);
+  EXPECT_FALSE(g.sym_d) << "the filter's own symmetry, not the list's current one";
+  // Still bound to both entries of pool 0 through the same slot (in-place overwrite), and to
+  // neither entry of pool 1.
+  EXPECT_EQ(*state.layers[0].entries[1].filter_id, 0);
+  EXPECT_EQ(*state.layers[1].entries[0].filter_id, 0);
+  EXPECT_FALSE(state.layers[0].entries[0].filter_id.has_value());
 }
 
 }  // namespace

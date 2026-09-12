@@ -453,6 +453,91 @@ std::optional<int> PoolSlotForSceneCrystal(const GuiState& state, int scene_crys
   return std::nullopt;
 }
 
+// Every entry (in layer order) that uses crystal pool slot `pool_id`. The histogram counted the
+// crystal wherever it was used, so the exclusion has to reach all of them — and they need not
+// share one filter_id: the linked-group invariant (gui_state.hpp) is about entries that share
+// BOTH ids, and a document may well hold one entry of a crystal with a filter and another without
+// (a loaded config, a Duplicate). The non-const overload delegates to the const one so the walk
+// exists once.
+std::vector<const EntryCard*> EntriesForPoolCrystal(const GuiState& state, int pool_id) {
+  std::vector<const EntryCard*> out;
+  for (const auto& layer : state.layers) {
+    for (const auto& entry : layer.entries) {
+      if (entry.crystal_id == pool_id) {
+        out.push_back(&entry);
+      }
+    }
+  }
+  return out;
+}
+
+std::vector<EntryCard*> EntriesForPoolCrystal(GuiState& state, int pool_id) {
+  std::vector<EntryCard*> out;
+  for (const EntryCard* entry : EntriesForPoolCrystal(static_cast<const GuiState&>(state), pool_id)) {
+    out.push_back(const_cast<EntryCard*>(entry));
+  }
+  return out;
+}
+
+// The entry's filter when it has one that the pool holds, else nullptr. The one place the
+// (entry -> pool slot) read is bounds-checked: a filter_id the pool does not hold reads as "no
+// filter" here and is left alone by the write below (never written through).
+const FilterConfig* FilterOfEntry(const GuiState& state, const EntryCard& entry) {
+  if (!entry.filter_id.has_value() || *entry.filter_id < 0 ||
+      *entry.filter_id >= static_cast<int>(state.filters.size())) {
+    return nullptr;
+  }
+  return &state.filters[static_cast<size_t>(*entry.filter_id)];
+}
+
+// What the crystal's entries carry today, read once for the eligibility, the tooltip and the
+// apply: the distinct pool slots holding an Out filter (first-appearance order), whether any
+// entry holds an In filter, and how many entries hold no filter at all.
+struct CrystalFilterCensus {
+  std::vector<int> out_slots;
+  bool any_in = false;
+  int unfiltered = 0;
+};
+
+CrystalFilterCensus CensusForPoolCrystal(const GuiState& state, int pool_id) {
+  CrystalFilterCensus census;
+  for (const EntryCard* entry : EntriesForPoolCrystal(state, pool_id)) {
+    const FilterConfig* existing = FilterOfEntry(state, *entry);
+    if (existing == nullptr) {
+      if (!entry->filter_id.has_value()) {
+        ++census.unfiltered;
+      }
+      continue;
+    }
+    if (existing->action != 1) {
+      census.any_in = true;
+    } else if (std::find(census.out_slots.begin(), census.out_slots.end(), *entry->filter_id) ==
+               census.out_slots.end()) {
+      census.out_slots.push_back(*entry->filter_id);
+    }
+  }
+  return census;
+}
+
+// The pool slot of the selected chain's crystal when the selection is a single-segment chain of a
+// crystal the document commits; nullopt otherwise. The two checks EvaluateExcludeEligibility
+// makes before it looks at filters, for the callers that only need to know where to look.
+std::optional<int> SelectedChainPoolSlot(const GuiState& state) {
+  const LUMICE_RaypathHistogramEntry* e = SelectedAnalysisEntry(state);
+  if (e == nullptr || e->chain_len != 1) {
+    return std::nullopt;
+  }
+  const std::optional<int> pool = PoolSlotForSceneCrystal(state, e->chain[0].crystal_id);
+  if (!pool.has_value() || *pool < 0 || *pool >= static_cast<int>(state.crystals.size())) {
+    return std::nullopt;
+  }
+  return pool;
+}
+
+std::string Plural(int n, const char* one, const char* many) {
+  return std::to_string(n) + " " + (n == 1 ? one : many);
+}
+
 }  // namespace
 
 ExcludeEligibility EvaluateExcludeEligibility(const GuiState& state, std::string* why) {
@@ -471,8 +556,8 @@ ExcludeEligibility EvaluateExcludeEligibility(const GuiState& state, std::string
     }
     return ExcludeEligibility::kMultiSegment;
   }
-  const std::optional<int> pool = PoolSlotForSceneCrystal(state, e->chain[0].crystal_id);
-  if (!pool.has_value() || *pool < 0 || *pool >= static_cast<int>(state.crystals.size())) {
+  const std::optional<int> pool = SelectedChainPoolSlot(state);
+  if (!pool.has_value()) {
     if (why) {
       *why =
           "The crystal this chain went through is not in the current document (the crystal list changed "
@@ -480,22 +565,52 @@ ExcludeEligibility EvaluateExcludeEligibility(const GuiState& state, std::string
     }
     return ExcludeEligibility::kCrystalNotInScene;
   }
-  for (const auto& layer : state.layers) {
-    for (const auto& entry : layer.entries) {
-      if (entry.crystal_id == *pool && entry.filter_id.has_value()) {
-        if (why) {
-          *why =
-              "An entry using this crystal already has a filter. Excluding on top of an existing filter is "
-              "not merged automatically; edit that filter instead.";
-        }
-        return ExcludeEligibility::kEntryHasFilter;
-      }
+  // The filters the crystal's entries carry: an Out filter is extended, so it does not deny; an
+  // In filter on any of them does.
+  if (CensusForPoolCrystal(state, *pool).any_in) {
+    if (why) {
+      *why =
+          "An entry using this crystal already has an In filter (filter_in). Exclude can only add to an "
+          "existing Out filter; edit that filter directly, or change its action to Out, to continue.";
     }
+    return ExcludeEligibility::kEntryHasInFilter;
   }
   if (why) {
     why->clear();
   }
   return ExcludeEligibility::kOk;
+}
+
+std::string ExcludeAppendNotice(const GuiState& state) {
+  const std::optional<int> pool = SelectedChainPoolSlot(state);
+  if (!pool.has_value()) {
+    return std::string();
+  }
+  const CrystalFilterCensus census = CensusForPoolCrystal(state, *pool);
+  if (census.any_in || census.out_slots.empty()) {
+    return std::string();
+  }
+  std::string notice;
+  if (census.out_slots.size() == 1) {
+    const int slot = census.out_slots.front();
+    notice = "This crystal already has an Out filter (\"" + state.filters[static_cast<size_t>(slot)].name +
+             "\"); the raypath is added to it as one more alternative.";
+    // The others on the same pool slot, counted the way the entry card's link badge counts them
+    // (panels.cpp CountEntriesSharing), so the two say the same number.
+    const int others = CountEntriesSharing(state, *pool, slot) - 1;
+    if (others > 0) {
+      notice += " Shared with " + Plural(others, "other entry", "other entries") + ": the change reaches all of them.";
+    }
+  } else {
+    notice = "This crystal's entries already carry " +
+             Plural(static_cast<int>(census.out_slots.size()), "Out filter", "Out filters") +
+             "; the raypath is added to each as one more alternative.";
+  }
+  if (census.unfiltered > 0) {
+    notice += " Its " + Plural(census.unfiltered, "entry", "entries") + " without a filter " +
+              (census.unfiltered == 1 ? "gets" : "get") + " a new one.";
+  }
+  return notice;
 }
 
 std::string FormatSegmentRaypathText(const LUMICE_RaypathChainSegment& segment) {
@@ -517,42 +632,81 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
     return false;
   }
   const LUMICE_RaypathHistogramEntry* e = SelectedAnalysisEntry(state);
-  const std::optional<int> pool = PoolSlotForSceneCrystal(state, e->chain[0].crystal_id);
+  const std::optional<int> pool = SelectedChainPoolSlot(state);
   // Eligibility above guarantees both; a second check costs nothing and keeps this function safe
   // to call on its own.
   if (e == nullptr || !pool.has_value()) {
     return false;
   }
-
-  FilterConfig filter;
-  filter.name = std::string("Exclude ") + e->display;
-  filter.action = 1;  // filter_out
-  // The row was counted under the symmetry the list on show was reduced with, so the filter
-  // matches it under the same bits: fewer and "3-5" would leave orientation-equivalent paths the
-  // row merged in the picture; more and it would remove paths the user saw as separate rows.
-  const uint8_t sym = state.analysis_result.entries_symmetry;
-  filter.sym_p = (sym & LUMICE_RAYPATH_SYMMETRY_P) != 0;
-  filter.sym_b = (sym & LUMICE_RAYPATH_SYMMETRY_B) != 0;
-  filter.sym_d = (sym & LUMICE_RAYPATH_SYMMETRY_D) != 0;
   RaypathParams rp;
   rp.raypath_text = FormatSegmentRaypathText(e->chain[0]);
-  filter.param = FromLegacyRaypath(rp);
+  // The chain in the filter editor's own OR-row form, so the export walks it exactly as it walks
+  // a row typed there (one summand per ';'-separated alternative; this text never has one).
+  const SumOfProducts rows = FromLegacyRaypath(rp);
 
-  // Every entry that uses the crystal: the histogram counted the crystal wherever it was used,
-  // and eligibility has already established that none of those entries has a filter. The first
-  // one is written through the pool primitive, which appends the slot and propagates the id to
-  // the rest of the (crystal, no-filter) group — i.e. to all of them.
-  for (auto& layer : state.layers) {
-    for (auto& entry : layer.entries) {
-      if (entry.crystal_id == *pool) {
-        WriteFilterToPool(state, entry, filter);
-        GUI_LOG_INFO("[Analysis] excluded raypath {} on crystal pool {} (filter \"{}\", symmetry {})", rp.raypath_text,
-                     *pool, filter.name, static_cast<int>(sym));
-        return true;
+  // Every entry that uses the crystal: the histogram counted the crystal wherever it was used.
+  // Eligibility has established that none of them holds an In filter, so each is one of two
+  // cases, and an entry whose pool slot was already handled through a linked sibling is skipped.
+  std::vector<int> slots_done;
+  EntryCard* first_unfiltered = nullptr;
+  for (EntryCard* entry : EntriesForPoolCrystal(state, *pool)) {
+    const FilterConfig* existing = FilterOfEntry(state, *entry);
+    if (existing == nullptr) {
+      if (!entry->filter_id.has_value() && first_unfiltered == nullptr) {
+        first_unfiltered = entry;
+      }
+      continue;
+    }
+    if (std::find(slots_done.begin(), slots_done.end(), *entry->filter_id) != slots_done.end()) {
+      continue;
+    }
+    slots_done.push_back(*entry->filter_id);
+    // An Out filter: append. The name, the action and the symmetry are deliberately the FILTER's
+    // own, not the list's — this chain joins a filter that already governs other rows under those
+    // bits, and giving one OR row its own symmetry is not something the filter model can say
+    // (per-row In/Out and symmetry are out of scope, by decision). A row already in it is not
+    // added twice, and when every row is already there nothing is written at all, so a second
+    // click is a true no-op to the frame-tail reconciler and not a same-content write it has to
+    // diff.
+    FilterConfig filter = *existing;
+    size_t added = 0;
+    for (const SummandText& row : rows) {
+      if (std::find(filter.param.begin(), filter.param.end(), row) == filter.param.end()) {
+        filter.param.push_back(row);
+        ++added;
       }
     }
+    if (added == 0) {
+      GUI_LOG_INFO("[Analysis] raypath {} is already excluded by filter \"{}\" on crystal pool {}; nothing to add",
+                   rp.raypath_text, filter.name, *pool);
+      continue;
+    }
+    WriteFilterToPool(state, *entry, filter);  // in place: every entry sharing the slot sees it
+    GUI_LOG_INFO("[Analysis] appended raypath {} to filter \"{}\" on crystal pool {} ({} rows now)", rp.raypath_text,
+                 filter.name, *pool, filter.param.size());
   }
-  return false;
+
+  if (first_unfiltered != nullptr) {
+    FilterConfig filter;
+    filter.name = std::string("Exclude ") + e->display;
+    filter.action = 1;  // filter_out
+    // The row was counted under the symmetry the list on show was reduced with, so the filter
+    // matches it under the same bits: fewer and "3-5" would leave orientation-equivalent paths
+    // the row merged in the picture; more and it would remove paths the user saw as separate
+    // rows.
+    const uint8_t sym = state.analysis_result.entries_symmetry;
+    filter.sym_p = (sym & LUMICE_RAYPATH_SYMMETRY_P) != 0;
+    filter.sym_b = (sym & LUMICE_RAYPATH_SYMMETRY_B) != 0;
+    filter.sym_d = (sym & LUMICE_RAYPATH_SYMMETRY_D) != 0;
+    filter.param = rows;
+    // The first filter-less entry is written through the pool primitive, which appends the slot
+    // and propagates the id to the rest of the (crystal, no-filter) group — i.e. to every other
+    // entry of the crystal that had no filter.
+    WriteFilterToPool(state, *first_unfiltered, filter);
+    GUI_LOG_INFO("[Analysis] excluded raypath {} on crystal pool {} (filter \"{}\", symmetry {})", rp.raypath_text,
+                 *pool, filter.name, static_cast<int>(sym));
+  }
+  return true;
 }
 
 // ---- Rendering -----------------------------------------------------------------------------------
@@ -865,9 +1019,14 @@ void RenderExcludeButton(GuiState& state) {
   ImGui::EndDisabled();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     if (elig == ExcludeEligibility::kOk) {
-      ImGui::SetTooltip(
+      std::string tip =
           "Add a filter on this chain's crystal that removes rays taking this path, under the symmetry\n"
-          "the list is shown with. The document becomes modified; press Run to see the picture without it.");
+          "the list is shown with. The document becomes modified; press Run to see the picture without it.";
+      const std::string notice = ExcludeAppendNotice(state);
+      if (!notice.empty()) {
+        tip += "\n" + notice;
+      }
+      ImGui::SetTooltip("%s", tip.c_str());
     } else {
       ImGui::SetTooltip("%s", why.c_str());
     }

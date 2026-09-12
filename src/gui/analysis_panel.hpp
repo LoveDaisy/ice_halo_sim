@@ -213,28 +213,45 @@ LUMICE_RaypathAnalysisRequest BuildAnalysisRequest(const GuiState& state, int ca
 // ---- Exclude this raypath ------------------------------------------------------------------------
 
 enum class ExcludeEligibility {
-  kOk,
+  kOk,                 // no filter on that crystal yet (a fresh Out filter is written), or an Out
+                       // filter already (this chain is appended to it as one more OR row)
   kNoSelection,        // no row selected, or no row of the result on show carries that chain
   kMultiSegment,       // the chain crosses scattering layers; a filter on one crystal cannot say it
   kCrystalNotInScene,  // the chain's crystal id is not one the CURRENT document commits (edited
                        // since the analysis) — never guess which crystal was meant
-  kEntryHasFilter,     // an entry using that crystal already has a filter; no automatic merge
+  kEntryHasInFilter,   // an entry using that crystal already has an IN filter: "keep only these
+                       // paths" and "also drop this one" do not compose into one filter, and
+                       // per-row In/Out is not a thing the filter model has; the user edits it
 };
 
 // Why the Exclude button is, or is not, enabled for the current selection. `why` (optional)
 // receives the tooltip text for a denial. Pure: reads the document and the result, writes nothing.
 ExcludeEligibility EvaluateExcludeEligibility(const GuiState& state, std::string* why);
 
+// The sentence the Exclude button's tooltip adds when the exclusion would EXTEND a filter rather
+// than only create one: an entry of the chain's crystal already carries an Out filter, so the
+// selection becomes one more OR row of it — and, when other entries share that filter's pool
+// slot, how many, in the words the entry card's link badge uses (CountEntriesSharing); when the
+// crystal's entries hold several distinct Out filters, how many; and when some of them hold none,
+// that those get a fresh filter. Empty when there is no filter to extend or the selection is not
+// eligible. Pure.
+std::string ExcludeAppendNotice(const GuiState& state);
+
 // "3-5": the face sequence of one chain segment in the raypath grammar the filter editor uses.
 std::string FormatSegmentRaypathText(const LUMICE_RaypathChainSegment& segment);
 
-// The exclusion itself, on an eligible selection: a filter_out filter on the chain's face
-// sequence, symmetric under the bits the list on show was reduced with
-// (analysis_result.entries_symmetry — the reduction the selected row was counted under, so the
-// filter removes exactly the rows the user sees merged into it, no wider and no narrower), bound
-// to every entry that uses the chain's crystal through the filter editor's own pool-write path.
-// The frame-tail reconciler sees the filters diff and marks the document hard-dirty; the user
-// re-runs. Returns false, writing nothing, when the selection is not eligible.
+// The exclusion itself, on an eligible selection, reaching every entry that uses the chain's
+// crystal (the histogram counted it wherever it was used). Entries with no filter get one: a
+// filter_out filter on the chain's face sequence, symmetric under the bits the list on show was
+// reduced with (analysis_result.entries_symmetry — the reduction the selected row was counted
+// under, so the filter removes exactly the rows the user sees merged into it, no wider and no
+// narrower), written through the filter editor's own pool-write path, which binds it to the
+// whole (crystal, no-filter) group. Entries with an Out filter get the face sequence appended to
+// it as one more OR row (the filter's name, action and symmetry stay what they were), the pool
+// slot overwritten in place so every entry sharing it sees the row; a row already in it is not
+// added twice, and a slot with nothing to add is not written at all. The frame-tail reconciler
+// sees the filters diff and marks the document hard-dirty; the user re-runs. Returns false,
+// writing nothing, when the selection is not eligible.
 bool ApplyExcludeSelectedRaypath(GuiState& state);
 
 // ---- Rendering -----------------------------------------------------------------------------------

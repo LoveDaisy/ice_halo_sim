@@ -19,6 +19,7 @@
 #include "IconsFontAwesome6.h"
 #include "gui/analysis_panel.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/raypath_segments.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "imgui_internal.h"
 #include "include/lumice.h"
@@ -254,11 +255,20 @@ bool RunAfterAnalysisRenders(ImGuiTestContext* ctx, bool exclude, bool gpu) {
     IM_CHECK_RETV(*gui::g_state.analysis.selected_entry == top_display, false);
     IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo(ICON_FA_BAN " Exclude this raypath")), false);
     ctx->ItemClick(ICON_FA_BAN " Exclude this raypath");
+    ctx->Yield(1);
+    // The filter is in the document, an Out one, so the same crystal stays excludable: the
+    // button is still enabled, and a second press of it for the same chain is the idempotent
+    // path — driven here under real frames, and read back as "one filter, one row, unchanged".
+    IM_CHECK_RETV(gui::g_state.filters.size() == 1u, false);
+    IM_CHECK_RETV(gui::g_state.filters[0].action == 1, false);
+    IM_CHECK_RETV(gui::g_state.filters[0].param.size() == 1u, false);
+    IM_CHECK_RETV(gui::EvaluateExcludeEligibility(gui::g_state, nullptr) == gui::ExcludeEligibility::kOk, false);
+    IM_CHECK_RETV(!IsDisabled(ctx->ItemInfo(ICON_FA_BAN " Exclude this raypath")), false);
+    ctx->ItemClick(ICON_FA_BAN " Exclude this raypath");
     ctx->SetRef("");
     ctx->Yield(1);
-    // The filter is in the document: the same entry is no longer excludable a second time.
-    IM_CHECK_RETV(gui::EvaluateExcludeEligibility(gui::g_state, nullptr) == gui::ExcludeEligibility::kEntryHasFilter,
-                  false);
+    IM_CHECK_RETV(gui::g_state.filters.size() == 1u, false);
+    IM_CHECK_RETV(gui::g_state.filters[0].param.size() == 1u, false);
   }
 
   // The second Run, from the top bar, on a finite budget.
@@ -846,6 +856,58 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[0], want[0]);
       IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[1], want[1]);
       IM_CHECK_EQ(gui::g_state.analysis.cone_center_dir[2], want[2]);
+    };
+  }
+
+  // An In filter on the chain's crystal keeps Exclude shut: the button is disabled with the
+  // selection made, the eligibility names the reason, and nothing is written by a click. The
+  // tooltip TEXT is not read off the screen — ImGui::SetTooltip draws through TextUnformatted
+  // with id 0, which the test engine's registry never sees (the limit
+  // test_view_display_controls.cpp records for its own disabled entries) — so the words are
+  // asserted on the same function the tooltip prints, with the hover driven for real so that
+  // frame's SetTooltip path is exercised too.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "exclude_is_shut_by_an_in_filter_on_the_crystal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      OpenWindow(ctx);
+      IM_CHECK(RunPointAnalysisToCompletion(ctx));
+      // The document's one entry gets an In filter (FilterConfig's default action) — as the
+      // filter editor would leave it after "keep only 1-3".
+      IM_CHECK(gui::g_state.filters.empty());
+      gui::FilterConfig keep;
+      keep.name = "keep 1-3";
+      keep.action = 0;
+      keep.param = gui::FromLegacyRaypath(gui::RaypathParams{ "1-3" });
+      gui::g_state.filters.push_back(keep);
+      gui::g_state.layers[0].entries[0].filter_id = 0;
+
+      const auto& view_result = gui::g_state.analysis_result;
+      IM_CHECK(!view_result.display_order.empty());
+      const std::string top_display =
+          view_result.payload->entries[static_cast<size_t>(view_result.display_order[0])].display;
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick((std::string("**/") + top_display).c_str());
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.selected_entry.has_value());
+      IM_CHECK(IsDisabled(ctx->ItemInfo(ICON_FA_BAN " Exclude this raypath")));
+      std::string why;
+      IM_CHECK_EQ((int)gui::EvaluateExcludeEligibility(gui::g_state, &why),
+                  (int)gui::ExcludeEligibility::kEntryHasInFilter);
+      IM_CHECK(!why.empty());
+      IM_CHECK(why.find("In filter") != std::string::npos);
+      IM_CHECK(gui::ExcludeAppendNotice(gui::g_state).empty());
+      // Hover, so the disabled button's tooltip frame is drawn; then click, which does nothing.
+      ctx->MouseMove(ICON_FA_BAN " Exclude this raypath");
+      ctx->Yield(2);
+      ctx->ItemClick(ICON_FA_BAN " Exclude this raypath");
+      ctx->SetRef("");
+      ctx->Yield(1);
+      IM_CHECK_EQ(gui::g_state.filters.size(), 1u);
+      IM_CHECK_EQ(gui::g_state.filters[0].action, 0);
+      IM_CHECK_EQ(gui::g_state.filters[0].param.size(), 1u);
+      IM_CHECK_STR_EQ(gui::g_state.filters[0].name.c_str(), "keep 1-3");
     };
   }
 
