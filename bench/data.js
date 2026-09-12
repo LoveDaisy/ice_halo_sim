@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789249342970,
+  "lastUpdate": 1789249345111,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "4e3f2bf4a1010ee5fe92f5a0cb24a863a3d96272",
-          "message": "Merge pull request #254 from LoveDaisy/fix/revert-field-scope-alignment\n\nfix(gui): align Revert's field scope with the predicate that decides what counts as a change",
-          "timestamp": "2026-08-06T17:07:01+08:00",
-          "tree_id": "39a256ded94aa63c7c11aaeb8f2c923af34401c7",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/4e3f2bf4a1010ee5fe92f5a0cb24a863a3d96272"
-        },
-        "date": 1786007859677,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 98.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 91.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "559b976cfc69c740bfbb7bcf1a4c9f0bac592e3c",
           "message": "Merge pull request #255 from LoveDaisy/feat/gui-rules-as-data\n\nMake three GUI rules queryable data, and replace the grid tests they forced",
           "timestamp": "2026-08-07T07:52:53+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a68880e398137ef91895edbb6d4ff0c997923e4",
+          "message": "Merge pull request #352 from LoveDaisy/chore/regen-refs-deterministic-single-shot\n\nchore(regen-refs): shoot deterministic groups once, share runs across groups, refuse stale-base reshoots",
+          "timestamp": "2026-09-13T05:31:09+08:00",
+          "tree_id": "5e9ceaec07873c2b9154175e6d957784999b8820",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7a68880e398137ef91895edbb6d4ff0c997923e4"
+        },
+        "date": 1789249344475,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 85.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.7,
             "unit": "%"
           }
         ]
