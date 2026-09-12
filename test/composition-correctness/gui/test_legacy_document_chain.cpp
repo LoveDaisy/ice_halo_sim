@@ -433,5 +433,43 @@ TEST(LegacyDocumentChain, ADocumentSurvivesAWriteToDiskAndAReadBack) {
   EXPECT_NEAR(loaded.sim.ray_num_millions, 3.0f, 0.01f);
 }
 
+// The core-config side of the same document: the ray budget's two domain bounds
+// (gui/ray_num_domain.hpp) written by the export path as whole rays and read back by the legacy
+// importer as millions. The importer scales `ray_num` to millions by casting the integer to float
+// FIRST (file_io.cpp, DeserializeFromJson) — exact up to 2^24 rays and rounded past it, which at
+// the 1e11 ceiling is a 2048-ray error (float's spacing there is 8192) that the division by 1e6
+// then rounds back onto 100000 M, whose own float spacing is 1/128 M — 0.002 M of error against a
+// 0.004 M rounding radius. That is a computed property of these two values, not a general one, so
+// the ceiling is asserted here rather than inferred from the 3 M case above. The exported figure
+// itself is asserted as the integer the CLI will read, since that is the contract the GUI's
+// export makes with core.
+TEST(LegacyDocumentChain, TheRayBudgetsDomainBoundsSurviveExportAndImport) {
+  struct Row {
+    float millions;
+    unsigned long long rays;
+  };
+  for (const Row& row : { Row{ 100000.0f, 100000000000ULL }, Row{ 0.1f, 100000ULL } }) {
+    DoNew();
+    g_state.sim.infinite = false;
+    g_state.sim.ray_num_millions = row.millions;
+    std::string json;
+    if (!BuildExportJsonOrWarn(g_state, &json, nullptr)) {
+      ADD_FAILURE() << row.millions << " M: the export path refused the document";
+      continue;
+    }
+    const nlohmann::json exported = nlohmann::json::parse(json);
+    EXPECT_EQ(exported["scene"]["ray_num"].get<unsigned long long>(), row.rays) << row.millions << " M";
+
+    GuiState loaded = InitDefaultState();
+    loaded.sim.ray_num_millions = 5.0f;  // seed off the expectation
+    if (!DeserializeFromJson(json, loaded)) {
+      ADD_FAILURE() << row.millions << " M: the importer rejected the export";
+      continue;
+    }
+    EXPECT_FLOAT_EQ(loaded.sim.ray_num_millions, row.millions);
+    EXPECT_FALSE(loaded.sim.infinite) << row.millions << " M";
+  }
+}
+
 }  // namespace
 }  // namespace lumice::gui

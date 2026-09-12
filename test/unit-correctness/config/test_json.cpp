@@ -698,6 +698,17 @@ TEST_F(V3TestJson, Filter_Complex) {
 
 
 // =============== Scene ===============
+// `ray_num` at the GUI slider's ceiling (gui/ray_num_domain.hpp: 100 000 M = 1e11 rays) parses
+// whole. The golden fixture below carries ray_num = 2, so nothing else here exercises a value
+// outside 32 bits; a reader that went through an int on the way to size_t would pass every other
+// case in this file and truncate exactly the document the GUI now exports at its top stop.
+TEST_F(V3TestJson, Scene_RayNumAtTheGuiCeilingParsesWhole) {
+  auto j = config_json_;
+  j.at("scene").at("ray_num") = 100000000000ULL;
+  auto manager = j.get<ConfigManager>();
+  ASSERT_EQ(manager.scene_.ray_num_, static_cast<size_t>(100000000000ULL));
+}
+
 TEST_F(V3TestJson, Scene_SingleScattering) {
   auto manager = config_json_.get<ConfigManager>();
   const auto& s = manager.scene_;

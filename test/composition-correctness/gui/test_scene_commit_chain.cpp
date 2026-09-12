@@ -818,6 +818,32 @@ TEST(SceneCommitChain, TheAnalysisSubmitsTheSceneTheRunWouldCommit) {
   EXPECT_EQ(from_emitter["scene"]["ray_num"].get<int>(), 250000);
 }
 
+// The ray budget's two domain bounds (gui/ray_num_domain.hpp: 0.1 M and 100 000 M) reach the
+// commit as whole integers. The ceiling is the one that can fail quietly: 1e11 is above what a
+// float carries exactly (its spacing there is 8192), so the value must be scaled to rays while it
+// is still a double — the millions figure IS float-exact, and the multiply happens in double —
+// and LUMICE_RayCount must be wide enough to hold the result. `get<unsigned long long>()` rather
+// than the int the case above uses, because 1e11 does not fit an int and a narrowing read would
+// be the same defect this asserts against, on the reading side.
+TEST(SceneCommitChain, TheRayBudgetsDomainBoundsReachTheCommitWhole) {
+  struct Row {
+    float millions;
+    unsigned long long rays;
+  };
+  for (const Row& row : { Row{ 100000.0f, 100000000000ULL }, Row{ 0.1f, 100000ULL } }) {
+    SeedOneEntryDocument();
+    g_state.sim.infinite = false;
+    g_state.sim.ray_num_millions = row.millions;
+    const nlohmann::json commit_doc = CommitSceneJson(g_state);
+    if (commit_doc.is_null()) {
+      ADD_FAILURE() << row.millions << " M: the commit arm produced no scene";
+      continue;
+    }
+    EXPECT_TRUE(commit_doc["scene"]["ray_num"].is_number_unsigned()) << row.millions << " M";
+    EXPECT_EQ(commit_doc["scene"]["ray_num"].get<unsigned long long>(), row.rays) << row.millions << " M";
+  }
+}
+
 // scene.ray_allocation reaches BOTH arms, from the document's own switch, spelled as core spells
 // it. Both values are driven, not one: with only `adaptive` asserted, a BuildScene that stopped
 // calling the setter would still pass whenever core's default happened to agree. And the key is

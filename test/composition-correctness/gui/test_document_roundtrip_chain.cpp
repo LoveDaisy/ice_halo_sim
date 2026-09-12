@@ -391,6 +391,29 @@ TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
   }
 }
 
+// The ray budget's two domain bounds (gui/ray_num_domain.hpp) survive the document, exactly. The
+// probe table above moves the field off its default and asks whether it comes back; this asks the
+// stricter question at the two values the slider can actually park on. Neither is a round-trip
+// gimme: 0.1 has no exact binary form, so it is only preserved if the writer emits enough digits
+// for the reader to land on the same float, and 100000 is the new ceiling — a writer that rendered
+// millions through a fixed short format would round one and a reader with a stale clamp would cut
+// the other. EXPECT_FLOAT_EQ (4 ULP) is the same figure the analysis-params case below uses.
+TEST(DocumentRoundtripChain, TheRayBudgetsDomainBoundsSurviveTheDocumentExactly) {
+  for (const float millions : { 100000.0f, 0.1f }) {
+    GuiState before = MinimalDocument();
+    before.sim.infinite = false;
+    before.sim.ray_num_millions = millions;
+    GuiState after = MinimalDocument();
+    after.sim.ray_num_millions = 5.0f;  // seed off the expectation
+    if (!DeserializeGuiStateJson(SerializeGuiStateJson(before), after)) {
+      ADD_FAILURE() << millions << " M: DeserializeGuiStateJson rejected its own output";
+      continue;
+    }
+    EXPECT_FLOAT_EQ(after.sim.ray_num_millions, millions);
+    EXPECT_FALSE(after.sim.infinite) << millions << " M";
+  }
+}
+
 // The analysis panel's request parameters (ray_num_millions / infinite, and the
 // ray_budget_initialized latch) are session-tier tool state — gui_state_tiers.hpp registers
 // the whole `analysis` struct as kSession — and must not be in the document. Not a row in the
