@@ -881,6 +881,55 @@ different brightness. The band-expectation charge is deterministic and matches w
 a discrete spectrum already does exactly (its `Σw` is the same value regardless of
 draw order).
 
+**"Rays emitted in that batch" is a ray-*equivalent*, not a ray count, once
+`scene.ray_allocation` is `"adaptive"`.** The definition above charges a batch as
+`emitted_weight × N`, which assumes every ray of the batch was born at the same
+nominal weight. Under `"proportional"` allocation (the default) that holds. Under
+`"adaptive"` it does not: the first scattering layer deals its rays by the `q_i` of
+the snapshot the batch Loaded from the scene's `RayAllocationOnline` (the running
+Neyman estimate the render's own batches keep up to date) rather than by
+`proportion` `p_i`, and every ray born into entry `i` is scaled by
+`correction_i = (p_i/ΣP)/(q_i/ΣQ)` (`ComputeRayAllocationCorrection`,
+`src/core/simulator.hpp`) so that the expected image stays what `proportion` says.
+Rays of one batch therefore no longer share one weight, and `emitted_weight × N`
+would charge the denominator for what was *dealt*, not for what was *emitted at the
+nominal weight* — a mode-dependent bias in the `kAbsolute` brightness. The charge
+is accordingly
+
+```
+emitted_energy_  =  emitted_weight × ( N + Σ_ci n_ci · (correction_ci − 1) )
+```
+
+summed over the entries `ci` of the **first** layer only — `n_ci` is what
+`PartitionCrystalRayNum` dealt entry `ci` this batch, and `correction_ci` is the one
+computed from the `q` *this* batch was dealt by. `q` moves from batch to batch under
+online allocation, and the charge stays exact because a batch binds one snapshot at
+its start and keeps it: the deal, the per-ray multiply and this sum all read the same
+`q`, so what is charged is what was emitted, whatever the next batch's `q` turns out
+to be. MS continuation layers re-deal
+rays that already exist, so they never add to it: the denominator counts emissions,
+not hops. The delta form `Σ n_ci·(correction_ci − 1)` rather than `Σ n_ci·correction_ci`
+is deliberate: it makes the charge exactly `N` — the old expression, bit for bit —
+whenever every correction is `1.0f`, including a layer that deals no rays at all
+(every `proportion` zero), which the plain sum would charge as `0`. Single owner of
+the sum: `AccumulateFirstLayerEmittedRayEquivalentDelta` (`src/core/simulator.cpp`),
+called from the legacy `Simulator::SimulateOneWavelength` first-layer partition and
+from each `TraceBackend`'s first `TraceLayer` of a batch; the backends surface it
+through `TraceBackend::GetLastBatchEmittedRayEquivalent(ray_num)`
+(`src/core/backend/trace_backend.hpp`), whose base implementation returns `ray_num`
+unchanged so a backend that never deals by `q` is correct without overriding, and
+`Simulator` multiplies that by `emitted_weight` at every `SimData::emitted_energy_`
+assignment (the legacy path, the per-batch backend drain, and the third-clock
+`xyz_win_.emitted_energy` window alike).
+
+Two claims that must not be conflated: under `"proportional"` every correction is
+`1.0f` and the new charge is **bit-identical** to the old one — zero regression for
+every existing config. Under `"adaptive"` the charge is a *different number* from
+`emitted_weight × N` by construction (that is the point); what is preserved is the
+**expectation** of the landed energy relative to it, not the per-batch value. A
+reader comparing `emitted_energy` between the two modes of one scene should expect
+them to differ and should not read the difference as a defect.
+
 ### §7.2 The `landed_fraction` Law
 
 `emitted_energy` and the pre-scrum landed-weight denominator differ by a **per-scene

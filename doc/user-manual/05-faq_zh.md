@@ -94,7 +94,7 @@ GUI 包了同一个引擎，但**并非** JSON config 的完全超集 — 一些
 ## 6. "我的光晕看上去淡 / 噪点多 / 不对" — 排查清单
 
 1. **太淡？** 升 `scene.ray_num`（光线数 ×4 ≈ 噪声 ÷2）。
-2. **噪点多？** 升 `scene.ray_num`，或者把 spectrum 收窄一点（如果色散噪声占主导）。
+2. **噪点多？** 升 `scene.ray_num`，或者把 spectrum 收窄一点（如果色散噪声占主导）。若只是某一个晕的边缘比画面其余部分粗糙（弱晕挨着亮晕），确认 `scene.ray_allocation` 是 `"adaptive"`——GUI 里就是 Simulation 面板的 **Adaptive ray allocation** 复选框，默认勾选。
 3. **完全没光晕？** 确认相机指向太阳：`render[].view.elevation` ≈ `scene.light_source.altitude`，`view.azimuth` ≈ `light_source.azimuth`。
 4. **形状不对？** 检查 `crystal[].axis` — 随机取向出圆环，定向片晶出弧线和亮斑。
 5. **还是不对？** 用 `-v` 重跑，看每个 batch 是否有零命中。

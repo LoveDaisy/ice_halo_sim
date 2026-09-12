@@ -1903,6 +1903,15 @@ void RenderSceneControls(GuiState& state) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
   }
+  // Document field (SimConfig), auto-diffed by the reconciler like `Infinite rays` — no MarkDirty
+  // here. No ConstraintFor: nothing gates it.
+  Checkbox("Adaptive ray allocation", &state.sim.ray_allocation_adaptive);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Allocate each crystal's rays by its measured per-ray energy variance instead of\n"
+        "its population share. The expected image is unchanged; noise becomes more even\n"
+        "across crystals (e.g. a faint halo's edge no longer looks rougher than the rest).");
+  }
 
   // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Marked dirty explicitly so
   // the next Apply/Run reconstructs the server for the chosen backend

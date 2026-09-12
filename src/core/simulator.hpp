@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "config/proj_config.hpp"
@@ -17,11 +18,13 @@
 #include "core/crystal.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/shared/ray_allocation_shared.hpp"
 #include "util/logger.hpp"
 
 namespace lumice {
 
 class FilterSpec;
+class RayAllocationOnline;
 
 template <class T>
 class Queue;
@@ -31,6 +34,12 @@ using QueuePtrU = std::unique_ptr<Queue<T>>;
 template <class T>
 using QueuePtrS = std::shared_ptr<Queue<T>>;
 
+// NOTE: of the four shared_ptr fields below, the first three (scene_, renders_,
+// raypath_color_) are shared_ptr<const T> input snapshots bound once when the
+// batch is constructed and never written again. ray_alloc_online_ is the
+// exception: it is non-const and the worker writes into it (Accumulate) while
+// running the batch — a synchronized channel, not a snapshot. See its own
+// comment below for why.
 struct SimBatch {
   size_t ray_num_ = 0;
   std::shared_ptr<const SceneConfig> scene_;
@@ -48,6 +57,74 @@ struct SimBatch {
   // raypath_color) is a consistent triple. NULL is treated as "no color
   // configured" (AC3 zero-cost path) by both CPU emit gates.
   std::shared_ptr<const RaypathColorConfig> raypath_color_;
+  // The online ray-allocation authority of the scene this batch belongs to
+  // (scene.ray_allocation = adaptive on a RENDER commit); null on every other
+  // batch — proportional scenes, analysis sessions — which then deal by p with
+  // every correction 1.0f, the zero-cost path. Captured in GenerateScene under
+  // scene_mutex_ with the three above, so a CommitConfig cannot pair a batch with
+  // another scene's tally. Not a snapshot itself: the worker Loads one snapshot
+  // from it when it STARTS the batch (not when the batch was queued — the queue
+  // runs up to kMaxSceneCnt batches ahead, i.e. tens of millions of rays on the
+  // GPU grain, and a q bound that early would never catch up with the run) and
+  // Accumulates its tally into it when the batch is done. An in-flight batch of
+  // a superseded scene keeps the old object alive and adds into that, so a new
+  // scene's tally can never be polluted by a stale batch. Non-const, unlike the
+  // three snapshots above, because the worker WRITES into it (Accumulate) — it is
+  // a synchronized channel between the workers and the server, not a snapshot;
+  // its own mutex is the whole of its thread contract.
+  std::shared_ptr<RayAllocationOnline> ray_alloc_online_;
+};
+
+// The online authority of one adaptive scene's ray allocation: the cumulative
+// per-(layer, entry) tally every batch of every worker adds into, and the
+// immutable q snapshot derived from it that the next batch deals by. One object
+// per committed adaptive scene, owned by the server and bound into every SimBatch
+// of that scene (SimBatch::ray_alloc_online_); an analysis session binds none and
+// so deals by p (doc/raypath-analysis-panel.md §10, unchanged).
+//
+// Two operations, both thread-safe, both O(entries):
+//   Load()       — the snapshot to deal the NEXT batch by. Never null: the
+//                  constructor publishes the cold-start deal (uniform over the
+//                  p_i > 0 entries of each layer — the √K-bounded worst case the
+//                  design chose over dealing by p, whose small-sample estimate
+//                  of a rare entry is exactly what a pilot got wrong).
+//   Accumulate() — add one batch's tally, recompute every layer's q from the
+//                  CUMULATIVE tally (ComputeAdaptiveRayAllocationWeights, floor
+//                  included) and publish a fresh snapshot. Cumulative rather
+//                  than EMA on purpose: within a run the statistic is
+//                  stationary, so the running total is the best estimate at
+//                  every point and converges monotonically.
+//
+// Unbiasedness rests on the order of those two calls inside a batch: a batch
+// Loads once at its start, traces and charges under that q, and only then
+// Accumulates its own tally — so the q a ray is corrected by depends only on
+// batches that finished before it was born (conditionally unbiased, batch by
+// batch). Workers merge through the object's own mutex; the server neither
+// reads nor writes the tally while workers run.
+class RayAllocationOnline {
+ public:
+  explicit RayAllocationOnline(const SceneConfig& scene);
+
+  std::shared_ptr<const RayAllocationSnapshot> Load() const;
+  // `delta` must be shaped like the scene this object was built for; a batch
+  // whose tally is empty (nothing dealt) is a no-op. Returns true when a
+  // log milestone was crossed — the caller decides what to do with it.
+  bool Accumulate(const RayAllocationTally& delta);
+
+  // A copy of the cumulative tally and of what it last published, for the log
+  // line and for tests. The energy shares the object was built with are what
+  // the q it publishes are relative to.
+  RayAllocationTally Cumulative() const;
+  const std::vector<std::vector<float>>& Proportions() const { return p_; }
+
+ private:
+  std::vector<std::vector<float>> p_;  // [mi][ci], crystal_proportion_
+  mutable std::mutex mutex_;
+  RayAllocationTally cumulative_;
+  std::shared_ptr<const RayAllocationSnapshot> current_;
+  // Log cadence: a milestone is crossed when the first layer's cumulative dealt
+  // count passes the next power of two (bounded to O(log N) lines per run).
+  size_t next_log_rays_ = 1;
 };
 
 class Simulator {
@@ -142,6 +219,7 @@ class Simulator {
     all_data_observer_ctx_ = ctx;
   }
 
+
  private:
   using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
   struct SimWorkspace {
@@ -171,10 +249,19 @@ class Simulator {
   // struct would make that call site express both meanings with one value. If a
   // further audit-only quantity ever joins it, group them into a batch-audit
   // struct rather than growing this parameter list again.
+  // `ray_alloc`: the q snapshot this batch deals by — Loaded ONCE per SimBatch
+  // by Run() from SimBatch::ray_alloc_online_ and held for the batch, so every
+  // wavelength of a discrete spectrum deals by the same q; nullptr on every
+  // proportional or analysis batch. `tally_out`: when non-null, this call's
+  // per-(layer, entry) tally (core/shared/ray_allocation_shared.hpp for the
+  // contract) is accumulated into it at the same "true exit" collection point
+  // outgoing_w_ is built from, so what is measured is exactly what the consumer
+  // is handed. Left untouched on a stop_ abort, when nothing is published either.
   void SimulateOneWavelength(const SceneConfig& config, const RaypathColorConfig* raypath_color,
                              const WlParam& wl_param, float emitted_weight, size_t ray_num, CrystalCache& crystal_cache,
                              SimWorkspace& workspace, uint64_t generation,
-                             std::vector<std::vector<double>>& ray_alloc_carry);
+                             std::vector<std::vector<double>>& ray_alloc_carry, const RayAllocationSnapshot* ray_alloc,
+                             RayAllocationTally* tally_out);
 
   // Backend-routed wavelength step (TraceBackend seam, scrum-258.1 exit-seam).
   // Drives backend.BeginSession -> (TraceLayer -> Recombine)+ -> ReadbackExitRays
@@ -186,7 +273,8 @@ class Simulator {
   void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
                                         std::shared_ptr<const RaypathColorConfig> raypath_color,
                                         const WlParam& wl_param, float emitted_weight, size_t ray_num,
-                                        uint64_t generation);
+                                        uint64_t generation, const RayAllocationSnapshot* ray_alloc,
+                                        RayAllocationTally* tally_out);
 
   // scrum-312 (third-clock drain): for SupportsThirdClockDrain() backends the
   // device XYZ accumulator persists across per-batch sessions; this window holds
@@ -232,6 +320,12 @@ class Simulator {
   // `backend` is null or nothing is pending (self-guarding so call sites stay
   // flat). Called only for SupportsThirdClockDrain() backends.
   void DrainDeviceXyz(TraceBackend* backend);
+  // One `RayAllocationOnline: layer L entry E: p= q= rays=` line per (layer, entry)
+  // of `online`, at the cadence Accumulate reports (each doubling of the first
+  // layer's dealt count). The only signal of the online q that crosses the process
+  // boundary: the e2e mechanism test parses it, and the server's Stop() prints the
+  // same shape once more as the run's final state.
+  void LogRayAllocationMilestone(const RayAllocationOnline& online);
 
   static constexpr size_t kSmallBatchRayNum = 32;
 
@@ -320,6 +414,100 @@ class Simulator {
 // Caller must ensure carry.size() == proportions.size(). Returns array with exact sum == ray_num.
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
                                                  std::vector<double>& carry);
+
+// Per-entry weight correction for dealing a layer's rays by `q` while the energy shares are
+// `p`: correction_i = (p_i/ΣP) / (q_i/ΣQ), with ΣP = Σ max(0, p_i) and ΣQ = Σ max(0, q_i) —
+// the same normalization PartitionCrystalRayNum applies to whatever it is handed, so the two
+// agree entry for entry and Σ_i n_i · w · correction_i == N · w up to the partition's ±1-ray
+// rounding, whatever raw scale `p` and `q` arrive in. Comparing the raw ratio p_i/q_i instead
+// would fold a constant ΣP/ΣQ into every ray whenever the two vectors are not on the same
+// scale — a global brightness bias, not a rounding error, and one a ±1-ray tolerance would
+// not catch.
+// An entry with q_i <= 0 is dealt no rays by PartitionCrystalRayNum, so its correction is
+// never read; it is returned as 1.0f so the unread slot holds a finite value rather than a
+// 0/0 NaN. Precondition: p.size() == q.size(). The single owner of this formula — every
+// backend consumes the vector, none re-derives it.
+std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, const std::vector<float>& q);
+
+// The single owner of the first layer's Σ_ci n_ci · (correction_ci − 1) formula that feeds
+// emitted_ray_equivalent / emitted_ray_equivalent_delta_this_batch_ (see the comment at the
+// call site in simulator.cpp for why the (correction - 1) shape matters). `crystal_ray_num`
+// must have at least `count` entries; `corrections` must have at least `count` entries too —
+// both hold for every call site, which all derive `count` from the same ms_info.setting_.size()
+// used to build both arrays. Every first_ms accumulation site (legacy Simulator,
+// CpuTraceBackend, MetalTraceBackend, CudaTraceBackend) calls this rather than re-deriving the
+// sum inline, so it enjoys the same single-authority status as ComputeRayAllocationCorrection.
+double AccumulateFirstLayerEmittedRayEquivalentDelta(const size_t* crystal_ray_num,
+                                                     const std::vector<float>& corrections, size_t count);
+
+// What one MS layer's ray partition and per-entry weight correction are, resolved from the
+// scene's allocation mode and the layer's entries. `partition_weights` is what
+// PartitionCrystalRayNum is handed — p_i (ScatteringSetting::crystal_proportion_) under
+// kProportional, q_i under a delivered kAdaptive layer. Named distinctly from `proportions`
+// (the scene's crystal_proportion_, always an energy share) precisely because this field's
+// dimension is mode-dependent: reusing that name here would make one identifier stand for two
+// different quantities, which is exactly the p_i/q_i conflation this task exists to undo.
+// `corrections` is what each ray born into entry ci is multiplied by.
+struct LayerRayAllocation {
+  std::vector<float> partition_weights;
+  std::vector<float> corrections;
+  // True when the layer is dealt by q (kAdaptive AND a snapshot was delivered). What a
+  // backend gates its tally on: a layer dealt by p has nothing to measure for.
+  bool adaptive = false;
+};
+
+// The one place that decides whether a layer deals by p or by q. `q_for_layer` is the
+// layer's row of the RayAllocationSnapshot the batch Loaded (its size must equal the
+// layer's entry count), or nullptr when no snapshot was delivered — every proportional
+// scene, and every analysis session, whose SimBatch binds no RayAllocationOnline.
+// kProportional, or kAdaptive with no snapshot, deals by crystal_proportion_ with every
+// correction exactly 1.0f — the multiply is then an IEEE identity and the layer is
+// bit-for-bit what it was before the mode existed. Delivery is all-or-nothing per LAYER
+// by construction (a snapshot carries every entry of every layer); there is no "partly
+// adaptive" layer.
+LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer,
+                                             const std::vector<float>* q_for_layer);
+
+// The q one layer is dealt by, from its energy shares `p` (crystal_proportion_) and
+// the cumulative tally of the same layer (`stats.size() == p.size()`). Neyman
+// allocation with a floor:
+//   q_i = 0                                  if p_i <= 0   (a switched-off entry stays off)
+//   q_i = max(raw_i / Σraw, 0.01 / K)        otherwise, raw_i = p_i · √(Σw²_i / rays_i)
+// with K the number of p_i > 0 entries — the entries the floor is FOR; a p_i = 0 entry
+// is not a share the floor divides among. The floor is not a zero-hit special case:
+// Neyman on its own pushes a rare-but-ordinary-energy entry BELOW its proportional
+// share (E[e²] carries the hit rate once more than E[e] does), and an entry the tally
+// saw no exit from would otherwise be dealt nothing for the rest of the run — a fixed
+// point nothing escapes (see the starvation test). 0.01/K keeps the main entries'
+// shares within 0.1% of Neyman while guaranteeing every live entry 1% of a uniform
+// deal. The vector is returned unnormalized past the floor: PartitionCrystalRayNum
+// and ComputeRayAllocationCorrection normalize whatever they are handed, and the
+// same Σ is what both see. An entry with rays_i == 0 has raw_i = 0 (nothing was
+// measured, so nothing is claimed); when every raw_i is 0 the live entries are
+// dealt uniformly at the floor — which is also the cold-start deal, before any
+// batch has been measured.
+std::vector<float> ComputeAdaptiveRayAllocationWeights(const std::vector<float>& p,
+                                                       const std::vector<RayAllocationEntryTally>& stats);
+
+// Whether a newly committed scene needs its online tally started over. True when
+// anything the tally can depend on differs between the two scenes; false when
+// only the fields it is indifferent to differ — ray_num_, geom_clock_ and the
+// ray_allocation_ mode itself. Implemented by comparing the two scenes with the
+// one SceneConfig equality this tree has (config_compare.hpp) after masking exactly
+// those fields, rather than by a second list of the fields that DO matter: a scene
+// field added later is therefore compared by default, which errs toward one extra
+// cold start, never toward a stale q. CommitConfig is a high-frequency path (the
+// GUI recommits every 70ms while a slider drags), and a recommit that changed
+// nothing the statistic reads must carry the accumulated tally forward rather than
+// throw it away.
+bool RayAllocationInputsChanged(const SceneConfig& previous, const SceneConfig& next);
+
+// The one writer of the `<prefix>: layer L entry E: p=… q=… rays=…` line, one per
+// (layer, entry): q is reported as the layer's SHARE (Σ over live entries = 1) so
+// it reads against p directly. Called by the worker at Accumulate's milestone
+// cadence (prefix "RayAllocationOnline") and by the server at Stop() for the run's
+// final state (prefix "RayAllocationOnline(final)").
+void LogRayAllocationState(Logger& logger, const RayAllocationOnline& online, const char* prefix);
 
 // Single owner of the hit-loop buffer-pair capacity contract. The pair is a
 // producer/consumer ping-pong (buffer_data[0] holds a hit's input rays,

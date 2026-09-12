@@ -516,6 +516,7 @@ TEST(SceneNegative, NullArgsReturnNullArg) {
 
   EXPECT_EQ(LUMICE_SceneSetLightSource(nullptr, 0, 0, 0, "D65"), LUMICE_ERR_NULL_ARG);
   EXPECT_EQ(LUMICE_SceneSetSimParams(nullptr, 0, 0, 0, 0), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_SceneSetRayAllocation(nullptr, LUMICE_RAY_ALLOCATION_PROPORTIONAL), LUMICE_ERR_NULL_ARG);
   EXPECT_EQ(LUMICE_SceneSetColorMode(nullptr, 0), LUMICE_ERR_NULL_ARG);
   EXPECT_EQ(LUMICE_SceneSetCustomSpectrum(nullptr, nullptr, 0), LUMICE_ERR_NULL_ARG);
 }
@@ -1037,6 +1038,55 @@ std::string SceneJsonWithMarkerBlock(const std::function<void(nlohmann::json&)>&
   return doc.dump();
 }
 }  // namespace
+
+// scene.ray_allocation through the handle. The CLI and the GUI both commit through
+// LUMICE_SceneFromJsonFile + LUMICE_CommitScene, so a key the handle's document → scratch →
+// document round trip drops is a key no product surface can set — and the drop is silent (core
+// reads proportional, the default, and warns about nothing). The handle carries the string
+// VERBATIM: which spellings mean what stays core's decision at commit, so a misspelling survives
+// to be reported there rather than being folded into the default here.
+TEST(SceneRayAllocation, TheKeySurvivesTheHandleRoundTripVerbatim) {
+  const auto round_trips = [](const char* spelled) {
+    nlohmann::json doc = nlohmann::json::parse(SceneJsonWithMarkerBlock([](nlohmann::json&) {}));
+    doc["scene"]["ray_allocation"] = spelled;
+    LUMICE_Scene* scene = nullptr;
+    ASSERT_EQ(LUMICE_SceneFromJson(doc.dump().c_str(), &scene), LUMICE_OK) << spelled;
+    ASSERT_NE(scene, nullptr);
+    const nlohmann::json out = nlohmann::json::parse(SceneToJsonString(scene));
+    LUMICE_SceneDestroy(scene);
+    ASSERT_TRUE(out["scene"].contains("ray_allocation")) << spelled;
+    EXPECT_EQ(out["scene"]["ray_allocation"].get<std::string>(), spelled);
+  };
+  for (const char* spelled : { "adaptive", "proportional", "adaptve" }) {
+    round_trips(spelled);
+  }
+  // Absent stays absent (the omit-when-default isomorphism every other scene scalar keeps), and a
+  // non-string value is a type error at the handle, not something to guess a meaning for.
+  nlohmann::json doc = nlohmann::json::parse(SceneJsonWithMarkerBlock([](nlohmann::json&) {}));
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.dump().c_str(), &scene), LUMICE_OK);
+  EXPECT_FALSE(nlohmann::json::parse(SceneToJsonString(scene))["scene"].contains("ray_allocation"));
+  LUMICE_SceneDestroy(scene);
+  doc["scene"]["ray_allocation"] = 1;
+  EXPECT_EQ(LUMICE_SceneFromJson(doc.dump().c_str(), &scene), LUMICE_ERR_INVALID_VALUE);
+}
+
+// The setter and the JSON round trip are two ways in for the same key: what SetRayAllocation writes
+// must be what LUMICE_SceneToJson emits (that is how the GUI's export arm gets the key for free),
+// and a rejected mode must leave whatever the scene held before, not clear it.
+TEST(SceneSetRayAllocation, ValidModesAndInvalidRejected) {
+  SceneGuard g;
+  EXPECT_EQ(LUMICE_SceneSetRayAllocation(g.get(), LUMICE_RAY_ALLOCATION_ADAPTIVE), LUMICE_OK);
+  EXPECT_EQ(SceneRoot(g.get()).at("scene").at("ray_allocation").get<std::string>(), "adaptive");
+  EXPECT_EQ(LUMICE_SceneSetRayAllocation(g.get(), LUMICE_RAY_ALLOCATION_PROPORTIONAL), LUMICE_OK);
+  EXPECT_EQ(SceneRoot(g.get()).at("scene").at("ray_allocation").get<std::string>(), "proportional");
+  EXPECT_EQ(LUMICE_SceneSetRayAllocation(g.get(), 99), LUMICE_ERR_INVALID_CONFIG);
+  EXPECT_EQ(SceneRoot(g.get()).at("scene").at("ray_allocation").get<std::string>(), "proportional")
+      << "a rejected mode must not touch the scene";
+  EXPECT_EQ(LUMICE_SceneSetRayAllocation(g.get(), LUMICE_RAY_ALLOCATION_ADAPTIVE), LUMICE_OK);
+  const nlohmann::json out = nlohmann::json::parse(SceneToJsonString(g.get()));
+  EXPECT_EQ(out.at("scene").at("ray_allocation").get<std::string>(), "adaptive");
+}
 
 TEST(SceneRenderZenithNadir, StructValuesReachTheJsonKey) {
   SceneGuard g;

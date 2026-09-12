@@ -271,6 +271,23 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
     scene.geom_clock_ = static_cast<size_t>(geom_clock);
   }
 
+  // Optional ray-allocation mode. Absent -> proportional (today's behavior). The enum codec
+  // maps an unrecognized string to proportional as well, silently — and because "adaptive" is
+  // the only thing anyone would type here on purpose, a typo hands back exactly the noisy
+  // image the author was trying to leave. Falling back stays the behavior (a malformed value
+  // must not make the config unloadable), but it is announced.
+  if (j_scene.contains("ray_allocation")) {
+    const auto& j_alloc = j_scene.at("ray_allocation");
+    const std::string alloc_str = j_alloc.is_string() ? j_alloc.get<std::string>() : std::string{};
+    if (alloc_str != "proportional" && alloc_str != "adaptive") {
+      LOG_WARNING(
+          "scene.ray_allocation: unrecognized value {} ignored; falling back to \"proportional\" "
+          "(accepted values: \"proportional\", \"adaptive\")",
+          j_alloc.dump());
+    }
+    j_alloc.get_to(scene.ray_allocation_);
+  }
+
   scene.light_source_ = j_scene.at("light_source").get<LightSourceConfig>();
 
   const auto& j_scattering = j_scene.at("scattering");

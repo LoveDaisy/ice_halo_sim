@@ -32,6 +32,8 @@ Press **Analyze**. A dedicated pass traces the scene and groups rays by raypath;
 
 **The analysis always runs on the CPU**, even if you have Metal or CUDA selected for rendering. This is deliberate, not a bug or a fallback you can turn off: the GPU trace path does not keep the per-ray bookkeeping this feature needs. There is no separate indicator for this in the window — Analyze simply may take longer than a GPU-accelerated render of the same scene would.
 
+The analysis also always deals rays across crystals by their population share, whatever the Simulation panel's **Adaptive ray allocation** checkbox says — that switch shapes the *render's* noise, and an analysis is a count of energy per raypath rather than a picture, so its totals are the same either way. Only the render preview changes with the checkbox.
+
 If the configuration has changed since your last run, Analyze still works and reports on the edited document — the picture on screen is the older one, and the line under the button says so until you Run again.
 
 ## 4. Reading the result list

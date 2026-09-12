@@ -241,6 +241,12 @@ const std::vector<FieldProbe>& FieldProbes() {
       // 1 (print) for the same reason ev_mode uses 1, and with the same word-on-disk split; the
       // spelling case further down covers that half.
       [](GuiState& s) { s.renderer.tone = 1; }, [](const GuiState& s) { return std::to_string(s.renderer.tone); } },
+    { "sim.ray_allocation",
+      // false (proportional): the document default is adaptive, so a serializer that dropped the
+      // key would round-trip adaptive. A bool in the struct, a WORD on disk; the spelling case
+      // below covers that half.
+      [](GuiState& s) { s.sim.ray_allocation_adaptive = false; },
+      [](const GuiState& s) { return std::to_string(s.sim.ray_allocation_adaptive); } },
     { "renderer.paper",
       // Off white on every channel: the default is {1,1,1}, so a serializer that dropped the key
       // would round-trip any value that left one channel at 1.
@@ -1291,6 +1297,58 @@ TEST(DocumentRoundtripChain, ToneIsSpelledOnDiskTheWayCoreSpellsIt) {
       continue;
     }
     EXPECT_EQ(read_back.renderer.tone, 0) << "variant: " << label;
+  }
+}
+
+// The same for ray allocation — a bool in the struct, core's two words on disk — with one
+// deliberate difference from ev_mode and tone in the absent/typo pair: they do NOT reach the same
+// place. Absent means a document saved before the key existed, which lands on the GUI document
+// default (adaptive, SimConfig's factory value, exactly as `infinite` and `max_hits` land on
+// theirs); a typo lands on proportional, the conservative side core itself falls to. Both must
+// still LOAD.
+TEST(DocumentRoundtripChain, RayAllocationIsSpelledOnDiskTheWayCoreSpellsIt) {
+  struct Row {
+    bool adaptive;
+    const char* spelling;
+  };
+  for (const Row& row : { Row{ true, "adaptive" }, Row{ false, "proportional" } }) {
+    GuiState doc = MinimalDocument();
+    doc.sim.ray_allocation_adaptive = row.adaptive;
+    const auto written = nlohmann::json::parse(SerializeGuiStateJson(doc));
+    EXPECT_EQ(written["sim"]["ray_allocation"].get<std::string>(), row.spelling);
+
+    auto on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    on_disk["sim"]["ray_allocation"] = row.spelling;
+    GuiState read_back = MinimalDocument();
+    read_back.sim.ray_allocation_adaptive = !row.adaptive;  // seed off the expectation
+    if (!DeserializeGuiStateJson(on_disk.dump(), read_back)) {
+      // Non-fatal per row, for the reason its ev_mode twin above states.
+      ADD_FAILURE() << row.spelling << ": the reader rejected a document carrying this spelling";
+      continue;
+    }
+    EXPECT_EQ(read_back.sim.ray_allocation_adaptive, row.adaptive) << row.spelling;
+  }
+
+  struct Variant {
+    const char* spelling;  // nullptr = key absent
+    bool expected;
+    const char* label;
+  };
+  for (const Variant& v : { Variant{ nullptr, SimConfig{}.ray_allocation_adaptive, "<absent>" },
+                            Variant{ "adaptve", false, "adaptve" } }) {
+    auto doc = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    if (v.spelling == nullptr) {
+      doc["sim"].erase("ray_allocation");
+    } else {
+      doc["sim"]["ray_allocation"] = v.spelling;
+    }
+    GuiState read_back = MinimalDocument();
+    read_back.sim.ray_allocation_adaptive = !v.expected;  // seed off the expectation
+    if (!DeserializeGuiStateJson(doc.dump(), read_back)) {
+      ADD_FAILURE() << v.label << ": an unrecognised or absent ray_allocation must load, not fail the document";
+      continue;
+    }
+    EXPECT_EQ(read_back.sim.ray_allocation_adaptive, v.expected) << "variant: " << v.label;
   }
 }
 

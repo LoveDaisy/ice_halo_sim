@@ -818,6 +818,42 @@ TEST(SceneCommitChain, TheAnalysisSubmitsTheSceneTheRunWouldCommit) {
   EXPECT_EQ(from_emitter["scene"]["ray_num"].get<int>(), 250000);
 }
 
+// scene.ray_allocation reaches BOTH arms, from the document's own switch, spelled as core spells
+// it. Both values are driven, not one: with only `adaptive` asserted, a BuildScene that stopped
+// calling the setter would still pass whenever core's default happened to agree. And the key is
+// always present — the document default is the GUI's (adaptive), not core's (proportional), so an
+// omitted key would silently hand the run to the other mode. Two arms reading one value is also the
+// whole of the argument that this key does not belong in kDivergingKeys above.
+TEST(SceneCommitChain, RayAllocationReachesBothIntentsIdentically) {
+  SeedOneEntryDocument();
+  for (const bool adaptive : { true, false }) {
+    g_state.sim.ray_allocation_adaptive = adaptive;
+    const char* const expected = adaptive ? "adaptive" : "proportional";
+
+    // Non-fatal per value: which of the two values fails is the diagnostic, so the first must not
+    // take the second's report with it.
+    const nlohmann::json commit_doc = CommitSceneJson(g_state);
+    if (commit_doc.is_null() || !commit_doc["scene"].contains("ray_allocation")) {
+      ADD_FAILURE() << expected << ": the commit arm produced no scene or omitted the key";
+    } else {
+      EXPECT_EQ(commit_doc["scene"]["ray_allocation"].get<std::string>(), expected);
+    }
+
+    nlohmann::json export_doc;
+    try {
+      export_doc = nlohmann::json::parse(CoreJson(g_state));
+    } catch (const std::exception& e) {
+      ADD_FAILURE() << expected << ": the export arm emitted unparsable JSON: " << e.what();
+      continue;
+    }
+    if (!export_doc["scene"].contains("ray_allocation")) {
+      ADD_FAILURE() << expected << ": the export arm omitted the key";
+      continue;
+    }
+    EXPECT_EQ(export_doc["scene"]["ray_allocation"].get<std::string>(), expected);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The crystal side: what the user shaped is what gets simulated.
 

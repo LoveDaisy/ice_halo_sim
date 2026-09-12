@@ -389,6 +389,17 @@ class ServerImpl {
   // every batch, and a colour config left over from the last render can name a crystal
   // the analysis's scene does not have — that is a throw on a worker thread.
   std::shared_ptr<const RaypathColorConfig> active_raypath_color_;
+  // The online ray-allocation authority of the committed RENDER scene when it is
+  // scene.ray_allocation = adaptive; null otherwise (proportional, or an analysis
+  // submission — which deals by p on purpose, doc/raypath-analysis-panel.md §10).
+  // Bound in the same scene_mutex_ critical section as the three above and attached
+  // to every SimBatch, which is the whole of the server's involvement: the workers
+  // Load q from it and Accumulate into it themselves, so no server thread reads or
+  // writes the tally while a run is live. CommitConfig KEEPS the object across a
+  // recommit whose RayAllocationInputsChanged is false (a view, a lens, the ray
+  // budget), so a slider drag does not throw the accumulated statistic away, and
+  // builds a fresh one — a cold start — otherwise.
+  std::shared_ptr<RayAllocationOnline> active_ray_alloc_;
   std::atomic<uint64_t> scene_generation_{ 0 };
   // Published lifecycle epoch (the backend-owned truth authority). Distinct from
   // scene_generation_ (an internal batch-staleness key): keeping them separate
@@ -984,6 +995,31 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // render: it holds no RenderConsumer. `was_analysis` says so explicitly below rather
   // than leaning on the renderer-count comparison, which would let a zero-renderer
   // config (whose render set is also two consumers) reuse the histogram set by accident.
+  // scene.ray_allocation = adaptive: decide what the online allocation starts from.
+  // Runs here — after Stop() has joined the workers, so nothing is Loading from or
+  // Accumulating into the previous object — while the previous scene is still
+  // readable as `config_manager_.scene_`, which is the debounce's whole comparison
+  // base. CommitConfig is a high-frequency path (the GUI recommits every 70ms while
+  // a slider drags), so the accumulated tally is carried forward unless something
+  // the statistic depends on changed; a previous scene that was proportional has no
+  // object to carry (active_ray_alloc_ is null) and starts cold. No ray is traced
+  // here, on any branch: the statistic comes from the render's own batches.
+  // The other scene publisher, StartRaypathAnalysis, binds no object on purpose: an
+  // analysis session renders no image, and lower image variance is the only thing
+  // adaptive dealing buys, so its layers deal by p there.
+  std::shared_ptr<RayAllocationOnline> next_ray_alloc;
+  if (new_config.scene_.ray_allocation_ == SceneConfig::RayAllocationMode::kAdaptive) {
+    const bool carry =
+        active_ray_alloc_ != nullptr && !RayAllocationInputsChanged(config_manager_.scene_, new_config.scene_);
+    if (carry) {
+      next_ray_alloc = active_ray_alloc_;
+      ILOG_INFO(logger_, "CommitConfig: ray-allocation inputs unchanged; keeping the online tally");
+    } else {
+      next_ray_alloc = std::make_shared<RayAllocationOnline>(new_config.scene_);
+      ILOG_INFO(logger_, "CommitConfig: ray-allocation online tally started (cold start: uniform deal)");
+    }
+  }
+
   auto old_renderers = config_manager_.renderers_;
   config_manager_ = std::move(new_config);
 
@@ -1072,6 +1108,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
     active_scene_ = std::move(new_scene);
     active_renders_ = std::move(new_renders);
     active_raypath_color_ = std::move(new_raypath_color);
+    active_ray_alloc_ = std::move(next_ray_alloc);
     scene_generation_.fetch_add(1);
     // Publish the new lifecycle epoch alongside the accumulator reset. Stop()
     // above has drained all workers, so no in-flight batch reads a half-updated
@@ -1198,6 +1235,7 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
     active_scene_ = std::make_shared<const SceneConfig>(new_config.scene_);
     active_renders_.reset();
     active_raypath_color_.reset();
+    active_ray_alloc_.reset();
     scene_generation_.fetch_add(1);
     committed_epoch_.fetch_add(1, std::memory_order_release);
   }
@@ -1543,6 +1581,22 @@ void ServerImpl::Stop() {
     start_cv_.wait(lk, [this] { return active_workers_.load() == 0; });
   }
   auto t1 = std::chrono::steady_clock::now();
+
+  // The run's final online ray allocation, once no worker can move it any more.
+  // Same line shape as the workers' milestone lines, distinguished by prefix, so
+  // one parser reads both; the last q of a run is what a cross-backend comparison
+  // wants, and the workers' doubling cadence only guarantees a line within 2× of
+  // the end.
+  {
+    std::shared_ptr<RayAllocationOnline> ray_alloc;
+    {
+      std::lock_guard<std::mutex> lock(scene_mutex_);
+      ray_alloc = active_ray_alloc_;
+    }
+    if (ray_alloc != nullptr) {
+      LogRayAllocationState(logger_, *ray_alloc, "RayAllocationOnline(final)");
+    }
+  }
 
   // Analysis session: publish what the stop leaves behind. An analysis run has no way to
   // end other than its ray budget or this call, and its result is a histogram that is
@@ -2088,12 +2142,14 @@ void ServerImpl::GenerateScene() {
   std::shared_ptr<const SceneConfig> scene;
   std::shared_ptr<const std::vector<RenderConfig>> renders;
   std::shared_ptr<const RaypathColorConfig> raypath_color;
+  std::shared_ptr<RayAllocationOnline> ray_alloc_online;
   uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     scene = active_scene_;
     renders = active_renders_;
     raypath_color = active_raypath_color_;
+    ray_alloc_online = active_ray_alloc_;
     generation = scene_generation_.load();
   }
   // task-268.4 commit↔batch decoupling: two independent knobs.
@@ -2240,7 +2296,7 @@ void ServerImpl::GenerateScene() {
     const size_t iter_cap = EffectiveDispatchCap(kGpuRoute, backend_active, nominal_cap, fallback_cap);
     size_t batch_ray_num = std::min(iter_cap, per_wl_ray_num - committed_num);
     AccountThenPublishBatch(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch), *scene_queue_,
-                            SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
+                            SimBatch{ batch_ray_num, scene, generation, renders, raypath_color, ray_alloc_online });
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());

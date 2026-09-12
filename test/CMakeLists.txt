@@ -102,6 +102,9 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_c_api_raypath_analysis.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_anchor_consumer.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
+  # The online ray allocation at CommitConfig: bound under adaptive, never under proportional,
+  # carried across commits that change nothing its tally depends on, and traces nothing there.
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_allocation_online_commit.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_scene_batch_publish_order.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
@@ -180,7 +183,11 @@ add_executable(unit_correctness_test
   # CUDA K-shape pool locality + transit coverage + knob-off collapse (Metal
   # KShapePool_* suite CUDA sibling). Body `#if LUMICE_CUDA_ENABLED`, so on
   # non-CUDA hosts the TU is empty (zero contributed symbols).
-  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_kshape_pool_locality.cpp")
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_kshape_pool_locality.cpp"
+  # Ray allocation (dealing by q_i with a per-entry weight correction) on every
+  # TraceBackend arm: CpuTraceBackend always; Metal under `#if __APPLE__`,
+  # CUDA under `#if LUMICE_CUDA_ENABLED` (self-skipping without a device).
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_ray_allocation_backends.cpp")
 target_include_directories(unit_correctness_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_correctness_test

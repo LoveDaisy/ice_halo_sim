@@ -428,15 +428,28 @@ struct WlEntry {
   float cmf_z;
 };
 
-// Merged exit-stats accumulator for trace_layer_kernel. One 8-byte struct
-// bound at buffer(14) (count + w_sum atomics); buffer(15) carries the per-ray
-// pool-shape offset (`r_pool_shape`) that the K-shape geometry pool feeds in.
+// Merged exit-stats accumulator for trace_layer_kernel. One 16-byte struct
+// bound at buffer(14); buffer(15) carries the per-ray pool-shape offset
+// (`r_pool_shape`) that the K-shape geometry pool feeds in.
 // Field order MUST match the host mirror `struct ExitStats` in
-// metal_trace_backend.mm (see the static_assert there). Both fields sit at
-// natural 4-byte alignment; total sizeof == 8.
+// metal_trace_backend.mm (see the static_assert there). All fields sit at
+// natural 4-byte alignment; total sizeof == 16.
+//   count / w_sum     : diagnostic tally of EVERY filter-pass polygon exit —
+//                       continuation writes included (parity harness).
+//   tally_w / tally_w2: the online ray-allocation tally
+//                       (core/shared/ray_allocation_shared.hpp): Σw and Σw² over
+//                       the rays handed to the IMAGE only — the two device-fused
+//                       exit tails, never the continuation write. Accumulated in
+//                       registers per ray and added ONCE per SIMD-group in the
+//                       kernel epilogue, only when prm.alloc_tally != 0 (an
+//                       adaptive dispatch); a proportional dispatch never touches
+//                       them. The host divides this dispatch's correction out
+//                       after readback.
 struct ExitStats {
   atomic_uint  count;
   atomic_float w_sum;
+  atomic_float tally_w;
+  atomic_float tally_w2;
 };
 
 struct KernelParams {
@@ -538,6 +551,11 @@ struct KernelParams {
   // MUST mirror the host KernelParams field of the same name (see the host-side static_assert
   // on sizeof(KernelParams)).
   lm_proj::ProjParams anchor_proj;
+  // 1 when this dispatch's layer is dealt by q (scene.ray_allocation = adaptive with a
+  // snapshot delivered) and the two exit tails must add into exit_stats->tally_w /
+  // tally_w2; 0 on every proportional dispatch, which then pays one branch per exit and
+  // no atomic. Mirrors the host field of the same name.
+  uint  alloc_tally;
 };
 
 // Add one emitted ray's Y into the exposure-anchor plane.
@@ -724,6 +742,15 @@ kernel void trace_layer_kernel(
   gate_stream.seed       = prm.gate_seed;
   gate_stream.global_idx = tid;
   gate_stream.slot       = 0u;
+
+  // Online ray-allocation tally, accumulated in REGISTERS along the ray's path
+  // and folded into exit_stats once per SIMD-group at the kernel's end (see
+  // the epilogue). Not an atomic per exit: two more single-address float
+  // atomics beside count / w_sum measured −23% on the single-crystal bench
+  // scene, where nearly every ray is an image-bound exit and every lane then
+  // serialises on the same 16 bytes. The register form costs two FMAs per exit.
+  float tally_w_acc  = 0.0f;
+  float tally_w2_acc = 0.0f;
 
   for (uint hit = 0u; hit < prm.max_hits; hit++) {
     if (to_face == kInvalidId) { break; }
@@ -975,6 +1002,9 @@ kernel void trace_layer_kernel(
               // Diagnostic counters (not consumed by parity tests).
               atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
               atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
+              // Online ray-allocation tally: this ray reached the image.
+              tally_w_acc  += cw;
+              tally_w2_acc += cw * cw;
             }
           }
           // filter_fail: implicit drop (no buffer write, no atomic counter
@@ -1100,6 +1130,9 @@ kernel void trace_layer_kernel(
             }
             atomic_fetch_add_explicit(&exit_stats->count, 1u, memory_order_relaxed);
             atomic_fetch_add_explicit(&exit_stats->w_sum, cw, memory_order_relaxed);
+            // Online ray-allocation tally: this ray reached the image.
+            tally_w_acc  += cw;
+            tally_w2_acc += cw * cw;
           }
           // filter_fail: implicit drop — no pixel write, no diagnostic counter bump.
         }
@@ -1121,6 +1154,21 @@ kernel void trace_layer_kernel(
     rec_csum += float(path[k]);
   }
   rec_sink[tid] = rec_csum;
+
+  // Online ray-allocation tally epilogue: one SIMD-group reduction and one
+  // atomic per SIMD-group instead of two atomics per exit. Every lane that
+  // passed the `tid < num_rays` guard reaches this point (the hit loop only
+  // breaks, never returns), so the group's active lanes are exactly the rays
+  // this dispatch traced; simd_sum reduces over the active lanes. Gated on
+  // alloc_tally so a proportional dispatch pays nothing here either.
+  if (prm.alloc_tally != 0u) {
+    float group_w  = simd_sum(tally_w_acc);
+    float group_w2 = simd_sum(tally_w2_acc);
+    if (simd_is_first()) {
+      atomic_fetch_add_explicit(&exit_stats->tally_w, group_w, memory_order_relaxed);
+      atomic_fetch_add_explicit(&exit_stats->tally_w2, group_w2, memory_order_relaxed);
+    }
+  }
 }
 
 // ===================== Device root-gen (task-260.2) ==========================
@@ -1325,7 +1373,9 @@ kernel void gen_root_kernel(
     sample_triangle(stream, tri_vtx + tri_id * 9u, p);
     to_face = tri_to_poly[tri_id];
   }
-  float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
+  // Per-ray spd weight × this dispatch's ray-allocation correction
+  // (host-computed; 1.0f under proportional allocation, so the multiply is exact).
+  float weight = wl_pool[wl_idx].spd_weight * gp.alloc_correction;
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
     // a triangle has no polygon backing so downstream HitSurface can drop it.
@@ -1362,7 +1412,8 @@ kernel void gen_root_kernel(
 // the same orientation, severely under-sampling crystal orientations across
 // batches (scrum-267 bugfix). The sun-* / ray_weight fields in gp are unused
 // (world dir comes from cont_d_in instead of sample_sph_cap; weight is
-// carried through from cont_w_in).
+// carried through from cont_w_in, times gp.alloc_correction — this
+// (layer, ci)'s ray-allocation factor).
 kernel void transit_root_kernel(
     device const float*  cont_d_in   [[buffer(0)]],
     device const float*  cont_w_in   [[buffer(1)]],
@@ -1476,9 +1527,11 @@ kernel void transit_root_kernel(
     to_face = tri_to_poly[tri_id];
   }
 
-  // 4. Carry continuation weight; mirror InitRay_p_fid fallback (zero weight
-  //    when a triangle has no polygon backing).
-  float w = cont_w_in[tid];
+  // 4. Carry continuation weight × this (layer, ci)'s ray-allocation correction
+  //    (the continuation layer re-deals its rays, so it owes its own factor —
+  //    1.0f under proportional allocation); mirror InitRay_p_fid fallback (zero
+  //    weight when a triangle has no polygon backing).
+  float w = cont_w_in[tid] * gp.alloc_correction;
   if (to_face == kInvalidId) {
     w = 0.0f;
   }

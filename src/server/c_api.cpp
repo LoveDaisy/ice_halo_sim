@@ -2,6 +2,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -781,6 +782,18 @@ static const char* ColorModeToString(int mode) {
   }
 }
 
+// Map LUMICE_RAY_ALLOCATION_* to its wire string. Throws std::invalid_argument on an invalid mode.
+static const char* RayAllocationModeToString(int mode) {
+  switch (mode) {
+    case LUMICE_RAY_ALLOCATION_PROPORTIONAL:
+      return "proportional";
+    case LUMICE_RAY_ALLOCATION_ADAPTIVE:
+      return "adaptive";
+    default:
+      throw std::invalid_argument("ray_allocation mode is invalid: " + std::to_string(mode));
+  }
+}
+
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
 // emitted filter JSON shape field by field. See that header for rationale.
 nlohmann::json ConfigToJson(const ConfigScratch& c) {
@@ -854,6 +867,10 @@ nlohmann::json ConfigToJson(const ConfigScratch& c) {
   // geom_clock: emit only when set (mirrors core proj_config.cpp::to_json's `if (geom_clock_ != 0)`).
   if (c.geom_clock != 0) {
     scene["geom_clock"] = c.geom_clock;
+  }
+  // ray_allocation: emit only when the document carried it, verbatim (see ConfigScratch).
+  if (c.ray_allocation[0] != '\0') {
+    scene["ray_allocation"] = c.ray_allocation;
   }
 
   scene["scattering"] = json::array();
@@ -1212,6 +1229,22 @@ LUMICE_ErrorCode LUMICE_SceneSetSimParams(LUMICE_Scene* scene, int infinite, LUM
   } else {
     scene_j.erase("geom_clock");
   }
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_SceneSetRayAllocation(LUMICE_Scene* scene, int mode) {
+  if (!scene) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  const char* mode_str = nullptr;
+  try {
+    mode_str = RayAllocationModeToString(mode);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneSetRayAllocation: {}", e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  scene->root["scene"]["ray_allocation"] = mode_str;
   return LUMICE_OK;
 }
 
@@ -2216,6 +2249,18 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScr
   // in core config_manager.cpp at commit, matching the ray_num/max_hits convention here).
   if (scene.contains("geom_clock")) {
     out->geom_clock = scene.at("geom_clock").get<int>();
+  }
+
+  // ray_allocation: verbatim pass-through (see ConfigScratch::ray_allocation). Only its TYPE is
+  // checked here; which spellings mean what is core's decision, made at commit.
+  out->ray_allocation[0] = '\0';
+  if (scene.contains("ray_allocation")) {
+    const auto& ra = scene.at("ray_allocation");
+    if (!ra.is_string()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    const std::string spelled = ra.get<std::string>();
+    std::snprintf(out->ray_allocation, sizeof(out->ray_allocation), "%s", spelled.c_str());
   }
 
   // Scattering: required (core: j_scene.at("scattering")), and so is each layer's "entries"

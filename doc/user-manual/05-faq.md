@@ -94,7 +94,7 @@ If you hit "I set X in the JSON and nothing happened", check this list first, th
 ## 6. "My halo looks faint / noisy / wrong" — checklist
 
 1. **Faint?** Raise `scene.ray_num` (4× more rays = 2× cleaner image, roughly).
-2. **Noisy?** Increase `scene.ray_num`, or narrow the wavelength band if the colour fringing dominates.
+2. **Noisy?** Increase `scene.ray_num`, or narrow the wavelength band if the colour fringing dominates. If one halo's edge is rougher than the rest of the image (a faint halo next to bright ones), make sure `scene.ray_allocation` is `"adaptive"` — in the GUI that is the Simulation panel's **Adaptive ray allocation** checkbox, on by default.
 3. **No halo at all?** Verify the camera points at the sun: set `render[].view.elevation` ≈ `scene.light_source.altitude` and `view.azimuth` ≈ `light_source.azimuth`.
 4. **Wrong shape?** Check `crystal[].axis` — random orientation gives circles; oriented plates give arcs and spots.
 5. **Still stuck?** Re-run with `-v` and inspect the per-batch logs for unexpected zero-hit batches.

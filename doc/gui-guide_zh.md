@@ -118,7 +118,7 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
 ### Scene（场景）
 
 - **Sun**：`Altitude`（-90° ~ 90°）、`Diameter`（视角直径，0.1° ~ 5°）、`Spectrum`（标准光源 `D50` / `D55` / `D65` / `D75` / `A` / `E` 之一）。
-- **Simulation**：`Infinite rays` 复选框（让模拟器持续累计直到手动停止）、有限模式下的 `Rays(M)`（单位：百万）、`Max hits`（每条光线最多碰撞次数，1 – 20）。
+- **Simulation**：`Infinite rays` 复选框（让模拟器持续累计直到手动停止）、有限模式下的 `Rays(M)`（单位：百万）、`Max hits`（每条光线最多碰撞次数，1 – 20）、以及 `Adaptive ray allocation` 复选框——新文档默认勾选——按各晶体实测的逐光线能量方差而非人口占比分配光线（对应 `configuration.md` 的 `scene.ray_allocation`）：期望画面不变，噪声在晶体之间更均匀，弱晕的边缘不再比其余部分显得更粗糙。这个选择会保存进 `.lmc`，也会写进导出的 config；控件出现之前保存的文档打开后视为勾选。
 
 ### View（视图）
 

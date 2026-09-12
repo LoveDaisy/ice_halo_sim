@@ -308,9 +308,20 @@ struct SimConfig {
   float ray_num_millions = 5.0f;
   int max_hits = 8;
   bool infinite = false;
+  // scene.ray_allocation, held as a bool because the wire field is two-valued ("proportional" |
+  // "adaptive") and the panel control is a checkbox; the string spelling lives only at the .lmc /
+  // JSON / C-API seams. Were the field ever to grow a third value, this bool, the two serializers
+  // in file_io.cpp, the field-editor registration and the panel checkbox all change together.
+  // The factory value here is the GUI DOCUMENT default — a new document, an .lmc saved before the
+  // key existed, and a core JSON imported without it all land on it — and it is deliberately not
+  // core's own default (proportional, which guards CLI regression batteries that never pass
+  // through here): BuildScene always writes the key out explicitly, so core's default is never
+  // consulted on a GUI-authored scene.
+  bool ray_allocation_adaptive = true;
 
   friend bool operator==(const SimConfig& a, const SimConfig& b) {
-    return a.ray_num_millions == b.ray_num_millions && a.max_hits == b.max_hits && a.infinite == b.infinite;
+    return a.ray_num_millions == b.ray_num_millions && a.max_hits == b.max_hits && a.infinite == b.infinite &&
+           a.ray_allocation_adaptive == b.ray_allocation_adaptive;
   }
   friend bool operator!=(const SimConfig& a, const SimConfig& b) { return !(a == b); }
 };
@@ -1961,6 +1972,8 @@ inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
 // the slot is 12 bytes and the struct grew by 8, so 4 of the 12 came out of padding that was
 // already there. Read off the compiler, not hand-computed — the arithmetic does not predict it,
 // which is the same lesson the two shrinks above record.
+// Size then held at 176 when SimConfig gained `ray_allocation_adaptive` (v4.37): the bool sits in
+// the padding that followed `infinite`, so the snapshot did not move. Read off the compiler.
 static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif

@@ -512,6 +512,7 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                                                    }));
     map.emplace("sim.max_hits", IntField([](GuiState& s) { return &s.sim.max_hits; }, 1, 64));
     map.emplace("sim.infinite", BoolField([](GuiState& s) { return &s.sim.infinite; }));
+    map.emplace("sim.ray_allocation", BoolField([](GuiState& s) { return &s.sim.ray_allocation_adaptive; }));
 
     // ---- renderer ----
     map.emplace("renderer.lens_type", LensTypeField());

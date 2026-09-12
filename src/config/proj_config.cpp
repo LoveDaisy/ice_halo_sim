@@ -17,6 +17,11 @@ void to_json(nlohmann::json& j, const SceneConfig& s) {
   if (s.geom_clock_ != 0) {
     j["geom_clock"] = s.geom_clock_;
   }
+  // Written only when it is not the default, like geom_clock above: an exported config must
+  // not grow a key its author never wrote.
+  if (s.ray_allocation_ != SceneConfig::RayAllocationMode::kProportional) {
+    j["ray_allocation"] = s.ray_allocation_;
+  }
   for (const auto& m : s.ms_) {
     nlohmann::json j_m;
     j_m["prob"] = m.prob_;

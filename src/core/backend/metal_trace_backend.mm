@@ -128,14 +128,22 @@ constexpr uint32_t kInvalidIdU32 = 0xffffffffu;
 // reads/writes non-atomically after `waitUntilCompleted` (unified memory +
 // relaxed-order atomics on the device side are fully ordered by the CB
 // completion barrier).
+// tally_w / tally_w2 are the online ray-allocation tally of ONE dispatch — Σw and
+// Σw² over the rays the kernel's two exit tails handed to the image, added only
+// when KernelParams::alloc_tally is set (see the MSL definition) — read back per
+// (layer, ci) by TraceLayer, which divides that dispatch's correction out.
 struct ExitStats {
   uint32_t count;
   float    w_sum;
+  float    tally_w;
+  float    tally_w2;
 };
-static_assert(sizeof(ExitStats) == 8u,
+static_assert(sizeof(ExitStats) == 16u,
               "ExitStats size mismatch — must match MSL struct in lumice_trace.metal");
 static_assert(offsetof(ExitStats, count) == 0u, "ExitStats::count offset drift");
 static_assert(offsetof(ExitStats, w_sum) == 4u, "ExitStats::w_sum offset drift");
+static_assert(offsetof(ExitStats, tally_w) == 8u, "ExitStats::tally_w offset drift");
+static_assert(offsetof(ExitStats, tally_w2) == 12u, "ExitStats::tally_w2 offset drift");
 
 // Mirror of the Metal-side KernelParams (host layout MUST match the .metal
 // struct field-for-field — all 4-byte scalars, natural alignment).
@@ -237,6 +245,10 @@ struct KernelParams {
   // Placed last, after the 4-byte and_term_counts_base_offset, so it starts at offset 300
   // — 4-aligned, which is all ProjParams (max member alignment 4) requires.
   lm_proj::ProjParams anchor_proj;
+  // 1 when this dispatch's layer deals by q and the exit tails must add into
+  // ExitStats::tally_w / tally_w2; 0 on every proportional dispatch (one branch
+  // per exit, no atomic — the mode's zero-cost promise). Mirrors the MSL field.
+  uint32_t alloc_tally;
 };
 // sizeof(ProjParams) == 68 (5 ints + 3 floats + float[9]). Two fields have left it in the 478
 // series: rectangular's `az0` (the lens now consumes the full camera pose out of `rot` like every
@@ -252,8 +264,10 @@ struct KernelParams {
 // move independently is the whole reason both are asserted rather than one derived from the other.
 // The exposure anchor then appends a second ProjParams (68) at offset 300, taking the struct to
 // 368 with no new padding — ProjParams' own alignment is 4, and 300 is already 4-aligned.
+// alloc_tally (4) then sits at 368-372, and the struct's alignment of 8 (color_class_bits) pads
+// it to 376.
 static_assert(sizeof(lm_proj::ProjParams) == 68u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 368u,
+static_assert(sizeof(KernelParams) == 376u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -313,8 +327,12 @@ struct GenRootKernelParams {
   // Appended at struct end; every existing field is 4-byte scalar with natural
   // alignment so no padding shift is introduced.
   uint32_t pool_shape_count;
+  // Ray-allocation weight correction for this dispatch (see the lm_pcg mirror
+  // in core/shared/pcg_shared.h). Host-computed, device-multiplied, 1.0f under
+  // proportional allocation. Appended at struct end like the field above.
+  float    alloc_correction;
 };
-static_assert(sizeof(GenRootKernelParams) == 96u,
+static_assert(sizeof(GenRootKernelParams) == 100u,
               "GenRootKernelParams size mismatch — update host struct to match Metal-side layout");
 
 size_t ComputeOutCap(size_t n, size_t max_hits) {
@@ -869,6 +887,20 @@ struct MetalTraceBackend::Impl {
   // correctly excluded for free. Read out by
   // GetLastBatchStochasticOrientationSampleCount().
   size_t                   orientation_count_this_batch_ = 0;
+  // First-layer Σ n_ci · (correction_ci − 1) for
+  // GetLastBatchEmittedRayEquivalent (see TraceBackend for the contract).
+  // Accumulated in TraceLayer's ci loop on the first layer only, reset per
+  // BeginSession beside the two counters above.
+  double                   emitted_ray_equivalent_delta_this_batch_ = 0.0;
+  // The online ray-allocation tally of this session (GetLastBatchRayAllocationTally),
+  // [mi][ci]; sized at BeginSession only when spec.ray_alloc is non-null, else left
+  // empty. TraceLayer writes one entry per (layer, ci) dispatch from
+  // `last_dispatch_stats_`, the plain copy of the ExitStats WaitAndReadbackLayer
+  // read back for the dispatch it just waited on; `alloc_tally_on_` is what
+  // DispatchLayer forwards to KernelParams::alloc_tally for the current layer.
+  RayAllocationTally       ray_alloc_tally_;
+  ExitStats                last_dispatch_stats_{};
+  bool                     alloc_tally_on_ = false;
 
   // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
   // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
@@ -1165,10 +1197,13 @@ struct MetalTraceBackend::Impl {
   // single-shape passthrough).
   void ResolveLayerCrystalForCi(const ScatteringSetting& setting, bool use_host,
                                 const HostRayBatch& host_batch, size_t p_ci);
+  // `alloc_correction`: this ci's ray-allocation weight correction, applied to
+  // every root's weight on both the device-gen and the host-gen path.
   size_t GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                       size_t ci, size_t crystal_ray_num,
                                       bool can_use_device_gen,
-                                      size_t attempts_ci_off);
+                                      size_t attempts_ci_off,
+                                      float alloc_correction);
   // task-267.4 (continuation-validation) golden-ray hook: test-only host-ray
   // injection path. Activated when HostRayBatch::d / p / w / tf are non-null
   // at first MS, ci=0 (TraceLayer guards the branch). Bypasses RNG-based
@@ -1189,11 +1224,14 @@ struct MetalTraceBackend::Impl {
   // task-gpu-rng-ray-index-uint64: `ray_base` widened to size_t so the full
   // 64-bit host counter reaches the device via SplitPcgRayBase (populating
   // gp.gen_ray_base + gp.gen_ray_base_hi in a single site).
+  // `alloc_correction`: this (layer, ci)'s ray-allocation weight correction,
+  // multiplied onto every carried-in weight by transit_root_kernel.
   GenRootKernelParams BuildTransitRootParams(const ScatteringSetting& setting,
                                               size_t ci_n,
                                               uint32_t ms_layer_idx,
                                               uint32_t ci,
-                                              size_t ray_base) const;
+                                              size_t ray_base,
+                                              float alloc_correction) const;
   // Encodes a transit_root_kernel compute pass that reads the cont_d/cont_w
   // slice [ci_start, ci_start + gp.num_rays) of in_slot and writes the full
   // root_*_buf in lock-step with the trace kernel's input layout.
@@ -2082,7 +2120,8 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
 size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSetting& setting,
                                                               size_t ci, size_t crystal_ray_num,
                                                               bool can_use_device_gen,
-                                                              size_t attempts_ci_off) {
+                                                              size_t attempts_ci_off,
+                                                              float alloc_correction) {
   if (can_use_device_gen) {
     // code-review round 1 Major#2: stash the EFFECTIVE per-ci attempts offset
     // (base + running per-ci accumulation) for EncodeGenRoot to consume,
@@ -2095,6 +2134,7 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // monotone across batches of the same session.
     GenRootKernelParams gp = BuildGenRootParams(setting, crystal_ray_num);
     gp.gen_seed     = gen_seed_;
+    gp.alloc_correction = alloc_correction;
     // task-gpu-rng-ray-index-uint64: SplitPcgRayBase carries the full 64-bit
     // running ray count into the device via lo/hi halves; the kernel mixes hi
     // into each ray's PCG seed so sessions beyond 2^32 rays no longer collapse
@@ -2190,7 +2230,11 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // cannot overflow — the result is < wl_pool_size_, itself a uint32_t.
     uint32_t wl_idx = static_cast<uint32_t>(rng.GetUniformIndex(wl_pool_size_));
     wl_idx_ptr[i] = wl_idx;
-    w_ptr[i] = wl_pool_host_[wl_idx].spd_weight;
+    // Same multiply gen_root_kernel applies to its per-ray spd weight: the
+    // host-gen fallback deals by the same partition, so it owes the same
+    // correction. (InitRayFirstMs above was handed a zero WlParam and its own
+    // default 1.0f — the weight it wrote is overwritten here.)
+    w_ptr[i] = wl_pool_host_[wl_idx].spd_weight * alloc_correction;
   }
   // K-shape pool: host-gen fallback ran InitRayFirstMs against `current_crystal`
   // (== pool_crystals_.front() by construction), so every ray belongs to pool
@@ -2320,6 +2364,10 @@ GenRootKernelParams MetalTraceBackend::Impl::BuildGenRootParams(
          "BuildGenRootParams: tri_count > kMaxTriPerKernel — caller must fall back to host gen");
   gp.num_rays = static_cast<uint32_t>(crystal_ray_num);
   // gen_seed / gen_ray_base are filled by the caller (depend on session state).
+  // The value-initialized struct left alloc_correction at 0 — which would zero
+  // every ray — so the identity is written here and the callers that deal by q
+  // overwrite it with the entry's correction.
+  gp.alloc_correction = 1.0f;
 
   const SunParam& sun = spec.scene->light_source_.param_;
   gp.sun_lon        = (sun.azimuth_ + 180.0f) * math::kDegreeToRad;
@@ -2476,8 +2524,9 @@ void MetalTraceBackend::Impl::EncodeGenRoot(id<MTLCommandBuffer> cb,
 // SimBatches (mirrors gen_root's per-dispatch advance from root_ray_count).
 GenRootKernelParams MetalTraceBackend::Impl::BuildTransitRootParams(
     const ScatteringSetting& setting, size_t ci_n,
-    uint32_t ms_layer_idx, uint32_t ci, size_t ray_base) const {
+    uint32_t ms_layer_idx, uint32_t ci, size_t ray_base, float alloc_correction) const {
   GenRootKernelParams gp = BuildGenRootParams(setting, ci_n);
+  gp.alloc_correction = alloc_correction;
   // Override seed: transit stream must be statistically independent from
   // root-gen (gen_seed_ + gen_ray_base) and from the emit gate (gate_seed) so
   // multi-layer multi-crystal continuations do not share PCG draws.
@@ -2642,6 +2691,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // task-358.3 (renamed from capture_component): gate the test-only capture
   // ring append (0 in prod → append branch skipped).
   params.capture_ray_mask = capture_ray_mask_ ? 1u : 0u;
+  // Online ray allocation: only a layer dealt by q is measured.
+  params.alloc_tally = alloc_tally_on_ ? 1u : 0u;
   // task-358.1 (metal-color-parity): Design-2 color-gate hot-path knobs.
   // has_color_groups = 0 when the session has no raypath_color config (or the
   // ColorGateTable has no matching placements) → MSL color pass is skipped
@@ -2737,6 +2788,8 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
     auto* es = static_cast<ExitStats*>([exit_stats_buf_ contents]);
     es->count = 0u;
     es->w_sum = 0.0f;
+    es->tally_w = 0.0f;
+    es->tally_w2 = 0.0f;
   }
 
   // task-268.7: caller may supply `existing_cb` so transit_root + trace share
@@ -2871,6 +2924,8 @@ void MetalTraceBackend::Impl::WaitAndReadbackLayer() {
     auto* es = static_cast<ExitStats*>([exit_stats_buf_ contents]);
     last_stats.exit_count += es->count;
     last_stats.exit_w_sum += es->w_sum;
+    // This dispatch alone, for the (layer, ci) tally TraceLayer records next.
+    last_dispatch_stats_ = *es;
   }
 }
 
@@ -2982,6 +3037,15 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // semantics.
   impl_->pool_shape_count_this_batch_ = 0u;
   impl_->orientation_count_this_batch_ = 0u;
+  impl_->emitted_ray_equivalent_delta_this_batch_ = 0.0;
+  impl_->ray_alloc_tally_.clear();
+  impl_->alloc_tally_on_ = false;
+  if (spec.ray_alloc != nullptr) {
+    impl_->ray_alloc_tally_.resize(spec.scene->ms_.size());
+    for (size_t mi = 0; mi < spec.scene->ms_.size(); mi++) {
+      impl_->ray_alloc_tally_[mi].assign(spec.scene->ms_[mi].setting_.size(), RayAllocationEntryTally{});
+    }
+  }
   // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally at the
   // single per-config entry point, BEFORE both the color-class clamp below
   // (~L2700) and EnsureFilterBuffers (~L2711, where the symmetry-group /
@@ -3229,15 +3293,21 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // risk orphaning ms_mode==1 mid-exits already written by earlier layers.
 
     // Partition the layer's rays across crystal populations. Matches
-    // simulator.cpp:572-586 and CpuTraceBackend::TraceLayer.
+    // Simulator::SimulateOneWavelength and CpuTraceBackend::TraceLayer: the
+    // allocation input (p, or q under adaptive) and the per-ci weight
+    // corrections come from the one resolver; the corrections travel to the
+    // gen / transit kernels as a per-dispatch scalar (both are per-ci dispatches).
     size_t crystal_cnt = ms_info.setting_.size();
-    std::vector<float> proportions;
-    proportions.reserve(crystal_cnt);
-    for (size_t ci = 0; ci < crystal_cnt; ci++) {
-      proportions.push_back(ms_info.setting_[ci].crystal_proportion_);
-    }
+    const LayerRayAllocation alloc = ResolveLayerRayAllocation(
+        impl_->spec.scene->ray_allocation_, ms_info,
+        impl_->spec.ray_alloc != nullptr ? &impl_->spec.ray_alloc->q[impl_->ms_idx] : nullptr);
+    impl_->alloc_tally_on_ = alloc.adaptive;
     std::vector<double> carry(crystal_cnt, 0.0);
-    auto crystal_ray_num = PartitionCrystalRayNum(proportions, total_ray_num, carry);
+    auto crystal_ray_num = PartitionCrystalRayNum(alloc.partition_weights, total_ray_num, carry);
+    if (first_ms) {
+      impl_->emitted_ray_equivalent_delta_this_batch_ +=
+          AccumulateFirstLayerEmittedRayEquivalentDelta(crystal_ray_num.get(), alloc.corrections, crystal_cnt);
+    }
 
     // Pre-allocate root_*_buf to the full per-layer total. Each per-ci
     // dispatch only uses crystal_ray_num[ci] of it; sizing for the upper
@@ -3299,8 +3369,25 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     // Only meaningful on the first_ms/gen branch, but harmless to accumulate
     // unconditionally.
     size_t attempts_win_off = 0;
+    // Online ray-allocation tally for one (layer, ci): the dealt count is the
+    // partition's own number; Σw / Σw² come off the ExitStats of the dispatch
+    // WaitAndReadbackLayer just waited on, with this entry's own correction
+    // divided out (core/shared/ray_allocation_shared.hpp). last_dispatch_stats_
+    // is zeroed at the top of every ci so a ci that never dispatched (skipped
+    // below) records its dealt rays and nothing else, not the previous ci's sums.
+    auto record_alloc_tally = [&](size_t ci, size_t ci_n) {
+      if (!alloc.adaptive) {
+        return;
+      }
+      auto& entry = impl_->ray_alloc_tally_[impl_->ms_idx][ci];
+      entry.rays += ci_n;
+      const double inv_c = alloc.corrections[ci] > 0.0f ? 1.0 / static_cast<double>(alloc.corrections[ci]) : 0.0;
+      entry.sum_w += static_cast<double>(impl_->last_dispatch_stats_.tally_w) * inv_c;
+      entry.sum_w2 += static_cast<double>(impl_->last_dispatch_stats_.tally_w2) * inv_c * inv_c;
+    };
     for (size_t ci = 0; ci < crystal_cnt; ci++) {
       size_t ci_n = crystal_ray_num[ci];
+      impl_->last_dispatch_stats_ = ExitStats{};
       if (ci_n == 0) {
         continue;
       }
@@ -3395,7 +3482,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                                     device_gen_geom_ok &&
                                     !impl_->disable_device_gen_;
           in_count = impl_->GenerateFirstLayerRootsForCi(setting, ci, ci_n, can_use_device_gen,
-                                                          attempts_win_off);
+                                                          attempts_win_off, alloc.corrections[ci]);
         }
       } else {
         // scrum-267 task-device-resident-continuation Step 3: device frame-
@@ -3422,6 +3509,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
                      "(ci={}, pool_size={}); ci skipped",
                      transit_pool_max_tri, ci, impl_->pool_crystals_.size());
           ci_start += ci_n;
+          record_alloc_tally(ci, ci_n);
           continue;
         }
         // Monotone advance — mirrors gen_root's root_ray_count contract so
@@ -3434,7 +3522,8 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
             setting, ci_n,
             static_cast<uint32_t>(impl_->ms_idx),
             static_cast<uint32_t>(ci),
-            impl_->transit_ray_count_);
+            impl_->transit_ray_count_,
+            alloc.corrections[ci]);
         id<MTLCommandBuffer> combined_cb = [impl_->queue commandBuffer];
         impl_->EncodeTransitRoot(combined_cb, transit_gp, in_slot, ci_start);
         // Advance unconditionally now: with the merged CB we no longer probe
@@ -3467,6 +3556,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // counter_init. Single-ci configs hit this once per layer (still one
         // commit+wait pair, same wall-clock).
         impl_->WaitAndReadbackLayer();
+        record_alloc_tally(ci, ci_n);
         continue;
       }
 
@@ -3482,6 +3572,7 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
       // configs trigger this once per layer; the post-loop nil-check below is
       // a defensive safety net.
       impl_->WaitAndReadbackLayer();
+      record_alloc_tally(ci, ci_n);
       // ci_start was incremented above inside the !first_ms branch (before
       // the in_count==0 continue), so the next ci reads the correct slice
       // even if this ci's filter+prob dropped everything.
@@ -3770,6 +3861,16 @@ size_t MetalTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
   // unset (P_ci ≡ 1) such a ci contributes 1 per batch; with the K knob on it
   // contributes ~ci_n/K.
   return impl_->pool_shape_count_this_batch_;
+}
+
+float MetalTraceBackend::GetLastBatchEmittedRayEquivalent(size_t ray_num) const {
+  // ray_num plus the first layer's Σ n_ci · (correction_ci − 1); exactly
+  // ray_num under proportional allocation. See TraceBackend.
+  return static_cast<float>(static_cast<double>(ray_num) + impl_->emitted_ray_equivalent_delta_this_batch_);
+}
+
+const RayAllocationTally& MetalTraceBackend::GetLastBatchRayAllocationTally() const {
+  return impl_->ray_alloc_tally_;
 }
 
 size_t MetalTraceBackend::GetLastBatchStochasticOrientationSampleCount() const {
