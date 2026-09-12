@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789228786958,
+  "lastUpdate": 1789228788999,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "14885a4009086138c80492f57dd454c3379f93a2",
-          "message": "Merge pull request #250 from LoveDaisy/feat/capi-result-lifetime-ownership\n\nrefactor(capi): 结果数据改为不可变引用计数帧 + 不透明句柄，净删六个旧 getter",
-          "timestamp": "2026-08-05T10:49:05+08:00",
-          "tree_id": "7d8fafa792635f949c3b78d1b503f263d2c404cc",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/14885a4009086138c80492f57dd454c3379f93a2"
-        },
-        "date": 1785898754797,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.6,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "b21fe562ba8cdf4e0cf66f9007ee180481bfadcd",
           "message": "Merge pull request #251 from LoveDaisy/feat/preview-lifecycle-invariant-closure\n\nGUI 预览生命周期不变量族级收口（scrum-429）：I3/I4 补齐 + 新增 I7 完成蕴含排空",
           "timestamp": "2026-08-06T10:26:27+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "70eb8f5fad44336cf2b57da4d314a9aced4c8224",
+          "message": "Merge pull request #349 from LoveDaisy/feat/raypath-analysis-followups\n\nRaypath analysis follow-ups: fixed-seed reproducibility, session-kind rebuild predicate, joiner glyphs, debt sweep",
+          "timestamp": "2026-09-12T23:46:53+08:00",
+          "tree_id": "1570515bb91fdd1a4610a3ac00dc77a6ae1f7cca",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/70eb8f5fad44336cf2b57da4d314a9aced4c8224"
+        },
+        "date": 1789228788442,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.1,
             "unit": "%"
           }
         ]
