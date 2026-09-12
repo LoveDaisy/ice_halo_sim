@@ -270,6 +270,7 @@ class RenderConsumer : public IConsume {
   // the projection it is derived from. Same rationale as VisibleMaskForTest above.
   const std::vector<uint8_t>& HorizonMaskForTest() const { return horizon_mask_; }
   const std::vector<std::vector<uint8_t>>& AngularDistMasksForTest() const { return angular_dist_masks_; }
+  const std::vector<std::vector<uint8_t>>& ViewDistMasksForTest() const { return view_dist_masks_; }
   const std::vector<std::vector<uint8_t>>& ElevationMasksForTest() const { return elevation_masks_; }
   const std::vector<std::vector<uint8_t>>& LongitudeMasksForTest() const { return longitude_masks_; }
   // The marker positions, for the tests that pin WHERE a ring lands and WHETHER one is drawn at
@@ -293,6 +294,7 @@ class RenderConsumer : public IConsume {
   const std::vector<annotation::Label>& ElevationLabelsForTest() const { return elevation_labels_; }
   const std::vector<annotation::Label>& LongitudeLabelsForTest() const { return longitude_labels_; }
   const std::vector<annotation::Label>& AngularDistLabelsForTest() const { return angular_dist_labels_; }
+  const std::vector<annotation::Label>& ViewDistLabelsForTest() const { return view_dist_labels_; }
 
   // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
   // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
@@ -324,6 +326,11 @@ class RenderConsumer : public IConsume {
   // neither has changed since the last build. See the member's declaration for why this is not a
   // constructor-only job.
   void RebuildAngularDistMasks();
+  // The same job for the axis-referenced twin (config_.view_dist_grid_). No sun term: the circles
+  // sit around the camera forward, which is a function of config_.view_ alone — a NeedsRebuild
+  // field, so it cannot move under a reused consumer. The change detector therefore compares the
+  // angle list and the label switch, and nothing else.
+  void RebuildViewDistMasks();
 
   // The same job for the two sun-INDEPENDENT line families: parallels (config_.elevation_grid_)
   // and meridians (config_.longitude_grid_). One helper serves both because the two differ in
@@ -367,6 +374,7 @@ class RenderConsumer : public IConsume {
     float outline_rgb[3]{ 0.0f, 0.0f, 0.0f };
     std::vector<LineLayer> grid;          // parallels then meridians, under the circles
     std::vector<LineLayer> angular_dist;  // the sun circles
+    std::vector<LineLayer> view_dist;     // the view circles, above the sun circles, below the outline
     std::vector<MarkerLayer> markers;     // the rings, on top of everything
     float marker_alpha = 0.0f;
     float marker_radius_px = 0.0f;
@@ -429,6 +437,13 @@ class RenderConsumer : public IConsume {
   std::vector<float> angular_dist_mask_angles_;
   float angular_dist_mask_sun_[3]{ 0.0f, 0.0f, 0.0f };
   bool angular_dist_masks_built_ = false;
+  // The axis-referenced twin, index-aligned with config_.view_dist_grid_. Same per-LINE rationale
+  // and the same rebuild lifetime (the angle list is an appearance field), but no direction cache:
+  // core derives the centre from the view, and the view is a NeedsRebuild field, so a reused
+  // consumer's axis never moves — see RebuildViewDistMasks().
+  std::vector<std::vector<uint8_t>> view_dist_masks_;
+  std::vector<float> view_dist_mask_angles_;
+  bool view_dist_masks_built_ = false;
   // Parallels and meridians, index-aligned with config_.elevation_grid_ / config_.longitude_grid_.
   // Same per-LINE rationale and same rebuild lifetime as angular_dist_masks_ above, with one
   // difference: these geometries are fixed in the celestial frame, so the sun is NOT an input and
@@ -453,12 +468,14 @@ class RenderConsumer : public IConsume {
   std::vector<annotation::Label> elevation_labels_;
   std::vector<annotation::Label> longitude_labels_;
   std::vector<annotation::Label> angular_dist_labels_;
+  std::vector<annotation::Label> view_dist_labels_;
   // What each label list was last built for, alongside the angle lists above. Only the switch
   // needs recording: everything else these lists depend on is already in the mask detectors.
   bool horizon_labels_built_for_ = false;
   bool elevation_labels_built_for_ = false;
   bool longitude_labels_built_for_ = false;
   bool angular_dist_labels_built_for_ = false;
+  bool view_dist_labels_built_for_ = false;
   // Where the zenith and the nadir land on the canvas, each with its own `valid`. Points, not
   // masks: the marker is a ring of a radius the config names, so a whole W*H mask would encode
   // the appearance too and would have to be rebuilt whenever the radius changed. PostSnapshot

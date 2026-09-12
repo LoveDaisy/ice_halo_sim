@@ -123,6 +123,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_contrast_headroom_warning.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_view_dist.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_grid.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_intensity_independence.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
