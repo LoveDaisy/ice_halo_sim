@@ -709,7 +709,7 @@ The render configuration defines the renderer parameters.
   - Stereographic: `fov = 4·arctan(d/(2f))`
   - Orthographic: `fov = 2·arcsin(d/f)` (requires `f ≥ 12mm` for fov=180)
   - Rectangular: `f` is ignored (always full-sky)
-  - Globe: `f` is not supported (use `fov` directly)
+  - Globe: same formula as Linear (`fov = 2·atan(d/f)`) — the globe's on-image scale is the linear model's, see `ComputeLensScale`
 
 **`globe` lens (outside-in perspective view of the celestial sphere)**:
 - Projection model: a pinhole perspective camera placed at distance `D = 4.0` (in unit-sphere radii) from the unit sphere centered at the world origin, looking toward the sphere center. The shader ray-traces against the unit sphere and shades the sample pointed to by the hit point.

@@ -684,7 +684,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   - Stereographic: `fov = 4·arctan(d/(2f))`
   - Orthographic: `fov = 2·arcsin(d/f)`（`f ≥ 12mm` 时 fov=180）
   - Rectangular: `f` 被忽略（始终全天投影）
-  - Globe: 不支持 `f`，请直接使用 `fov`
+  - Globe: 与 Linear 相同公式（`fov = 2·atan(d/f)`）——globe 的像面尺度就是 linear 模型的，见 `ComputeLensScale`
 
 **`globe` 镜头（外部观察天球的透视视角）**：
 - 投影模型：相机位于距单位球心 `D = 4.0`（单位球半径为单位）处，朝球心方向看；shader 对单位球做光线—球面求交，命中点对应的样本被着色。
