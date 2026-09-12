@@ -335,13 +335,32 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // backend consumes the vector, none re-derives it.
 std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, const std::vector<float>& q);
 
+// The single owner of the first layer's Σ_ci n_ci · (correction_ci − 1) formula that feeds
+// emitted_ray_equivalent / emitted_ray_equivalent_delta_this_batch_ (see the comment at the
+// call site in simulator.cpp for why the (correction - 1) shape matters). `crystal_ray_num`
+// must have at least `count` entries; `corrections` must have at least `count` entries too —
+// both hold for every call site, which all derive `count` from the same ms_info.setting_.size()
+// used to build both arrays. Every first_ms accumulation site (legacy Simulator,
+// CpuTraceBackend, MetalTraceBackend, CudaTraceBackend) calls this rather than re-deriving the
+// sum inline, so it enjoys the same single-authority status as ComputeRayAllocationCorrection.
+double AccumulateFirstLayerEmittedRayEquivalentDelta(const size_t* crystal_ray_num,
+                                                     const std::vector<float>& corrections, size_t count);
+
 // What one MS layer's ray partition and per-entry weight correction are, resolved from the
-// scene's allocation mode and the layer's entries. `proportions` is what PartitionCrystalRayNum
-// is handed; `corrections` is what each ray born into entry ci is multiplied by.
+// scene's allocation mode and the layer's entries. `partition_weights` is what
+// PartitionCrystalRayNum is handed — p_i (ScatteringSetting::crystal_proportion_) under
+// kProportional, q_i under a delivered kAdaptive layer. Named distinctly from `proportions`
+// (the scene's crystal_proportion_, always an energy share) precisely because this field's
+// dimension is mode-dependent: reusing that name here would make one identifier stand for two
+// different quantities, which is exactly the p_i/q_i conflation this task exists to undo.
+// `corrections` is what each ray born into entry ci is multiplied by.
 struct LayerRayAllocation {
-  std::vector<float> proportions;
+  std::vector<float> partition_weights;
   std::vector<float> corrections;
   // True when the layer is dealt by q (kAdaptive AND every entry delivered a weight).
+  // Not yet consumed by any TraceLayer/SimulateOneWavelength call site as of this task — it is
+  // reserved for 537.3 (the pilot-stats feedback loop), which needs to tell a delivered
+  // adaptive layer apart from a proportional-fallback one at the consumer side.
   bool adaptive = false;
 };
 

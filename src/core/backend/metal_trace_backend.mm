@@ -3263,12 +3263,10 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
     size_t crystal_cnt = ms_info.setting_.size();
     const LayerRayAllocation alloc = ResolveLayerRayAllocation(impl_->spec.scene->ray_allocation_, ms_info);
     std::vector<double> carry(crystal_cnt, 0.0);
-    auto crystal_ray_num = PartitionCrystalRayNum(alloc.proportions, total_ray_num, carry);
+    auto crystal_ray_num = PartitionCrystalRayNum(alloc.partition_weights, total_ray_num, carry);
     if (first_ms) {
-      for (size_t ci = 0; ci < crystal_cnt; ci++) {
-        impl_->emitted_ray_equivalent_delta_this_batch_ +=
-            static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(alloc.corrections[ci]) - 1.0);
-      }
+      impl_->emitted_ray_equivalent_delta_this_batch_ +=
+          AccumulateFirstLayerEmittedRayEquivalentDelta(crystal_ray_num.get(), alloc.corrections, crystal_cnt);
     }
 
     // Pre-allocate root_*_buf to the full per-layer total. Each per-ci

@@ -2763,7 +2763,8 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
     // mirrors TraceLayer's PartitionCrystalRayNum input for the same layer
     // (p, or q under adaptive — the one resolver decides), so K_ci apportions
     // on the SAME weights the ci-loop uses to split ray_num.
-    const std::vector<float> proportions = ResolveLayerRayAllocation(scene.ray_allocation_, scene.ms_[mi]).proportions;
+    const std::vector<float> proportions =
+        ResolveLayerRayAllocation(scene.ray_allocation_, scene.ms_[mi]).partition_weights;
     const std::vector<uint32_t> k_ci_this_layer = AllocateShapeBudget(proportions, ray_num, k_shape);
 
     for (size_t ci = 0; ci < settings.size(); ++ci) {
@@ -4055,12 +4056,10 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   if (carry.size() != crystal_cnt) {
     carry.assign(crystal_cnt, 0.0);
   }
-  auto crystal_ray_num = PartitionCrystalRayNum(alloc.proportions, n, carry);
+  auto crystal_ray_num = PartitionCrystalRayNum(alloc.partition_weights, n, carry);
   if (first_ms) {
-    for (size_t ci = 0; ci < crystal_cnt; ci++) {
-      impl_->emitted_ray_equivalent_delta_this_batch_ +=
-          static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(alloc.corrections[ci]) - 1.0);
-    }
+    impl_->emitted_ray_equivalent_delta_this_batch_ +=
+        AccumulateFirstLayerEmittedRayEquivalentDelta(crystal_ray_num.get(), alloc.corrections, crystal_cnt);
   }
 
   // Zero the layer's accumulators ONCE before the ci-loop: each ci's trace

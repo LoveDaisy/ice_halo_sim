@@ -1632,6 +1632,20 @@ TEST(RayAllocationCorrection, UndealtEntriesStayFiniteAndNegativesAreClamped) {
   EXPECT_EQ(c[1], 1.0f);
 }
 
+TEST(RayAllocationCorrection, AllZeroEnergyShareWithDealtRaysIsZeroNotIdentity) {
+  // total_p <= 0 while total_q > 0: every entry's energy share is zero (a
+  // proportional-fallback layer whose crystal_proportion_ is entirely 0) yet
+  // some entries were dealt real rays (a 537.3 q epsilon floor can raise q
+  // above 0 without touching p). Those dealt entries must contribute zero
+  // energy — the same "p_i == 0 ⇒ correction == 0" rule already pinned above
+  // for the single-entry case — not the 1.0f identity, which would inject the
+  // nominal weight for entries the scene declared as carrying none.
+  auto c = ComputeRayAllocationCorrection({ 0.0f, 0.0f }, { 1.0f, 3.0f });
+  ASSERT_EQ(c.size(), 2u);
+  EXPECT_EQ(c[0], 0.0f);
+  EXPECT_EQ(c[1], 0.0f);
+}
+
 namespace {
 
 // Deterministic hexagonal prism of height `h`; two different heights make two

@@ -613,7 +613,7 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 
 std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, const std::vector<float>& q) {
   assert(p.size() == q.size());
-  const size_t n = std::min(p.size(), q.size());
+  const size_t n = p.size();
   std::vector<float> correction(n, 1.0f);
   double total_p = 0.0;
   double total_q = 0.0;
@@ -621,8 +621,18 @@ std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, c
     total_p += std::max(0.0f, p[i]);
     total_q += std::max(0.0f, q[i]);
   }
-  if (total_p <= 0.0 || total_q <= 0.0) {
+  if (total_q <= 0.0) {
     return correction;  // nothing is dealt; nothing is read
+  }
+  if (total_p <= 0.0) {
+    // Some entry was dealt real rays (total_q > 0) while every entry's energy
+    // share is zero — e.g. a q epsilon floor (537.3) raised q above 0 on a
+    // layer whose crystal_proportion_ is entirely 0. Those rays must
+    // contribute zero energy, the same as the already-tested single-entry
+    // p_i == 0 case, not the identity correction: 1.0f here would inject the
+    // nominal weight for entries the scene declared as carrying none.
+    std::fill(correction.begin(), correction.end(), 0.0f);
+    return correction;
   }
   for (size_t i = 0; i < n; i++) {
     if (q[i] <= 0.0f) {
@@ -636,12 +646,22 @@ std::vector<float> ComputeRayAllocationCorrection(const std::vector<float>& p, c
 }
 
 
+double AccumulateFirstLayerEmittedRayEquivalentDelta(const size_t* crystal_ray_num,
+                                                     const std::vector<float>& corrections, size_t count) {
+  double delta = 0.0;
+  for (size_t ci = 0; ci < count; ci++) {
+    delta += static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(corrections[ci]) - 1.0);
+  }
+  return delta;
+}
+
+
 LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode, const MsInfo& layer) {
   LayerRayAllocation out;
   const size_t n = layer.setting_.size();
-  out.proportions.reserve(n);
+  out.partition_weights.reserve(n);
   for (const auto& s : layer.setting_) {
-    out.proportions.push_back(s.crystal_proportion_);
+    out.partition_weights.push_back(s.crystal_proportion_);
   }
   bool delivered = (mode == SceneConfig::RayAllocationMode::kAdaptive);
   for (size_t i = 0; delivered && i < n; i++) {
@@ -656,8 +676,8 @@ LayerRayAllocation ResolveLayerRayAllocation(SceneConfig::RayAllocationMode mode
   for (const auto& s : layer.setting_) {
     q.push_back(s.crystal_ray_alloc_weight_);
   }
-  out.corrections = ComputeRayAllocationCorrection(out.proportions, q);
-  out.proportions = std::move(q);
+  out.corrections = ComputeRayAllocationCorrection(out.partition_weights, q);
+  out.partition_weights = std::move(q);
   out.adaptive = true;
   return out;
 }
@@ -1478,10 +1498,10 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
     const auto& m = config.ms_[mi];
     auto ms_crystal_cnt = m.setting_.size();
-    // proportions: what the partition deals by (p, or q under adaptive);
+    // partition_weights: what the partition deals by (p, or q under adaptive);
     // corrections: what each ray born into ci is scaled by (all 1.0f under p).
     const LayerRayAllocation alloc = ResolveLayerRayAllocation(config.ray_allocation_, m);
-    const std::vector<float>& proportions = alloc.proportions;
+    const std::vector<float>& proportions = alloc.partition_weights;
     const std::vector<float>& corrections = alloc.corrections;
 
     // Lazy-initialize carry for this scattering layer.
@@ -1494,10 +1514,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
 
     auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num, ray_alloc_carry[mi]);
     if (first_ms) {
-      for (size_t ci = 0; ci < ms_crystal_cnt; ci++) {
-        emitted_ray_equivalent +=
-            static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(corrections[ci]) - 1.0);
-      }
+      emitted_ray_equivalent +=
+          AccumulateFirstLayerEmittedRayEquivalentDelta(crystal_ray_num.get(), corrections, ms_crystal_cnt);
     }
 
     // NOTE: ray_num will change between scatterings.
