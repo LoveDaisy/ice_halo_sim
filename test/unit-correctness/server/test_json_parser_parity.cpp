@@ -1265,6 +1265,54 @@ TEST(JsonParserParity, GridFamilyLineSwitchesExplicitTrueIsNotConfusedWithOmitte
   EXPECT_TRUE(p.via_capi.renderers_.begin()->second.elevation_grid_line_);
 }
 
+// --- render.grid.view_dist / view_dist_line / view_dist_label: the axis-referenced family (v4.39) ---
+//
+// Three new keys with the same default shape as the angular_dist three (list empty, line switch
+// default-TRUE, label switch default-false), so the same two decoder failure shapes apply: a
+// memset-seeded line switch, and a paste that reads the twin's key. The values differ from the
+// angular_dist entry beside them on every field so the second shape fails on value, not on count.
+
+TEST(JsonParserParity, GridViewDistThreeKeysSurviveBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "angular_dist": [ { "value": 22.0, "opacity": 0.4 } ],
+           "view_dist": [ { "value": 35.0, "opacity": 0.6, "width": 2.5, "color": [0.1, 0.9, 0.2] } ],
+           "angular_dist_line": true, "view_dist_line": false,
+           "angular_dist_label": false, "view_dist_label": true })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  ASSERT_EQ(renderer.view_dist_grid_.size(), 1u);
+  EXPECT_FLOAT_EQ(renderer.view_dist_grid_[0].value_, 35.0f);
+  EXPECT_FLOAT_EQ(renderer.view_dist_grid_[0].opacity_, 0.6f);
+  EXPECT_FALSE(renderer.view_dist_grid_line_);
+  EXPECT_TRUE(renderer.view_dist_label_);
+  // The twin is read from its own keys.
+  ASSERT_EQ(renderer.angular_dist_grid_.size(), 1u);
+  EXPECT_FLOAT_EQ(renderer.angular_dist_grid_[0].value_, 22.0f);
+  EXPECT_TRUE(renderer.angular_dist_grid_line_);
+  EXPECT_FALSE(renderer.angular_dist_label_);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridViewDistOmittedLeavesBothParsersAtTheFamilyOffDefaults) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const auto& via_capi = p.via_capi.renderers_.begin()->second;
+  const auto& core = p.core.renderers_.begin()->second;
+  EXPECT_TRUE(via_capi.view_dist_grid_.empty());
+  EXPECT_TRUE(via_capi.view_dist_grid_line_) << "a memset-seeded decoder answers false here";
+  EXPECT_FALSE(via_capi.view_dist_label_);
+  EXPECT_TRUE(core.view_dist_grid_.empty());
+  EXPECT_TRUE(core.view_dist_grid_line_);
+  EXPECT_FALSE(core.view_dist_label_);
+  EXPECT_TRUE(via_capi == core);
+}
+
 // --- render.front: the second clip dimension (v4.20) ---
 //
 // Its own top-level key, deliberately not a fourth "visible" enumerator. The negative half of that

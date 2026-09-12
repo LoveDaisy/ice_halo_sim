@@ -373,7 +373,24 @@ extern "C" {
 // programmatic author (the GUI's Simulation panel) now sets it with LUMICE_RAY_ALLOCATION_* the
 // way LUMICE_SceneSetColorMode takes LUMICE_COLOR_MODE_*. Nothing else moved; a handle that never
 // calls it still omits the key and still round-trips a document's spelling verbatim.
-#define LUMICE_API_VERSION 438
+//
+// BREAKING (v4.39): a fifth annotation family, the view-distance circles — circles of constant
+// angular distance from the camera's OPTICAL AXIS, the axis-referenced twin of angular_dist (which
+// is referenced to the sun). Two structs grow at the tail, recompile. LUMICE_RenderParam gains
+// `view_dist[]` / `view_dist_count` / `view_dist_line` / `view_dist_label` after `paper`
+// (sizeof 4904 -> 6452); LUMICE_AnnotationRequest gains `view_dist_deg` / `view_dist_count` after
+// `marker_count` (sizeof 128 -> 144). LUMICE_ANNOTATION_VIEW_DIST (4) is the label kind. JSON keys
+// "grid.view_dist", "grid.view_dist_line", "grid.view_dist_label", shaped exactly like the
+// angular_dist three; absent keys leave the family off, so a document that predates it renders as
+// it did. Nothing is removed or reordered; a zero-initialised LUMICE_RenderParam keeps the family
+// off (count 0) but, like the other three line switches, names `view_dist_line` = 0 where the JSON
+// default is true — go through JSON or set it.
+// WHAT IS NOT THERE, deliberately: no `reference_dir_view`. The centre is the view's own forward
+// (elevation / azimuth / roll), which core already derives for the front-hemisphere clip, so a
+// caller has nothing to supply — and the axis is independent of `lens_shift` by construction: a
+// shifted lens moves the axis's PIXEL, not the axis, and the circles follow the axis. A second
+// direction field would have been a second copy of a quantity the request already determines.
+#define LUMICE_API_VERSION 439
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -697,8 +714,8 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 // the OR/AND expansion seen in practice.
 #define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
 #define LUMICE_MAX_CONFIG_COLOR_REFS 32
-// Per-renderer grid-line ceiling (angular_dist[] / elevation_grid[] / longitude_grid[] inline arrays in
-// LUMICE_RenderParam). Same "widen (breaking bump)" rule as the constants above. 64 matches the
+// Per-renderer grid-line ceiling (angular_dist[] / view_dist[] / elevation_grid[] / longitude_grid[]
+// inline arrays in LUMICE_RenderParam). Same "widen (breaking bump)" rule as the constants above. 64 matches the
 // order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 angular-distance
 // line.
 #define LUMICE_MAX_CONFIG_GRID_LINES 64
@@ -1298,7 +1315,34 @@ typedef struct LUMICE_RenderParam_ {
   // doc/print-mode-subtractive-ink.md for what the mode does and does not promise.
   int tone;
   float paper[3];
+  // ADDED (v4.39). Circles of constant angular distance from the camera's OPTICAL AXIS — the
+  // view's own forward direction (elevation / azimuth / roll), independent of lens_shift — the
+  // camera-referenced twin of angular_dist[] above. RENDERED the same way: the CLI renderer builds
+  // each entry's mask through core's in-process annotation layer and composites it with that
+  // entry's own `opacity` and `color`; `width` is read and round-tripped but inert. No direction
+  // field of its own — unlike angular_dist[] (referenced to the sun) the axis needs no caller
+  // input; see the v4.39 note at LUMICE_API_VERSION.
+  LUMICE_GridLine view_dist[LUMICE_MAX_CONFIG_GRID_LINES];
+  int view_dist_count;
+  // Its line and label switches, same contract as `angular_dist_line` / `angular_dist_label`
+  // above: `view_dist_line` defaults TRUE on the JSON side (a filled list draws without touching
+  // the flag) and is zero in a zero-initialised struct like its three siblings; `view_dist_label`
+  // defaults false (text nobody asked for must not appear in a document that predates the field),
+  // and drives the label geometry independently of the line switch.
+  int view_dist_line;
+  int view_dist_label;
 } LUMICE_RenderParam;
+// The exact-size pin, the same duty RenderConfig's own carries on the C++ side: a field appended
+// to this struct is an ABI event that has to be declared at LUMICE_API_VERSION, and the two
+// numbers moving together is what shows the declaration was made. `>=`-style pins (LUMICE_RayCount
+// above) guard an invariant that never changes; this one is expected to change, once per append,
+// and every change is a bump. LUMICE_GridLine is 24 bytes (six 4-byte fields) and
+// LUMICE_MarkerStyle 20, so the arrays account for 4 * 64 * 24 + 6 * 20 of it.
+#if defined(__cplusplus)
+static_assert(sizeof(LUMICE_RenderParam) == 6452, "LUMICE_RenderParam layout changed — bump LUMICE_API_VERSION");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(LUMICE_RenderParam) == 6452, "LUMICE_RenderParam layout changed — bump LUMICE_API_VERSION");
+#endif
 
 // =============== Scene (opaque handle) ===============
 // LUMICE_Scene (opaque type declared up top) is THE configuration container of this API and the
@@ -1833,6 +1877,10 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
 #define LUMICE_ANNOTATION_ELEVATION 1
 #define LUMICE_ANNOTATION_LONGITUDE 2
 #define LUMICE_ANNOTATION_ANGULAR_DIST 3
+// Circles about the camera's optical axis (LUMICE_AnnotationRequest::view_dist_deg). Same geometry
+// as ANGULAR_DIST with a different centre; a distinct kind so a consumer can style and switch it on
+// its own. ADDED (v4.39).
+#define LUMICE_ANNOTATION_VIEW_DIST 4
 
 // Longest label text core produces, including the terminating NUL. Values are at most
 // "-180.0" plus a two-byte UTF-8 degree sign.
@@ -1911,7 +1959,25 @@ typedef struct LUMICE_AnnotationRequest_ {
   // asked for here like any other id (MARKER_ZENITH / MARKER_NADIR); there is no separate switch.
   const int* marker_ids;
   int marker_count;
+
+  // ADDED (v4.39). Circles of constant angular distance from the camera's OPTICAL AXIS, which core
+  // derives from `view`'s az/el/roll — the camera-referenced twin of angular_dist_deg above. No
+  // direction field: unlike angular_dist_deg (referenced to the caller's `reference_dir`) the axis
+  // is determined by the request already. Borrowed for the duration of the call, like the lists
+  // above; NULL with a zero count means none. Labels come back with kind
+  // LUMICE_ANNOTATION_VIEW_DIST and `index` into THIS list.
+  const float* view_dist_deg;
+  int view_dist_count;
 } LUMICE_AnnotationRequest;
+// Exact-size pin, same duty and same rule as LUMICE_RenderParam's above. Pointer-bearing, so the
+// number is the LP64 / LLP64 one every supported target shares (8-byte pointers).
+#if defined(__cplusplus)
+static_assert(sizeof(LUMICE_AnnotationRequest) == 144,
+              "LUMICE_AnnotationRequest layout changed — bump LUMICE_API_VERSION");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(LUMICE_AnnotationRequest) == 144,
+               "LUMICE_AnnotationRequest layout changed — bump LUMICE_API_VERSION");
+#endif
 
 // One label: where to put it, what it says, and which curve it came from.
 typedef struct LUMICE_AnnotationLabel_ {
