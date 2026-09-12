@@ -382,6 +382,20 @@ in isolation: isolated runs measured 0.34–0.62 dB optimistic, which is how the
 `auto_ev` references once ended up flaking. The driver has no switch for this. `lens_proj` is
 currently the only stochastic group; the other three are deterministic and are held to the
 pixel ruler described further down, not to a PSNR floor.
+N is **per group**, and the driver's defaults encode that: a group registered
+`deterministic=True` runs the suite **once** per phase (Phase A takes that single capture as the
+reference — the mean of one frame is that frame; Phase B still writes `identical_runs` /
+`maxcc_tau` / `maxcc_local_max` from that one run and records `n_calib_runs: 1`), a stochastic
+group runs it `STOCHASTIC_RUNS` (10) times. The hard rule behind the default: **a reshoot of a
+deterministic group triggered by a UI change is never repeated** — the second run of a frame
+with no simulation and no RNG in it is the same bytes again, and at ~88 s per full-suite run
+the old 10/10 default turned one two-group reshoot into 64 minutes of zero information. Two
+more cost rules the driver enforces rather than describes: several groups in one invocation
+share the same runs (each full-suite run already exports every group's captures and prints
+every group's PSNR lines, so the cost is `max(n)` over the selected groups, not `sum(n)`), and
+Phase A refuses to shoot a reference `origin/main` has already reshot since the merge base —
+that image would be discarded at rebase time in favour of main's copy, so rebase first, then
+shoot (`--allow-stale-base` overrides; no `origin/main` at all skips the check with a note).
 
 The `lens_proj` references cover the preview fragment shader's projection math
 (`src/gui/preview_renderer.cpp`: `linearInverse` / `fisheyeInverse` / `dualFisheyeInverse` /
@@ -417,7 +431,9 @@ segment of the crystal preview) against the smallest real drift on record (95 px
 measurements and margins are in `doc/testing-architecture.md` §4.6. Regen trigger: any layout
 change to the edit modal (slider/input widths, property-table columns, control ordering,
 auto-resize behavior), or a harness window size / font atlas / ImGui style change. Command:
-`python scripts/regen_gui_test_refs.py --group modal_layout`. There is no threshold to copy back:
+`python scripts/regen_gui_test_refs.py --group modal_layout` — a single run per phase by default;
+pass `--n` / `--n-calib` to this group only when you are proving something (e.g. that a scene
+is still deterministic), never as routine. There is no threshold to copy back:
 K is a cross-machine number Phase B cannot measure, so it lives in the source; Phase B writes
 `maxcc_tau` / `maxcc_local_max` as an audit that the reference machine still reads 0.
 
@@ -453,7 +469,8 @@ every deterministic group `--filter <group>` in isolation must read `inf` exactl
 does — measured so for `capture_harness`, `modal_layout` and this group after the reset took over,
 with the leaking functional case run first as the positive control. Regen trigger: any layout change to the panel's section headers, the settings
 table's columns, the preset table's columns, or the pinned action row. Command:
-`python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. No threshold to copy back
+`python scripts/regen_gui_test_refs.py --group defaults_panel_layout` — single run per phase by
+default, same rule as `modal_layout` for `--n` / `--n-calib`. No threshold to copy back
 (same reason as `modal_layout`); `kRuler` in `test/gui/visual/test_gui_defaults_panel.cpp` holds K.
 
 **`--keep-export-png` / `--export-dir` flags** — `--keep-export-png` makes
@@ -476,9 +493,13 @@ group names the `gui_test` category it tags its output with (also the `[<tag>]` 
 print and its key in `_thresholds.json`), its scenes/modes, and the export and reference filename
 prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves
 are group-agnostic.
-Two constraints when registering one: the key must be unique across groups (PSNR samples are
-attributed by an exact match on the `[<tag>]` prefix in a shared full-suite stderr), and the
-test must compare via `lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line.
+Three constraints when registering one: the key must be unique across groups (PSNR samples are
+attributed by an exact match on the `[<tag>]` prefix in a shared full-suite stderr); the
+test must compare via `lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line;
+and the entry must declare `deterministic` (`True` only when every scene's frame carries no
+simulation and no RNG) — the field has no default on purpose, because it sets the run-count
+default and the alternative, inferring it from `_thresholds.json`'s `identical_runs` after the
+fact, has nothing to read for a group that has no entry yet.
 
 Not every `CheckAgainstReference` caller is in `GROUPS`. The `visual` category
 (`test/gui/visual/test_preview_pixels.cpp`: `crystal_preview_prism/pyramid/wireframe/shaded`,
@@ -501,8 +522,13 @@ matches its own references byte-for-byte.
 
 **Regeneration workflow:**
 ```bash
-# Full regen of EVERY registered group (Phase A: mean-ref + Phase B: thresholds, ~20 min):
+# Full regen of EVERY registered group (Phase A: mean-ref + Phase B: thresholds). Cost is set by
+# the stochastic group: 10 + 10 full-suite runs at ~88 s each ≈ 30 min, and the three
+# deterministic groups ride along on the first run of each phase at no extra cost.
 python scripts/regen_gui_test_refs.py
+
+# One deterministic group: 1 + 1 full-suite runs ≈ 3 min. Do NOT add --n / --n-calib here.
+python scripts/regen_gui_test_refs.py --group modal_layout
 
 # One group only (recommended — regen what you changed, leave other groups' refs alone):
 python scripts/regen_gui_test_refs.py --group lens_proj
@@ -516,8 +542,11 @@ python scripts/regen_gui_test_refs.py --group lens_proj --phase-b-only
 # Single scene (--scene requires --group; scene names are only unique within a group):
 python scripts/regen_gui_test_refs.py --group lens_proj --scene overlay_ea
 
-# Quick smoke test (2 runs each phase):
+# Quick smoke test of the stochastic path (2 runs each phase; the flags apply to every selected group):
 python scripts/regen_gui_test_refs.py --group lens_proj --n 2 --n-calib 2
+
+# Shoot even though origin/main has already reshot one of these references (default: refuse):
+python scripts/regen_gui_test_refs.py --group modal_layout --allow-stale-base
 ```
 
 Phase B merges per group and per scene: groups and scenes not covered by the run keep their

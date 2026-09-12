@@ -1325,7 +1325,7 @@ this table summarizes):
 - Row ② scenes and K: `test/gui/parity/test_gui_cli_export_parity.cpp:1059–1065`
   (`kLinesOnlyScenes[]`, K=4 on every row), with the calibration table immediately above it.
 - Row ③ thresholds: same file, the `bm4_threshold` fields at lines 639 / 722 / 846 / 931.
-- `regen_gui_test_refs.py` Phase B's row-① audit fields: `scripts/regen_gui_test_refs.py:553–555`
+- `regen_gui_test_refs.py` Phase B's row-① audit fields: `scripts/regen_gui_test_refs.py:706–708`
   (`maxcc_tau` / `maxcc_local_max` / `maxcc_samples`).
 - CI capture upload feeding row ①'s cross-machine K measurement:
   `.github/workflows/ci.yml`'s `GUI visual regression (Xvfb + Mesa llvmpipe)` step
