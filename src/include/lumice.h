@@ -321,9 +321,10 @@ extern "C" {
 // LUMICE_RaypathHistogramEntry's layout is unchanged (LUMICE_RAYPATH_DISPLAY_MAX still covers the
 // longest text the new format can need — its derivation is at the constant).
 //
-// BREAKING (v4.34): LUMICE_RaypathAnalysisRequest loses `cone_stop_target` and with it the cone
-// early stop as a mechanism — `infinite` moves up (offset 80 -> 72), `ray_num` moves up (88 -> 80),
-// sizeof shrinks (96 -> 88), recompile: a v4.33 caller's `infinite` would land in the new
+// BREAKING (v4.34): LUMICE_RaypathAnalysisRequest loses its cone stop target (the LUMICE_RayCount
+// that followed `cone_ring_count`) and with it the cone early stop as a mechanism — `infinite`
+// moves up (offset 80 -> 72), `ray_num` moves up (88 -> 80), sizeof shrinks (96 -> 88),
+// recompile: a v4.33 caller's `infinite` would land in the new
 // trailing padding and its request would ask for zero rays. An analysis run's length is now
 // decided by exactly two things in every ROI mode: its own ray budget (`infinite` / `ray_num`) and
 // LUMICE_StopServer. A run stopped that way keeps what it accumulated: the frame published after

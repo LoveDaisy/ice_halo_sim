@@ -269,7 +269,7 @@ class LUMICE_RaypathAnalysisRequest(ctypes.Structure):
     ]
 
 
-# 88 since v4.34: `cone_stop_target` (8 bytes at 72) is gone, `infinite` moved up into its place,
+# 88 since v4.34: the cone stop target (8 bytes at 72) is gone, `infinite` moved up into its place,
 # and the 4 bytes after `infinite` are padding before the 8-aligned `ray_num`.
 assert ctypes.sizeof(LUMICE_RaypathAnalysisRequest) == 88, (
     "LUMICE_RaypathAnalysisRequest size mismatch — verify lumice.h field layout"
