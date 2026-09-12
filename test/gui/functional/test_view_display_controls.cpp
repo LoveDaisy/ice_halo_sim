@@ -1042,6 +1042,29 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       const float scale_relative = gui::g_preview_vp.params.exposure.intensity_scale;
       IM_CHECK_GT(scale_relative, 0.0f);
 
+      // The probe that proves the two modes divide by DIFFERENT things. Landed intensity is the
+      // kRelative denominator and appears nowhere in kAbsolute (mono_exposure_scale.hpp), so
+      // scaling it by a known factor must move one scale by exactly that factor and the other
+      // not at all. Any factor != 1 exposes the structure; 5 keeps the response far from float
+      // noise at either end. It is a probe factor, not a tolerance — the tolerances below are
+      // the same 1e-4 the closed-form check uses.
+      //
+      // Direct field write + Yield is the pattern this case already relies on for
+      // exposure_offset further down: the sim is kDone / kRunCompleted, so no payload arrives
+      // to overwrite the write, and the panel recomputes the scale from g_state every frame.
+      // The field is restored (and a frame drawn) before the probe returns, so everything after
+      // a probe runs on the unperturbed state.
+      constexpr float kSeparationProbeFactor = 5.0f;
+      const float original_snapshot_intensity = gui::g_state.snapshot_intensity;
+      auto probe_scale_with_intensity = [&](float factor) -> float {
+        gui::g_state.snapshot_intensity = original_snapshot_intensity * factor;
+        ctx->Yield();
+        const float probed = gui::g_preview_vp.params.exposure.intensity_scale;
+        gui::g_state.snapshot_intensity = original_snapshot_intensity;
+        ctx->Yield();
+        return probed;
+      };
+
       // One combo pick, then exactly one frame.
       PickExposureMode(ctx, "Absolute");
       IM_CHECK_EQ(gui::g_state.renderer.ev_mode, 1);
@@ -1062,15 +1085,25 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
           lumice::gui::ComputeMonoExposure(lumice::gui::MonoEvMode::kAbsolute, expected_in).intensity_scale;
       IM_CHECK_GT(expected, 0.0f);
       IM_CHECK_LT(std::abs(scale_absolute - expected), expected * 1e-4f);
-      // And it really moved — otherwise "matches the absolute formula" would be satisfied by the
-      // two formulas happening to agree on this scene.
-      IM_CHECK(std::abs(scale_absolute - scale_relative) > scale_relative * 1e-3f);
+      // And it really switched formula. This used to be stated as "absolute differs from relative
+      // by more than 0.1%", which compares two numbers the random simulation decides: on this
+      // scene they are only ~10% apart and the relative anchor (P99 over the sky) jitters with
+      // the seed, so some seeds closed the gap and the case went red on a fact about the seed,
+      // not about the code. Stated structurally instead: perturb the landed intensity and the
+      // absolute scale must not move, because that quantity is not in its formula at all. An
+      // implementation whose absolute branch quietly read snapshot_intensity would move by the
+      // probe factor here — deterministically, on every seed — which is the regression the old
+      // inequality was reaching for.
+      // kAbsolute divides by snapshot_emitted_energy, never snapshot_intensity (mono_exposure_scale.hpp).
+      const float scale_absolute_after_probe = probe_scale_with_intensity(kSeparationProbeFactor);
+      IM_CHECK_LT(std::abs(scale_absolute_after_probe - scale_absolute), scale_absolute * 1e-4f);
       // The value captured before the yield is reported, not asserted: the panel may or may not
       // have already been drawn this frame when the popup closed, so demanding it here would be
       // asserting a frame-ordering detail rather than the same-frame promise. What the promise
       // means is that no poll, commit or run stood between the click and the new exposure — which
       // the run-state checks below are what actually pin.
-      ctx->LogInfo("scale before yield %.6f, after %.6f", scale_before_next_frame, scale_absolute);
+      ctx->LogInfo("scale before yield %.6f, after %.6f, after x%.0f intensity probe %.6f", scale_before_next_frame,
+                   scale_absolute, kSeparationProbeFactor, scale_absolute_after_probe);
 
       // No re-run was asked for, and none happened.
       IM_CHECK_EQ(gui::g_state.sim_state, gui::GuiState::SimState::kDone);
@@ -1101,6 +1134,17 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.ev_mode, 0);
       IM_CHECK_LT(std::abs(gui::g_preview_vp.params.exposure.intensity_scale - scale_relative), scale_relative * 1e-3f);
+      // The other half of the separation: the same probe that left absolute untouched must move
+      // relative by exactly the probe factor, inversely. Together with the absolute check this
+      // pins that the two branches read different denominators, without comparing their values.
+      // kRelative divides by snapshot_intensity, so a factor-k probe must read back scale/k.
+      const float scale_relative_confirmed = gui::g_preview_vp.params.exposure.intensity_scale;
+      const float scale_relative_after_probe = probe_scale_with_intensity(kSeparationProbeFactor);
+      const float expected_relative_after_probe = scale_relative_confirmed / kSeparationProbeFactor;
+      IM_CHECK_LT(std::abs(scale_relative_after_probe - expected_relative_after_probe),
+                  expected_relative_after_probe * 1e-4f);
+      ctx->LogInfo("relative scale %.6f, after x%.0f intensity probe %.6f (expected %.6f)", scale_relative_confirmed,
+                   kSeparationProbeFactor, scale_relative_after_probe, expected_relative_after_probe);
 
       gui::g_server_poller.Stop();
       LUMICE_StopServer(gui::g_server);
