@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789228788999,
+  "lastUpdate": 1789245353553,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "b21fe562ba8cdf4e0cf66f9007ee180481bfadcd",
-          "message": "Merge pull request #251 from LoveDaisy/feat/preview-lifecycle-invariant-closure\n\nGUI 预览生命周期不变量族级收口（scrum-429）：I3/I4 补齐 + 新增 I7 完成蕴含排空",
-          "timestamp": "2026-08-06T10:26:27+08:00",
-          "tree_id": "67e60db6fdf70c87913882cb11a32d89376d886c",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b21fe562ba8cdf4e0cf66f9007ee180481bfadcd"
-        },
-        "date": 1785983768922,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 318457.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 579518,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 397350.9,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 318243.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4758,6 +4710,54 @@ window.BENCHMARK_DATA = {
             "value": 376566.3,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c106292be4122b60092a9666131dde843f639b15",
+          "message": "Merge pull request #348 from LoveDaisy/feat/crystal-ray-allocation\n\nfeat(core): adaptive ray allocation across crystal entries (scene.ray_allocation)",
+          "timestamp": "2026-09-13T04:19:28+08:00",
+          "tree_id": "82448d3731df653e760db492e5a8794a13dc6f0c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c106292be4122b60092a9666131dde843f639b15"
+        },
+        "date": 1789245352047,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 438166.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 595074.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 431818.5,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 337191.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
