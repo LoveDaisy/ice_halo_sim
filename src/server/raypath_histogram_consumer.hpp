@@ -213,8 +213,9 @@ std::string FormatRaypathChainDisplay(const std::vector<RaypathChainSegment>& ch
 RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& finest, uint8_t symmetry);
 
 // ReduceRaypathHistogram over a frame's recorded result, through the frame's per-symmetry cache
-// (ResultFrame::raypath_reduce_cache_, one memo per possible kSym* bitmask — 8 slots, see that
-// struct's own comment for why one slot is not enough): the reduction for `symmetry` is computed
+// (ResultFrame::raypath_reduce_cache_, a shared_ptr<ResultFrame::RaypathReduceCache> — one memo
+// per possible kSym* bitmask, 8 slots; see that struct's own comment in server.hpp for why one
+// slot is not enough): the reduction for `symmetry` is computed
 // once and reused on every later call with the same symmetry, without evicting any other
 // symmetry's memo. Null when the frame carries no analysis result. What both C API reads of the
 // histogram call, so the row count and the rows of one (frame, symmetry) pair are one reduction,
