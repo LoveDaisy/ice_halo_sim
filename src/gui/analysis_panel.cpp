@@ -19,6 +19,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"  // SliderWithInput
+#include "gui/ray_num_domain.hpp"
 #include "gui/raypath_segments.hpp"
 #include "gui/semantic_colors.hpp"
 #include "gui/server_poller.hpp"
@@ -849,9 +850,11 @@ void RenderRequestParamsControls(GuiState& state) {
   auto& a = state.analysis;
   EnsureDefaultAnalysisRayBudget(state);
   // The document's Rays row, re-drawn for the session's own field: a checkbox that turns the
-  // total off and a slider for the total. Kept in step with panels.cpp by hand — evaluated and
-  // not shared, because the two rows read different fields under different constraint sources
-  // (the registry's versus these constants), and a helper would need both spelled as parameters.
+  // total off and a slider for the total. The RENDERING is kept in step with panels.cpp by hand —
+  // evaluated and not shared, because the two rows read different fields under different enable
+  // gates (the registry's Applicability versus a.infinite), and a helper would need both spelled
+  // as parameters. The DOMAIN is not hand-copied: range, format and scale are the same four symbols
+  // the registry row reads (gui/ray_num_domain.hpp), so the two cannot disagree on what a budget is.
   PushLabelColumnItemWidth();
   Checkbox("Infinite rays", &a.infinite);
   if (ImGui::IsItemHovered()) {
@@ -860,7 +863,8 @@ void RenderRequestParamsControls(GuiState& state) {
   ImGui::PopItemWidth();
   ImGui::BeginGroup();
   ImGui::BeginDisabled(a.infinite);
-  SliderWithInput("Rays(M)", &a.ray_num_millions, kAnalysisRayNumMinMillions, kAnalysisRayNumMaxMillions, "%.1f");
+  SliderWithInput("Rays(M)", &a.ray_num_millions, kRayNumMinMillions, kRayNumMaxMillions, kRayNumSliderFmt,
+                  kRayNumSliderScale);
   ImGui::EndDisabled();
   ImGui::EndGroup();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {

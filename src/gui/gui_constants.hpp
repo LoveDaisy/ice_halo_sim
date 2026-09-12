@@ -171,12 +171,6 @@ constexpr float kCameraTiltDeg = 15.0f;
 constexpr float kAnalysisConeMaxRadiusDeg = 15.0f;
 constexpr int kAnalysisConeRingCount = 30;  // 0.5 degrees per ring
 constexpr float kAnalysisConeDefaultRadiusDeg = 2.0f;
-// The panel's own Rays(M) input bounds — the same domain as sim.ray_num_millions's
-// (field_editor_registry.cpp), repeated here because this field is session-tier, not a document
-// field the registry governs. Two constants, one meaning: a budget the document may ask for, the
-// analysis may ask for too.
-constexpr float kAnalysisRayNumMinMillions = 0.1f;
-constexpr float kAnalysisRayNumMaxMillions = 100.0f;
 static_assert(kAnalysisConeRingCount >= 1 && kAnalysisConeRingCount <= LUMICE_MAX_RAYPATH_CONE_RINGS,
               "the cone ring count must be a request the C API accepts (it rejects, not truncates)");
 static_assert(kAnalysisConeDefaultRadiusDeg > 0.0f && kAnalysisConeDefaultRadiusDeg <= kAnalysisConeMaxRadiusDeg,

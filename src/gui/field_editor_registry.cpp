@@ -7,6 +7,7 @@
 #include "gui/app.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/panels.hpp"
+#include "gui/ray_num_domain.hpp"
 #include "gui/slider_format_rules.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
@@ -487,7 +488,9 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     // relative format on it would be the same mismatch as the defect, in the other direction. The
     // rest of this registry is out of the gate's reach for a structural reason, not an oversight:
     // most of its domains are FloatDomainFn closures over live GuiState (renderer.fov and friends),
-    // so their bounds are not constant expressions and no static_assert can read them.
+    // so their bounds are not constant expressions and no static_assert can read them. The other
+    // constant-domain row, sim.ray_num_millions below, is gated too — in gui/ray_num_domain.hpp,
+    // where its quadruple is defined once for this row and the analysis panel's.
     {
       constexpr float kSunDiameterMin = 0.1f;
       constexpr float kSunDiameterMax = 5.0f;
@@ -501,15 +504,18 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace("sun.spectrum", SpectrumField());
 
     // ---- sim ----
-    map.emplace("sim.ray_num_millions", FloatField([](GuiState& s) { return &s.sim.ray_num_millions; },
-                                                   FixedDomain(0.1f, 100.0f), "%.1f", SliderScale::kLinear,
-                                                   [](const GuiState& s) -> Applicability {
-                                                     if (s.sim.infinite) {
-                                                       return { false,
-                                                                "Infinite rays is on, so no ray total applies." };
-                                                     }
-                                                     return {};
-                                                   }));
+    // Domain, format and scale come from gui/ray_num_domain.hpp, which the analysis panel's own
+    // Rays(M) row reads too; the pairing gate is static_asserted there, beside the one definition,
+    // rather than in a local block here like sun.diameter's above (that form fits a single consumer).
+    map.emplace("sim.ray_num_millions",
+                FloatField([](GuiState& s) { return &s.sim.ray_num_millions; },
+                           FixedDomain(kRayNumMinMillions, kRayNumMaxMillions), kRayNumSliderFmt, kRayNumSliderScale,
+                           [](const GuiState& s) -> Applicability {
+                             if (s.sim.infinite) {
+                               return { false, "Infinite rays is on, so no ray total applies." };
+                             }
+                             return {};
+                           }));
     map.emplace("sim.max_hits", IntField([](GuiState& s) { return &s.sim.max_hits; }, 1, 64));
     map.emplace("sim.infinite", BoolField([](GuiState& s) { return &s.sim.infinite; }));
     map.emplace("sim.ray_allocation", BoolField([](GuiState& s) { return &s.sim.ray_allocation_adaptive; }));
