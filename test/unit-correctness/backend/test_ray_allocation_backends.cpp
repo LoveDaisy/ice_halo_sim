@@ -454,6 +454,18 @@ TEST(RayAllocationBackends, CudaHostGenDealsByQAndLandsTheSameEnergy) {
     GTEST_SKIP() << "cuda/host-gen: the LUMICE_DISABLE_DEVICE_GEN fallback landed no energy at all; "
                     "the allocation invariants cannot be read off a black frame";
   }
+  // Cross-arm magnitude: the two checks below compare the fallback with itself
+  // (proportional vs skewed), so a fallback that is internally consistent but
+  // lands the wrong total — say a stale but non-zero polygon count read off the
+  // per-ray shape carrier — would pass them. Against the device-gen arm the
+  // total is pinned: same scene, same N, the same per-ray landed fraction f_0
+  // drawn from the same distribution, so the ratio is 1 up to f_0's sampling
+  // noise and the tolerance is the one the skewed check already uses.
+  // LUMICE_DISABLE_DEVICE_GEN is unset at this point, so this arm is device gen.
+  auto device_prop = RunCudaArm(prop_arm, render);
+  ASSERT_GT(device_prop.landed, 0.0) << "cuda/device-gen: proportional arm landed nothing";
+  EXPECT_NEAR(prop.landed / device_prop.landed, 1.0, kLandedTol)
+      << "cuda/host-gen vs cuda/device-gen: landed host-gen=" << prop.landed << " device-gen=" << device_prop.landed;
   ExpectSkewedInvariants(prop, skew, "cuda/host-gen");
   ExpectSkewedTally(prop, skew, "cuda/host-gen", kGpuTallyTol);
 }

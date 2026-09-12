@@ -2065,6 +2065,9 @@ struct CudaTraceBackend::Impl {
   uint32_t* pinned_from_poly_ = nullptr;
   uint32_t* pinned_root_wl_idx_ = nullptr;  // n_roots (296.6 per-ray wl, H2D staging)
   float* pinned_rot_c2w_ = nullptr;  // n_roots × 9 (mirrors d_rot_c2w_)
+  // n_roots × uint2 (mirrors d_root_pool_shape_). Host-roots fallback only: the
+  // device-gen and transit kernels write the carrier themselves.
+  uint2* pinned_root_pool_shape_ = nullptr;
   ExitRayRecord* pinned_exit_ = nullptr;
 
   RandomNumberGenerator rng_{0u};  // re-seeded ONCE per Impl lifetime in BeginSession (rng_seeded_ gate)
@@ -2518,6 +2521,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     cudaFreeHost(pinned_from_poly_);   pinned_from_poly_ = nullptr;
     cudaFreeHost(pinned_root_wl_idx_); pinned_root_wl_idx_ = nullptr;
     cudaFreeHost(pinned_rot_c2w_);     pinned_rot_c2w_ = nullptr;
+    cudaFreeHost(pinned_root_pool_shape_); pinned_root_pool_shape_ = nullptr;
     cudaFreeHost(pinned_cont_count_);  pinned_cont_count_ = nullptr;
     cudaFreeHost(pinned_exit_);        pinned_exit_ = nullptr;
 
@@ -3049,6 +3053,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   cudaFreeHost(pinned_from_poly_); pinned_from_poly_ = nullptr;
   cudaFreeHost(pinned_root_wl_idx_); pinned_root_wl_idx_ = nullptr;
   cudaFreeHost(pinned_rot_c2w_);  pinned_rot_c2w_ = nullptr;
+  cudaFreeHost(pinned_root_pool_shape_); pinned_root_pool_shape_ = nullptr;
   cudaFreeHost(pinned_exit_);     pinned_exit_ = nullptr;
   cudaFreeHost(pinned_cont_count_); pinned_cont_count_ = nullptr;
 
@@ -3107,6 +3112,7 @@ void CudaTraceBackend::Impl::EnsureSessionBuffers(size_t n) {
   ck(cudaHostAlloc(&pinned_from_poly_, n * sizeof(uint32_t),               cudaHostAllocDefault), "cudaHostAlloc pinned_from_poly");
   ck(cudaHostAlloc(&pinned_root_wl_idx_, n * sizeof(uint32_t),             cudaHostAllocDefault), "cudaHostAlloc pinned_root_wl_idx");
   ck(cudaHostAlloc(&pinned_rot_c2w_,  9 * n * sizeof(float),               cudaHostAllocDefault), "cudaHostAlloc pinned_rot_c2w");
+  ck(cudaHostAlloc(&pinned_root_pool_shape_, n * sizeof(uint2),           cudaHostAllocDefault), "cudaHostAlloc pinned_root_pool_shape");
   ck(cudaHostAlloc(&pinned_exit_,     exit_cap_ * sizeof(ExitRayRecord),   cudaHostAllocDefault), "cudaHostAlloc pinned_exit");
   ck(cudaHostAlloc(&pinned_cont_count_, sizeof(uint32_t),                  cudaHostAllocDefault), "cudaHostAlloc pinned_cont_count");
 
@@ -4444,6 +4450,17 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->pinned_from_poly_[i] =
               (r.to_face_ == kInvalidId) ? kInvalidIdU32 : static_cast<uint32_t>(r.to_face_);
           std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
+          // K-shape carrier. trace_single_ms_kernel reads d_pool_shape_in[tid]
+          // unconditionally on every ray and takes its poly_cnt as the
+          // polygon-loop bound; gen_root_kernel / transit_multi_ms_kernel write
+          // it on the device, so this host branch is the one producer that has
+          // to write it by hand (it was missed, and d_root_pool_shape_ is never
+          // memset — an uninitialised 0 collapses the loop to zero iterations
+          // and the frame renders black). UploadCrystalGeometry above put this
+          // ci's single crystal at pool offset 0, so {0, poly_cnt_} is the row
+          // the 1-row fallback shape table holds. Same write as Metal's
+          // GenerateFirstLayerRootsForCi.
+          impl_->pinned_root_pool_shape_[i] = make_uint2(0u, impl_->poly_cnt_);
         }
       } catch (...) {
         impl_->Reset();
@@ -4457,6 +4474,8 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       cudaMemcpyAsync(impl_->d_from_poly_, impl_->pinned_from_poly_, ci_n * sizeof(uint32_t),
                       cudaMemcpyHostToDevice);
       cudaMemcpyAsync(impl_->d_root_wl_idx_, impl_->pinned_root_wl_idx_, ci_n * sizeof(uint32_t),
+                      cudaMemcpyHostToDevice);
+      cudaMemcpyAsync(impl_->d_root_pool_shape_, impl_->pinned_root_pool_shape_, ci_n * sizeof(uint2),
                       cudaMemcpyHostToDevice);
       ck_reset(cudaGetLastError(), "H2D batch");
       // Same per-ray orientation draw as the device-gen branch above, just on
