@@ -825,10 +825,21 @@ TEST_F(Halo22, FullSkyTopChainIsThe22DegreePathAheadOfTheUndeviatedPass) {
     energy += e.energy_;
   }
   // The record is bounded (kRaypathHistogramCapacity rows, ChainIdInterningTable::
-  // kDefaultCapacity chains per producer) and this scene, recorded at its finest,
-  // exceeds both; what no row holds is in the other bucket, and the two together
-  // are every ray delivered.
+  // kDefaultCapacity chains per producer) and this scene at 160k rays FITS both — the
+  // constants were calibrated so the 22° reference scene is exact (11.7k finest chains at
+  // 200k rays) — so the bounded record IS the unbounded one: nothing in the bucket, no
+  // truncation, no row that took a slot over. A scene that overflows would show up here
+  // first, as a non-empty bucket; the general invariant, rows + bucket = every ray
+  // delivered, is asserted alongside so the test still reads right if the constants move.
   EXPECT_EQ(counted + r.other_count_, delivered);
+  EXPECT_EQ(r.other_count_, 0u) << "the 22° scene fits the bounded record exactly";
+  EXPECT_DOUBLE_EQ(r.other_energy_, 0.0);
+  EXPECT_EQ(r.truncated_chain_count_, 0u);
+  EXPECT_DOUBLE_EQ(r.max_row_error_, 0.0);
+  EXPECT_LT(finest.entries_.size(), kRaypathHistogramCapacity) << "fits with room, not by coincidence at the edge";
+  for (const auto& e : finest.entries_) {
+    EXPECT_DOUBLE_EQ(e.error_bound_, 0.0) << e.display_;
+  }
   EXPECT_EQ(r.other_count_, finest.other_count_) << "the reduction passes the bucket through";
   EXPECT_EQ(r.truncated_chain_count_, finest.truncated_chain_count_);
   // Conservation across the four symmetries a reader can ask for, on real

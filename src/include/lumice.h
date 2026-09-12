@@ -340,8 +340,8 @@ extern "C" {
 // row of a run that fit is. LUMICE_RaypathAnalysisInfo gains `other_energy` / `other_count` /
 // `truncated_chain_count` / `max_row_error` (sizeof 32 -> 64): the rays whose chain the
 // producer's interning table had no room for, as one bucket that is not a row (so Σ entries +
-// other is every counted ray, at every symmetry); how many distinct chains that bucket stands
-// for; and the largest `error_bound` over the frame's rows (0 = no eviction happened, the record
+// other is every counted ray, at every symmetry); how many times a chain hit that full record;
+// and the largest `error_bound` over the frame's rows (0 = no eviction happened, the record
 // is exact). Nothing is removed or reordered; a run that never overflows either bound reads
 // exactly as it did in v4.34, with the four new fields 0.
 #define LUMICE_API_VERSION 435
@@ -2118,8 +2118,10 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
   // an entry and never reduced: the sum of every entry's `energy` plus `other_energy` is the
   // energy of every counted ray, under every symmetry, and likewise for `count`. A consumer
   // listing the entries shows this as one more line ("other") so the percentages add up.
-  // `truncated_chain_count` is how many distinct chains that bucket stands for (the producers'
-  // count, summed over the run). `max_row_error` is the largest `error_bound` over the entries
+  // `truncated_chain_count` is how many times a ray's chain hit the full record (summed over the
+  // producers and the run) — arrivals, not distinct chains, since a chain that was turned away is
+  // not remembered and counts again when it comes back; it says how often the cut hit, and bounds
+  // the distinct chains the bucket stands for from above. `max_row_error` is the largest `error_bound` over the entries
   // under THIS symmetry (merging rows adds their errors), i.e. how uncertain the least certain
   // entry is; 0 means no row ever took a slot over and every entry is exact.
   double other_energy;

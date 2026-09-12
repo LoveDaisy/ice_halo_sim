@@ -34,7 +34,7 @@ struct AnalysisPayload {
   float cone_radius_rad = 0.0f;                // CONE only, else 0
   // The bounded record's account (LUMICE_RaypathAnalysisInfo, v4.35): the rays whose chain the
   // record had no room for, as one bucket that is never an entry — shown as the list's fixed
-  // "other" line so the percentages add up — how many chains it stands for, and the least
+  // "other" line so the percentages add up — how many times a chain hit the full record, and the least
   // certain entry's error_bound under the symmetry the entries were read with. All 0 for a run
   // that fit, which is every small scene. Filled by the main-thread read only (RefreshAnalysisEntries),
   // like `entries`; the poller's payload leaves them 0.

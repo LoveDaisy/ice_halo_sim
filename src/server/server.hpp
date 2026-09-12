@@ -295,10 +295,13 @@ struct RaypathHistogramResult {
   // unchanged.
   double other_energy_ = 0.0;
   size_t other_count_ = 0;
-  // Distinct chains the producers' tables turned away over the run (Σ
-  // SimData::chain_id_overflow_count_): how many chains the "other" bucket
-  // stands for on the producer side. Rows evicted on the consumer side are
-  // not chains lost — they can come back — and are not in this number.
+  // How many times the producers' tables turned a chain away over the run (Σ
+  // SimData::chain_id_overflow_count_): arrivals at a full table, not distinct
+  // chains (a turned-away chain is not remembered, so it counts again when it
+  // comes back) — an upper bound on the distinct chains the "other" bucket
+  // stands for, and the measure of how often the producer-side cut hit. Rows
+  // evicted on the consumer side are not chains lost — they can come back —
+  // and are not in this number.
   size_t truncated_chain_count_ = 0;
   // max over entries_ of error_bound_ — of THIS result's entries, so a reduced
   // result's is over its merged rows; 0 when no row ever took a slot over,

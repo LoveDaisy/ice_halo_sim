@@ -25,9 +25,10 @@
 // names "some chain this table had no room for". That answer is sticky along
 // the chain: interning any child under kOverflowChainId is kOverflowChainId
 // again, so a ray whose chain overflowed at layer i carries the sentinel out
-// of every later layer too. The number of distinct keys turned away since the
-// last FlushDelta() is counted (ConsumeOverflowCount) so the consumer can
-// report how much of the record was truncated. The sentinel sits at the top of
+// of every later layer too. Every key turned away since the last FlushDelta()
+// is counted (ConsumeOverflowCount) — each ARRIVAL, since a key that was not
+// interned is not remembered and is a new key again next time — so the
+// consumer can report how often the record was truncated. The sentinel sits at the top of
 // the id space rather than in slot 1 on purpose: it is never an entry, so the
 // dense-id contract above and Size() stay exactly what they were, and nothing
 // that walks ids 1..Size() can meet it.
@@ -72,11 +73,18 @@ class ChainIdInterningTable {
   // and far above any dense id a bounded table can hand out.
   static constexpr uint32_t kOverflowChainId = 0xFFFFFFFEu;
   // Per-table chain capacity (K_trie). One table per simulation worker, so a
-  // process holds worker_count × this many chains at most on the producer side.
-  // Sized by measurement on the two-layer plate+column scene that motivated the
-  // bound (839k distinct chains at 200k rays, ms_prob 0.3): see the task's
-  // calibration table in doc/raypath-analysis-panel.md.
-  static constexpr size_t kDefaultCapacity = 8192;
+  // process holds worker_count × this many chains at most on the producer side
+  // (plus the consumer's merge of them, the same number again at most).
+  // Calibrated by measurement (doc/raypath-analysis-panel.md carries the
+  // table): the 22° single-prism reference scene records 11.7k distinct
+  // finest chains at 200k rays, so 16384 keeps that scene EXACT, and on the
+  // two-layer plate+column scene that motivated the bound (838k distinct
+  // chains at 200k rays, ms_prob 0.3) it costs ~7 MB per worker, keeps the
+  // top 13 reduced rows exact and sends 23% of the energy to the other bucket
+  // — against 36 MB total and top-5-only exactness at 8192, and 135 MB at
+  // 32768 for two more exact rows. A power of two so the hash tables it
+  // sizes stay at their natural load.
+  static constexpr size_t kDefaultCapacity = 16384;
   // "No bound": the consumer-side merge table (ChainIdMerger) is bounded by
   // construction — it only ever absorbs entries that fit into some producer's
   // bounded table — and must not turn a delivered entry away, which would drop
@@ -93,11 +101,14 @@ class ChainIdInterningTable {
 
   size_t Capacity() const { return capacity_; }
 
-  // Distinct keys turned away for want of room since the previous call (or
+  // Keys turned away for want of room since the previous call (or
   // construction / Clear()), then zeroed — read at the same point as
-  // FlushDelta(). A child interned under the sentinel is not a "distinct key
-  // turned away" (its chain was already counted when it first overflowed), so
-  // this counts chains lost, not layers walked past the loss.
+  // FlushDelta(). Counts arrivals, not distinct chains: a turned-away key is
+  // not remembered, so the same chain arriving again is turned away and
+  // counted again (the count is therefore >= the distinct chains lost). A
+  // child interned under the sentinel is not counted (its chain was counted
+  // at the layer where it was turned away), so this is per arrival at the
+  // first layer that had no room, not per layer walked past it.
   size_t ConsumeOverflowCount();
 
   // Number of interned chains, i.e. the largest id in use.

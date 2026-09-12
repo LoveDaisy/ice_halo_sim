@@ -924,11 +924,12 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       // count above is not read as "every raypath there was".
       if (state.analysis_result.payload->truncated_chain_count > 0) {
         ImGui::SameLine();
-        ImGui::TextDisabled("; %d raypaths not recorded", state.analysis_result.payload->truncated_chain_count);
+        ImGui::TextDisabled("; record full (%d hits)", state.analysis_result.payload->truncated_chain_count);
         if (ImGui::IsItemHovered()) {
           ImGui::SetTooltip(
-              "The record keeps a fixed number of distinct raypaths per worker; these arrived after it was full.\n"
-              "Their energy is the list's \"other\" line. The percentages still add up to 100.");
+              "The record keeps a fixed number of distinct raypaths per worker. This many times a ray reached a\n"
+              "raypath the record had no room for; those rays' energy is the list's \"other\" line, so the\n"
+              "percentages still add up to 100.");
         }
       }
     }
@@ -1073,8 +1074,10 @@ void RenderResultList(GuiState& state) {
     ImGui::Selectable(kAnalysisOtherRowLabel, false,
                       ImGuiSelectableFlags_Disabled | ImGuiSelectableFlags_SpanAllColumns);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("%d raypaths arrived after the record was full; their energy is counted here as one.",
-                        view.payload->truncated_chain_count);
+      ImGui::SetTooltip(
+          "Rays whose raypath the record had no room for (%d hits on the full record); their energy\n"
+          "is counted here as one, so the column above closes at 100.",
+          view.payload->truncated_chain_count);
     }
     const double other_pct = AnalysisOtherPct(state);
     ImGui::TableSetColumnIndex(1);

@@ -18,8 +18,9 @@
 //      fixed-seed -> single-worker rule, not by the seed derivation itself.
 //   E. The table's bound: a table of capacity K answers the (K+1)-th distinct
 //      key with kOverflowChainId, keeps every earlier chain intact, counts the
-//      distinct keys it turned away (and not the layers walked past the
-//      loss), and hands the count over once per FlushDelta() cycle. The
+//      arrivals it turned away (again when the same key comes back — it is not
+//      remembered — and not the layers walked past the loss), and hands the
+//      count over once per FlushDelta() cycle. The
 //      capacity is the ruler, not a fixed assertion: two tables of different
 //      capacity under the same stream overflow at different points, which is
 //      what shows the bound is in force rather than the test being true of
@@ -227,6 +228,10 @@ TEST(ChainIdTableBound, CapacityIsTheRulerNewKeysPastItGetTheSentinelAndEarlierC
   EXPECT_EQ(t.Intern(kRoot, 1, Seg{ 5 }), kOverflow);
   EXPECT_EQ(t.ConsumeOverflowCount(), 2u) << "keys {4} and {5} were turned away; the children were not new keys";
   EXPECT_EQ(t.ConsumeOverflowCount(), 0u) << "the count is handed over once";
+  // A turned-away key is not remembered: the same chain arriving again is
+  // turned away again and counted again (arrivals, not distinct chains).
+  EXPECT_EQ(t.Intern(kRoot, 1, Seg{ 4 }), kOverflow);
+  EXPECT_EQ(t.ConsumeOverflowCount(), 1u);
 
   // The sentinel walks as nothing: no path, no crash.
   EXPECT_TRUE(t.Segments(kOverflow).empty());

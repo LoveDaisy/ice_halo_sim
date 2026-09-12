@@ -833,7 +833,8 @@ a slot over, and under a symmetry the sum over the merged rows. `LUMICE_RaypathA
 carries the record-level account: `other_energy` / `other_count` are the rays whose chain the
 producer had no room for, as one bucket that is never an entry (so Σ entries + other is every
 counted ray, under every symmetry — a consumer shows it as one more line so the percentages add
-up); `truncated_chain_count` is how many distinct chains that bucket stands for;
+up); `truncated_chain_count` is how many times a ray's chain hit the full record (arrivals, not
+distinct chains — a turned-away chain is not remembered, so it counts again when it comes back);
 `max_row_error` is the largest `error_bound` over the entries under the read's symmetry, 0 when
 no row was ever taken over and every entry is exact — the shape of every run that fits, which
 reads exactly as it did before v4.35.

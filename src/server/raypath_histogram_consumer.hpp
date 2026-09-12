@@ -68,11 +68,14 @@ namespace lumice {
 struct SceneConfig;
 
 // Row capacity of one consumer (k in the class comment): the bound on the
-// finest record's memory and on what a read-time reduction has to walk. Sized
-// by measurement on the two-layer plate+column scene that motivated the bound
-// (839k distinct chains at 200k rays, ms_prob 0.3): see the calibration table
-// in doc/raypath-analysis-panel.md.
-constexpr size_t kRaypathHistogramCapacity = 4096;
+// finest record's memory and on what a read-time reduction has to walk.
+// Calibrated by measurement (doc/raypath-analysis-panel.md carries the
+// table): equal to the producers' ChainIdInterningTable::kDefaultCapacity,
+// which keeps the 22° reference scene (11.7k finest chains at 200k rays)
+// exact end to end — the two bounds are only ever both exact or both not —
+// and reads back in 15 ms on the 838k-chain two-layer scene that took 1.5 s
+// unbounded; 32768 would double that for no exact row gained there.
+constexpr size_t kRaypathHistogramCapacity = 16384;
 
 class RaypathHistogramConsumer : public IConsume {
  public:
