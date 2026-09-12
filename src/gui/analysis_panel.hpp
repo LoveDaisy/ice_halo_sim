@@ -71,12 +71,23 @@ int RingsWithinRadius(float radius_deg, float cone_radius_deg, int ring_count);
 // Energy of the first `rings` rings of an entry (clamped to what the entry holds). Rings <= 0 is 0.
 double SumRingEnergy(const LUMICE_RaypathHistogramEntry& entry, int rings);
 
-// Rebuild analysis_result's display_energy / display_order / display_total from the payload and
-// the slider (state.analysis.cone_radius_deg) — a CONE result sums the rings inside the radius,
-// every other mode shows `energy` as delivered. Pure re-projection of data already on hand:
-// touches no lifecycle, no dirty, no server. Called on adoption, on every entry re-read, and on
-// every slider change.
+// Rebuild analysis_result's display_energy / display_order / display_cumulative_pct /
+// display_total from the payload and the slider (state.analysis.cone_radius_deg) — a CONE result
+// sums the rings inside the radius, every other mode shows `energy` as delivered; the payload's
+// other bucket enters the total whole (it is not ring-split) and closes the cumulative column.
+// Pure re-projection of data already on hand: touches no lifecycle, no dirty, no server. Called on
+// adoption, on every entry re-read, and on every slider change.
 void RecomputeAnalysisDisplayOrder(GuiState& state);
+
+// The share of the total that the fixed "other" line shows: the other bucket's energy over
+// display_total, as a percentage; 0 without a payload or with an empty bucket.
+double AnalysisOtherPct(const GuiState& state);
+
+// The label of that line — in the header so a test can address the row. No chain formats to
+// this (a chain's text is digits, dashes, parentheses, "C<id>" and " -> "), so it can never
+// name an entry: SelectedAnalysisEntry finds nothing for it even if it were ever written into
+// analysis.selected_entry, and the row is a disabled selectable so it never is.
+inline constexpr const char* kAnalysisOtherRowLabel = "other (not recorded)";
 
 // ---- The symmetry, and the read of the entries under it ------------------------------------------
 

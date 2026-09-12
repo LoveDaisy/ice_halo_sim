@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -966,6 +967,112 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedServerGuard guard;
       IM_CHECK(RunAfterAnalysisRenders(ctx, /*exclude=*/false, /*gpu=*/true));
+    };
+  }
+
+  // The bounded record on screen (v4.35). A result whose record was full — three rows plus an
+  // "other" bucket — is put on show directly (no server: the row and the column are a property of
+  // the list, and the record-level numbers come through the payload the read fills), and the
+  // list must carry the "Cumulative %" header, a monotone column, and the fixed "other" line at
+  // the bottom that a click cannot select: the selection stays what it was, and with nothing
+  // selected the Exclude button stays disabled. The status line names the truncation. The cone
+  // filter is a real path here too: no server is needed to drag the slider, and the other line
+  // must keep closing the column after a re-sum.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "other_row_and_cumulative_column");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      ResetTestState();
+      auto payload = std::make_shared<gui::AnalysisPayload>();
+      payload->snapshot_generation = 3;
+      payload->roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
+      payload->other_energy = 2.0;
+      payload->other_count = 20;
+      payload->truncated_chain_count = 7;
+      const double energies[3] = { 5.0, 2.0, 1.0 };
+      for (int i = 0; i < 3; i++) {
+        LUMICE_RaypathHistogramEntry e{};
+        e.chain_len = 1;
+        e.chain[0].crystal_id = 1;
+        e.chain[0].segment_len = 2;
+        e.chain[0].segment[0] = i + 1;
+        e.chain[0].segment[1] = i + 2;
+        snprintf(e.display, sizeof(e.display), "%d-%d", i + 1, i + 2);
+        e.energy = energies[i];
+        e.count = 100;
+        e.error_bound = i == 2 ? 0.5 : 0.0;  // the last row took a slot over
+        payload->entries.push_back(e);
+      }
+      IM_CHECK(gui::AdoptAnalysisPayloadIfNew(gui::g_state, payload));
+      gui::g_state.analysis.fetched_once = true;
+      gui::g_state.analysis.fetched_generation = 3;
+      gui::g_state.analysis.fetched_symmetry = gui::AnalysisSymmetryBits(gui::g_state);
+      gui::g_state.analysis.window_open = true;
+      ctx->Yield(2);
+      ctx->WindowMove(kWindowRef, ImVec2(60, 60));
+      ctx->Yield(1);
+      ctx->SetRef(kWindowRef);
+
+      // The column and the line exist in the rendered table. The header cell is not addressable
+      // by label (imgui_tables.cpp never hands header labels to the engine), so the column is read
+      // off the table object itself, whose id BeginTable computed from the window with nothing
+      // pushed — the same route test_defaults_panel.cpp takes to its settings table.
+      ImGuiWindow* win = ctx->GetWindowByRef(kWindowRef);
+      IM_CHECK(win != nullptr);
+      ImGuiTable* table = ImGui::TableFindByID(win->GetID("##analysis_rows"));
+      IM_CHECK(table != nullptr);
+      bool has_cumulative = false;
+      for (int n = 0; n < table->ColumnsCount; n++) {
+        has_cumulative = has_cumulative || std::strcmp(ImGui::TableGetColumnName(table, n), "Cumulative %") == 0;
+      }
+      IM_CHECK(has_cumulative);
+      IM_CHECK_EQ(table->ColumnsCount, 5);
+      const ImGuiTestItemInfo other =
+          ctx->ItemInfo(std::string("**/").append(gui::kAnalysisOtherRowLabel).c_str(), ImGuiTestOpFlags_NoError);
+      IM_CHECK(other.ID != 0);
+      IM_CHECK(IsDisabled(other));
+      // Below every chain row: the last row's rect is above it.
+      const ImGuiTestItemInfo last_row = ctx->ItemInfo("**/3-4");
+      IM_CHECK(last_row.ID != 0);
+      IM_CHECK_GT(other.RectFull.Min.y, last_row.RectFull.Min.y);
+      // The column is what the unit computed: 5/10, 7/10, 8/10, and the other line's 20 closes it.
+      const auto& view = gui::g_state.analysis_result;
+      IM_CHECK_EQ(view.display_cumulative_pct.size(), 3u);
+      IM_CHECK_FLOAT_NEAR(view.display_cumulative_pct[0], 50.0, 1e-9);
+      IM_CHECK_FLOAT_NEAR(view.display_cumulative_pct[1], 70.0, 1e-9);
+      IM_CHECK_FLOAT_NEAR(view.display_cumulative_pct[2], 80.0, 1e-9);
+      IM_CHECK_FLOAT_NEAR(view.display_cumulative_pct[2] + gui::AnalysisOtherPct(gui::g_state), 100.0, 1e-9);
+
+      // A click on the other line selects nothing; Exclude stays disabled.
+      IM_CHECK(!gui::g_state.analysis.selected_entry.has_value());
+      ctx->ItemClick(std::string("**/").append(gui::kAnalysisOtherRowLabel).c_str());
+      ctx->Yield(1);
+      IM_CHECK(!gui::g_state.analysis.selected_entry.has_value());
+      IM_CHECK(IsDisabled(ctx->ItemInfo(ICON_FA_BAN " Exclude this raypath")));
+      // And it does not take a selection away from a real row either.
+      ctx->ItemClick("**/1-2");
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.selected_entry.has_value() && *gui::g_state.analysis.selected_entry == "1-2");
+      ctx->ItemClick(std::string("**/").append(gui::kAnalysisOtherRowLabel).c_str());
+      ctx->Yield(1);
+      IM_CHECK(gui::g_state.analysis.selected_entry.has_value() && *gui::g_state.analysis.selected_entry == "1-2");
+      ctx->SetRef("");
+
+      // The same list without a bucket has no other line and the column ends at 100.
+      auto exact = std::make_shared<gui::AnalysisPayload>(*payload);
+      exact->snapshot_generation = 4;
+      exact->other_energy = 0.0;
+      exact->other_count = 0;
+      exact->truncated_chain_count = 0;
+      IM_CHECK(gui::AdoptAnalysisPayloadIfNew(gui::g_state, exact));
+      gui::g_state.analysis.fetched_generation = 4;
+      ctx->Yield(2);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(
+          ctx->ItemInfo(std::string("**/").append(gui::kAnalysisOtherRowLabel).c_str(), ImGuiTestOpFlags_NoError).ID ==
+          0);
+      IM_CHECK_FLOAT_NEAR(gui::g_state.analysis_result.display_cumulative_pct.back(), 100.0, 1e-9);
+      ctx->SetRef("");
     };
   }
 }

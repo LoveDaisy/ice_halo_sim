@@ -1653,7 +1653,15 @@ struct GuiState {
     // Row order: indices into payload->entries, display_energy descending. The entries themselves
     // are never moved.
     std::vector<int> display_order;
-    double display_total = 0.0;  // sum of display_energy — the percentage column's denominator
+    // Per ROW (same index as display_order, not as entries): the running Σ of display_energy down
+    // the list as a percentage of display_total — the "Cumulative %" column. Monotone, and the
+    // last row reaches 100 minus the other bucket's share (which the fixed "other" line closes).
+    std::vector<double> display_cumulative_pct;
+    // Σ display_energy + the payload's other_energy — the percentage columns' denominator. The
+    // other bucket is not ring-split (it is not a chain), so in CONE mode it enters whole whatever
+    // the slider says: the "other" line's share is the bucket's share of the record, not of the
+    // radius on show.
+    double display_total = 0.0;
     int display_ring_count = 0;  // rings summed in CONE mode (what the slider resolved to)
   };
   AnalysisResultView analysis_result;

@@ -119,6 +119,81 @@ TEST(AnalysisPanelLogic, ConePayloadIsOrderedByTheDefaultRadiusOnAdoption) {
   EXPECT_DOUBLE_EQ(state.analysis_result.display_total, 11.0);
 }
 
+// The cumulative column and the other bucket (v4.35). The column is the running Σ down the sorted
+// rows over a denominator that includes the bucket, so it is monotone, its last value is 100 minus
+// the bucket's share, and the "other" line closes it at 100 — in every mode, and after a slider
+// change in CONE mode (where the bucket enters whole, not ring-split). A payload with an empty
+// bucket reads exactly as before: total unchanged, last cumulative value 100.
+TEST(AnalysisPanelLogic, CumulativePctIsMonotoneAndTheOtherBucketClosesItAtOneHundred) {
+  GuiState state;
+  auto p = MakePayload(7, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0, 5.0, 3.0 });
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
+  const auto& view = state.analysis_result;
+  ASSERT_EQ(view.display_cumulative_pct.size(), 3u);
+  EXPECT_DOUBLE_EQ(view.display_total, 9.0) << "no bucket: the total is the rows' own";
+  EXPECT_NEAR(view.display_cumulative_pct[0], 5.0 / 9.0 * 100.0, 1e-9);
+  EXPECT_NEAR(view.display_cumulative_pct[1], 8.0 / 9.0 * 100.0, 1e-9);
+  EXPECT_NEAR(view.display_cumulative_pct[2], 100.0, 1e-9);
+  EXPECT_DOUBLE_EQ(AnalysisOtherPct(state), 0.0);
+
+  // The same rows with a bucket of 3.0: the denominator grows, the rows' shares shrink, the last
+  // cumulative value is 75 and the other line's 25 closes it.
+  auto q = MakePayload(8, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0, 5.0, 3.0 });
+  q->other_energy = 3.0;
+  q->other_count = 30;
+  q->truncated_chain_count = 4;
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, q));
+  EXPECT_DOUBLE_EQ(view.display_total, 12.0);
+  ASSERT_EQ(view.display_cumulative_pct.size(), 3u);
+  for (size_t i = 1; i < view.display_cumulative_pct.size(); i++) {
+    EXPECT_GE(view.display_cumulative_pct[i], view.display_cumulative_pct[i - 1]) << "monotone at " << i;
+  }
+  EXPECT_NEAR(view.display_cumulative_pct.back(), 75.0, 1e-9);
+  EXPECT_NEAR(AnalysisOtherPct(state), 25.0, 1e-9);
+  EXPECT_NEAR(view.display_cumulative_pct.back() + AnalysisOtherPct(state), 100.0, 1e-9);
+
+  // CONE with the slider on ring 0 only: entry 0's 2.0 is the only row energy on show, the bucket
+  // (not ring-split) still enters whole — so the rows reach 2/(2+8) = 20 and other closes with 80.
+  GuiState cone;
+  cone.analysis.cone_radius_deg = 1.0f;
+  auto c = MakePayload(9, LUMICE_RAYPATH_ROI_CONE, { 2.0, 9.0, 50.0, 60.0 }, 4, 4.0f);
+  c->other_energy = 8.0;
+  c->other_count = 80;
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(cone, c));
+  EXPECT_EQ(cone.analysis_result.display_ring_count, 1);
+  EXPECT_DOUBLE_EQ(cone.analysis_result.display_total, 10.0);
+  ASSERT_EQ(cone.analysis_result.display_cumulative_pct.size(), 4u);
+  EXPECT_NEAR(cone.analysis_result.display_cumulative_pct[0], 20.0, 1e-9);
+  EXPECT_NEAR(cone.analysis_result.display_cumulative_pct.back(), 20.0, 1e-9)
+      << "rows outside the radius add nothing; the column stays flat, never drops";
+  EXPECT_NEAR(AnalysisOtherPct(cone), 80.0, 1e-9);
+  // Slider to every ring: 121 of rows + 8 — the bucket's share shrinks, still closes at 100.
+  cone.analysis.cone_radius_deg = 4.0f;
+  RecomputeAnalysisDisplayOrder(cone);
+  EXPECT_DOUBLE_EQ(cone.analysis_result.display_total, 129.0);
+  EXPECT_NEAR(cone.analysis_result.display_cumulative_pct.back() + AnalysisOtherPct(cone), 100.0, 1e-9);
+  for (size_t i = 1; i < cone.analysis_result.display_cumulative_pct.size(); i++) {
+    EXPECT_GE(cone.analysis_result.display_cumulative_pct[i], cone.analysis_result.display_cumulative_pct[i - 1]);
+  }
+}
+
+// The "other" line can never be the selection: its label names no entry, so even written into
+// selected_entry by hand it resolves to nothing and Exclude reads "no selection" — the property
+// the rendered row (a disabled selectable) rests on, pinned at the unit it actually lives in.
+TEST(AnalysisPanelLogic, OtherRowLabelNamesNoEntryAndExcludeReadsNoSelection) {
+  GuiState state;
+  auto p = MakePayload(1, LUMICE_RAYPATH_ROI_FULL_SKY, { 5.0, 3.0 });
+  p->other_energy = 1.0;
+  p->other_count = 10;
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
+  state.analysis.selected_entry = std::string(kAnalysisOtherRowLabel);
+  EXPECT_EQ(SelectedAnalysisEntry(state), nullptr);
+  std::string why;
+  EXPECT_EQ(EvaluateExcludeEligibility(state, &why), ExcludeEligibility::kNoSelection);
+  // And no chain text could collide with it: the label carries characters no display ever does.
+  EXPECT_NE(std::string(kAnalysisOtherRowLabel).find_first_not_of("0123456789-() >C"), std::string::npos);
+}
+
 // The generation gate. The same result observed over many polls (the poller carries the payload
 // forward, and `present` is true on every one of them) must not reset the selection or reorder
 // the list; only a payload with a NEW generation does. Red-state probe: make the gate adopt on

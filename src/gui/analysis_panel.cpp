@@ -150,6 +150,7 @@ void RecomputeAnalysisDisplayOrder(GuiState& state) {
   auto& view = state.analysis_result;
   view.display_energy.clear();
   view.display_order.clear();
+  view.display_cumulative_pct.clear();
   view.display_total = 0.0;
   view.display_ring_count = 0;
   if (!view.payload) {
@@ -172,6 +173,24 @@ void RecomputeAnalysisDisplayOrder(GuiState& state) {
   // ascending), so the list is deterministic for equal sums too.
   std::stable_sort(view.display_order.begin(), view.display_order.end(),
                    [&](int a, int b) { return view.display_energy[a] > view.display_energy[b]; });
+  // The other bucket is in the denominator whole — see AnalysisResultView::display_total — and the
+  // cumulative column runs down the sorted rows, so it is monotone by construction and its last
+  // value plus the "other" line's share is 100.
+  view.display_total += view.payload->other_energy;
+  view.display_cumulative_pct.reserve(view.display_order.size());
+  double running = 0.0;
+  for (const int idx : view.display_order) {
+    running += view.display_energy[static_cast<size_t>(idx)];
+    view.display_cumulative_pct.push_back(view.display_total > 0.0 ? running / view.display_total * 100.0 : 0.0);
+  }
+}
+
+double AnalysisOtherPct(const GuiState& state) {
+  const auto& view = state.analysis_result;
+  if (!view.payload || !(view.display_total > 0.0)) {
+    return 0.0;
+  }
+  return view.payload->other_energy / view.display_total * 100.0;
 }
 
 // ---- The symmetry, and the read of the entries under it ------------------------------------------
@@ -221,6 +240,10 @@ bool RefreshAnalysisEntries(GuiState& state, LUMICE_Server* server) {
   payload->roi_mode = info.roi_mode;
   payload->cone_ring_count = info.cone_ring_count;
   payload->cone_radius_rad = info.cone_radius_rad;
+  payload->other_energy = info.other_energy;
+  payload->other_count = info.other_count;
+  payload->truncated_chain_count = info.truncated_chain_count;
+  payload->max_row_error = info.max_row_error;
   // One more slot than entries: the sentinel (count == 0) lands at [entry_count] when the frame
   // holds exactly entry_count entries, and the read below stops at it in every case.
   std::vector<LUMICE_RaypathHistogramEntry> raw(static_cast<size_t>(std::max(info.entry_count, 0)) + 1);
@@ -897,6 +920,17 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       ImGui::SameLine();
       ImGui::TextDisabled("%zu raypaths (%s)", state.analysis_result.payload->entries.size(),
                           RoiModeLabel(state.analysis_result.payload->roi_mode));
+      // The record is bounded; when it cut something, say so where the row count is, so the
+      // count above is not read as "every raypath there was".
+      if (state.analysis_result.payload->truncated_chain_count > 0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("; %d raypaths not recorded", state.analysis_result.payload->truncated_chain_count);
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(
+              "The record keeps a fixed number of distinct raypaths per worker; these arrived after it was full.\n"
+              "Their energy is the list's \"other\" line. The percentages still add up to 100.");
+        }
+      }
     }
     // The marker moved (a drag, a pick) since the result on show was asked for: the list is
     // about the old centre. A hint only — Analyze stays the one way to re-run.
@@ -978,12 +1012,13 @@ void RenderResultList(GuiState& state) {
   const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY |
                                 ImGuiTableFlags_SizingStretchProp;
   const float avail_h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.0f;
-  if (!ImGui::BeginTable("##analysis_rows", 4, flags, ImVec2(0.0f, std::max(avail_h, 120.0f)))) {
+  if (!ImGui::BeginTable("##analysis_rows", 5, flags, ImVec2(0.0f, std::max(avail_h, 120.0f)))) {
     return;
   }
   ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableSetupColumn("Raypath", ImGuiTableColumnFlags_WidthStretch, 3.0f);
   ImGui::TableSetupColumn("Energy", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  ImGui::TableSetupColumn("Cumulative %", ImGuiTableColumnFlags_WidthStretch, 1.2f);
   ImGui::TableSetupColumn("Rays", ImGuiTableColumnFlags_WidthStretch, 1.0f);
   ImGui::TableSetupColumn("+/-", ImGuiTableColumnFlags_WidthStretch, 0.8f);
   ImGui::TableHeadersRow();
@@ -1009,12 +1044,48 @@ void RenderResultList(GuiState& state) {
     ImGui::TableSetColumnIndex(1);
     ImGui::Text("%.2f%%", total > 0.0 ? energy / total * 100.0 : 0.0);
     ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%llu", static_cast<unsigned long long>(e.count));
+    ImGui::Text("%.1f%%", view.display_cumulative_pct[row]);
     ImGui::TableSetColumnIndex(3);
+    ImGui::Text("%llu", static_cast<unsigned long long>(e.count));
+    ImGui::TableSetColumnIndex(4);
     // 1/sqrt(N): the relative statistical error of the count, so the noise in the tail reads as
-    // noise rather than as signal.
+    // noise rather than as signal. A row that took over an evicted slot (error_bound > 0) may
+    // also hold energy of some other chain; that bound is shown beside it, as a share of the row.
     const double rel = e.count > 0 ? 1.0 / std::sqrt(static_cast<double>(e.count)) : 1.0;
-    ImGui::Text("%.0f%%", rel * 100.0);
+    if (e.error_bound > 0.0 && e.energy > 0.0) {
+      ImGui::Text("%.0f%% (-%.0f%%)", rel * 100.0, e.error_bound / e.energy * 100.0);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Up to this share of the row may belong to another raypath: the record was full and this\n"
+            "raypath took over the smallest row's energy when it first appeared.");
+      }
+    } else {
+      ImGui::Text("%.0f%%", rel * 100.0);
+    }
+  }
+  // The fixed "other" line: what the record had no room for, so the column above reaches 100. Not
+  // a raypath — a DISABLED selectable (addressable, so a test can click it; never pressed, and its
+  // press is not read anyway), so it can never become the selection, and the Exclude button (which
+  // needs a selected row that IS a chain) is disabled for it by construction.
+  if (view.payload->other_count > 0) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::Selectable(kAnalysisOtherRowLabel, false,
+                      ImGuiSelectableFlags_Disabled | ImGuiSelectableFlags_SpanAllColumns);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%d raypaths arrived after the record was full; their energy is counted here as one.",
+                        view.payload->truncated_chain_count);
+    }
+    const double other_pct = AnalysisOtherPct(state);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%.2f%%", other_pct);
+    ImGui::TableSetColumnIndex(2);
+    ImGui::TextDisabled("%.1f%%",
+                        (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct);
+    ImGui::TableSetColumnIndex(3);
+    ImGui::TextDisabled("%llu", static_cast<unsigned long long>(view.payload->other_count));
+    ImGui::TableSetColumnIndex(4);
+    ImGui::TextDisabled("-");
   }
   ImGui::EndTable();
 }

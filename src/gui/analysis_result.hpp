@@ -32,6 +32,16 @@ struct AnalysisPayload {
   int roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;  // echo of the request
   int cone_ring_count = 0;                     // CONE only, else 0
   float cone_radius_rad = 0.0f;                // CONE only, else 0
+  // The bounded record's account (LUMICE_RaypathAnalysisInfo, v4.35): the rays whose chain the
+  // record had no room for, as one bucket that is never an entry — shown as the list's fixed
+  // "other" line so the percentages add up — how many chains it stands for, and the least
+  // certain entry's error_bound under the symmetry the entries were read with. All 0 for a run
+  // that fit, which is every small scene. Filled by the main-thread read only (RefreshAnalysisEntries),
+  // like `entries`; the poller's payload leaves them 0.
+  double other_energy = 0.0;
+  LUMICE_RayCount other_count = 0;
+  int truncated_chain_count = 0;
+  double max_row_error = 0.0;
   // Energy-descending, as LUMICE_FrameGetRaypathAnalysis returns them under the symmetry
   // GuiState::AnalysisResultView::entries_symmetry records. Empty in a payload the poller
   // published (see above). Never reordered here: the list's display order is a separate index
