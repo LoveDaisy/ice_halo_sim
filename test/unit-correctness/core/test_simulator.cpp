@@ -1606,7 +1606,8 @@ TEST(RayAllocationCorrection, EqualVectorsAtAnyScaleAreIdentity) {
 TEST(RayAllocationCorrection, ComparesNormalizedSharesNotRawRatios) {
   // p shares (1/2, 1/2); q shares (3/4, 1/4) → corrections (2/3, 2). A raw
   // p_i/q_i would read (1/30, 1/10) here: the q vector is deliberately on a
-  // different scale from p, which is exactly the input a pilot might deliver.
+  // different scale from p, which is exactly the input the online loop delivers
+  // (ComputeAdaptiveRayAllocationWeights returns q unnormalized past the floor).
   auto c = ComputeRayAllocationCorrection({ 1.0f, 1.0f }, { 30.0f, 10.0f });
   ASSERT_EQ(c.size(), 2u);
   EXPECT_NEAR(c[0], 2.0f / 3.0f, 1e-6f);

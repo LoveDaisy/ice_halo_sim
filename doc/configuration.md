@@ -442,7 +442,7 @@ The scene configuration defines the simulation scene, including the light source
 | `light_source` | object | yes | - | Inline light source configuration (see below) |
 | `ray_num` | integer or string | yes | - | **Total** rays across all spectrum wavelengths; use `"infinite"` for continuous simulation |
 | `max_hits` | integer | yes | - | Maximum number of hits |
-| `ray_allocation` | string | no | `"proportional"` | How each scattering layer's rays are dealt across its entries. `"proportional"` deals by `proportion` — sampling share and energy share are one knob. `"adaptive"` runs a short CPU pilot pass at commit time, derives a per-entry sampling share `q_i ∝ p_i·√E[e²]` (Neyman allocation), deals rays by `q_i` and scales every ray born into entry *i* by `(p_i/ΣP)/(q_i/ΣQ)`, so the **expected image is unchanged** and only its variance moves. See the note below. |
+| `ray_allocation` | string | no | `"proportional"` | How each scattering layer's rays are dealt across its entries. `"proportional"` deals by `proportion` — sampling share and energy share are one knob. `"adaptive"` measures each entry's per-ray energy from the render's own batches as it runs (on whichever backend is rendering), keeps a per-entry sampling share `q_i ∝ p_i·√E[e²]` (Neyman allocation) up to date from that running tally, deals rays by `q_i` and scales every ray born into entry *i* by `(p_i/ΣP)/(q_i/ΣQ)`, so the **expected image is unchanged** and only its variance moves. See the note below. |
 | `scattering` | array | yes | - | Scattering configuration array |
 
 > **`ray_num` is the total across all wavelengths.**
@@ -473,25 +473,32 @@ The scene configuration defines the simulation scene, including the light source
 > unfiltered `100`): dealt 1% of the rays, each carrying far more energy than the rest, that
 > entry's contribution converges slowest and its halo comes out grainy.
 >
-> `"adaptive"` separates the two knobs. When the scene is committed for rendering, a pilot
-> pass traces the scene on the CPU (a few hundred thousand rays, doubled up to three times
-> until each entry's estimate settles; it blocks the commit for a few seconds at most) and tallies each
-> entry's per-ray energy. From that tally each entry is given a sampling share
-> `q_i ∝ p_i·√E[e²_i]`, floored at `0.01/K` of a uniform deal (K = the number of entries with
-> `proportion > 0`) so no live entry is ever starved; an entry with `proportion: 0` stays at
-> zero. Rays are then dealt by `q_i`, and every ray born into entry *i* has its weight
-> multiplied by `(p_i/ΣP)/(q_i/ΣQ)` — the image's expectation is exactly what `proportion`
-> says, and only the noise distribution changes. The pilot is re-run only when something its
-> tally can depend on changes (crystals, filters, proportions, light source, …); editing
-> `ray_num` alone reuses the previous shares. It is also a *render*-commit step only: a raypath
-> analysis session (`doc/raypath-analysis-panel.md` §10) never runs it and always deals by
-> `proportion`. A misspelled value is not an error — the loader warns
+> `"adaptive"` separates the two knobs. The statistic comes from the render itself: every
+> batch the run traces — on the CPU, on Metal or on CUDA, whichever backend is rendering —
+> tallies each entry's per-ray energy (rays dealt, Σw and Σw² of its exits), and the running
+> total gives each entry a sampling share `q_i ∝ p_i·√E[e²_i]`, floored at `0.01/K` of a
+> uniform deal (K = the number of entries with `proportion > 0`) so no live entry is ever
+> starved; an entry with `proportion: 0` stays at zero. The very first batch, before anything
+> has been measured, deals the live entries uniformly; every batch after that deals by the
+> shares the batches before it measured, and every ray born into entry *i* has its weight
+> multiplied by `(p_i/ΣP)/(q_i/ΣQ)` for the shares *its* batch was dealt by — the image's
+> expectation is exactly what `proportion` says at every point of the run, and only the noise
+> distribution changes. Nothing is traced at commit time, and a commit that changes nothing
+> the statistic can depend on (a view, a lens, `ray_num`, …) keeps the tally accumulated so
+> far; a change to crystals, filters, proportions, the light source or the layer structure
+> starts it over. The log reports the running shares at each doubling of the dealt count
+> (`RayAllocationOnline: layer L entry E: p=… q=… rays=…`) and once more, as
+> `RayAllocationOnline(final)`, when the run stops. It is also a *render*-commit feature only:
+> a raypath analysis session (`doc/raypath-analysis-panel.md` §10) never measures it and
+> always deals by `proportion`. A misspelled value is not an error — the loader warns
 > (`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`) and
 > behaves as if the key were absent, which is the safe default but also the noisy image the
 > author was trying to leave, so check the log. The mode is a document setting with no GUI
 > control today; the engine-side owners are `ResolveLayerRayAllocation` (the one place that
-> decides whether a layer deals by `p` or by `q`) and `ComputeAdaptiveRayAllocationWeights`
-> (the Neyman formula and its floor), both in `src/core/simulator.hpp`.
+> decides whether a layer deals by `p` or by `q`), `ComputeAdaptiveRayAllocationWeights`
+> (the Neyman formula and its floor) and `RayAllocationOnline` (the running tally and the
+> snapshot of `q` each batch is dealt by), all in `src/core/simulator.hpp`; the tally's
+> definition every backend writes to is `src/core/shared/ray_allocation_shared.hpp`.
 
 #### light_source (Light Source Configuration)
 

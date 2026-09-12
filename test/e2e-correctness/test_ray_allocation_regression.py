@@ -18,13 +18,18 @@ directions and one scene cannot serve both (see the module constants):
    filtered high-proportion entry whose rays are individually dim next to an
    unfiltered ``proportion: 1`` entry whose rays each carry far more energy --
    is rendered under ``"adaptive"`` and its stdout (the CLI's logger sink writes
-   there, not to stderr) parsed for the pilot's
-   ``RayAllocationPilot: layer L entry E: p=... q=...`` lines, which must show a
-   sampling share moved well away from the energy share. This is the only signal
-   of the pilot that crosses the process boundary: the pilot's numbers have
-   direct C++ coverage (test_ray_allocation_pilot_commit.cpp,
-   test_ray_allocation_backends.cpp), but the CLI exposes no programmatic way to
-   read q, so a log-text contract is the price of testing it end to end.
+   there, not to stderr) parsed for the online allocation's final report,
+   ``RayAllocationOnline(final): layer L entry E: p=... q=... rays=...`` (one
+   line per entry, written by the server's Stop once no worker can move the
+   statistic), which must show a sampling share moved well away from the energy
+   share. This is the only signal of the online q that crosses the process
+   boundary: the loop's numbers have direct C++ coverage
+   (test_ray_allocation_online_commit.cpp, test_ray_allocation_backends.cpp,
+   test_simulator.cpp), but the CLI exposes no programmatic way to read q, so a
+   log-text contract is the price of testing it end to end. The workers also
+   write ``RayAllocationOnline: layer ...`` milestone lines while the run goes
+   (each doubling of the first layer's dealt count); the final line is the one
+   parsed because it is the converged value, not a snapshot on the way.
 
 The same mechanism scene is not used for (1): on it q is nowhere near p, so a
 PSNR pairing would measure a large, legitimate change in noise distribution and
@@ -52,17 +57,21 @@ compared against the 3 proportional frames:
   to change that). That is why the mechanism test below exists: this PSNR pair
   answers "is the expected image unchanged to within MC noise", not "did adaptive
   do anything".
-Pilot output on that scene (deterministic -- the pilot is seeded; measured at
-5,000,000 rays, and the pilot's own budget does not depend on ray_num):
-  p = 100/50/10 → q = 0.6354/0.3019/0.06276 (shares 0.6250/0.3125/0.0625 → at most
-  3.4 % relative movement), i.e. the "q ≈ p" regime the scene was built for.
+Online q on that scene at the end of the run (measured by the render itself, so
+it carries the run's own sampling noise; 10,000,000 rays, legacy CPU path, 3 runs
+on 2026-09-12): p = 100/50/10 -> q = 0.6353/0.302/0.0627 on every run (shares
+0.6250/0.3125/0.0625 -> at most 3.4 % relative movement), i.e. the "q ≈ p"
+regime the scene was built for -- and the same values, to the third digit, that
+the pilot it replaced reported (0.6354/0.3019/0.06276).
 
-Mechanism threshold: the skewed scene's pilot reads p=100 q=0.02011 (share
-0.990 → 0.020) and p=1 q=0.9799 (share 0.0099 → 0.980) on 2026-09-12, identical
-across 3 runs; the largest relative share movement is ~98×. The assertion asks
-for 0.25 (25 %): far below what the scene delivers, far above the 3.4 % the
-q ≈ p control scene shows, so it cannot be satisfied by noise on a pilot that
-did nothing.
+Mechanism threshold: the skewed scene's final lines read p=100 q=0.016-0.020
+(share 0.990 -> 0.02) and p=1 q=0.980-0.984 (share 0.0099 -> 0.98) over 3 runs
+on 2026-09-12, at its 10,000 rays; the largest relative share movement is ~98×,
+and it is already there after the first few thousand rays (the cold start deals
+the two entries 50/50, the first batch's tally moves it). The assertion asks for
+0.25 (25 %): far below what the scene delivers, far above the 3.4 % the q ≈ p
+control scene shows, so it cannot be satisfied by noise on a loop that did
+nothing.
 """
 
 import glob
@@ -87,19 +96,21 @@ PROPORTIONAL = "ray_allocation_no_filter_proportional"
 ADAPTIVE = "ray_allocation_no_filter_adaptive"
 SKEWED_ADAPTIVE = "ray_allocation_skewed_adaptive"
 
-# The pilot's per-entry report line (Simulator::RunRayAllocationPilot, ILOG_INFO):
-#   RayAllocationPilot: layer 0 entry 1: p=1 q=0.9799 rays=1980 exits=11344
-PILOT_ENTRY_RE = re.compile(
-    r"RayAllocationPilot: layer (?P<layer>\d+) entry (?P<entry>\d+): "
-    r"p=(?P<p>[0-9.eE+-]+) q=(?P<q>[0-9.eE+-]+) rays=(?P<rays>\d+) exits=(?P<exits>\d+)"
+# The online allocation's final per-entry report line (LogRayAllocationState,
+# core/simulator.cpp, written by ServerImpl::Stop; q is the layer's share):
+#   RayAllocationOnline(final): layer 0 entry 1: p=1 q=0.9799 rays=1980 sum_w=... sum_w2=...
+FINAL_ENTRY_RE = re.compile(
+    r"RayAllocationOnline\(final\): layer (?P<layer>\d+) entry (?P<entry>\d+): "
+    r"p=(?P<p>[0-9.eE+-]+) q=(?P<q>[0-9.eE+-]+) rays=(?P<rays>\d+)"
 )
-PILOT_RAN_MARKER = "RayAllocationPilot: ran"
+# Any line of the online loop at all -- milestone or final.
+ONLINE_MARKER = "RayAllocationOnline"
 
 
-def parse_pilot_entries(log_text: str):
-    """Return {(layer, entry): (p, q)} for every pilot report line in `log_text`."""
+def parse_final_entries(log_text: str):
+    """Return {(layer, entry): (p, q)} for every final report line in `log_text`."""
     out = {}
-    for m in PILOT_ENTRY_RE.finditer(log_text):
+    for m in FINAL_ENTRY_RE.finditer(log_text):
         key = (int(m.group("layer")), int(m.group("entry")))
         out[key] = (float(m.group("p")), float(m.group("q")))
     return out
@@ -154,22 +165,22 @@ class TestRayAllocationRegression(LumiceTestCase):
             f"or the first-layer emitted_energy_ charge.",
         )
 
-    def test_proportional_never_runs_the_pilot(self):
-        """Negative control for the mechanism test: proportional emits no pilot line."""
+    def test_proportional_keeps_no_online_tally(self):
+        """Negative control for the mechanism test: proportional emits no online line."""
         result = self.renders[PROPORTIONAL]
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(
-            PILOT_RAN_MARKER, result.stdout,
-            "the proportional arm ran the ray-allocation pilot; the default mode must "
-            "stay the pre-pilot path bit for bit",
+            ONLINE_MARKER, result.stdout,
+            "the proportional arm kept an online ray-allocation tally; the default mode "
+            "must stay the pre-allocation path bit for bit",
         )
 
-    def test_adaptive_pilot_moves_a_share_on_the_skewed_scene(self):
-        """The pilot ran on a render commit and dealt a share visibly away from p.
+    def test_adaptive_online_q_moves_a_share_on_the_skewed_scene(self):
+        """The online loop ran on a render commit and dealt a share visibly away from p.
 
-        Guards the silent-fallback shape: an adaptive layer whose weights were
-        never delivered deals by p with every correction 1.0f and passes the
-        PSNR test above with room to spare.
+        Guards the silent-fallback shape: an adaptive layer given no snapshot
+        deals by p with every correction 1.0f and passes the PSNR test above
+        with room to spare.
         """
         result = self.renders[SKEWED_ADAPTIVE]
         self.assertEqual(
@@ -177,16 +188,16 @@ class TestRayAllocationRegression(LumiceTestCase):
             f"{SKEWED_ADAPTIVE} failed:\nstdout: {result.stdout}\nstderr: {result.stderr}",
         )
         self.assertIn(
-            PILOT_RAN_MARKER, result.stdout,
-            "no RayAllocationPilot summary line in stdout: the pilot did not run on a "
-            "render commit with scene.ray_allocation = adaptive (or its ILOG_INFO "
-            "wording changed -- update PILOT_ENTRY_RE together with the source)",
+            "RayAllocationOnline(final)", result.stdout,
+            "no RayAllocationOnline(final) line in stdout: the online loop did not run on "
+            "a render commit with scene.ray_allocation = adaptive (or its ILOG_INFO "
+            "wording changed -- update FINAL_ENTRY_RE together with the source)",
         )
-        entries = parse_pilot_entries(result.stdout)
+        entries = parse_final_entries(result.stdout)
         layer0 = {k: v for k, v in entries.items() if k[0] == 0}
         self.assertEqual(
             len(layer0), 2,
-            f"expected 2 pilot entry lines for layer 0, parsed {entries} from:\n{result.stdout}",
+            f"expected 2 final entry lines for layer 0, parsed {entries} from:\n{result.stdout}",
         )
         total_p = sum(p for p, _ in layer0.values())
         total_q = sum(q for _, q in layer0.values())
@@ -198,7 +209,8 @@ class TestRayAllocationRegression(LumiceTestCase):
         self.assertGreaterEqual(
             max(moves.values()),
             MECHANISM_MIN_RELATIVE_SHARE_MOVE,
-            f"the pilot delivered q ≈ p on a scene built to skew it (relative share "
+            f"the online loop left q ≈ p on a scene built to skew it (relative share "
             f"moves {moves}); adaptive dealing is not taking effect -- see "
-            f"ComputeAdaptiveRayAllocationWeights and the CommitConfig pilot call",
+            f"RayAllocationOnline / ComputeAdaptiveRayAllocationWeights and the "
+            f"CommitConfig binding of active_ray_alloc_",
         )

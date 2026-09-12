@@ -415,7 +415,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `light_source` | 对象 | 是 | - | 内联光源配置（见下方） |
 | `ray_num` | 整数或字符串 | 是 | - | **总光线数**（跨所有光谱波长），或 `"infinite"` 持续模拟 |
 | `max_hits` | 整数 | 是 | - | 最大碰撞次数 |
-| `ray_allocation` | 字符串 | 否 | `"proportional"` | 每个散射层的光线如何在各条目之间分配。`"proportional"` 按 `proportion` 分配——采样份额与能量份额是同一个旋钮。`"adaptive"` 在提交渲染时先跑一段短的 CPU pilot，按 Neyman 分配推出每条目的采样份额 `q_i ∝ p_i·√E[e²]`，按 `q_i` 分配光线，并把落入条目 *i* 的每条光线权重乘以 `(p_i/ΣP)/(q_i/ΣQ)`，因此**期望图像不变**，只有方差分布改变。见下方说明。 |
+| `ray_allocation` | 字符串 | 否 | `"proportional"` | 每个散射层的光线如何在各条目之间分配。`"proportional"` 按 `proportion` 分配——采样份额与能量份额是同一个旋钮。`"adaptive"` 在渲染进行中从主跑自己的每一批（在哪个后端渲染就在哪个后端统计）在线累计各条目的每光线能量，据此持续更新每条目的采样份额 `q_i ∝ p_i·√E[e²]`（Neyman 分配），按 `q_i` 分配光线，并把落入条目 *i* 的每条光线权重乘以 `(p_i/ΣP)/(q_i/ΣQ)`，因此**期望图像不变**，只有方差分布改变。见下方说明。 |
 | `scattering` | 数组 | 是 | - | 散射配置数组 |
 
 > **`ray_num` 的语义（task-323 起变更）**：`ray_num` 是**总光线数**，服务端内部按
@@ -434,20 +434,26 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 > 相同：该条目只分到 1% 的光线，每条却带着远高于其余条目的能量，于是它的贡献收敛最慢，晕带
 > 显得粗糙。
 >
-> `"adaptive"` 把这两个旋钮拆开。场景提交渲染时，先在 CPU 上跑一段 pilot（几十万条光线，
-> 直到每个条目的估计稳定为止，最多翻倍三次；最坏只阻塞提交几秒），统计各条目的每光线能量。
-> 由这份统计得到每个条目的采样份额 `q_i ∝ p_i·√E[e²_i]`，并以均匀分配的 `0.01/K` 为下限
-> （K 为 `proportion > 0` 的条目数），保证任何活条目都不会被饿死；`proportion: 0` 的条目保持
-> 为零。之后光线按 `q_i` 分配，落入条目 *i* 的每条光线权重乘以 `(p_i/ΣP)/(q_i/ΣQ)`——图像的
-> 期望值恰好就是 `proportion` 所说的那个，只有噪声分布变了。pilot 只在它的统计可能依赖的
-> 内容（晶体、filter、比例、光源……）变化时重跑；只改 `ray_num` 会沿用上一次的份额。它也只是
-> *渲染*提交的一步：光路分析会话（`doc/raypath-analysis-panel.md` §10）从不运行它，始终按
-> `proportion` 分配。拼错的取值不是错误——加载器会告警
+> `"adaptive"` 把这两个旋钮拆开。统计来自渲染本身：主跑追踪的每一批光线——在 CPU、Metal 还是
+> CUDA 上渲染都一样——都统计各条目的每光线能量（分到的光线数、出射的 Σw 与 Σw²），累计总和给出
+> 每个条目的采样份额 `q_i ∝ p_i·√E[e²_i]`，并以均匀分配的 `0.01/K` 为下限（K 为
+> `proportion > 0` 的条目数），保证任何活条目都不会被饿死；`proportion: 0` 的条目保持为零。
+> 第一批在还没有任何测量时对活条目均分；之后每一批按它之前各批测得的份额分配，落入条目 *i* 的
+> 每条光线权重乘以按*该批*所用份额算出的 `(p_i/ΣP)/(q_i/ΣQ)`——图像的期望值在整个 run 的每一刻
+> 都恰好是 `proportion` 所说的那个，只有噪声分布变了。提交时不追踪任何光线；一次不改动统计所
+> 依赖内容的提交（视角、镜头、`ray_num`……）会保留已累计的统计，而改晶体、filter、比例、光源或
+> 层结构则从头开始。日志在分到的光线数每翻一倍时报告当前份额
+> （`RayAllocationOnline: layer L entry E: p=… q=… rays=…`），run 停止时再以
+> `RayAllocationOnline(final)` 报告一次。它也只是*渲染*提交才有的功能：光路分析会话
+> （`doc/raypath-analysis-panel.md` §10）从不做这份统计，始终按 `proportion` 分配。
+> 拼错的取值不是错误——加载器会告警
 > （`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`）
 > 并当作该键不存在处理；这是安全的默认，但也正是作者想要摆脱的那张噪声图，所以要看日志。
 > 该模式目前是纯文档设置，GUI 没有对应控件；引擎侧的权威实现是 `ResolveLayerRayAllocation`
-> （唯一决定一层按 `p` 还是按 `q` 分配的地方）与 `ComputeAdaptiveRayAllocationWeights`
-> （Neyman 公式及其下限），都在 `src/core/simulator.hpp`。
+> （唯一决定一层按 `p` 还是按 `q` 分配的地方）、`ComputeAdaptiveRayAllocationWeights`
+> （Neyman 公式及其下限）与 `RayAllocationOnline`（累计统计与每批所用 `q` 的快照），都在
+> `src/core/simulator.hpp`；三个后端共同写入的统计量定义在
+> `src/core/shared/ray_allocation_shared.hpp`。
 
 #### light_source（光源配置）
 

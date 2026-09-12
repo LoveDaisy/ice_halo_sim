@@ -885,9 +885,11 @@ draw order).
 `scene.ray_allocation` is `"adaptive"`.** The definition above charges a batch as
 `emitted_weight × N`, which assumes every ray of the batch was born at the same
 nominal weight. Under `"proportional"` allocation (the default) that holds. Under
-`"adaptive"` it does not: the first scattering layer deals its rays by the pilot's
-`q_i` rather than by `proportion` `p_i`, and every ray born into entry `i` is scaled
-by `correction_i = (p_i/ΣP)/(q_i/ΣQ)` (`ComputeRayAllocationCorrection`,
+`"adaptive"` it does not: the first scattering layer deals its rays by the `q_i` of
+the snapshot the batch Loaded from the scene's `RayAllocationOnline` (the running
+Neyman estimate the render's own batches keep up to date) rather than by
+`proportion` `p_i`, and every ray born into entry `i` is scaled by
+`correction_i = (p_i/ΣP)/(q_i/ΣQ)` (`ComputeRayAllocationCorrection`,
 `src/core/simulator.hpp`) so that the expected image stays what `proportion` says.
 Rays of one batch therefore no longer share one weight, and `emitted_weight × N`
 would charge the denominator for what was *dealt*, not for what was *emitted at the
@@ -899,7 +901,12 @@ emitted_energy_  =  emitted_weight × ( N + Σ_ci n_ci · (correction_ci − 1) 
 ```
 
 summed over the entries `ci` of the **first** layer only — `n_ci` is what
-`PartitionCrystalRayNum` dealt entry `ci` this batch. MS continuation layers re-deal
+`PartitionCrystalRayNum` dealt entry `ci` this batch, and `correction_ci` is the one
+computed from the `q` *this* batch was dealt by. `q` moves from batch to batch under
+online allocation, and the charge stays exact because a batch binds one snapshot at
+its start and keeps it: the deal, the per-ray multiply and this sum all read the same
+`q`, so what is charged is what was emitted, whatever the next batch's `q` turns out
+to be. MS continuation layers re-deal
 rays that already exist, so they never add to it: the denominator counts emissions,
 not hops. The delta form `Σ n_ci·(correction_ci − 1)` rather than `Σ n_ci·correction_ci`
 is deliberate: it makes the charge exactly `N` — the old expression, bit for bit —
