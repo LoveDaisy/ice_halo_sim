@@ -180,7 +180,11 @@ add_executable(unit_correctness_test
   # CUDA K-shape pool locality + transit coverage + knob-off collapse (Metal
   # KShapePool_* suite CUDA sibling). Body `#if LUMICE_CUDA_ENABLED`, so on
   # non-CUDA hosts the TU is empty (zero contributed symbols).
-  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_kshape_pool_locality.cpp")
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_cuda_kshape_pool_locality.cpp"
+  # Ray allocation (dealing by q_i with a per-entry weight correction) on every
+  # TraceBackend arm: CpuTraceBackend always; Metal under `#if __APPLE__`,
+  # CUDA under `#if LUMICE_CUDA_ENABLED` (self-skipping without a device).
+  "${PROJ_TEST_DIR}/unit-correctness/backend/test_ray_allocation_backends.cpp")
 target_include_directories(unit_correctness_test
   PRIVATE ${PROJ_TEST_DIR})
 target_link_libraries(unit_correctness_test

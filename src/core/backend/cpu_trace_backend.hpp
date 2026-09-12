@@ -81,6 +81,11 @@ class CpuTraceBackend : public TraceBackend {
     return stochastic_orientation_sample_count_this_batch_;
   }
 
+  // First-layer Σ n_ci · (correction_ci − 1) on top of ray_num. See TraceBackend.
+  float GetLastBatchEmittedRayEquivalent(size_t ray_num) const override {
+    return static_cast<float>(static_cast<double>(ray_num) + emitted_ray_equivalent_delta_this_batch_);
+  }
+
  private:
   SessionSpec spec_{};
   RandomNumberGenerator rng_;
@@ -101,6 +106,11 @@ class CpuTraceBackend : public TraceBackend {
   // population's ray count (not by 1) per (layer, ci) whose axis draws, because
   // orientation is resampled per ray with no reuse at all.
   size_t stochastic_orientation_sample_count_this_batch_ = 0;
+  // Output register for GetLastBatchEmittedRayEquivalent: the first layer's
+  // Σ n_ci · (correction_ci − 1), zeroed every BeginSession. Kept as the delta
+  // from ray_num so a proportional session reports ray_num exactly, not a
+  // rounded sum that merely equals it.
+  double emitted_ray_equivalent_delta_this_batch_ = 0.0;
   size_t ms_idx_ = 0;  // advances on each Recombine.
   float total_landed_weight_ = 0.0f;
 

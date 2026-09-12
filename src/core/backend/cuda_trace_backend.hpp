@@ -147,6 +147,8 @@ class CudaTraceBackend : public TraceBackend {
   // Stochastic orientation draws this batch made, in rays. Backed by
   // Impl::orientation_count_this_batch_, zeroed at the same points.
   size_t GetLastBatchStochasticOrientationSampleCount() const override;
+  // First-layer emitted-ray equivalent under ray allocation; see TraceBackend.
+  float GetLastBatchEmittedRayEquivalent(size_t ray_num) const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 

@@ -144,6 +144,8 @@ class MetalTraceBackend : public TraceBackend {
   // cross-backend contract.
   size_t GetLastBatchStochasticCrystalSampleCount() const override;
   size_t GetLastBatchStochasticOrientationSampleCount() const override;
+  // First-layer emitted-ray equivalent under ray allocation; see TraceBackend.
+  float GetLastBatchEmittedRayEquivalent(size_t ray_num) const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 

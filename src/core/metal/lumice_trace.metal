@@ -1325,7 +1325,9 @@ kernel void gen_root_kernel(
     sample_triangle(stream, tri_vtx + tri_id * 9u, p);
     to_face = tri_to_poly[tri_id];
   }
-  float weight = wl_pool[wl_idx].spd_weight;  // scrum-268.8 per-ray spd weight
+  // Per-ray spd weight × this dispatch's ray-allocation correction
+  // (host-computed; 1.0f under proportional allocation, so the multiply is exact).
+  float weight = wl_pool[wl_idx].spd_weight * gp.alloc_correction;
   if (to_face == kInvalidId) {
     // Mirrors InitRay_p_fid fallback (simulator.cpp:92-94): zero weight when
     // a triangle has no polygon backing so downstream HitSurface can drop it.
@@ -1362,7 +1364,8 @@ kernel void gen_root_kernel(
 // the same orientation, severely under-sampling crystal orientations across
 // batches (scrum-267 bugfix). The sun-* / ray_weight fields in gp are unused
 // (world dir comes from cont_d_in instead of sample_sph_cap; weight is
-// carried through from cont_w_in).
+// carried through from cont_w_in, times gp.alloc_correction — this
+// (layer, ci)'s ray-allocation factor).
 kernel void transit_root_kernel(
     device const float*  cont_d_in   [[buffer(0)]],
     device const float*  cont_w_in   [[buffer(1)]],
@@ -1476,9 +1479,11 @@ kernel void transit_root_kernel(
     to_face = tri_to_poly[tri_id];
   }
 
-  // 4. Carry continuation weight; mirror InitRay_p_fid fallback (zero weight
-  //    when a triangle has no polygon backing).
-  float w = cont_w_in[tid];
+  // 4. Carry continuation weight × this (layer, ci)'s ray-allocation correction
+  //    (the continuation layer re-deals its rays, so it owes its own factor —
+  //    1.0f under proportional allocation); mirror InitRay_p_fid fallback (zero
+  //    weight when a triangle has no polygon backing).
+  float w = cont_w_in[tid] * gp.alloc_correction;
   if (to_face == kInvalidId) {
     w = 0.0f;
   }

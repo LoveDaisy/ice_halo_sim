@@ -1959,7 +1959,9 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       // hits the batch cap here. This sheds the per-batch synchronous D2H tax.
       xyz_win_.pending = true;
       xyz_win_.root_rays += ray_num;
-      xyz_win_.emitted_energy += emitted_weight * static_cast<float>(ray_num);
+      // × what the backend's first layer emitted at the nominal weight, not
+      // × ray_num: the two differ once a layer deals by q. See TraceBackend.
+      xyz_win_.emitted_energy += emitted_weight * backend.GetLastBatchEmittedRayEquivalent(ray_num);
       xyz_win_.stochastic_crystal_samples += backend.GetLastBatchStochasticCrystalSampleCount();
       xyz_win_.stochastic_orientation_samples += backend.GetLastBatchStochasticOrientationSampleCount();
       // OVERWRITE (not +=) — config constant, identical on every batch.
@@ -1985,7 +1987,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.curr_wl_ = wl_param.wl_;
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
-    sim_data.emitted_energy_ = emitted_weight * static_cast<float>(ray_num);
+    sim_data.emitted_energy_ = emitted_weight * backend.GetLastBatchEmittedRayEquivalent(ray_num);
     sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
     sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
     sim_data.stochastic_orientation_sample_count_ = backend.GetLastBatchStochasticOrientationSampleCount();
@@ -2060,7 +2062,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.root_ray_count_ = ray_num;  // distinguishes a valid backend batch
                                        // from the shutdown sentinel (see
                                        // server.cpp::ConsumeData).
-  sim_data.emitted_energy_ = emitted_weight * static_cast<float>(ray_num);
+  sim_data.emitted_energy_ = emitted_weight * backend.GetLastBatchEmittedRayEquivalent(ray_num);
   sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
   sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
   sim_data.stochastic_orientation_sample_count_ = backend.GetLastBatchStochasticOrientationSampleCount();

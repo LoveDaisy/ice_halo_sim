@@ -186,6 +186,15 @@ struct GenRootKernelParams {
   // per-ci pool via floor(pcg_uniform(BuildGeomShapeStream(...)) * P_ci).
   // Appended at struct end so existing fields keep their offsets.
   uint32_t pool_shape_count;
+  // Ray-allocation weight correction for this (layer, ci) dispatch — the
+  // (p_i/ΣP)/(q_i/ΣQ) factor computed ONCE on the host by
+  // ComputeRayAllocationCorrection (core/simulator.hpp) and consumed here as a
+  // plain multiplier on the weight each root (gen) or carried (transit) ray is
+  // written with. The device never re-derives the normalization; it multiplies.
+  // 1.0f on every proportional layer (the mode's default), so the historical
+  // weights fall out bit-for-bit. Every host builder MUST set it explicitly: a
+  // value-initialized struct leaves it 0, which zeroes every ray.
+  float alloc_correction;
 };
 
 // --- PCG hash + stream ----------------------------------------------------

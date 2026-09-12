@@ -62,6 +62,10 @@ struct BatchTraceSpec {
   // golden-ray tests (test/golden-analytic/backend/test_cpu_golden_rays.cpp)
   // to inject analytically-known rays; production code passes nullptr.
   const HostRayBatch* host = nullptr;
+  // This entry's ray-allocation weight correction (ResolveLayerRayAllocation);
+  // 1.0f on every proportional layer. Forwarded to InitRayFirstMs /
+  // InitRayOtherMs, which fold it into the ray's weight at birth.
+  float weight_correction = 1.0f;
 };
 
 // Mutable I/O buffers threaded across the layer's ci iterations. Reference
@@ -145,11 +149,11 @@ void TraceCrystalBatch(RandomNumberGenerator& rng, const CrystalTraceSpec& cryst
     } else if (batch.first_ms) {
       InitRayFirstMs(rng, batch.sun_param, batch.wl_param, curr_ray_num,                     //
                      crystal_spec.crystal, crystal_spec.crystal_id, crystal_spec.axis_dist,  //
-                     workspace, buffers.all_data);
+                     workspace, buffers.all_data, batch.weight_correction);
     } else {
       InitRayOtherMs(rng, buffers.prev_init, curr_ray_num,                                   //
                      crystal_spec.crystal, crystal_spec.crystal_id, crystal_spec.axis_dist,  //
-                     workspace, buffers.all_data, buffers.init_ray_offset);
+                     workspace, buffers.all_data, buffers.init_ray_offset, batch.weight_correction);
     }
 
     for (size_t i = 0; i < batch.max_hits; i++) {
@@ -260,6 +264,7 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   exit_records_.clear();
   stochastic_sample_count_this_batch_ = 0;
   stochastic_orientation_sample_count_this_batch_ = 0;
+  emitted_ray_equivalent_delta_this_batch_ = 0.0;
 
   // Design 2 (task-engine-redirect-design2): build the placement-scoped color
   // gate table for this session's scene × raypath_color config. Missing
@@ -289,17 +294,20 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   }
 
   // Partition rays across crystal populations within this MS layer.
-  // Mirrors Simulator::SimulateOneWavelength (simulator.cpp:572-586): build
-  // proportions from setting_[ci].crystal_proportion_ + zeros carry (one
-  // session = one wavelength here, no cross-wavelength accumulation).
+  // Mirrors Simulator::SimulateOneWavelength: the layer's allocation input (p,
+  // or q under adaptive) + per-entry weight corrections come from the one
+  // resolver, with a zeros carry (one session = one wavelength here, no
+  // cross-wavelength accumulation).
   size_t crystal_cnt = ms_info.setting_.size();
-  std::vector<float> proportions;
-  proportions.reserve(crystal_cnt);
-  for (size_t ci = 0; ci < crystal_cnt; ci++) {
-    proportions.push_back(ms_info.setting_[ci].crystal_proportion_);
-  }
+  const LayerRayAllocation alloc = ResolveLayerRayAllocation(spec_.scene->ray_allocation_, ms_info);
   std::vector<double> carry(crystal_cnt, 0.0);
-  auto crystal_ray_num = PartitionCrystalRayNum(proportions, total_ray_num, carry);
+  auto crystal_ray_num = PartitionCrystalRayNum(alloc.proportions, total_ray_num, carry);
+  if (first_ms) {
+    for (size_t ci = 0; ci < crystal_cnt; ci++) {
+      emitted_ray_equivalent_delta_this_batch_ +=
+          static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(alloc.corrections[ci]) - 1.0);
+    }
+  }
 
   // Prepare bookkeeping buffer + the input init_data for InitRayOtherMs.
   RayBuffer all_data = AllocateAllData(*spec_.scene, total_ray_num);
@@ -412,7 +420,8 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                           first_ms,
                           static_cast<uint8_t>(ms_idx_),
                           color_groups.empty() ? nullptr : &color_groups,
-                          host_inject };
+                          host_inject,
+                          alloc.corrections[ci] };
     BatchTraceBuffers buffers{ prev_init, init_ray_offset, all_data, cont_collect, outgoing_records };
     TraceCrystalBatch(rng_, crystal_spec, batch, buffers);
   }

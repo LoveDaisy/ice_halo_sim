@@ -645,6 +645,23 @@ class TraceBackend {
   // unavailable value that both consumer surfaces can distinguish instead.
   virtual size_t GetLastBatchStochasticOrientationSampleCount() const { return 0; }
 
+  // What THIS session's first layer emitted, in "rays at the nominal weight":
+  //     ray_num + Σ_ci n_ci · (correction_ci − 1)
+  // where n_ci is what the layer's partition dealt entry ci and correction_ci the
+  // weight every ray born into it was scaled by (ComputeRayAllocationCorrection,
+  // core/simulator.hpp). Read by Simulator to charge SimData::emitted_energy_ —
+  // the absolute-EV normalization denominator — as emitted_weight × this, in
+  // place of the former emitted_weight × ray_num, which assumed every ray of a
+  // batch was born at the same weight. Under proportional allocation every
+  // correction is 1.0f and this IS ray_num, which is why the base returns the
+  // argument unchanged: a backend that never deals by q is correct without
+  // overriding. A backend that does deal by q (every one that runs a scene's
+  // ResolveLayerRayAllocation) must override with the sum it accumulated on its
+  // first TraceLayer of the session — first layer ONLY: continuation layers
+  // re-deal rays that already exist, and the denominator counts emissions, not
+  // hops. Reset per BeginSession like the two counters above.
+  virtual float GetLastBatchEmittedRayEquivalent(size_t ray_num) const { return static_cast<float>(ray_num); }
+
   // Per-committed-config tally of GPU-side raypath-color drops (see
   // ColorDegradeCounts above). Base + CPU backend have no such caps and return
   // all-zeros; Metal/CUDA override. Value is recomputed from scratch on each

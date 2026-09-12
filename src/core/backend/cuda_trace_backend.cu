@@ -380,6 +380,10 @@ lm_pcg::GenRootKernelParams BuildTransitGpParams(const AxisDistribution& axis_di
   gp.roll_mean_rad = axis_dist.roll_dist.center * math::kDegreeToRad;
   gp.roll_std_rad  = axis_dist.roll_dist.spread * math::kDegreeToRad;
   gp.roll_pad      = 0.0f;
+  // Ray-allocation identity. The value-initialized struct above left this at
+  // 0, which would zero every ray; TraceLayer overwrites it per ci with the
+  // entry's correction (1.0f under proportional allocation either way).
+  gp.alloc_correction = 1.0f;
   return gp;
 }
 
@@ -1400,7 +1404,10 @@ __global__ void transit_multi_ms_kernel(
     lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
     to_face_u16 = d_tri_to_poly_ray[tri_id];
   }
-  float w = d_cont_w_in[tid];
+  // Carried weight × this (layer, ci)'s ray-allocation correction: the
+  // continuation layer re-deals its rays, so it owes its own host-computed
+  // factor (1.0f under proportional allocation, an exact multiply).
+  float w = d_cont_w_in[tid] * gp.alloc_correction;
   uint32_t to_face_u32;
   if (to_face_u16 == kInvalidIdU16) {
     w = 0.0f;
@@ -1619,7 +1626,9 @@ __global__ void gen_root_kernel(float* __restrict__ d_root_d,           // 3 × 
     lm_pcg::sample_triangle(stream, d_tri_vtx_ray + tri_id * 9u, p);
     to_face_u16 = d_tri_to_poly_ray[tri_id];
   }
-  float weight = d_wl_pool[wl_idx].spd_weight;
+  // Per-ray spd weight × this dispatch's ray-allocation correction
+  // (host-computed; 1.0f under proportional allocation, an exact multiply).
+  float weight = d_wl_pool[wl_idx].spd_weight * gp.alloc_correction;
   uint32_t to_face_u32;
   if (to_face_u16 == kInvalidIdU16) {
     weight = 0.0f;
@@ -1809,6 +1818,11 @@ struct CudaTraceBackend::Impl {
   // three sites that advance gen_ray_count_ / transit_ray_count_ or run the host
   // fallback — so, unlike the shape counter, the fallback path is NOT a gap here.
   size_t orientation_count_this_batch_ = 0;
+  // First-layer Σ n_ci · (correction_ci − 1) for
+  // GetLastBatchEmittedRayEquivalent (TraceBackend has the contract). Accumulated
+  // in TraceLayer's partition on the first layer only; zeroed beside the two
+  // counters above at BeginSession and on Reset.
+  double emitted_ray_equivalent_delta_this_batch_ = 0.0;
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
   // True iff any (layer, ci) crystal param in `pool_scene_` carries a
@@ -2324,6 +2338,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     ci_pool_slot_base_.clear(); ci_pool_shape_count_.clear();  // K-shape pool
     pool_shape_count_this_batch_ = 0;
     orientation_count_this_batch_ = 0;
+    emitted_ray_equivalent_delta_this_batch_ = 0.0;
     geom_pool_built_ = false;
     pool_scene_ = nullptr;
     // increment 4: filter descriptors + wl pool persist across the keep path;
@@ -2744,14 +2759,11 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
     layer_ci_base_.push_back(static_cast<uint32_t>(ci_pool_slot_base_.size()));
     const auto& settings = scene.ms_[mi].setting_;
     // Build per-ci shape-count budget (Path B static-weight). K==0 → all 1s
-    // → today's byte-exact behavior (AC2). This layer's proportions[] mirrors
-    // TraceLayer's PartitionCrystalRayNum input for the same layer, so K_ci
-    // apportions on the SAME weights the ci-loop uses to split ray_num.
-    std::vector<float> proportions;
-    proportions.reserve(settings.size());
-    for (const auto& s : settings) {
-      proportions.push_back(s.crystal_proportion_);
-    }
+    // → today's byte-exact behavior (AC2). This layer's allocation input
+    // mirrors TraceLayer's PartitionCrystalRayNum input for the same layer
+    // (p, or q under adaptive — the one resolver decides), so K_ci apportions
+    // on the SAME weights the ci-loop uses to split ray_num.
+    const std::vector<float> proportions = ResolveLayerRayAllocation(scene.ray_allocation_, scene.ms_[mi]).proportions;
     const std::vector<uint32_t> k_ci_this_layer = AllocateShapeBudget(proportions, ray_num, k_shape);
 
     for (size_t ci = 0; ci < settings.size(); ++ci) {
@@ -3621,6 +3633,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // regression test will catch you if you remove this" — none will.
     impl_->pool_shape_count_this_batch_ = 0u;
     impl_->orientation_count_this_batch_ = 0u;
+    impl_->emitted_ray_equivalent_delta_this_batch_ = 0.0;
 
     // scrum-306.2 increment 4: a scene change invalidates every per-session-constant
     // cache (geometry pool, filter descriptors, wl pool). Within one scene these are
@@ -4027,14 +4040,14 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
     impl_->EnsureContCapacity(n, out_slot);
   }
 
-  // Partition this layer's `n` rays across its crystals by proportion. carry is
-  // per-(layer) persistent across batches (largest-remainder), mirroring
-  // simulator.cpp:830 ray_alloc_carry[mi].
-  std::vector<float> proportions;
-  proportions.reserve(crystal_cnt);
-  for (size_t ci = 0; ci < crystal_cnt; ci++) {
-    proportions.push_back(ms_layer.setting_[ci].crystal_proportion_);
-  }
+  // Partition this layer's `n` rays across its crystals. The allocation input
+  // (p, or q under adaptive) and the per-ci weight corrections come from the
+  // one resolver, as on every other backend; the corrections reach the gen /
+  // transit kernels as a per-dispatch scalar (both are per-ci launches) and
+  // the host-roots fallback applies the same multiply on the host. carry is
+  // per-(layer) persistent across batches (largest-remainder), mirroring the
+  // legacy simulator's ray_alloc_carry[mi].
+  const LayerRayAllocation alloc = ResolveLayerRayAllocation(impl_->scene_->ray_allocation_, ms_layer);
   if (impl_->ray_alloc_carry_.size() < impl_->n_ms_layers_) {
     impl_->ray_alloc_carry_.resize(impl_->n_ms_layers_);
   }
@@ -4042,7 +4055,13 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
   if (carry.size() != crystal_cnt) {
     carry.assign(crystal_cnt, 0.0);
   }
-  auto crystal_ray_num = PartitionCrystalRayNum(proportions, n, carry);
+  auto crystal_ray_num = PartitionCrystalRayNum(alloc.proportions, n, carry);
+  if (first_ms) {
+    for (size_t ci = 0; ci < crystal_cnt; ci++) {
+      impl_->emitted_ray_equivalent_delta_this_batch_ +=
+          static_cast<double>(crystal_ray_num[ci]) * (static_cast<double>(alloc.corrections[ci]) - 1.0);
+    }
+  }
 
   // Zero the layer's accumulators ONCE before the ci-loop: each ci's trace
   // dispatch APPENDS to d_exit_ / cont[out_slot] via atomic counters.
@@ -4194,6 +4213,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           BuildGenGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin,
                            impl_->scene_->light_source_.param_, impl_->wl_pool_size_);
       gp.gen_seed     = impl_->gen_seed_;
+      gp.alloc_correction = alloc.corrections[ci];
       // K-shape: tell the kernel how many pool shapes to draw from. The
       // shape-table pointer is passed separately below (constant per dispatch).
       // gp.tri_count above is kept as the belt-and-suspenders early-exit guard
@@ -4267,7 +4287,11 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           // overflow — the result is < wl_pool_size_, itself a uint32_t.
           uint32_t wl_idx = static_cast<uint32_t>(impl_->rng_.GetUniformIndex(impl_->wl_pool_size_));
           impl_->pinned_root_wl_idx_[i] = wl_idx;
-          impl_->pinned_ws_[i] = impl_->wl_pool_host_[wl_idx].spd_weight;
+          // Same multiply gen_root_kernel applies: the fallback deals by the
+          // same partition, so it owes the same correction. (InitRayFirstMs
+          // above ran at its own default 1.0f — the weight it wrote is
+          // overwritten here.)
+          impl_->pinned_ws_[i] = impl_->wl_pool_host_[wl_idx].spd_weight * alloc.corrections[ci];
           impl_->pinned_from_poly_[i] =
               (r.to_face_ == kInvalidId) ? kInvalidIdU32 : static_cast<uint32_t>(r.to_face_);
           std::memcpy(impl_->pinned_rot_c2w_ + i * 9, r.crystal_rot_.GetMat(), 9 * sizeof(float));
@@ -4305,6 +4329,7 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       lm_pcg::GenRootKernelParams gp =
           BuildTransitGpParams(ms_setting.crystal_.axis_, geom_tri_cnt, cin);
       gp.gen_seed     = impl_->transit_seed_;
+      gp.alloc_correction = alloc.corrections[ci];
       // K-shape: per-ci pool shape count (see gen dispatch above for details).
       gp.pool_shape_count = ci_p_ci;
       // task-gpu-rng-ray-index-uint64: full 64-bit transit_ray_count_ →
@@ -5052,6 +5077,12 @@ size_t CudaTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
   //     that requires per-ci accounting on the fallback path; still deferred as
   //     a diagnostic-only gap (the primary device-gen path is exact).
   return impl_->pool_shape_count_this_batch_;
+}
+
+float CudaTraceBackend::GetLastBatchEmittedRayEquivalent(size_t ray_num) const {
+  // ray_num plus the first layer's Σ n_ci · (correction_ci − 1); exactly
+  // ray_num under proportional allocation. See TraceBackend.
+  return static_cast<float>(static_cast<double>(ray_num) + impl_->emitted_ray_equivalent_delta_this_batch_);
 }
 
 size_t CudaTraceBackend::GetLastBatchStochasticOrientationSampleCount() const {
