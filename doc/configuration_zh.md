@@ -677,7 +677,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 - `fov` 为覆盖输出图像**短边**（`min(width, height)`）的全视场角（度）——不是对角线。`rectangular` 和 `dual_*` 类型会忽略 `fov`（始终为全天投影）。⚠️ 按对角线换算 `fov` 会让实际视场比预期小：例如 3600×2400 的 linear 渲染，若按对角线把 `fov` 算成 120°，等效的短边口径 `fov` 其实约为 87°——一个 22° 的晕会缩小到约一半半径。请始终按短边推导 `fov`（或下方的 `f`）。GUI 预览 shader 用的是同一口径（`src/gui/preview_renderer.cpp` 的 `linearInverse`/`fisheyeInverse`，`short_edge = min(u_resolution.x, u_resolution.y)`），因此同一份 config 在 GUI 与 CLI 里渲染出的视觉尺寸一致。
 - `fisheye_orthographic` 和 `dual_fisheye_orthographic` 的 FOV 上限为 **180°**（投影公式 `r = f·sin(θ)` 在 θ > 90° 时回折），超出值会被拒绝。
 - `dual_fisheye_orthographic` 不支持 `overlap` 参数（会被静默忽略并输出一条 VERBOSE 日志）。
-- 可以使用 `f`（焦距，mm，基于 35mm 胶片）代替 `fov`。下列公式里的 `d = 12mm` 是 35mm 胶片等效画幅**短边**的半长（35mm 胶片短边为 24mm）——与 `fov` 本身的短边口径一致。程序会根据投影模型使用正确公式换算：
+- 可以使用 `f`（焦距，mm，基于 35mm 胶片）代替 `fov`。下列公式里的 `d = 12mm` 是 35mm 胶片等效画幅**短边**的半长（35mm 胶片短边为 24mm）——与 `fov` 本身的短边口径一致。程序会根据投影模型使用正确公式换算。GUI 导入路径同样读 `f`，走的是同一份换算实现（`src/util/lens_focal.hpp`，两个读取方都调它），因此用 `f` 写的 config 在 GUI 里打开得到的 `fov` 与 CLI 渲染用的相同；GUI 自己导出时只写 `fov`。两侧都是 `fov` 存在时以 `fov` 为准、忽略 `f`。
   - Linear: `fov = 2·atan(d/f)`
   - Equal area: `fov = 4·arcsin(d/(2f))`
   - Equidistant: `fov = 2d/f`（弧度 → 度）
