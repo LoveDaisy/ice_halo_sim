@@ -194,9 +194,10 @@ std::string FormatRaypathChainDisplay(const std::vector<RaypathChainSegment>& ch
 // ring_energy_ and error_bound_ summed — and each merged row is labelled by
 // FormatRaypathChainDisplay and sorted as the recorded result is (energy
 // descending, display ascending). Σ energy_ and Σ count_ are conserved
-// exactly up to summation order; the row count never grows; the four
-// record-level scalars (other_energy_, other_count_, truncated_chain_count_,
-// max_row_error_) are copied through unchanged, being about no chain. Pure: reads
+// exactly up to summation order; the row count never grows; the record-level
+// bucket and truncation count (other_energy_, other_count_,
+// truncated_chain_count_) are copied through unchanged, being about no chain,
+// and max_row_error_ is the max over the MERGED rows. Pure: reads
 // `finest`, returns a new result, and is what every C API read of the
 // histogram goes through — symmetry 0 too, so the display text is the same
 // authority's at every setting.

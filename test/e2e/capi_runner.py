@@ -297,15 +297,17 @@ class LUMICE_RaypathHistogramEntry(ctypes.Structure):
         ("count",       ctypes.c_ulonglong),
         ("ring_energy", ctypes.c_double * LUMICE_MAX_RAYPATH_CONE_RINGS),
         ("ring_count",  ctypes.c_int),
+        # v4.35: the row's Space-Saving uncertainty; 4 bytes of padding precede it.
+        ("error_bound", ctypes.c_double),
     ]
 
 
 assert ctypes.sizeof(LUMICE_RaypathChainSegment) == 264
-assert ctypes.sizeof(LUMICE_RaypathHistogramEntry) == 5600, (
+assert ctypes.sizeof(LUMICE_RaypathHistogramEntry) == 5608, (
     "LUMICE_RaypathHistogramEntry size mismatch — verify lumice.h field layout"
 )
 for _name, _offset in (("chain_len", 2112), ("display", 2116), ("energy", 5320), ("count", 5328),
-                       ("ring_energy", 5336), ("ring_count", 5592)):
+                       ("ring_energy", 5336), ("ring_count", 5592), ("error_bound", 5600)):
     assert getattr(LUMICE_RaypathHistogramEntry, _name).offset == _offset, (
         f"LUMICE_RaypathHistogramEntry.{_name} offset drift — the mirror and lumice.h disagree"
     )
@@ -321,10 +323,21 @@ class LUMICE_RaypathAnalysisInfo(ctypes.Structure):
         # v4.30: the server's snapshot counter (LUMICE_RawXyzResult.snapshot_generation's twin);
         # 4 bytes of padding sit before it, hence 32 and not 28.
         ("snapshot_generation", ctypes.c_ulonglong),
+        # v4.35: the bounded record's account — the "other" bucket, its chain count, and the
+        # least certain row; 4 bytes of padding follow truncated_chain_count, hence 64.
+        ("other_energy",          ctypes.c_double),
+        ("other_count",           ctypes.c_ulonglong),
+        ("truncated_chain_count", ctypes.c_int),
+        ("max_row_error",         ctypes.c_double),
     ]
 
 
-assert ctypes.sizeof(LUMICE_RaypathAnalysisInfo) == 32
+assert ctypes.sizeof(LUMICE_RaypathAnalysisInfo) == 64
+for _name, _offset in (("snapshot_generation", 24), ("other_energy", 32), ("other_count", 40),
+                       ("truncated_chain_count", 48), ("max_row_error", 56)):
+    assert getattr(LUMICE_RaypathAnalysisInfo, _name).offset == _offset, (
+        f"LUMICE_RaypathAnalysisInfo.{_name} offset drift — the mirror and lumice.h disagree"
+    )
 
 
 @dataclass
@@ -336,6 +349,7 @@ class RaypathHistogramEntry:
     energy: float
     count: int
     ring_energy: List[float]
+    error_bound: float = 0.0  # v4.35: how much of `energy` may be another chain's
 
 
 @dataclass
@@ -345,6 +359,12 @@ class RaypathAnalysisResult:
     active_backend: int                   # LUMICE_GetActiveBackend during the run
     sim_ray_num: int                      # LUMICE_FrameGetStats on the same frame
     log_lines: List[str] = field(default_factory=list)
+    # v4.35: the bounded record's account (LUMICE_RaypathAnalysisInfo). Σ entries + other is
+    # every counted ray, in energy and in count.
+    other_energy: float = 0.0
+    other_count: int = 0
+    truncated_chain_count: int = 0
+    max_row_error: float = 0.0
 
 
 # LUMICE_ServerState constants (lumice.h)
@@ -1066,6 +1086,7 @@ def run_raypath_analysis_capi(
                     energy=float(e.energy),
                     count=int(e.count),
                     ring_energy=[float(e.ring_energy[r]) for r in range(e.ring_count)],
+                    error_bound=float(e.error_bound),
                 ))
             return RaypathAnalysisResult(
                 roi_mode=int(info.roi_mode),
@@ -1073,6 +1094,10 @@ def run_raypath_analysis_capi(
                 active_backend=int(active.value),
                 sim_ray_num=int(stats.sim_ray_num),
                 log_lines=list(lines),
+                other_energy=float(info.other_energy),
+                other_count=int(info.other_count),
+                truncated_chain_count=int(info.truncated_chain_count),
+                max_row_error=float(info.max_row_error),
             )
         finally:
             lib.LUMICE_DestroyServer(server)

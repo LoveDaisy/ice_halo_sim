@@ -1302,8 +1302,15 @@ TEST(ReadTimeReduction, MergedRowErrorIsTheOrbitSumAndRecordScalarsPassThrough) 
     EXPECT_DOUBLE_EQ(r->other_energy_, 5.0);
     EXPECT_EQ(r->other_count_, 50u);
     EXPECT_EQ(r->truncated_chain_count_, 12u);
-    EXPECT_DOUBLE_EQ(r->max_row_error_, kFixtureRowError);
+    double max_err = 0.0;
+    for (const auto& e : r->entries_) {
+      max_err = std::max(max_err, e.error_bound_);
+    }
+    EXPECT_DOUBLE_EQ(r->max_row_error_, max_err) << "the max is over this result's own rows";
   }
+  EXPECT_DOUBLE_EQ(none.max_row_error_, kFixtureRowError);
+  EXPECT_DOUBLE_EQ(p.max_row_error_, 2.0 * kFixtureRowError);
+  EXPECT_DOUBLE_EQ(pbd.max_row_error_, 3.0 * kFixtureRowError);
   // Orbit sizes by the reduction authority itself, not typed: how many finest
   // rows reduce onto each row's segment under that symmetry.
   auto orbit_of = [&finest](const RaypathHistogramEntry& e, uint8_t sym) {

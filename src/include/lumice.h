@@ -331,7 +331,20 @@ extern "C" {
 // LUMICE_StopServer returns carries the histogram consumed up to the stop (before v4.34 a stop
 // could discard the batches consumed since the last poll, leaving the pre-stop frame in place).
 // Nothing else moved.
-#define LUMICE_API_VERSION 434
+//
+// BREAKING (v4.35): the analysis record is BOUNDED, and says so. Two structs grow at the tail,
+// recompile. LUMICE_RaypathHistogramEntry gains `error_bound` (sizeof 5600 -> 5608):
+// the server keeps a fixed number of rows (Space-Saving), and a row that took over an evicted
+// row's slot carries that row's energy as its own uncertainty — the chain's true energy is
+// within [energy - error_bound, energy]; 0 for a row that never took a slot over, which every
+// row of a run that fit is. LUMICE_RaypathAnalysisInfo gains `other_energy` / `other_count` /
+// `truncated_chain_count` / `max_row_error` (sizeof 32 -> 64): the rays whose chain the
+// producer's interning table had no room for, as one bucket that is not a row (so Σ entries +
+// other is every counted ray, at every symmetry); how many distinct chains that bucket stands
+// for; and the largest `error_bound` over the frame's rows (0 = no eviction happened, the record
+// is exact). Nothing is removed or reordered; a run that never overflows either bound reads
+// exactly as it did in v4.34, with the four new fields 0.
+#define LUMICE_API_VERSION 435
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -2074,6 +2087,15 @@ typedef struct LUMICE_RaypathHistogramEntry_ {
   // in the other modes.
   double ring_energy[LUMICE_MAX_RAYPATH_CONE_RINGS];
   int ring_count;
+
+  // ADDED v4.35. How much of `energy` (and of `ring_energy`, and proportionally of `count`) may
+  // belong to some other chain: the server holds a bounded number of rows, and a chain arriving
+  // with no row while every row is taken takes over the lowest row — energy, count and rings —
+  // and records what it took over here (Space-Saving). The chain's true energy lies within
+  // [energy - error_bound, energy]; a row that never took a slot over has 0. Under a symmetry
+  // that merges rows it is the sum over the merged rows, so a row standing for m recorded chains
+  // is uncertain by at most m × (total energy / row capacity).
+  double error_bound;
 } LUMICE_RaypathHistogramEntry;
 
 // What a frame says about its analysis result as a whole, before any entry is read.
@@ -2089,6 +2111,21 @@ typedef struct LUMICE_RaypathAnalysisInfo_ {
   // the same frame read the same value. THIS is the "is there a new result" signal: `present`
   // above is true on every frame of the session, not once. 0 when present == 0. (v4.30)
   unsigned long long snapshot_generation;
+
+  // ADDED v4.35: what the bounded record could not keep as rows, all 0 when present == 0 and all
+  // 0 for a run that fit — the shape of every small scene. `other_energy` / `other_count` are the
+  // rays whose chain the producer's interning table had no room for, as ONE bucket that is never
+  // an entry and never reduced: the sum of every entry's `energy` plus `other_energy` is the
+  // energy of every counted ray, under every symmetry, and likewise for `count`. A consumer
+  // listing the entries shows this as one more line ("other") so the percentages add up.
+  // `truncated_chain_count` is how many distinct chains that bucket stands for (the producers'
+  // count, summed over the run). `max_row_error` is the largest `error_bound` over the entries
+  // under THIS symmetry (merging rows adds their errors), i.e. how uncertain the least certain
+  // entry is; 0 means no row ever took a slot over and every entry is exact.
+  double other_energy;
+  LUMICE_RayCount other_count;
+  int truncated_chain_count;
+  double max_row_error;
 } LUMICE_RaypathAnalysisInfo;
 
 // Start an analysis run on the committed scene (lifecycle above). Returns LUMICE_ERR_NULL_ARG for a

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -3974,6 +3975,13 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysisInfo(const LUMICE_ResultFrame* fr
   out->cone_ring_count = result->cone_ring_count_;
   out->cone_radius_rad = result->cone_radius_rad_;
   out->snapshot_generation = frame->frame_->snapshot_generation_;
+  // The bounded record's own account (v4.35), read off the reduction like entry_count: the
+  // bucket and the truncation count are the same at every symmetry, the max row error is that
+  // symmetry's (merging rows adds their errors).
+  out->other_energy = reduced->other_energy_;
+  out->other_count = static_cast<LUMICE_RayCount>(reduced->other_count_);
+  out->truncated_chain_count = static_cast<int>(std::min<size_t>(reduced->truncated_chain_count_, INT_MAX));
+  out->max_row_error = reduced->max_row_error_;
   return LUMICE_OK;
 }
 
@@ -4021,6 +4029,7 @@ LUMICE_ErrorCode LUMICE_FrameGetRaypathAnalysis(const LUMICE_ResultFrame* frame,
       dst.display[n] = '\0';
       dst.energy = src.energy_;
       dst.count = static_cast<LUMICE_RayCount>(src.count_);
+      dst.error_bound = src.error_bound_;
       const size_t rings = std::min<size_t>(src.ring_energy_.size(), LUMICE_MAX_RAYPATH_CONE_RINGS);
       // Cannot truncate: the request's ring count was capped at LUMICE_StartRaypathAnalysis.
       for (size_t r = 0; r < rings; r++) {

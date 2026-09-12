@@ -31,7 +31,7 @@
 #include "server/raypath_histogram_consumer.hpp"  // FormatRaypathChainDisplay (the truncation fixture premise)
 #include "server/server.hpp"
 
-static_assert(LUMICE_API_VERSION >= 434, "the analysis run needs the v4.34 header (no cone stop target)");
+static_assert(LUMICE_API_VERSION >= 435, "the analysis run needs the v4.35 header (bounded record fields)");
 
 // The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
 // offsets, so a field inserted in the middle (which keeps the size) is caught as well as
@@ -44,15 +44,20 @@ static_assert(offsetof(LUMICE_RaypathAnalysisRequest, cone_center) == 52, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, infinite) == 72, "");
 static_assert(offsetof(LUMICE_RaypathAnalysisRequest, ray_num) == 80, "");
 static_assert(sizeof(LUMICE_RaypathChainSegment) == 264, "LUMICE_RaypathChainSegment layout changed");
-static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 5600, "LUMICE_RaypathHistogramEntry layout changed");
+static_assert(sizeof(LUMICE_RaypathHistogramEntry) == 5608, "LUMICE_RaypathHistogramEntry layout changed");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, chain_len) == 2112, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, display) == 2116, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, energy) == 5320, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, count) == 5328, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_energy) == 5336, "");
 static_assert(offsetof(LUMICE_RaypathHistogramEntry, ring_count) == 5592, "");
-static_assert(sizeof(LUMICE_RaypathAnalysisInfo) == 32, "LUMICE_RaypathAnalysisInfo layout changed");
+static_assert(offsetof(LUMICE_RaypathHistogramEntry, error_bound) == 5600, "");
+static_assert(sizeof(LUMICE_RaypathAnalysisInfo) == 64, "LUMICE_RaypathAnalysisInfo layout changed");
 static_assert(offsetof(LUMICE_RaypathAnalysisInfo, snapshot_generation) == 24, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisInfo, other_energy) == 32, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisInfo, other_count) == 40, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisInfo, truncated_chain_count) == 48, "");
+static_assert(offsetof(LUMICE_RaypathAnalysisInfo, max_row_error) == 56, "");
 
 namespace {
 
@@ -330,6 +335,12 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
     }
     EXPECT_EQ(isym.present, 1);
     EXPECT_EQ(isym.snapshot_generation, info.snapshot_generation) << "the symmetry is not a new result";
+    // The bucket is the record's, the same under every symmetry; the max row error is this
+    // symmetry's — never below the finest one, since merging adds errors.
+    EXPECT_EQ(isym.other_count, info.other_count) << "symmetry " << sym;
+    EXPECT_DOUBLE_EQ(isym.other_energy, info.other_energy) << "symmetry " << sym;
+    EXPECT_EQ(isym.truncated_chain_count, info.truncated_chain_count) << "symmetry " << sym;
+    EXPECT_GE(isym.max_row_error, 0.0) << "symmetry " << sym;
     std::vector<LUMICE_RaypathHistogramEntry> rows(static_cast<size_t>(isym.entry_count) + 1);
     if (LUMICE_FrameGetRaypathAnalysis(frame, sym, rows.data(), isym.entry_count + 1) != LUMICE_OK) {
       ADD_FAILURE() << "symmetry " << sym << ": the entry read failed";
@@ -339,12 +350,18 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
     LUMICE_RayCount t = 0;
     bool saw_35 = false;
     bool saw_46 = false;
+    double max_err = 0.0;
     for (int i = 0; i < isym.entry_count; i++) {
       t += rows[static_cast<size_t>(i)].count;
       saw_35 = saw_35 || std::strcmp(rows[static_cast<size_t>(i)].display, "3-5") == 0;
       saw_46 = saw_46 || std::strcmp(rows[static_cast<size_t>(i)].display, "4-6") == 0;
+      EXPECT_GE(rows[static_cast<size_t>(i)].error_bound, 0.0);
+      EXPECT_LE(rows[static_cast<size_t>(i)].error_bound, rows[static_cast<size_t>(i)].energy)
+          << "a row is never uncertain by more than it holds";
+      max_err = std::max(max_err, rows[static_cast<size_t>(i)].error_bound);
     }
     EXPECT_EQ(t, pbd_total) << "symmetry " << sym;
+    EXPECT_DOUBLE_EQ(isym.max_row_error, max_err) << "symmetry " << sym << ": the info's max is over these rows";
     if (prev_rows >= 0) {
       EXPECT_LE(isym.entry_count, prev_rows) << "symmetry " << sym;
     }
@@ -369,7 +386,8 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   LUMICE_StatsResult stats{};
   ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
   EXPECT_EQ(stats.sim_ray_num, 40000u);
-  EXPECT_LE(total, stats.sim_ray_num * 8u) << "max_hits = 7 bounds the outgoing rays per input ray";
+  EXPECT_LE(total + info.other_count, stats.sim_ray_num * 8u)
+      << "max_hits = 7 bounds the outgoing rays per input ray, rows and bucket together";
 
   // The image getters on an analysis frame: sentinel at [0], not a previous render's residue.
   LUMICE_RawXyzResult xyz[2];
@@ -390,6 +408,10 @@ TEST_F(CApiRaypathAnalysis, FrameGettersEndToEnd) {
   EXPECT_EQ(info.present, 0);
   EXPECT_EQ(info.entry_count, 0);
   EXPECT_EQ(info.snapshot_generation, 0u) << "every field is 0 when present == 0";
+  EXPECT_DOUBLE_EQ(info.other_energy, 0.0);
+  EXPECT_EQ(info.other_count, 0u);
+  EXPECT_EQ(info.truncated_chain_count, 0);
+  EXPECT_DOUBLE_EQ(info.max_row_error, 0.0);
   std::memset(one, 0x5A, sizeof(one));
   ASSERT_EQ(LUMICE_FrameGetRaypathAnalysis(frame, kSymAll, one, 1), LUMICE_OK);
   EXPECT_EQ(one[0].count, 0u) << "sentinel at [0] on a render frame";
@@ -598,7 +620,11 @@ TEST(CApiRaypathAnalysisTruncation, DeepChainIsTruncatedNotOverrun) {
   }
   deep.energy_ = 2.5;
   deep.count_ = 7;
+  deep.error_bound_ = 0.75;
   r.entries_.push_back(deep);
+  r.other_energy_ = 1.25;
+  r.other_count_ = 3;
+  r.truncated_chain_count_ = 11;
   // Every layer multi-crystal: the "C<id>(" prefix is part of the longest-text derivation.
   r.reduce_ctx_.layer_multi_crystal_.assign(deep.chain_.size(), true);
   frame->raypath_histogram_result_ = r;
@@ -635,6 +661,17 @@ TEST(CApiRaypathAnalysisTruncation, DeepChainIsTruncatedNotOverrun) {
   EXPECT_DOUBLE_EQ(g.entry.energy, 2.5);
   EXPECT_EQ(g.entry.count, 7u);
   EXPECT_EQ(g.entry.ring_count, 0);
+  EXPECT_DOUBLE_EQ(g.entry.error_bound, 0.75);
+  // And the info's v4.35 fields come off the same hand-built record.
+  LUMICE_ResultFrame* again = WrapResultFrameForTest(frame);
+  LUMICE_RaypathAnalysisInfo info{};
+  ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(again, 0, &info), LUMICE_OK);
+  LUMICE_ReleaseResultFrame(again);
+  EXPECT_EQ(info.present, 1);
+  EXPECT_DOUBLE_EQ(info.other_energy, 1.25);
+  EXPECT_EQ(info.other_count, 3u);
+  EXPECT_EQ(info.truncated_chain_count, 11);
+  EXPECT_DOUBLE_EQ(info.max_row_error, 0.75) << "one row, its error is the max";
 }
 
 // ---------------------------------------------------------------------------

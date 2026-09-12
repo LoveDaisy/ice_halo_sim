@@ -359,11 +359,11 @@ RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& fine
   out.cone_ring_count_ = finest.cone_ring_count_;
   out.cone_radius_rad_ = finest.cone_radius_rad_;
   out.reduce_ctx_ = finest.reduce_ctx_;
-  // About the record, not about any chain: through unchanged.
+  // About the record, not about any chain: through unchanged. (max_row_error_
+  // is recomputed over the merged rows at the end — merging adds errors.)
   out.other_energy_ = finest.other_energy_;
   out.other_count_ = finest.other_count_;
   out.truncated_chain_count_ = finest.truncated_chain_count_;
-  out.max_row_error_ = finest.max_row_error_;
 
   // A table of this call's own: interning the reduced segments layer by layer,
   // parent before child exactly as the recording table did, gives one dense id
@@ -414,6 +414,7 @@ RaypathHistogramResult ReduceRaypathHistogram(const RaypathHistogramResult& fine
   }
   out.entries_.reserve(merged.size());
   for (auto& [id, e] : merged) {
+    out.max_row_error_ = std::max(out.max_row_error_, e.error_bound_);
     out.entries_.push_back(std::move(e));
   }
   SortByEnergyThenDisplay(out.entries_);

@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 434        // ABI version, encoded major*100 + minor (v4.34)
+#define LUMICE_API_VERSION 435        // ABI version, encoded major*100 + minor (v4.35)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -821,6 +821,22 @@ route ahead of both `LUMICE_SetPreferredBackend` and `LUMICE_TRACE_BACKEND`, as 
 (the preference is untouched and the next render honours it; `LUMICE_GetBackendFallbackFlag` stays
 0). `LUMICE_GetActiveBackend` reads what the simulation actually runs on — `LUMICE_BACKEND_CPU`
 for the whole analysis session — as opposed to what was asked for.
+
+**Bounded record** (v4.35): the run keeps a fixed number of rows, whatever the ray count or the
+number of scattering layers — per worker at most `ChainIdInterningTable::kDefaultCapacity` distinct
+chains are interned, and the server keeps at most `kRaypathHistogramCapacity` rows (Space-Saving:
+a chain arriving with no row while every row is taken takes over the lowest-energy row and records
+the energy it took over as its uncertainty). What that costs is reported, not hidden.
+`LUMICE_RaypathHistogramEntry::error_bound` is how much of a row's `energy` may belong to another
+chain — the true energy lies within `[energy - error_bound, energy]`, 0 for a row that never took
+a slot over, and under a symmetry the sum over the merged rows. `LUMICE_RaypathAnalysisInfo`
+carries the record-level account: `other_energy` / `other_count` are the rays whose chain the
+producer had no room for, as one bucket that is never an entry (so Σ entries + other is every
+counted ray, under every symmetry — a consumer shows it as one more line so the percentages add
+up); `truncated_chain_count` is how many distinct chains that bucket stands for;
+`max_row_error` is the largest `error_bound` over the entries under the read's symmetry, 0 when
+no row was ever taken over and every entry is exact — the shape of every run that fits, which
+reads exactly as it did before v4.35.
 
 **Chain text**: `LUMICE_RaypathHistogramEntry::display` is a byte copy of the server's one chain
 formatter (v4.33 format): faces joined by `-`; a layer that holds more than one crystal in the

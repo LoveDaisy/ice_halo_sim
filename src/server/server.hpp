@@ -300,8 +300,9 @@ struct RaypathHistogramResult {
   // stands for on the producer side. Rows evicted on the consumer side are
   // not chains lost — they can come back — and are not in this number.
   size_t truncated_chain_count_ = 0;
-  // max over entries_ of error_bound_ at the snapshot; 0 when no row ever
-  // took a slot over, which is the "no eviction happened" signal.
+  // max over entries_ of error_bound_ — of THIS result's entries, so a reduced
+  // result's is over its merged rows; 0 when no row ever took a slot over,
+  // which is the "no eviction happened" signal.
   double max_row_error_ = 0.0;
   // Echo of the request the entries were counted under.
   RaypathRoiMode roi_mode_ = RaypathRoiMode::kFullSky;
