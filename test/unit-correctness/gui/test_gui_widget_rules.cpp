@@ -97,36 +97,22 @@ TEST(SimStateRules, BackendBusyIsBusyOrAnalysisInProgress) {
   }
 }
 
-// Analyze: server + committed scene + nothing in flight + the picture reflects the config. Each
-// of the four denials is shown to deny on its own, and the one row that satisfies all four is
-// shown to be the only enabled one, per SimState.
-TEST(SimStateRules, AnalyzeNeedsAServerASceneAnIdleBackendAndAnUnmodifiedPicture) {
+// Analyze: a server + nothing in flight, and nothing else — the analysis submits the document
+// itself, so neither a prior run nor an unedited picture is a condition. Each of the two denials
+// is shown to deny on its own, and the row that satisfies both is enabled per SimState exactly
+// when the backend is not busy, kModified included — the row the old rule refused.
+TEST(SimStateRules, AnalyzeNeedsAServerAndAnIdleBackendOnly) {
   for (GuiState::SimState s : kAllSimStates) {
-    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/false, /*has_committed_scene=*/true, s, false));
-    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, /*has_committed_scene=*/false, s, false));
-    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, /*has_committed_scene=*/true, s, true));
-    const bool expect = !IsBusy(s) && !IsModified(s);
-    EXPECT_EQ(CanStartAnalysis(/*has_server=*/true, /*has_committed_scene=*/true, s, false), expect)
-        << "SimState=" << static_cast<int>(s);
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/false, s, false));
+    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, s, true));
+    EXPECT_EQ(CanStartAnalysis(/*has_server=*/true, s, false), !IsBusy(s)) << "SimState=" << static_cast<int>(s);
   }
-  // Spelled out for the row that matters: a completed, unedited run is analysable; an edited one
-  // is not until it is re-run.
-  EXPECT_TRUE(CanStartAnalysis(true, true, GuiState::SimState::kDone, false));
-  EXPECT_FALSE(CanStartAnalysis(true, true, GuiState::SimState::kModified, false));
-}
-
-// The "committed scene is this document's" half of the Analyze gate, over every RunIntent: only
-// an intent that a Run of THIS document produced qualifies, and only once an epoch was read back.
-// kNone and kLoaded are the two that reach kIdle / kDone without a Run, which is exactly the case
-// an epoch left over from a previous document would otherwise pass.
-TEST(SimStateRules, CommittedSceneNeedsARunOfThisDocument) {
-  constexpr RunIntent kAll[] = { RunIntent::kNone,     RunIntent::kLoaded,  RunIntent::kRunning,
-                                 RunIntent::kStopping, RunIntent::kStopped, RunIntent::kRunCompleted };
-  for (RunIntent intent : kAll) {
-    EXPECT_FALSE(HasCommittedSceneForThisDocument(intent, 0)) << static_cast<int>(intent);
-    const bool expect = intent != RunIntent::kNone && intent != RunIntent::kLoaded;
-    EXPECT_EQ(HasCommittedSceneForThisDocument(intent, 7), expect) << static_cast<int>(intent);
-  }
+  // Spelled out for the rows that matter: a fresh document (kIdle) and an edited one (kModified)
+  // both analyse; a run in flight does not.
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kIdle, false));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kDone, false));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kModified, false));
+  EXPECT_FALSE(CanStartAnalysis(true, GuiState::SimState::kSimulating, false));
 }
 
 // ---- Zero-contribution layer notice (panels.cpp scattering-layer header) ----

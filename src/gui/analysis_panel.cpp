@@ -763,7 +763,9 @@ void RenderRoiControls(GuiState& state) {
   const int prev_mode = a.roi_mode;
   ImGui::RadioButton("Whole sky", &a.roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
   ImGui::SameLine();
-  // "In frame" is the frame on screen; without a preview there is no frame to be in.
+  // "In frame" is the frame on screen; the radio waits for a preview so the choice is made
+  // against a picture. A mode already selected still analyses without one — DoAnalyze sizes the
+  // frame at the document's own resolution then — so this gates the radio, not the button.
   ImGui::BeginDisabled(!g_preview_vp.active);
   ImGui::RadioButton("In frame", &a.roi_mode, LUMICE_RAYPATH_ROI_IN_FRAME);
   ImGui::EndDisabled();
@@ -871,14 +873,11 @@ void RenderPickBanner(const GuiState& state) {
 
 void RenderRunControls(GuiState& state, LUMICE_Server* server) {
   const bool in_progress = state.analysis_run_in_progress;
-  const bool has_scene = HasCommittedSceneForThisDocument(state.run_intent, state.committed_epoch);
   const bool needs_centre = state.analysis.roi_mode == LUMICE_RAYPATH_ROI_CONE && !state.analysis.cone_center_valid;
-  // IN_FRAME is "inside the picture on screen"; with no preview active there is no such frame,
-  // and the radio is disabled — but the mode can still be the one left selected before the
-  // preview went away, so the button gates on it too.
-  const bool needs_frame = state.analysis.roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME && !g_preview_vp.active;
-  const bool can_start =
-      CanStartAnalysis(server != nullptr, has_scene, state.sim_state, in_progress) && !needs_centre && !needs_frame;
+  // No frame gate for IN_FRAME: the frame is the document's own view at the preview's canvas
+  // when there is one and at the document's own resolution otherwise (DoAnalyze), so the mode
+  // always names a frame — a mode left selected before the preview went away still analyses.
+  const bool can_start = CanStartAnalysis(server != nullptr, state.sim_state, in_progress) && !needs_centre;
 
   if (in_progress) {
     PushDestructiveStyle();
@@ -903,18 +902,24 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
     ImGui::EndDisabled();
     if (!can_start && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       const char* why = "";
-      if (server == nullptr || !has_scene) {
-        why = "Run the simulation first: the analysis traces the committed scene.";
+      if (server == nullptr) {
+        why = "No simulation server.";
       } else if (IsBusy(state.sim_state)) {
         why = "A render is in progress. Wait for it, or stop it.";
-      } else if (IsModified(state.sim_state)) {
-        why = "The configuration changed since the last run. Run first, so the analysis reports on what you see.";
       } else if (needs_centre) {
         why = "Pick the point on the preview first.";
-      } else if (needs_frame) {
-        why = "'In frame' needs a preview on screen.";
       }
       ImGui::SetTooltip("%s", why);
+    }
+    // What the list describes is the configured document, always; when the picture on screen is
+    // not of that document, say so here — not in a tooltip, and not as a reason to refuse. The
+    // two branches cannot both hold: kNone reconciles to kIdle, which dirty never lifts to
+    // kModified (app.cpp ReconcileSimState).
+    if (state.run_intent == RunIntent::kNone) {
+      ImGui::TextDisabled(
+          "No rendered image for this document yet \xe2\x80\x94 the list describes the configured scene.");
+    } else if (IsModified(state.sim_state)) {
+      ImGui::TextDisabled("Image is from a previous configuration \xe2\x80\x94 the list describes the current one.");
     }
     if (state.analysis_result.payload) {
       ImGui::SameLine();

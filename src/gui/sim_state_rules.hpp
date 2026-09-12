@@ -63,25 +63,15 @@ inline bool CanRunFromModal(bool has_server, GuiState::SimState state, bool anal
   return has_server && !IsBackendBusy(state, analysis_in_progress);
 }
 
-// "The server's committed scene is THIS document's": the analysis traces whatever was last
-// committed, and the intent channel is what says whether that was this document. kNone (fresh /
-// New / a JSON import) and kLoaded (an .lmc with a baked picture, never run) both leave the
-// server holding some earlier document's scene — or none, epoch 0 — so neither qualifies, even
-// though committed_epoch may still read non-zero from that earlier run (nothing resets it on a
-// document switch; the intent is the reset).
-inline bool HasCommittedSceneForThisDocument(RunIntent intent, uint64_t committed_epoch) {
-  return committed_epoch != 0 && intent != RunIntent::kNone && intent != RunIntent::kLoaded;
-}
-
-// The panel's Analyze button. An analysis needs a committed scene (LUMICE_StartRaypathAnalysis
-// answers LUMICE_ERR_INVALID_CONFIG without one — `has_committed_scene` is
-// HasCommittedSceneForThisDocument above), a backend with nothing in flight (the C API's mutual exclusion, surfaced as
-// a disabled button rather than as an error line after the click), and a picture that reflects the config: in kModified
-// the committed scene is not the one on the panels, so what the analysis would report on is not what the user is
-// looking at. Run first, then Analyze — the button's tooltip says so.
-inline bool CanStartAnalysis(bool has_server, bool has_committed_scene, GuiState::SimState state,
-                             bool analysis_in_progress) {
-  return has_server && has_committed_scene && !IsBackendBusy(state, analysis_in_progress) && !IsModified(state);
+// The panel's Analyze button. An analysis submits the document on the panels itself
+// (DoAnalyze builds the scene the way DoRun does and hands it to LUMICE_StartRaypathAnalysis), so
+// it needs no run before it and no picture that matches: a fresh document, a loaded .lmc that was
+// never run, and an edited (kModified) document all analyse — what the list describes is always
+// the configured scene, and the panel says so in a status line when the picture on screen is
+// not of it. The one thing it does need is a backend with nothing in flight (the C API's mutual
+// exclusion, surfaced as a disabled button rather than as an error line after the click).
+inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool analysis_in_progress) {
+  return has_server && !IsBackendBusy(state, analysis_in_progress);
 }
 
 }  // namespace lumice::gui

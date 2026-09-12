@@ -1120,6 +1120,65 @@ bool MaybeReconstructServerForConstructionProperties() {
   return true;
 }
 
+// The one emitter of the document a run is given, for BOTH kinds of run. DoRun and DoAnalyze
+// call this and nothing else to turn g_state into the LUMICE_Scene they submit, so the scene an
+// analysis reports on is byte-for-byte the scene a Run of the same document would render — a
+// second BuildScene call site would be a second place for the two to drift apart, and nothing
+// downstream could tell (doc/gui-state-governance.md §9: one encoder per intent). The overflow
+// report is part of the emitter for the same reason: a document too large for the ABI is refused
+// the same way, with the same message, whichever button asked.
+ScenePtr BuildCommitSceneOrWarn(const GuiState& state, bool user_initiated) {
+  FilterOverflowInfo overflow;
+  ColorClassOverflowInfo color_overflow;
+  ScenePtr scene = BuildScene(state, SceneIntent::kSimCommit, &overflow, &color_overflow);
+  if (scene) {
+    return scene;
+  }
+  // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
+  // (which runs strictly after the filter walk), rather than a physical-filter overflow.
+  // Reusing the filter-overflow wording/limit for a color overflow would misattribute the
+  // resource type and print the wrong cap number to the user.
+  std::string warning_msg;
+  std::string log_locator;
+  if (color_overflow.class_index >= 0) {
+    log_locator = FormatColorOverflowLocator(color_overflow);
+    // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply
+    // and the previous configuration was kept, so the user knows why nothing changed.
+    warning_msg = "This raypath color configuration exceeds its limits (" + log_locator +
+                  ").\nThe previous configuration was kept. Simplify the color configuration and try again.";
+  } else {
+    // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
+    // identifying which filter reference tripped the ABI bounds, captured inside
+    // BuildScene. Built by FormatOverflowLocator so the format is unit-testable
+    // (test/composition-correctness/gui/test_filter_reconstruct_chain.cpp) rather than only
+    // exercised through on-screen GUI.
+    log_locator = FormatOverflowLocator(overflow);
+    warning_msg = "This filter has too many OR segments / values to apply (limit " +
+                  std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + log_locator +
+                  ").\nThe previous configuration was kept. Simplify the filter and try again.";
+  }
+  // Log-panel dedup: gate the Log write on the SAME state SetGuiWarning uses for modal dedup
+  // (in-flight message equals the new one). Sharing the key intentionally couples the two
+  // channels — a wording change (e.g. new Layer/Entry after the user switches which filter
+  // triggers the overflow) counts as a fresh event and re-logs. A separate static holding the
+  // last logged message would be a second dedup key that could disagree with the modal's.
+  if (PeekGuiWarning() != warning_msg) {
+    GUI_LOG_WARNING("[GUI] BuildCommitSceneOrWarn: {} exceeds ABI limits ({}); keeping the previous configuration.",
+                    color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
+  }
+  // A user-clicked Run (or Analyze) always opens the warning modal, even when the previous
+  // OK dismissed it and the overflow condition is unchanged. SetGuiWarning's identity-dedup
+  // would otherwise silently swallow the second click. The auto-commit (70ms) path sets
+  // user_initiated=false so a stuck-overflow slider drag does not reopen the modal every
+  // tick and freeze the UI (app_panels.cpp's warning modal records why "OK to clear" alone
+  // is wrong).
+  if (user_initiated) {
+    ClearGuiWarning();
+  }
+  SetGuiWarning(warning_msg);
+  return nullptr;
+}
+
 bool DoRun(bool user_initiated) {
   if (!g_server) {
     return true;
@@ -1224,53 +1283,9 @@ bool DoRun(bool user_initiated) {
   // Build the scene BEFORE stopping the poller: if a filter exceeds the ABI bounds
   // (clause / term / filter capacity), keep the previously committed state (graceful
   // degradation) — poller untouched, buffer not torn — rather than commit a truncated config.
-  FilterOverflowInfo overflow;
-  ColorClassOverflowInfo color_overflow;
-  ScenePtr scene = BuildScene(g_state, SceneIntent::kSimCommit, &overflow, &color_overflow);
+  // The build and the overflow report are BuildCommitSceneOrWarn's, shared with DoAnalyze.
+  ScenePtr scene = BuildCommitSceneOrWarn(g_state, user_initiated);
   if (!scene) {
-    // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
-    // (which runs strictly after the filter walk), rather than a physical-filter overflow.
-    // Reusing the filter-overflow wording/limit for a color overflow would misattribute the
-    // resource type and print the wrong cap number to the user (code-review-01 Major 1).
-    std::string warning_msg;
-    std::string log_locator;
-    if (color_overflow.class_index >= 0) {
-      log_locator = FormatColorOverflowLocator(color_overflow);
-      // User-visible prompt (the Log panel is collapsed by default): the edit did NOT apply
-      // and the previous configuration was kept, so the user knows why nothing changed.
-      warning_msg = "This raypath color configuration exceeds its limits (" + log_locator +
-                    ").\nThe previous configuration was kept. Simplify the color configuration and try again.";
-    } else {
-      // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
-      // identifying which filter reference tripped the ABI bounds, captured inside
-      // BuildScene. Built by FormatOverflowLocator so the format is unit-testable
-      // (test/composition-correctness/gui/test_filter_reconstruct_chain.cpp) rather than only
-      // exercised through on-screen GUI.
-      log_locator = FormatOverflowLocator(overflow);
-      warning_msg = "This filter has too many OR segments / values to apply (limit " +
-                    std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + log_locator +
-                    ").\nThe previous configuration was kept. Simplify the filter and try again.";
-    }
-    // Log-panel dedup: gate the Log write on the SAME state SetGuiWarning uses for modal dedup
-    // (in-flight message equals the new one). Sharing the key intentionally couples the two
-    // channels — a wording change (e.g. new Layer/Entry after the user switches which filter
-    // triggers the overflow) counts as a fresh event and re-logs. See plan.md §7 risk 1 for
-    // why we did NOT introduce a separate `g_last_overlimit_log_msg` static variable.
-    if (PeekGuiWarning() != warning_msg) {
-      GUI_LOG_WARNING("[GUI] DoRun: {} exceeds ABI limits ({}); keeping the previous configuration.",
-                      color_overflow.class_index >= 0 ? "raypath color configuration" : "filter", log_locator);
-    }
-    // task-gui-feedback-affordances Step 2 (AC3): a user-clicked Run always
-    // opens the warning modal, even when the previous OK dismissed it and the
-    // overflow condition is unchanged. SetGuiWarning's identity-dedup would
-    // otherwise silently swallow the second Run. The auto-commit (70ms) path
-    // sets user_initiated=false so a stuck-overflow slider drag does not
-    // reopen the modal every tick and freeze the UI (app_panels.cpp:1315-1320
-    // records why "OK to clear" alone is wrong).
-    if (user_initiated) {
-      ClearGuiWarning();
-    }
-    SetGuiWarning(warning_msg);
     return true;
   }
 
@@ -1444,13 +1459,24 @@ bool DoAnalyze() {
   // Same reason DoRun joins first: a Stop may still be draining on the background thread, and the
   // server call below must not race it.
   JoinPendingStop();
-  // The IN_FRAME canvas is the preview's own — the frame on screen is what "in frame" means. The
-  // panel disables IN_FRAME while the preview is inactive, so the fallback is for the other two
-  // modes, whose requests never read the canvas size.
-  const int canvas_w = g_preview_vp.active ? g_preview_vp.vp_w : 1;
-  const int canvas_h = g_preview_vp.active ? g_preview_vp.vp_h : 1;
+  // The document on the panels, through the same emitter DoRun uses (its comment says why it
+  // must be the same one). An analysis is always a deliberate click, so a document too large for
+  // the ABI reopens the warning the way an explicit Run does, and nothing is analysed — not a
+  // truncated document, and not the previous one.
+  ScenePtr scene = BuildCommitSceneOrWarn(g_state, /*user_initiated=*/true);
+  if (!scene) {
+    return false;
+  }
+  // The IN_FRAME canvas is the preview's own when there is one — the frame on screen is what
+  // "in frame" means. Without a preview the frame is still the document's own view, sized at
+  // the resolution the document would render at: PreviewAnnotationView reads only the state
+  // and the canvas size, so this is the same frame a preview of that size would show. (The
+  // other two modes never read the canvas.)
+  const int doc_res = kSimResolutions[g_state.renderer.sim_resolution_index];
+  const int canvas_w = g_preview_vp.active ? g_preview_vp.vp_w : doc_res;
+  const int canvas_h = g_preview_vp.active ? g_preview_vp.vp_h : doc_res;
   const LUMICE_RaypathAnalysisRequest req = BuildAnalysisRequest(g_state, canvas_w, canvas_h);
-  const LUMICE_ErrorCode err = LUMICE_StartRaypathAnalysis(g_server, &req);
+  const LUMICE_ErrorCode err = LUMICE_StartRaypathAnalysis(g_server, scene.get(), &req);
   if (err != LUMICE_OK) {
     GUI_LOG_WARNING("[GUI] DoAnalyze: LUMICE_StartRaypathAnalysis failed with error code {} (roi_mode={})",
                     static_cast<int>(err), req.roi_mode);

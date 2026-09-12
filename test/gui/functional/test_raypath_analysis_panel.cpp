@@ -403,11 +403,13 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(first, largest);
       // The 22-degree halo IS the top chain at this point of the sky.
       IM_CHECK_STR_EQ(view_result.payload->entries[static_cast<size_t>(view_result.display_order[0])].display, "3-5");
-      // The analysis shares the render's epoch (server.cpp: same scene, same epoch) and the
-      // picture on screen is still the render's: sim_state stayed kDone throughout.
+      // The analysis is a submission of its own (v4.36): the server's epoch moved past the
+      // render's — and the picture on screen is still the render's, because the GUI's own
+      // committed_epoch (the one ReconcileSimState keys on) did not: sim_state stayed kDone.
       LUMICE_SimLifecycleResult after{};
       LUMICE_GetSimLifecycle(gui::g_server, &after);
-      IM_CHECK_EQ(after.epoch, before.epoch);
+      IM_CHECK_GT(after.epoch, before.epoch);
+      IM_CHECK_EQ(gui::g_state.committed_epoch, before.epoch);
       IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kDone);
     };
   }
@@ -426,7 +428,7 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       OpenWindow(ctx);
       ctx->SetRef(kWindowRef);
       IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
-      IM_CHECK(!gui::CanStartAnalysis(true, true, gui::g_state.sim_state, gui::g_state.analysis_run_in_progress));
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, gui::g_state.analysis_run_in_progress));
       // A click on it does nothing: no intent, no run.
       ctx->ItemClick(kAnalyzeButton);
       ctx->Yield(2);
