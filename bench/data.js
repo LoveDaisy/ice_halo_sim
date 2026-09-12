@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789256492874,
+  "lastUpdate": 1789256496758,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4776,54 +4776,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "6b3c6b4ca3743e19c327b64957e7c30aea188970",
-          "message": "Merge pull request #257 from LoveDaisy/feat/config-default-semantics\n\nMake core's implicit config defaults into written contracts (prob / axis type / absent axis)",
-          "timestamp": "2026-08-07T15:41:10+08:00",
-          "tree_id": "8426a314fa4cb0aff7bfe853eb95de84ef4b10f0",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6b3c6b4ca3743e19c327b64957e7c30aea188970"
-        },
-        "date": 1786089129013,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 897892.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1172841.3,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 763477.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 655729.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "35c7cd3f1734523f8812d509152a6b3ff8ab2ea7",
           "message": "Merge pull request #258 from LoveDaisy/fix/preview-drag-gain-fov\n\nfix(gui): scale preview drag by the lens's angular resolution",
           "timestamp": "2026-08-07T16:10:31+08:00",
@@ -9518,6 +9470,54 @@ window.BENCHMARK_DATA = {
             "value": 1013551.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V45 96-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0add0b4a676a2e20ab27c782e9e9b5a182aac5b",
+          "message": "Merge pull request #355 from LoveDaisy/feat/cli-lens-and-grid-contract\n\nfeat(lens): the CLI/GUI lens contract — short-edge fov, defaults, focal length import, annotations at intensity 0",
+          "timestamp": "2026-09-13T07:31:34+08:00",
+          "tree_id": "14ed237826bf2e9217fc60dc8c0bd508aee5669a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f0add0b4a676a2e20ab27c782e9e9b5a182aac5b"
+        },
+        "date": 1789256495974,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 929375.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1186105,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 958150.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 661972.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
