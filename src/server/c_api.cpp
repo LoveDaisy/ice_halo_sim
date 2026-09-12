@@ -3261,6 +3261,7 @@ LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecyc
       break;
   }
   out->epoch = static_cast<unsigned long long>(server->server_->CommittedEpoch());
+  out->session_kind = static_cast<int>(server->server_->GetSessionKind());
 
   return LUMICE_OK;
 }
@@ -3314,6 +3315,9 @@ LUMICE_ErrorCode LUMICE_GetBackendFallbackFlag(LUMICE_Server* server, int* out_f
 }
 
 
+static_assert(static_cast<int>(ns::SessionKind::kRender) == LUMICE_SESSION_RENDER &&
+                  static_cast<int>(ns::SessionKind::kAnalysis) == LUMICE_SESSION_ANALYSIS,
+              "LUMICE_SESSION_* drifted from SessionKind; the cast in LUMICE_GetSimLifecycle relies on equality");
 static_assert(static_cast<int>(ns::BackendKind::kCpu) == LUMICE_BACKEND_CPU &&
                   static_cast<int>(ns::BackendKind::kMetal) == LUMICE_BACKEND_METAL &&
                   static_cast<int>(ns::BackendKind::kCuda) == LUMICE_BACKEND_CUDA,

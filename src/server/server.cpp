@@ -93,6 +93,10 @@ class ServerImpl {
   void Start();
   ServerStatus GetStatus() const;
   SimLifecycle GetSimLifecycle() const;
+  // See Server::GetSessionKind. A plain acquire load of mode_ — the same read the
+  // CommitConfig reuse decision performs, so a caller predicting that decision reads
+  // exactly what it will read.
+  SessionKind GetSessionKind() const;
   uint64_t CommittedEpoch() const;
   uint64_t DrainedEpoch() const;
   bool IsIdle();
@@ -153,7 +157,7 @@ class ServerImpl {
   // WARN line no GUI user ever sees. Cheap: one atomic load under a short mutex.
   // An analysis session is not a fallback: its CPU route is asked for, not fallen to.
   bool BackendFellBack() const {
-    return gpu_route_ && mode_.load(std::memory_order_acquire) != SessionMode::kAnalysis && !ReadBackendActive();
+    return gpu_route_ && mode_.load(std::memory_order_acquire) != SessionKind::kAnalysis && !ReadBackendActive();
   }
 
  private:
@@ -438,8 +442,9 @@ class ServerImpl {
   // Atomic for the same reason the analysis budget fields below are: control thread
   // writes, worker threads read, and a plain member would rest on Stop()'s join being a
   // happens-before that every future edit of this file preserves.
-  enum class SessionMode { kRender, kAnalysis };
-  std::atomic<SessionMode> mode_{ SessionMode::kRender };
+  // The enum itself is public (server.hpp SessionKind) so that GetSessionKind() can hand
+  // the very same value to the C API instead of a mirrored copy of it.
+  std::atomic<SessionKind> mode_{ SessionKind::kRender };
 
   // The analysis run's own ray budget (RaypathAnalysisRequest::ray_num_), carried from
   // StartRaypathAnalysis (control thread) to GenerateScene's budget ingest point (worker
@@ -886,7 +891,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // completed (or stopped) analysis session is exactly the state a new render commit is
   // expected to replace. Checked before the parse so a rejected commit leaves the server
   // — config_manager_ included — untouched.
-  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis && GetSimLifecycle() == SimLifecycle::kRunning) {
+  if (mode_.load(std::memory_order_acquire) == SessionKind::kAnalysis && GetSimLifecycle() == SimLifecycle::kRunning) {
     ILOG_WARN(logger_, "CommitConfig: rejected — an analysis run is in progress; Stop() it first");
     return Error::ServerError("analysis run in progress; stop it before committing a render config");
   }
@@ -958,7 +963,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // per-Simulator analysis properties can be withdrawn here without racing a Run(): a
   // render session must not pay the chain-id cost (non-analysis mode is zero-cost by
   // contract) and must get the backend the user asked for back.
-  const bool was_analysis = mode_.exchange(SessionMode::kRender, std::memory_order_acq_rel) == SessionMode::kAnalysis;
+  const bool was_analysis = mode_.exchange(SessionKind::kRender, std::memory_order_acq_rel) == SessionKind::kAnalysis;
   if (was_analysis) {
     {
       std::lock_guard<std::mutex> lock(prod_mutex_);
@@ -1119,7 +1124,7 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
   // running ANALYSIS is not refused — the same call with a new ROI restarts it, which is
   // how a caller changes the cone without a Stop() round-trip. Checked before the parse so
   // a rejected request leaves the server untouched, as CommitConfig's guard does.
-  if (mode_.load(std::memory_order_acquire) == SessionMode::kRender && GetSimLifecycle() == SimLifecycle::kRunning) {
+  if (mode_.load(std::memory_order_acquire) == SessionKind::kRender && GetSimLifecycle() == SimLifecycle::kRunning) {
     ILOG_WARN(logger_, "StartRaypathAnalysis: rejected — a render run is in progress; Stop() it first");
     return Error::ServerError("render run in progress; stop it before starting analysis");
   }
@@ -1143,7 +1148,7 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
   RaypathReduceContext reduce_ctx = BuildRaypathReduceContext(new_config.scene_);
 
   Stop();
-  mode_.store(SessionMode::kAnalysis, std::memory_order_release);
+  mode_.store(SessionKind::kAnalysis, std::memory_order_release);
   // The render's image must not be readable off an analysis session's frame, not even
   // flagged stale: the first frame of this session is empty until its first batch.
   PublishEmptyFrame();
@@ -1201,7 +1206,7 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
 }
 
 BackendKind ServerImpl::GetActiveBackend() const {
-  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis) {
+  if (mode_.load(std::memory_order_acquire) == SessionKind::kAnalysis) {
     return BackendKind::kCpu;  // structural: SetAnalysisForceCpu(true) on every Simulator
   }
   std::lock_guard<std::mutex> lock(prod_mutex_);
@@ -1552,7 +1557,7 @@ void ServerImpl::Stop() {
   // Render sessions are deliberately untouched: their Stop() contract (a stop reads as
   // idle with no data, doc/capi-lifecycle-architecture.md §7.1) is what the GUI's
   // re-simulate paths rest on. No lock is held here; DoSnapshot() takes its own two.
-  if (mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis) {
+  if (mode_.load(std::memory_order_acquire) == SessionKind::kAnalysis) {
     DoSnapshot();
   }
 
@@ -1661,6 +1666,10 @@ SimLifecycle ServerImpl::GetSimLifecycle() const {
     consumed = has_ever_consumed_;
   }
   return consumed ? SimLifecycle::kCompleted : SimLifecycle::kIdle;
+}
+
+SessionKind ServerImpl::GetSessionKind() const {
+  return mode_.load(std::memory_order_acquire);
 }
 
 uint64_t ServerImpl::CommittedEpoch() const {
@@ -2117,7 +2126,7 @@ void ServerImpl::GenerateScene() {
   // The analysis session forces the CPU route here AND in the Simulator's CreateBackend
   // (through the same session flag) — the two halves of one routing decision, kept in
   // step by passing the same fact to both.
-  const bool kAnalysis = mode_.load(std::memory_order_acquire) == SessionMode::kAnalysis;
+  const bool kAnalysis = mode_.load(std::memory_order_acquire) == SessionKind::kAnalysis;
   const bool kGpuRoute = ResolveGpuRoute(kPref, logger_, /*force_cpu=*/kAnalysis);
 #if defined(LUMICE_CUDA_ENABLED) && !defined(__APPLE__)
   const bool kIsCudaRoute = kGpuRoute;
@@ -2533,6 +2542,13 @@ SimLifecycle Server::GetSimLifecycle() const {
     return SimLifecycle::kIdle;
   }
   return impl_->GetSimLifecycle();
+}
+
+SessionKind Server::GetSessionKind() const {
+  if (!impl_) {
+    return SessionKind::kRender;
+  }
+  return impl_->GetSessionKind();
 }
 
 uint64_t Server::CommittedEpoch() const {

@@ -31,7 +31,8 @@
 #include "server/raypath_histogram_consumer.hpp"  // FormatRaypathChainDisplay (the truncation fixture premise)
 #include "server/server.hpp"
 
-static_assert(LUMICE_API_VERSION >= 435, "the analysis run needs the v4.35 header (bounded record fields)");
+static_assert(LUMICE_API_VERSION >= 437,
+              "the analysis run needs the v4.37 header (bounded record fields, session_kind)");
 
 // The layout the ctypes mirrors in test/e2e/capi_runner.py are written against. Sizes AND
 // offsets, so a field inserted in the middle (which keeps the size) is caught as well as
@@ -290,11 +291,17 @@ TEST_F(CApiRaypathAnalysis, AnalysisNeedsNoPriorCommitAndTheCommitAfterItRenders
   LUMICE_SimLifecycleResult lc{};
   ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
   ASSERT_EQ(lc.epoch, 0u) << "positive control: nothing submitted yet";
+  ASSERT_EQ(lc.session_kind, LUMICE_SESSION_RENDER) << "positive control: the default before any run";
   const LUMICE_RaypathAnalysisRequest req = FullSky();
   ASSERT_EQ(StartAnalysis(server_, Halo22Json("40000"), &req), LUMICE_OK);
   ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
   EXPECT_EQ(lc.epoch, 1u) << "the analysis is a submission of its own: it minted the epoch";
+  EXPECT_EQ(lc.session_kind, LUMICE_SESSION_ANALYSIS) << "the session kind is the server's own, read back";
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.session_kind, LUMICE_SESSION_ANALYSIS)
+      << "completion does not flip the kind: only the next commit does, and a client predicting that "
+         "commit's reuse decision reads this value first";
   EXPECT_EQ(ActiveBackend(server_), LUMICE_BACKEND_CPU);
   LUMICE_ResultFrame* frame = nullptr;
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
@@ -314,6 +321,7 @@ TEST_F(CApiRaypathAnalysis, AnalysisNeedsNoPriorCommitAndTheCommitAfterItRenders
   ASSERT_EQ(CommitJson(server_, Halo22Json("2000")), LUMICE_OK);
   ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &lc), LUMICE_OK);
   EXPECT_EQ(lc.epoch, 2u);
+  EXPECT_EQ(lc.session_kind, LUMICE_SESSION_RENDER) << "the commit is what flips it back";
   ASSERT_TRUE(WaitForCompletedAndDrained(server_, 30000));
   ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
   ASSERT_EQ(LUMICE_FrameGetRaypathAnalysisInfo(frame, kSymAll, &info), LUMICE_OK);
