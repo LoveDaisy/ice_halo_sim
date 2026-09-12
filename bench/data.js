@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789250201568,
+  "lastUpdate": 1789250203892,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "559b976cfc69c740bfbb7bcf1a4c9f0bac592e3c",
-          "message": "Merge pull request #255 from LoveDaisy/feat/gui-rules-as-data\n\nMake three GUI rules queryable data, and replace the grid tests they forced",
-          "timestamp": "2026-08-07T07:52:53+08:00",
-          "tree_id": "e263eeb0da176a674de554034f5744e15cc45bf6",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/559b976cfc69c740bfbb7bcf1a4c9f0bac592e3c"
-        },
-        "date": 1786060889733,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 79.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.6,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "985357aace8cb86e666f1c4e317f08c847f2af51",
           "message": "Merge pull request #256 from LoveDaisy/fix/pyramid-closed-form-geometry-defects\n\nfix(core): close the closed-form pyramid's structural geometry defects",
           "timestamp": "2026-08-07T14:54:11+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "365409776ad9761a5ebf3402cf9cde48f573e9d8",
+          "message": "Merge pull request #353 from LoveDaisy/fix/render-consumer-label-flake-root-cause\n\nfix(test): root-cause the RenderConsumerLabel flake — an uninitialized SunParam azimuth",
+          "timestamp": "2026-09-13T05:47:24+08:00",
+          "tree_id": "2a620f7705b88d7f56d29a1cf923e190e358fd9e",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/365409776ad9761a5ebf3402cf9cde48f573e9d8"
+        },
+        "date": 1789250203207,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 92.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.1,
             "unit": "%"
           }
         ]
