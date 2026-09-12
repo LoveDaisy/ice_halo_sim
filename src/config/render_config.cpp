@@ -4,11 +4,12 @@
 #include <cmath>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 
 #include "config/config_compare.hpp"
-#include "core/math.hpp"
 #include "util/color_space.hpp"
+#include "util/lens_focal.hpp"
 #include "util/lens_fov_default.hpp"
 #include "util/logger.hpp"
 
@@ -165,56 +166,53 @@ void to_json(nlohmann::json& j, const LensParam& l) {
 
 void from_json(const nlohmann::json& j, LensParam& l) {
   constexpr int kErrCodeInvalidValue = 404;
-  constexpr float kHalfShortEdge = 12.0f;  // half short edge of 35mm film (24mm / 2)
 
   j.at("type").get_to(l.type_);
   if (j.contains("fov")) {
     j.at("fov").get_to(l.fov_);
   } else if (j.contains("f")) {
-    float f = j.at("f").get<float>();
-    float d = kHalfShortEdge;
-    // NOTE: f→fov formula must match the scale formula in render.cpp for each projection model.
+    // The formulas live in util/lens_focal.hpp, the one function the GUI's import path also calls;
+    // this switch only names which of its six families each lens type belongs to. The GUI keeps the
+    // same map over its own LensType in src/gui/file_io.cpp — a new enumerator here must be added
+    // there too, and neither switch writes a `default:` so the compiler points at the one missed.
+    const float f = j.at("f").get<float>();
+    LensFocalFormula formula = LensFocalFormula::kLinear;
     switch (l.type_) {
       case LensParam::kLinear:
-        l.fov_ = std::atan2(d, f) * 2 * math::kRadToDegree;
+      case LensParam::kGlobe:
+        formula = LensFocalFormula::kLinear;
         break;
       case LensParam::kFisheyeEqualArea:
       case LensParam::kDualFisheyeEqualArea:
-        if (d / (2 * f) > 1.0f) {
-          throw nlohmann::detail::out_of_range::create(
-              kErrCodeInvalidValue, "focal length too short for equal area fisheye (f >= 6mm required)", j);
-        }
-        l.fov_ = std::asin(d / (2 * f)) * 4 * math::kRadToDegree;
+        formula = LensFocalFormula::kFisheyeEqualArea;
         break;
       case LensParam::kFisheyeEquidistant:
       case LensParam::kDualFisheyeEquidistant:
-        l.fov_ = (d / f) * math::kRadToDegree;
+        formula = LensFocalFormula::kFisheyeEquidistant;
         break;
       case LensParam::kFisheyeStereographic:
       case LensParam::kDualFisheyeStereographic:
-        l.fov_ = std::atan(d / (2 * f)) * 4 * math::kRadToDegree;
-        break;
-      case LensParam::kRectangular:
-        l.fov_ = 0;  // Rectangular is always full-sky; fov is ignored
+        formula = LensFocalFormula::kFisheyeStereographic;
         break;
       case LensParam::kFisheyeOrthographic:
       case LensParam::kDualFisheyeOrthographic:
-        // r = f * sin(theta); boundary r_max = d = kHalfShortEdge. fov = 2 * asin(d / f).
-        // Unlike EA's r = 2f * sin(theta/2) (denominator 2f), orthographic uses f directly.
-        if (d / f > 1.0f) {
-          throw nlohmann::detail::out_of_range::create(
-              kErrCodeInvalidValue, "focal length too short for orthographic fisheye (f >= 12mm required for fov=180)",
-              j);
-        }
-        l.fov_ = std::asin(d / f) * 2 * math::kRadToDegree;
+        formula = LensFocalFormula::kFisheyeOrthographic;
         break;
-      case LensParam::kGlobe:
-        // Globe's on-image scale uses focal = img_radius/tan(fov/2), identical
-        // to the linear model (see ComputeLensScale / GUI globeInverse), so the
-        // f→fov mapping mirrors linear.
-        l.fov_ = std::atan2(d, f) * 2 * math::kRadToDegree;
+      case LensParam::kRectangular:
+        formula = LensFocalFormula::kRectangular;
         break;
     }
+    const std::optional<float> fov = LensFocalLengthToFovDegrees(formula, f);
+    if (!fov.has_value()) {
+      // The two families with a domain edge, each rejected with the message it has always had.
+      if (formula == LensFocalFormula::kFisheyeEqualArea) {
+        throw nlohmann::detail::out_of_range::create(
+            kErrCodeInvalidValue, "focal length too short for equal area fisheye (f >= 6mm required)", j);
+      }
+      throw nlohmann::detail::out_of_range::create(
+          kErrCodeInvalidValue, "focal length too short for orthographic fisheye (f >= 12mm required for fov=180)", j);
+    }
+    l.fov_ = *fov;
   } else {
     // Neither key: the default doc/configuration.md's lens "Defaults" section has published all
     // along, taken from the one function the GUI's import path also calls (util/lens_fov_default.hpp)
