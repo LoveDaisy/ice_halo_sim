@@ -14,14 +14,23 @@ Phase B: Run gui_test N_calib times, parse PSNR output from stderr, and
   recommendation; the cross-machine K lives in the test source (see _MAXCC_RE).
 
 Both phases are driven by the GROUPS registry below: a reference group names the
-gui_test category it tags its output with, its scenes/modes, and the tmp/reference
-filename prefixes. Adding a visual-regression suite means adding a GROUPS entry — the
-Phase A/B algorithms themselves stay untouched.
+gui_test category it tags its output with, its scenes/modes, the tmp/reference
+filename prefixes, and whether it is deterministic. Adding a visual-regression suite
+means adding a GROUPS entry — the Phase A/B algorithms themselves stay untouched.
 
 Every run of both phases is a full gui_test run under the same invocation
 scripts/build.sh uses for its correctness pool (see SUITE_ARGS), because that is the
 condition the committed thresholds have to hold under; groups are separated by the
-"[<group>]" tag their comparisons print, not by narrowing what runs.
+"[<group>]" tag their comparisons print, not by narrowing what runs. Because every such
+run exports every group's captures and prints every group's PSNR lines, one invocation
+covering several groups runs max(n) full suites, not sum(n), and deals each run out to
+every group that still wants a sample. N itself is per group: a deterministic group
+(no simulation, no RNG in any scene) defaults to a single run per phase, since a second
+run of the same frame is no information; a stochastic one to STOCHASTIC_RUNS.
+
+Phase A is also gated on origin/main: if main has already reshot a reference this run
+would write, the run refuses (that reference would be discarded at rebase time) unless
+--allow-stale-base is passed. See check_reference_base.
 
 See AGENTS.md "GUI Test Reference Regeneration" for usage.
 """
@@ -61,6 +70,19 @@ class ReferenceGroup:
                 from there, so only the filename is shared with the test source.
     ref_prefix  the reference lives at <refs_dir>/<ref_prefix><key>.jpg.
     source      the group's test source, quoted in the "copy thresholds back" hint.
+    deterministic
+                True when every scene's frame carries no simulation and no RNG, so one run
+                is the whole population: the reference is that single capture, Phase B's
+                statistics have nothing to estimate, and the group is held to the pixel
+                ruler in its test source rather than to a PSNR floor. This flag sets the
+                run-count DEFAULT (1/1 instead of STOCHASTIC_RUNS) — nothing else. Repeating
+                a full-suite run on a deterministic group is zero information at ~90 s per
+                run, which is how one two-group reshoot came to cost 64 minutes; a
+                registration must declare it, since the alternative is the driver guessing
+                from _thresholds.json's identical_runs after the fact, on a group that may
+                have no entry yet. It is not a correctness claim the driver enforces:
+                Phase B's maxcc_local_max audit is what catches a "deterministic" scene
+                that has stopped being one.
     """
 
     key: str
@@ -69,7 +91,14 @@ class ReferenceGroup:
     tmp_prefix: str
     ref_prefix: str
     source: str
+    deterministic: bool
 
+
+# Run counts a stochastic group defaults to, for Phase A (mean of N frames) and Phase B
+# (N_calib PSNR samples behind mean − max(4σ, 1 dB)). A deterministic group defaults to 1/1
+# and takes these only when --n / --n-calib are passed explicitly, which applies the same count
+# to every selected group.
+STOCHASTIC_RUNS = 10
 
 GROUPS: dict[str, ReferenceGroup] = {
     "capture_harness": ReferenceGroup(
@@ -79,6 +108,7 @@ GROUPS: dict[str, ReferenceGroup] = {
         tmp_prefix="lumice_capture_harness_",
         ref_prefix="smoke_",
         source="test/gui/visual/test_gui_capture_smoke.cpp",
+        deterministic=True,
     ),
     # Lens-projection scene names — must match kScenes[] order in test_gui_lens_projection.cpp.
     # One scene per projection branch of the preview fragment shader, plus overlay_ea, which
@@ -107,6 +137,7 @@ GROUPS: dict[str, ReferenceGroup] = {
         tmp_prefix="lumice_lens_proj_",
         ref_prefix="lens_proj_",
         source="test/gui/visual/test_gui_lens_projection.cpp",
+        deterministic=False,
     ),
     # Defaults-panel layout scene names — must match kScenes[] order in
     # test/gui/visual/test_gui_defaults_panel.cpp. Each scene is one state of the "Save Current as
@@ -127,6 +158,7 @@ GROUPS: dict[str, ReferenceGroup] = {
         tmp_prefix="lumice_defaults_panel_",
         ref_prefix="defaults_panel_",
         source="test/gui/visual/test_gui_defaults_panel.cpp",
+        deterministic=True,
     ),
     # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
     # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
@@ -143,6 +175,7 @@ GROUPS: dict[str, ReferenceGroup] = {
         tmp_prefix="lumice_modal_layout_",
         ref_prefix="modal_layout_",
         source="test/gui/visual/test_gui_modal_layout.cpp",
+        deterministic=True,
     ),
 }
 
@@ -231,6 +264,30 @@ def _scene_list(group: ReferenceGroup, args: argparse.Namespace) -> list[str]:
 def _scene_key(scene: str, mode: str | None) -> str:
     """Scene identifier used in filenames, stderr tags and _thresholds.json."""
     return f"{scene}_{mode}" if mode else scene
+
+
+def _resolve_runs(group: ReferenceGroup, explicit: int | None) -> int:
+    """Run count for one group: the explicit --n / --n-calib value when given, else the group's
+    default — 1 for a deterministic group, STOCHASTIC_RUNS otherwise. An explicit value is the
+    caller's statement that they want that many samples from every selected group, so it is
+    not clamped for deterministic ones (that is how a suspected non-determinism gets measured).
+    """
+    if explicit is not None:
+        if explicit < 1:
+            print(f"ERROR: run count must be >= 1, got {explicit}", file=sys.stderr)
+            sys.exit(1)
+        return explicit
+    return 1 if group.deterministic else STOCHASTIC_RUNS
+
+
+def _run_plan(groups: list[ReferenceGroup], explicit: int | None) -> dict[str, int]:
+    """Per-group run counts for one phase. The phase runs max() of these full-suite runs and
+    hands every run's output to each group that still wants a sample, so several groups in
+    one invocation cost max(n), not sum(n): each full-suite run already exports every group's
+    captures and prints every group's PSNR lines, and it was only ever the driver that threw
+    the other groups' share of each run away.
+    """
+    return {g.key: _resolve_runs(g, explicit) for g in groups}
 
 
 # Every run — reference generation AND calibration — invokes gui_test exactly the way
@@ -337,42 +394,98 @@ def _read_thresholds(json_path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Stale-base gate — refuse to reshoot references origin/main has already reshot
+# ---------------------------------------------------------------------------
+
+
+def _git(args: list[str]) -> tuple[int, str, str]:
+    result = subprocess.run(["git"] + args, capture_output=True, text=True)
+    return result.returncode, result.stdout, result.stderr
+
+
+def _planned_reference_paths(groups: list[ReferenceGroup], args: argparse.Namespace) -> set[str]:
+    """Every reference file Phase A may write in this invocation, as paths relative to the
+    current directory (both extensions: the format silence rule decides per scene)."""
+    out: set[str] = set()
+    for group in groups:
+        for scene in _scene_list(group, args):
+            for mode in group.modes:
+                base = os.path.join(args.refs_dir, f"{group.ref_prefix}{_scene_key(scene, mode)}")
+                out.add(os.path.normpath(base + ".jpg"))
+                out.add(os.path.normpath(base + ".png"))
+    return out
+
+
+def check_reference_base(groups: list[ReferenceGroup], args: argparse.Namespace) -> None:
+    """Exit non-zero if origin/main has changed any reference this run is about to write.
+
+    A reference reshot on a branch whose base is behind origin/main on that same file is work
+    that gets thrown away: at rebase time the branch's copy and main's copy conflict, and the
+    only sane resolution is to take main's and reshoot again on top of it. That is also the
+    order the gate asks for — rebase first, then shoot. The comparison is HEAD...origin/main
+    restricted to the reference directory, i.e. what main changed since the merge base; the
+    branch's own reference changes do not matter here (they are the thing being redone).
+
+    Scoped to the planned image files, deliberately not to _thresholds.json: main rewrites that
+    file's group entry on every calibration of any group, so including it would fire this gate
+    for a lens_proj reshoot because main recalibrated modal_layout.
+
+    Compares against the LOCAL origin/main ref and does not fetch: a fetch is a network side
+    effect this script should not make on the caller's behalf, so the caller runs `git fetch`
+    when currency matters. No origin/main at all (no remote, exported tree) skips the gate with
+    a note; any other git failure stops the run, since a gate that fails open on an error is
+    not a gate. --allow-stale-base is the explicit override for both.
+    """
+    if args.allow_stale_base:
+        print("[base] --allow-stale-base: skipping the origin/main reference check")
+        return
+    rc, _, _ = _git(["rev-parse", "--verify", "-q", "origin/main"])
+    if rc != 0:
+        print("[base] origin/main not found (no remote?) — skipping the stale-base check")
+        return
+    rc, out, err = _git(["diff", "--name-only", "--relative", "HEAD...origin/main", "--", args.refs_dir])
+    if rc != 0:
+        print(
+            f"ERROR: git diff HEAD...origin/main -- {args.refs_dir} failed: {err.strip()}\n"
+            "Resolve that (a refs dir outside this checkout, or no merge base), or pass "
+            "--allow-stale-base to shoot anyway.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    changed_on_main = {os.path.normpath(line) for line in out.splitlines() if line.strip()}
+    hits = sorted(_planned_reference_paths(groups, args) & changed_on_main)
+    if not hits:
+        print("[base] origin/main has not touched any reference this run would write")
+        return
+    print(
+        "ERROR: origin/main has already reshot reference(s) this run would write:\n"
+        + "".join(f"  {path}\n" for path in hits)
+        + "A reference shot here would be discarded at rebase time in favour of main's copy.\n"
+        "Rebase this branch onto origin/main first (git fetch && git rebase origin/main),\n"
+        "then reshoot on top of it. Pass --allow-stale-base to override.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Phase A — mean-ref generation
 # ---------------------------------------------------------------------------
 
 
-def phase_a_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
-    binary = args.binary
-    n = args.n
+def _phase_a_average_group(group: ReferenceGroup, n: int, args: argparse.Namespace) -> int:
+    """Per (scene, mode): pixel-average the group's n collected frames, apply the format
+    silence rule, save the reference. n == 1 is the deterministic case and is not special-cased:
+    the mean of one frame is that frame, and the rms terms below evaluate to 0 for it.
+    Returns the number of (scene, mode) keys that had no frame at all and were left untouched."""
     refs_dir = args.refs_dir
     quality = args.quality
     scenes = _scene_list(group, args)
-
-    print(f"[Phase A][{group.key}] Mean-ref generation: N={n} runs, JPEG quality={quality}")
-    print(f"[Phase A][{group.key}] Binary : {binary}")
-    print(f"[Phase A][{group.key}] Refs   : {refs_dir}")
-    print(f"[Phase A][{group.key}] Scenes : {scenes} (full-suite runs; --scene selects which to average)")
-
-    # Clear staging dir for idempotent reruns
     staging = os.path.join(STAGING_DIR, group.key)
-    if os.path.exists(staging):
-        shutil.rmtree(staging)
-    os.makedirs(staging)
 
-    # Collect N independent runs
-    for i in range(n):
-        run_dir = os.path.join(staging, f"run_{i}")
-        print(f"[Phase A][{group.key}] Run {i + 1}/{n}...", flush=True)
-        export_dir = os.path.join(staging, f"export_{i}")
-        os.makedirs(export_dir, exist_ok=True)
-        rc, _ = _run(binary, ["--keep-export-png", "--export-dir", export_dir])
-        if rc != 0:
-            print(f"  WARNING: run {i} exited {rc}", file=sys.stderr)
-        _collect_pngs(group, run_dir, scenes, export_dir)
-
-    # Per (scene, mode): pixel-average → apply format silence rule → save reference
-    print()
+    print(f"\n[Phase A][{group.key}] Averaging N={n} run(s), JPEG quality={quality}")
     updated = 0
+    skipped = 0
     for scene in scenes:
         for mode in group.modes:
             key = _scene_key(scene, mode)
@@ -387,6 +500,7 @@ def phase_a_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
 
             if not frames:
                 print(f"  ERROR: no frames for {key} — skipping", file=sys.stderr)
+                skipped += 1
                 continue
 
             stack = np.stack(frames, axis=0)   # (N, H, W, C)
@@ -432,12 +546,59 @@ def phase_a_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
                 os.unlink(tmp_png)
             updated += 1
 
-    print(f"\n[Phase A][{group.key}] Done — {updated} references updated in {refs_dir}")
+    print(f"[Phase A][{group.key}] Done — {updated} references updated in {refs_dir}")
+    return skipped
 
 
 def phase_a(args: argparse.Namespace) -> None:
-    for group in _selected_groups(args):
-        phase_a_group(group, args)
+    groups = _selected_groups(args)
+    plan = _run_plan(groups, args.n)
+    n_max = max(plan.values())
+    binary = args.binary
+
+    print(f"[Phase A] Mean-ref generation: {n_max} full-suite run(s) shared by {len(groups)} group(s)")
+    print(f"[Phase A] Binary : {binary}")
+    print(f"[Phase A] Refs   : {args.refs_dir}")
+    for group in groups:
+        kind = "deterministic" if group.deterministic else "stochastic"
+        print(f"[Phase A][{group.key}] N={plan[group.key]} ({kind}); "
+              f"scenes {_scene_list(group, args)} (--scene selects which to average)")
+
+    # Clear staging for idempotent reruns: each selected group's collected frames, and the
+    # shared export directories every run writes into before the frames are dealt out.
+    for group in groups:
+        staging = os.path.join(STAGING_DIR, group.key)
+        if os.path.exists(staging):
+            shutil.rmtree(staging)
+        os.makedirs(staging)
+    for i in range(n_max):
+        export_dir = os.path.join(STAGING_DIR, f"export_{i}")
+        if os.path.exists(export_dir):
+            shutil.rmtree(export_dir)
+        os.makedirs(export_dir)
+
+    # n_max independent runs; run i is dealt to every group whose plan still wants sample i.
+    for i in range(n_max):
+        print(f"[Phase A] Run {i + 1}/{n_max}...", flush=True)
+        export_dir = os.path.join(STAGING_DIR, f"export_{i}")
+        rc, _ = _run(binary, ["--keep-export-png", "--export-dir", export_dir])
+        if rc != 0:
+            print(f"  WARNING: run {i} exited {rc}", file=sys.stderr)
+        for group in groups:
+            if i < plan[group.key]:
+                run_dir = os.path.join(STAGING_DIR, group.key, f"run_{i}")
+                _collect_pngs(group, run_dir, _scene_list(group, args), export_dir)
+
+    # A run's exit code is not a usable signal here: a reshoot exists because the frame changed,
+    # so gui_test failing its comparison against the OLD reference is the expected outcome. What
+    # is a signal is a capture that never appeared — and with a deterministic group's single run
+    # there is no other sample to fall back on, so a missing frame must not end as exit 0 with a
+    # stale reference still in place.
+    skipped = sum(_phase_a_average_group(group, plan[group.key], args) for group in groups)
+    if skipped:
+        print(f"ERROR: [Phase A] {skipped} reference(s) not written — no captured frame; see above",
+              file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -445,43 +606,46 @@ def phase_a(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
-def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
-    binary = args.binary
-    n_calib = args.n_calib
-    refs_dir = args.refs_dir
-    # Every group prints into the same full-suite stderr, and --scene must leave the group's
-    # other scenes' entries untouched, so sampling is restricted to the selected keys.
-    wanted = {_scene_key(scene, mode) for scene in _scene_list(group, args) for mode in group.modes}
+@dataclass
+class _GroupSamples:
+    """What one group harvested from the calibration runs dealt to it."""
 
-    print(f"[Phase B][{group.key}] Threshold calibration: N_calib={n_calib} runs")
-    print(f"[Phase B][{group.key}] Binary : {binary}")
-    print(f"[Phase B][{group.key}] Scenes : {sorted(wanted)}")
-
-    psnr_data: dict[str, list[float]] = {}
+    wanted: set[str]
+    psnr: dict[str, list[float]]
     # tag -> (tau, [maxcc per run]); only scenes the binary compares under the pixel ruler.
-    maxcc_data: dict[str, tuple[int, list[int]]] = {}
-    for i in range(n_calib):
-        print(f"[Phase B][{group.key}] Calibration run {i + 1}/{n_calib}...", flush=True)
-        _, stderr = _run(binary, [], capture_stderr=True)
-        for m in _PSNR_RE.finditer(stderr):
-            # Drop PSNR lines belonging to another group, or to a scene this run did not select.
-            if m.group(1) != group.key or m.group(2) not in wanted:
-                continue
-            tag, val = m.group(2), float(m.group(3))
-            psnr_data.setdefault(tag, []).append(val)
-        for m in _MAXCC_RE.finditer(stderr):
-            if m.group(1) != group.key or m.group(2) not in wanted:
-                continue
-            tag, maxcc, tau = m.group(2), int(m.group(4)), int(m.group(6))
-            prev_tau, samples = maxcc_data.setdefault(tag, (tau, []))
-            if prev_tau != tau:
-                print(
-                    f"ERROR: [Phase B][{group.key}] tag '{tag}' printed tau={tau} after tau={prev_tau} "
-                    "— one scene, one ruler",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            samples.append(maxcc)
+    maxcc: dict[str, tuple[int, list[int]]]
+
+
+def _phase_b_ingest(group: ReferenceGroup, samples: _GroupSamples, stderr: str) -> None:
+    """Pull this group's PSNR / pixel-ruler lines out of one full-suite stderr."""
+    for m in _PSNR_RE.finditer(stderr):
+        # Drop PSNR lines belonging to another group, or to a scene this run did not select.
+        if m.group(1) != group.key or m.group(2) not in samples.wanted:
+            continue
+        tag, val = m.group(2), float(m.group(3))
+        samples.psnr.setdefault(tag, []).append(val)
+    for m in _MAXCC_RE.finditer(stderr):
+        if m.group(1) != group.key or m.group(2) not in samples.wanted:
+            continue
+        tag, maxcc, tau = m.group(2), int(m.group(4)), int(m.group(6))
+        prev_tau, per_run = samples.maxcc.setdefault(tag, (tau, []))
+        if prev_tau != tau:
+            print(
+                f"ERROR: [Phase B][{group.key}] tag '{tag}' printed tau={tau} after tau={prev_tau} "
+                "— one scene, one ruler",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        per_run.append(maxcc)
+
+
+def _phase_b_write_group(
+    group: ReferenceGroup, samples: _GroupSamples, n_calib: int, n_ref: int, args: argparse.Namespace
+) -> None:
+    refs_dir = args.refs_dir
+    wanted = samples.wanted
+    psnr_data = samples.psnr
+    maxcc_data = samples.maxcc
 
     if not psnr_data:
         print(
@@ -507,26 +671,26 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     )
     scenes_out: dict[str, dict] = {}
     for tag in sorted(psnr_data):
-        samples = psnr_data[tag]
-        if len(samples) < n_calib:
+        vals_all = psnr_data[tag]
+        if len(vals_all) < n_calib:
             print(
-                f"WARNING: [Phase B][{group.key}] tag '{tag}' produced only {len(samples)}/{n_calib} "
+                f"WARNING: [Phase B][{group.key}] tag '{tag}' produced only {len(vals_all)}/{n_calib} "
                 "PSNR samples — the resulting mean/std/threshold are computed from fewer runs than "
                 "declared in n_calib_runs",
                 file=sys.stderr,
             )
-        identical = sum(1 for v in samples if math.isinf(v))
-        finite = [v for v in samples if math.isfinite(v)]
+        identical = sum(1 for v in vals_all if math.isinf(v))
+        finite = [v for v in vals_all if math.isfinite(v)]
         if not finite:
             # Every run matched the reference exactly. Report the deterministic floor rather
             # than a statistic computed from nothing.
-            print(f"  {tag}: {identical}/{len(samples)} runs pixel-identical → "
+            print(f"  {tag}: {identical}/{len(vals_all)} runs pixel-identical → "
                   f"threshold={DETERMINISTIC_FLOOR_DB:.1f} dB (deterministic floor)")
             scenes_out[tag] = {
                 "psnr_mean": None,
                 "psnr_std": None,
                 "identical_runs": identical,
-                "n_samples": len(samples),
+                "n_samples": len(vals_all),
                 "threshold": DETERMINISTIC_FLOOR_DB,
             }
             continue
@@ -536,26 +700,26 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         mean = float(vals.mean())
         std = float(vals.std(ddof=0))
         threshold = math.floor((mean - max(SIGMA_MARGIN * std, MIN_MARGIN_DB)) * 2) / 2
-        suffix = f"  ({identical}/{len(samples)} runs pixel-identical, excluded)" if identical else ""
+        suffix = f"  ({identical}/{len(vals_all)} runs pixel-identical, excluded)" if identical else ""
         print(f"  {tag}: mean={mean:.2f} dB  std={std:.4f} dB  threshold={threshold:.1f} dB{suffix}")
         scenes_out[tag] = {
             "psnr_mean": round(mean, 4),
             "psnr_std": round(std, 4),
             "identical_runs": identical,
-            "n_samples": len(samples),
+            "n_samples": len(vals_all),
             "threshold": threshold,
         }
 
     # Pixel-ruler audit fields. Attached to the scene entry beside the PSNR statistics rather
     # than replacing them: `threshold` keeps its meaning for the stochastic groups, and for a
     # deterministic group it is now the historical PSNR figure, not the ruler.
-    for tag, (tau, samples) in sorted(maxcc_data.items()):
+    for tag, (tau, per_run) in sorted(maxcc_data.items()):
         entry = scenes_out.setdefault(tag, {})
         entry["maxcc_tau"] = tau
-        entry["maxcc_local_max"] = max(samples)
-        entry["maxcc_samples"] = len(samples)
-        note = "" if max(samples) == 0 else "  ← NOT byte-identical on this machine; investigate before re-shooting"
-        print(f"  {tag}: pixel ruler tau={tau}, local maxcc max={max(samples)} over {len(samples)} runs{note}")
+        entry["maxcc_local_max"] = max(per_run)
+        entry["maxcc_samples"] = len(per_run)
+        note = "" if max(per_run) == 0 else "  ← NOT byte-identical on this machine; investigate before re-shooting"
+        print(f"  {tag}: pixel ruler tau={tau}, local maxcc max={max(per_run)} over {len(per_run)} runs{note}")
 
     # Merge into existing thresholds.json at two levels: scenes this run did not touch keep
     # their audit history (e.g. --scene overlay_ea must not wipe the other lens_proj scenes),
@@ -575,9 +739,11 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     # those members keep their original psnr_mean/psnr_std untouched. Do not read these three as
     # per-scene metadata and do not infer from them that existing scenes were re-calibrated —
     # the per-scene audit trail is n_samples / identical_runs inside each scene entry.
+    # n_ref_runs is the Phase A count this invocation's flags resolve to for the group, whether
+    # or not Phase A ran (--phase-b-only), matching what the same flags would have shot.
     groups_out[group.key] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "n_ref_runs": getattr(args, "n", 10),
+        "n_ref_runs": n_ref,
         "n_calib_runs": n_calib,
         "scenes": existing_scenes,
     }
@@ -594,8 +760,32 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
 
 
 def phase_b(args: argparse.Namespace) -> None:
-    for group in _selected_groups(args):
-        phase_b_group(group, args)
+    groups = _selected_groups(args)
+    plan = _run_plan(groups, args.n_calib)
+    ref_plan = _run_plan(groups, args.n)
+    n_max = max(plan.values())
+    binary = args.binary
+
+    print(f"\n[Phase B] Threshold calibration: {n_max} full-suite run(s) shared by {len(groups)} group(s)")
+    print(f"[Phase B] Binary : {binary}")
+    samples: dict[str, _GroupSamples] = {}
+    for group in groups:
+        # Every group prints into the same full-suite stderr, and --scene must leave the group's
+        # other scenes' entries untouched, so sampling is restricted to the selected keys.
+        wanted = {_scene_key(scene, mode) for scene in _scene_list(group, args) for mode in group.modes}
+        samples[group.key] = _GroupSamples(wanted=wanted, psnr={}, maxcc={})
+        kind = "deterministic" if group.deterministic else "stochastic"
+        print(f"[Phase B][{group.key}] N_calib={plan[group.key]} ({kind}); scenes {sorted(wanted)}")
+
+    for i in range(n_max):
+        print(f"[Phase B] Calibration run {i + 1}/{n_max}...", flush=True)
+        _, stderr = _run(binary, [], capture_stderr=True)
+        for group in groups:
+            if i < plan[group.key]:
+                _phase_b_ingest(group, samples[group.key], stderr)
+
+    for group in groups:
+        _phase_b_write_group(group, samples[group.key], plan[group.key], ref_plan[group.key], args)
 
 
 # ---------------------------------------------------------------------------
@@ -613,10 +803,30 @@ def main() -> None:
         help="Path to gui_test binary (default: build/Release/static/bin/gui_test)",
     )
     parser.add_argument(
-        "--n", type=int, default=10, help="Phase A: number of reference runs (default: 10)"
+        "--n",
+        type=int,
+        default=None,
+        help=(
+            "Phase A: number of reference runs, applied to every selected group. Default: "
+            f"per group — 1 for a deterministic group, {STOCHASTIC_RUNS} for a stochastic one "
+            "(the `deterministic` flag in GROUPS). Pass it for a deterministic group only when "
+            "you are measuring something, e.g. whether it is still deterministic."
+        ),
     )
     parser.add_argument(
-        "--n-calib", type=int, default=10, help="Phase B: number of calibration runs (default: 10)"
+        "--n-calib",
+        type=int,
+        default=None,
+        help="Phase B: number of calibration runs, applied to every selected group. Default: same rule as --n.",
+    )
+    parser.add_argument(
+        "--allow-stale-base",
+        action="store_true",
+        help=(
+            "Shoot even if origin/main has already changed a reference this run would write "
+            "(the default refuses, because that reference would be discarded at rebase time; "
+            "rebase first instead)."
+        ),
     )
     parser.add_argument(
         "--refs-dir",
@@ -675,7 +885,10 @@ def main() -> None:
 
     if args.phase_b_only:
         phase_b(args)
-    elif args.phase_a_only:
+        return
+    # Phase A is the only phase that writes reference images, so it is the only one gated.
+    check_reference_base(_selected_groups(args), args)
+    if args.phase_a_only:
         phase_a(args)
     else:
         phase_a(args)
