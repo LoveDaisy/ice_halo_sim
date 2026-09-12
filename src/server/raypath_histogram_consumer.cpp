@@ -354,14 +354,23 @@ std::shared_ptr<const RaypathHistogramResult> ReducedRaypathHistogramOf(const Re
         ReduceRaypathHistogram(*frame.raypath_histogram_result_, symmetry));
   }
   auto& cache = *frame.raypath_reduce_cache_;
-  std::lock_guard<std::mutex> lock(cache.mutex_);
-  if (!cache.filled_ || cache.symmetry_ != symmetry) {
-    cache.reduced_ = std::make_shared<const RaypathHistogramResult>(
-        ReduceRaypathHistogram(*frame.raypath_histogram_result_, symmetry));
-    cache.symmetry_ = symmetry;
-    cache.filled_ = true;
+  // symmetry is validated to 0..7 by the C API boundary before this is ever reached, so it
+  // indexes the 8-slot array directly (see the ResultFrame::RaypathReduceCache comment for why
+  // 8 slots, and why the reduction below runs outside the lock).
+  const size_t slot = symmetry & 0x7u;
+  {
+    std::lock_guard<std::mutex> lock(cache.mutex_);
+    if (cache.slots_[slot]) {
+      return cache.slots_[slot];
+    }
   }
-  return cache.reduced_;
+  auto computed = std::make_shared<const RaypathHistogramResult>(
+      ReduceRaypathHistogram(*frame.raypath_histogram_result_, symmetry));
+  std::lock_guard<std::mutex> lock(cache.mutex_);
+  if (!cache.slots_[slot]) {
+    cache.slots_[slot] = std::move(computed);
+  }
+  return cache.slots_[slot];
 }
 
 }  // namespace lumice

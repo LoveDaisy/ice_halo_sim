@@ -76,6 +76,13 @@ class ChainIdInterningTable {
 
   // Human-readable chain, leaf first walked back to the root, e.g.
   // "crystal1(1-3-5)-crystal2(3-2)". The root itself formats as "".
+  //
+  // INTERNAL DIAGNOSTIC USE ONLY — do not surface this string to a user. It formats the
+  // finest, unreduced chain (this table has no symmetry or scene-layer context to reduce or
+  // group by), so it is not the display text a product surface should show. The single
+  // authority for user-facing raypath-analysis display text is
+  // `lumice::FormatRaypathChainDisplay` (server/raypath_histogram_consumer.hpp), which formats
+  // the *reduced* chain and knows which layers are multi-crystal.
   std::string Format(uint32_t id) const;
 
   // The same walk as Format(), structured: this chain's entries root-first,

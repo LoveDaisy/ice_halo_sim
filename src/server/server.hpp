@@ -1,6 +1,7 @@
 #ifndef INCLUDE_SERVER_H_
 #define INCLUDE_SERVER_H_
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -358,19 +359,38 @@ struct ResultFrame {
   // such consumer and leaves it nullopt — there is no cross-snapshot cache that a
   // stale value could survive in.
   std::optional<RaypathHistogramResult> raypath_histogram_result_;
-  // The read-time reduction of raypath_histogram_result_ last asked for, kept so the two
+  // The read-time reduction of raypath_histogram_result_, memoized per symmetry so the two
   // C API reads a consumer makes per (frame, symmetry) — the row count, then the rows — cost
   // one reduction rather than two (ReduceRaypathHistogram is O(rows), and an unreduced
-  // multi-scatter record has hundreds of thousands). ONE slot, not one per symmetry: a
-  // reduced multi-scatter result is itself tens of MB, and the consumer's own dedup already
-  // keeps it from asking twice for the same pair. Behind a shared_ptr so the shallow copies
-  // AcquireResultFrame makes share it; guarded by its own mutex since frames are read from
-  // any thread. Allocated by DoSnapshot alongside the result; null on a render frame.
+  // multi-scatter record has hundreds of thousands).
+  //
+  // ONE SLOT PER SYMMETRY, not one global slot: symmetry is a 3-bit bitmask (P|B|D, 0..7), so
+  // this is a small bounded array, not "one per caller". A single shared slot lets two real
+  // callers with different, both-fixed-for-their-lifetime symmetries starve each other:
+  // server_poller.cpp polls this frame at a fixed symmetry=0 (it never reads entry_count, only
+  // present/roi_mode/cone_*/snapshot_generation — see its own comment — but
+  // LUMICE_FrameGetRaypathAnalysisInfo still has to fill entry_count, so it still triggers a
+  // reduction), while the GUI main thread reads the same frame at whatever symmetry the
+  // panel's checkboxes name (analysis_panel.cpp::RefreshAnalysisEntries). With one slot, each
+  // read evicted the other's cached result, turning "reduce once per (frame, symmetry)" back
+  // into "reduce on every poll and every refresh" — measured in the hundreds of milliseconds
+  // to low seconds on a multi-scatter scene with hundreds of thousands of finest chains. Eight
+  // slots (one per possible bitmask value) means the poller's fixed symmetry and the GUI's
+  // currently-selected symmetry each keep their own memo and never evict each other.
+  //
+  // The reduction itself runs OUTSIDE the mutex (see ReducedRaypathHistogramOf): holding the
+  // lock for the ~1.6s worst-case computation would block every other reader of this frame —
+  // including the render/GUI thread — for that long. A race where two threads miss the same
+  // empty slot at once recomputes twice and keeps whichever result is published first; both
+  // are equal (the reduction is a pure function of the frame + symmetry), so this trades a
+  // rare duplicate computation for never blocking a reader on another reader's compute.
+  //
+  // Behind a shared_ptr so the shallow copies AcquireResultFrame makes share it; guarded by
+  // its own mutex since frames are read from any thread. Allocated by DoSnapshot alongside the
+  // result; null on a render frame.
   struct RaypathReduceCache {
     std::mutex mutex_;
-    bool filled_ = false;
-    uint8_t symmetry_ = 0;
-    std::shared_ptr<const RaypathHistogramResult> reduced_;
+    std::array<std::shared_ptr<const RaypathHistogramResult>, 8> slots_;
   };
   std::shared_ptr<RaypathReduceCache> raypath_reduce_cache_;
 

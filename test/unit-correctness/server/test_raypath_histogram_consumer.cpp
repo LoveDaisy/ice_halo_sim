@@ -1264,5 +1264,35 @@ TEST(ReduceContext, LayerFlagIsPerLayerWhenOneCrystalIsAloneOnOneLayerAndSharedO
   EXPECT_EQ(reduced.entries_[0].display_, "(3-5) -> C1(1-3)");
 }
 
+// A frame's reduce cache holds one memo per symmetry (0..7), not one shared slot: two callers
+// with different, each fixed for their own lifetime, symmetries reading the same frame must not
+// evict each other's memo. Interleave reads at two symmetries and check the memo returned for a
+// given symmetry is the very same object across both readings (pointer identity), which a shared
+// single slot could not provide once the other symmetry had been read in between.
+TEST(ReducedRaypathHistogramOf, DistinctSymmetriesKeepIndependentMemosAndDoNotEvictEachOther) {
+  RaypathHistogramResult finest;
+  RaypathHistogramEntry e;
+  e.chain_.push_back(RaypathChainSegment{ 1, { 3, 5 } });
+  e.energy_ = 1.0;
+  e.count_ = 1;
+  finest.entries_.push_back(e);
+
+  ResultFrame frame;
+  frame.raypath_histogram_result_ = finest;
+  frame.raypath_reduce_cache_ = std::make_shared<ResultFrame::RaypathReduceCache>();
+
+  const auto sym0_first = ReducedRaypathHistogramOf(frame, 0);
+  const auto sym7_first = ReducedRaypathHistogramOf(frame, 7);
+  const auto sym0_second = ReducedRaypathHistogramOf(frame, 0);
+  const auto sym7_second = ReducedRaypathHistogramOf(frame, 7);
+
+  ASSERT_NE(sym0_first, nullptr);
+  ASSERT_NE(sym7_first, nullptr);
+  EXPECT_EQ(sym0_first.get(), sym0_second.get())
+      << "symmetry=0's memo should survive an interleaved symmetry=7 read, not be evicted by it";
+  EXPECT_EQ(sym7_first.get(), sym7_second.get())
+      << "symmetry=7's memo should survive an interleaved symmetry=0 read, not be evicted by it";
+}
+
 }  // namespace
 }  // namespace lumice
