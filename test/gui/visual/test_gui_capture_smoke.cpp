@@ -25,7 +25,7 @@
 // demands byte-identity outright: tau = 0, K = 0. PSNR is still printed beside it — the
 // scripts/regen_gui_test_refs.py Phase B audit trail (test/gui/references/_thresholds.json)
 // records both — but it no longer decides pass/fail; see support/pixel_diff_metrics.hpp.
-static constexpr lumice::test::MaxCcRuler kRuler{ /*tau=*/0, /*max_cc_threshold=*/0 };
+constexpr lumice::test::MaxCcRuler kRuler{ /*tau=*/0, /*max_cc_threshold=*/0 };
 // The PSNR floor the old ruler applied, kept for the diagnostic line only.
 static constexpr double kPsnrThreshold = 40.0;
 

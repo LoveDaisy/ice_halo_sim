@@ -421,12 +421,18 @@ jobs:
       # rule that has to tolerate this runner but not a real layout change has to be derived from
       # these captures, not from the log. Same condition, action and retention as the log: one
       # diagnostic family, one policy.
+      # if-no-files-found: the directory is created up front by the run step, so an empty upload
+      # would otherwise succeed silently — and an empty capture set is exactly the evidence loss
+      # this artifact exists to prevent (a filter that matched nothing, a binary that never got as
+      # far as a capture). Make that state red here rather than discover it when someone opens the
+      # artifact.
       - name: Upload GUI visual-regression captures
         if: always() && matrix.run_gui_visual == 'ON'
         uses: actions/upload-artifact@v7
         with:
           name: gui-visual-regression-captures
           path: gui_captures
+          if-no-files-found: error
           retention-days: 30
 
       - name: Benchmark

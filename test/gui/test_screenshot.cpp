@@ -157,6 +157,14 @@ bool CheckAgainstReference(const char* group, const char* tag, const std::string
       fprintf(stderr, "[%s] %s: largest differing blob exceeds K — possible regression\n", group, tag);
       return false;
     }
+    // Early warning, not a verdict: K is set against the CI leg's llvmpipe residue, and the margin
+    // between that residue and K is thin for some groups (modal_layout: 1.36x). A Mesa upgrade that
+    // grows the residue would otherwise surface as a red with no run-up; this line surfaces it
+    // while the comparison is still green. Half of K, deliberately not a second constant.
+    if (diff.max_cc > ruler->max_cc_threshold / 2) {
+      fprintf(stderr, "[%s] %s: [WARN] largest differing blob (%d px) is past K/2=%d — margin to a red is thinning\n",
+              group, tag, diff.max_cc, ruler->max_cc_threshold / 2);
+    }
   } else {
     fprintf(stderr, "[%s] %s: PSNR=%.2f dB (threshold=%.1f dB)\n", group, tag, psnr, threshold);
     if (psnr < threshold) {
