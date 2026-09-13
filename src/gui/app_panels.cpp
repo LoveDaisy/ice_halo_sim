@@ -972,38 +972,26 @@ void RenderCircleAnglePopup(std::vector<float>& angles, const float* presets, si
   }
 }
 
-// The two FAMILY-WIDE marker fields, behind the Reference Points section header's fold.
+// The one FAMILY-WIDE marker field left behind a fold: the radius. Family-wide is why it is here
+// and not in a per-row cell of the section's table — radius applies to all six rings at once
+// (GuiState::markers_radius_px, mirroring LUMICE_RenderParam's own family/entry split), so a cell
+// per row would be six controls editing one value.
 //
-// Family-wide is why they are here and not in the section's table: alpha and radius apply to all
-// six rings at once (GuiState::markers_alpha / markers_radius_px, mirroring LUMICE_RenderParam's
-// own family/entry split), so a per-row cell for either would be six controls editing one value.
-// The section header owns them for the same reason the Zenith/Nadir ROW used to own the radius —
-// the fold is where a field that only one thing has goes — except the "one thing" is now the family
-// rather than a row.
+// The family's OTHER field, alpha, used to sit beside it in this popup and does not any more: the
+// section's table now opens with an "All" row (RenderMarkersSection), and that row's Alpha cell
+// is the natural home for a value the whole family shares — it puts the field in the column its
+// six siblings leave empty, one click closer than a fold. Radius has no such column, so it stays
+// here, reached from the All row's fold cell.
 void RenderMarkersFamilyPopup() {
-  const FieldEditorConstraint alpha_c = ConstraintFor(kMarkersAlphaKey, g_state);
   const FieldEditorConstraint radius_c = ConstraintFor(kMarkersRadiusKey, g_state);
-  // The same control the four alpha cells of the table above use. The names have to be drawn here
-  // rather than passed in: DragFloatField folds its whole label argument into the widget id
-  // ("##" + label), so nothing of it is ever displayed — and unlike an alpha cell, a field in a
-  // popup has no column header to take its name from.
+  // The same control the alpha cells of the tables above use. The name has to be drawn here rather
+  // than passed in: DragFloatField folds its whole label argument into the widget id ("##" + label),
+  // so nothing of it is ever displayed — and unlike an alpha cell, a field in a popup has no column
+  // header to take its name from.
   constexpr float kFieldWidth = 100.0f;
-  constexpr const char* kLabels[] = { "Alpha", "Radius" };
-  // Right-align the two controls with each other: "Alpha" and "Radius" are different widths, so
-  // drawing each name followed by SameLine would step the two inputs by that difference.
-  float name_w = 0.0f;
-  for (const char* label : kLabels) {
-    name_w = std::max(name_w, ImGui::CalcTextSize(label).x);
-  }
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(kLabels[0]);
-  ImGui::SameLine(name_w + ImGui::GetStyle().ItemSpacing.x);
-  ImGui::SetNextItemWidth(kFieldWidth);
-  DragFloatField("Alpha##markers_family", &g_state.markers_alpha, static_cast<float>(alpha_c.min_value),
-                 static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(kLabels[1]);
-  ImGui::SameLine(name_w + ImGui::GetStyle().ItemSpacing.x);
+  ImGui::TextUnformatted("Radius");
+  ImGui::SameLine();
   ImGui::SetNextItemWidth(kFieldWidth);
   DragFloatField("Radius##markers_family", &g_state.markers_radius_px, static_cast<float>(radius_c.min_value),
                  static_cast<float>(radius_c.max_value), radius_c.fmt, radius_c.scale);
@@ -1195,9 +1183,11 @@ void RenderOverlayRowsTable(const char* table_id, const OverlayRowSpec* rows, in
 void RenderAngularDistSection() {
   // Same externally-owned open-state protocol as RenderMarkersSection, for the same reason.
   ImGui::SetNextItemOpen(g_state.angular_dist_section_open, ImGuiCond_Always);
-  // AllowOverlap kept for parity with the two other section headers although nothing is drawn on
-  // this one: a button added to it later would otherwise silently never receive its click (see
-  // RenderMarkersSection for the mechanism).
+  // AllowOverlap kept although nothing is drawn on this header: a button added to it later would
+  // otherwise silently never receive its click — a CollapsingHeader spans the full content width
+  // and claims hover first, and the failure is invisible in a rendered frame (the button still
+  // LOOKS present). The Reference Points header carried this flag for exactly that reason while it
+  // had buttons; it no longer does, so this is now the only header with it.
   const bool section_open =
       ImGui::CollapsingHeader("Angular Distance from...##angular_dist", ImGuiTreeNodeFlags_AllowOverlap);
   g_state.angular_dist_section_open = section_open;
@@ -1249,56 +1239,13 @@ void RenderMarkersSection() {
   // steps, so the value read back is the post-click one and the field follows the user rather than
   // fighting them.
   ImGui::SetNextItemOpen(g_state.markers_section_open, ImGuiCond_Always);
-  // AllowOverlap, and it is load-bearing rather than defensive: a CollapsingHeader spans the full
-  // content width, and ImGui gives hover to the FIRST item that claims it in a frame — so without
-  // this the header swallows every click aimed at the three buttons drawn on top of it, which
-  // still LOOK and hit-test as present. The failure is invisible from a rendered frame; what
-  // catches it is a test that clicks them (test_overlay_controls.cpp).
-  const bool section_open = ImGui::CollapsingHeader("Reference Points##markers", ImGuiTreeNodeFlags_AllowOverlap);
+  // No AllowOverlap, because nothing is drawn on the header any more. The [All] / [None] / [...]
+  // trio that used to sit right-aligned on this row needed that flag to be clickable at all (a
+  // CollapsingHeader spans the full content width and claims hover first), and its absence failed
+  // invisibly — the buttons still LOOKED present. Everything family-wide now lives in the table's
+  // own first row, where it is an ordinary cell and needs no hit-test exception.
+  const bool section_open = ImGui::CollapsingHeader("Reference Points##markers");
   g_state.markers_section_open = section_open;
-
-  // [All] / [None] / [...] drawn ON the header's own row, right-aligned. Deliberately NOT a
-  // tri-state checkbox on the header: a tri-state control has to represent "some", which invites
-  // the question of what clicking it from "some" means, and the answer would be a rule the user has
-  // to learn. Two buttons say what they do and have no state of their own to read.
-  const ImGuiStyle& style = ImGui::GetStyle();
-  const float all_w = ImGui::CalcTextSize("All").x + style.FramePadding.x * 2.0f;
-  const float none_w = ImGui::CalcTextSize("None").x + style.FramePadding.x * 2.0f;
-  const float fold_w = ImGui::CalcTextSize(ICON_FA_ELLIPSIS).x + style.FramePadding.x * 2.0f;
-  const float buttons_w = all_w + none_w + fold_w + style.ItemSpacing.x * 2.0f;
-  ImGui::SameLine(ImGui::GetContentRegionMax().x - buttons_w);
-  if (ImGui::SmallButton("All##markers_all")) {
-    for (MarkerAppearance& m : g_state.markers) {
-      m.show = true;
-    }
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Draw every reference point");
-  }
-  ImGui::SameLine();
-  if (ImGui::SmallButton("None##markers_none")) {
-    for (MarkerAppearance& m : g_state.markers) {
-      m.show = false;
-    }
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Draw none of them");
-  }
-  ImGui::SameLine();
-  // Triple hash for the same reason the table's row folds use one: the label carries a visible
-  // glyph, and ImGui hashes the WHOLE label for "glyph##suffix", so the id would contain the icon
-  // codepoint and renaming the icon would silently rename the item.
-  constexpr const char* kFamilyFoldId = "###markers_family_fold";
-  if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + kFamilyFoldId).c_str())) {
-    ImGui::OpenPopup(kFamilyFoldId);
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Marker alpha and radius");
-  }
-  if (ImGui::BeginPopup(kFamilyFoldId)) {
-    RenderMarkersFamilyPopup();
-    ImGui::EndPopup();
-  }
 
   if (!section_open) {
     return;
@@ -1313,6 +1260,82 @@ void RenderMarkersSection() {
   // "Label" over these same two columns, and a second copy of them three rows down would read as
   // two different pairs of columns rather than as one pair continued.
   SetupOverlayTableColumns();
+
+  // The "All" row: the family, as one row over the same six columns its six members use. It is
+  // DERIVED — nothing here is a field of its own. Line and Label are the AND of the six `show` /
+  // `label` flags, drawn tri-state (a filled square when the six disagree), and a click fans the
+  // flipped AND back out to all six; the six entries stay the single authority, and this row is
+  // never serialized (test_document_roundtrip_chain / test_json_document_contract_chain would
+  // notice a key). Alpha and the fold hold the family's two shared fields, which is why those two
+  // cells are the only ones in this table's Alpha and fold columns that are not empty.
+  //
+  // Two id conventions meet in this one row, on purpose — do not "unify" them. Line/Label take the
+  // prefix form of their six sibling cells (`##marker_line_<serial>` → `##marker_line_all`);
+  // Alpha takes the suffix form every other table's alpha cell uses (`##grid_alpha`,
+  // `##sun_circles_alpha` → `##markers_all_alpha`), so test_overlay_controls.cpp's domain-clamp
+  // case reaches it through the same `row + "_alpha"` spelling as the other five, with no special
+  // path for this one.
+  {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    // Empty swatch, as a statement: the family has no colour, each point has its own.
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("All");
+
+    bool all_show = true;
+    bool any_show = false;
+    bool all_label = true;
+    bool any_label = false;
+    for (const MarkerAppearance& m : g_state.markers) {
+      all_show = all_show && m.show;
+      any_show = any_show || m.show;
+      all_label = all_label && m.label;
+      any_label = any_label || m.label;
+    }
+
+    ImGui::TableSetColumnIndex(2);
+    // The AND goes in, not the OR — that is what makes "mixed → all on" fall out of ImGui's own
+    // flip with no rule of this row's own (see TriStateCheckbox).
+    if (TriStateCheckbox("##marker_line_all", &all_show, any_show && !all_show)) {
+      for (MarkerAppearance& m : g_state.markers) {
+        m.show = all_show;
+      }
+    }
+
+    ImGui::TableSetColumnIndex(3);
+    if (TriStateCheckbox("##marker_label_all", &all_label, any_label && !all_label)) {
+      for (MarkerAppearance& m : g_state.markers) {
+        m.label = all_label;
+      }
+    }
+
+    ImGui::TableSetColumnIndex(4);
+    // The same DragFloatField + registry constraint the other tables' alpha cells are, hand-written
+    // here because this section has never shared RenderOverlayRowsTable's loop (its rows have a
+    // different shape). The id it resolves to is "##markers_all_alpha" — see the note above.
+    const FieldEditorConstraint alpha_c = ConstraintFor(kMarkersAlphaKey, g_state);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    DragFloatField("markers_all_alpha", &g_state.markers_alpha, static_cast<float>(alpha_c.min_value),
+                   static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
+
+    ImGui::TableSetColumnIndex(5);
+    // Triple hash for the same reason the other tables' row folds use one: the label carries a
+    // visible glyph, and ImGui hashes the WHOLE label for "glyph##suffix", so the id would contain
+    // the icon codepoint and renaming the icon would silently rename the item.
+    constexpr const char* kFamilyFoldId = "###markers_family_fold";
+    if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + kFamilyFoldId).c_str())) {
+      ImGui::OpenPopup(kFamilyFoldId);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Marker radius");
+    }
+    if (ImGui::BeginPopup(kFamilyFoldId)) {
+      RenderMarkersFamilyPopup();
+      ImGui::EndPopup();
+    }
+  }
 
   for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
     MarkerAppearance& m = g_state.markers[i];
@@ -1359,10 +1382,11 @@ void RenderMarkersSection() {
     ImGui::TableSetColumnIndex(3);
     Checkbox((std::string("##marker_label_") + kMarkerSerialNames[i]).c_str(), &m.label);
 
-    // Columns 4 (Alpha) and 5 (fold) stay EMPTY for every marker row, and both emptinesses are
-    // statements rather than omissions. Alpha is family-wide, so a per-row cell would be six
+    // Columns 4 (Alpha) and 5 (fold) stay EMPTY for every NAMED marker row, and both emptinesses
+    // are statements rather than omissions. Alpha is family-wide, so a per-row cell would be six
     // controls editing one value; the fold column says "this row owns a field the others do not",
-    // which no marker does — the family's two fields hang off the section header instead.
+    // which no marker does. The All row above is the one exception in both columns — it IS the
+    // family, so the family's two fields are rightly its.
   }
 
   ImGui::EndTable();

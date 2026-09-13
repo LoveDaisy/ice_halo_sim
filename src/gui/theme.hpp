@@ -48,4 +48,18 @@ ImVec4 AccentColor(float alpha = 1.0f);
 // the thing being maintained).
 bool Checkbox(const char* label, bool* v);
 
+// Checkbox() above, for a value DERIVED from several booleans — an "All" row over a column of
+// switches. `all_true` is the AND of them and `mixed` says whether the OR disagrees with it; the
+// box then draws ImGui's filled square (ImGuiItemFlags_MixedValue) instead of a tick or nothing.
+//
+// No click rule of its own, on purpose. ImGui's Checkbox flips the value it was handed, and the
+// value handed in is the AND — so a mixed box (AND false) turns everything ON, an all-on box turns
+// everything off, and an all-off box turns everything on: the usual select-all convention falls out
+// of passing the AND rather than the OR, with no state machine to explain "what does clicking
+// 'some' do". The caller fans the returned `*all_true` back out to the source booleans.
+//
+// A wrapper around Checkbox() rather than a sibling of it: the inset border an unchecked box gets
+// under FrameBorderSize=0 is the same aid a mixed box (also unchecked, as ImGui reads it) needs.
+bool TriStateCheckbox(const char* label, bool* all_true, bool mixed);
+
 }  // namespace lumice::gui
