@@ -40,10 +40,19 @@ TEST(LensFocal, EqualAreaBelowSixMmHasNoSolution) {
   EXPECT_NEAR(*edge, 360.0f, kTol);
 }
 
-// equidistant: fov = d / f radians. f = 12 → 1 rad = 57.2958°.
-TEST(LensFocal, EquidistantAtTwelveMmIsOneRadian) {
+// equidistant: fov = 2d / f radians. f = 12 → 2 rad = 114.5916°.
+TEST(LensFocal, EquidistantAtTwelveMmIsTwoRadians) {
   const std::optional<float> fov =
       lumice::LensFocalLengthToFovDegrees(lumice::LensFocalFormula::kFisheyeEquidistant, 12.0f);
+  ASSERT_TRUE(fov.has_value());
+  EXPECT_NEAR(*fov, 114.5916f, kTol);
+}
+
+// equidistant, second point: f = 24 → 1 rad = 57.2958°. Together with the f = 12 row this pins the
+// factor 2 itself, not one absolute value — an offset instead of a doubling passes at most one.
+TEST(LensFocal, EquidistantAtTwentyFourMmIsOneRadian) {
+  const std::optional<float> fov =
+      lumice::LensFocalLengthToFovDegrees(lumice::LensFocalFormula::kFisheyeEquidistant, 24.0f);
   ASSERT_TRUE(fov.has_value());
   EXPECT_NEAR(*fov, 57.2958f, kTol);
 }

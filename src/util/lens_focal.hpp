@@ -49,10 +49,8 @@ namespace lumice {
 enum class LensFocalFormula {
   kLinear,                // `fov = 2 · atan(d / f)`; also `globe`, whose on-image scale is linear's
   kFisheyeEqualArea,      // `fov = 4 · asin(d / 2f)`; no solution when `d / 2f > 1`
-  kFisheyeEquidistant,    // `fov = d / f` (radians), as core has always computed it — note that
-                          // doc/configuration.md states `2d / f`, which is also what the forward
-                          // projection's edge implies; reconciling the two changes the CLI's
-                          // output for such configs and is a decision of its own, not a move.
+  kFisheyeEquidistant,    // `fov = 2d / f` (radians): r = f · theta, so the frame edge r = d sits
+                          // at theta = d / f and the full angle is twice that
   kFisheyeStereographic,  // `fov = 4 · atan(d / 2f)`
   kFisheyeOrthographic,   // `fov = 2 · asin(d / f)`; no solution when `d / f > 1`
   kRectangular,           // always full-sky; `f` is ignored and `fov` is 0 by convention
@@ -72,7 +70,7 @@ inline std::optional<float> LensFocalLengthToFovDegrees(LensFocalFormula formula
       }
       return std::asin(d / (2 * f)) * 4 * kRadToDegree;
     case LensFocalFormula::kFisheyeEquidistant:
-      return (d / f) * kRadToDegree;
+      return (2 * d / f) * kRadToDegree;
     case LensFocalFormula::kFisheyeStereographic:
       return std::atan(d / (2 * f)) * 4 * kRadToDegree;
     case LensFocalFormula::kFisheyeOrthographic:
