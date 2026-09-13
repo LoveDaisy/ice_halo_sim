@@ -833,6 +833,26 @@ TEST_F(V3TestJson, Scene_GeomClockRoundTrip) {
   EXPECT_EQ(j_on.at("geom_clock").get<size_t>(), kGeomClockMax);
 }
 
+// =============== Lens Equidistant ===============
+
+TEST(LensConfigEquidistant, FCalcMidRange) {
+  // Equidistant: r = f * theta, frame edge r = d = 12mm -> fov = 2 * d / f rad.
+  // f = 12 -> 2 rad = 114.5916 deg (the same row the GUI import contract test pins to core).
+  nlohmann::json j = { { "type", "fisheye_equidistant" }, { "f", 12.0f } };
+  auto l = j.get<LensParam>();
+  EXPECT_EQ(l.type_, LensParam::kFisheyeEquidistant);
+  EXPECT_NEAR(l.fov_, 114.5916f, 1e-3f);
+}
+
+TEST(LensConfigEquidistant, DualFCalcMatchesSingle) {
+  // Both equidistant lens types route to the one formula family; the dual variant must decode
+  // the same f to the same fov.
+  nlohmann::json j = { { "type", "dual_fisheye_equidistant" }, { "f", 24.0f } };
+  auto l = j.get<LensParam>();
+  EXPECT_EQ(l.type_, LensParam::kDualFisheyeEquidistant);
+  EXPECT_NEAR(l.fov_, 57.2958f, 1e-3f);
+}
+
 // =============== Lens Orthographic ===============
 
 TEST(LensConfigOrthographic, MaxFovIs180) {
