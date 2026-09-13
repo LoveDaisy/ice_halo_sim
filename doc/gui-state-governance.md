@@ -151,6 +151,15 @@
 
   这张注册表也是主 UI 与面板收敛到"同一份权威"的落地方式：主 UI 里所有绑定到已注册字段的滑条调用点（`app_panels.cpp` 的 View / Display / Overlay 与 `panels.cpp` 的 Sun / Simulation，共 16 处）都改读同一个 `ConstraintFor()`（`field_editor_registry.hpp:137`），不再各自持有一份边界字面量——改一处，主 UI 与面板同时移动（`main-ui-constraint-registry` / 408.8 落地；其 AC3 的红态探针证明了这一点：故意改错某个约束的边界，主 UI 与表格单元格在同一次改动、同一帧一起偏移）。
 
+  **`sim.ray_allocation` 是仓库里第一个"只在 Settings 可编辑"的文档字段**（`hide-ray-allocation-checkbox`
+  chore）：注册表里的 `FieldEditorEntry` 照常存在（`field_editor_registry.cpp:523`，`BoolField`），
+  但主面板（`panels.cpp`）不再有任何控件绑定同一个字段——上面两段说的"存在性/编辑器双权威"第一次
+  出现了一个只被后者覆盖、完全不被主 UI 触达的字段。这是 owner 有意的选择，不是注册表漏掉了主 UI 那一
+  半：字段本身仍是文档字段（`.lmc` / 导出 JSON / C-API 三条 seam 都不动），GUI 文档默认仍是
+  `adaptive`。接受的代价——载入一份带 `"proportional"` 的历史文档时，主面板不会有任何提示（用户只能
+  去 Settings 的 Current value 列才看得到）；但这只影响噪声在各晶体间的分布，不影响期望图像，且随时
+  可在 Settings 里改回来，是可逆的。
+
 ### 8.4 覆盖文件即"残缺的 GuiState 文档"
 
 覆盖文件的 GuiState 半区不是一种新格式：它就是一份省略了大多数 key 的 `SerializeGuiStateJson` 输出，读取时复用既有的反序列化器——后者本就是"缺 key = 走工厂值"的语义。应用时先把工厂 `GuiState{}` 序列化、再用覆盖文档做 JSON merge-patch、最后整体反序列化回 `GuiState`，即"工厂值 + 用户已存的键"，而不是把用户文档合并进调用方当时手上那份可能已被污染的状态。字段级类型错误会让整份覆盖被丢弃（而不是部分应用半份），这条设计取舍见 8.6 I3。
