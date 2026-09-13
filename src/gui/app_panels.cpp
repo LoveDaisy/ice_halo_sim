@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -912,17 +913,21 @@ namespace {
 //
 // `angles` is a parameter because the editor has TWO callers — the Sun row's fold edits the
 // sun circles' list, the Lens Center row's fold edits the view circles' — and the list is the
-// only thing about the editor that differs between them. The rules it applies (presets, duplicate
-// test, cap, clamp band) are angular_dist_rules.hpp's, already pure functions of the list they are
-// handed; what was left bound to one family was only WHICH vector to draw. The typed scratch value
-// is one `static` shared by both callers on purpose: only one popup is open at a time, and a
-// number half-typed for one family is not a value worth keeping apart per family.
-void RenderCircleAnglePopup(std::vector<float>& angles) {
+// only thing about the editor that differs between them, EXCEPT for the preset buttons: those are
+// now also passed in (`presets`/`preset_count`), one table per family (Sun keeps halo radii
+// 9/22/28/46, Lens Center gets framing radii 22/46/90 — see the two callers in
+// RenderAngularDistSection for both tables). The rules the editor applies to whichever list it is
+// handed (duplicate test, cap, clamp band) are angular_dist_rules.hpp's, already pure functions of
+// the list; what was left bound to one family was only WHICH vector to draw and WHICH buttons to
+// offer. The typed scratch value is one `static` shared by both callers on purpose: only one popup
+// is open at a time, and a number half-typed for one family is not a value worth keeping apart per
+// family.
+void RenderCircleAnglePopup(std::vector<float>& angles, const float* presets, size_t preset_count) {
   bool at_limit = AngularDistCirclesAtLimit(angles.size());
 
   // Preset buttons
-  const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
-  for (float p : presets) {
+  for (size_t i = 0; i < preset_count; ++i) {
+    const float p = presets[i];
     const bool already = AngularDistCircleAlreadyPresent(angles, p);
     char label[16];
     std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
@@ -1033,10 +1038,18 @@ struct OverlayRowSpec {
   // What the fold holds, when it holds anything: the angle list the row's popup edits. Null for a
   // row with no fold — a row offers a fold exactly when it owns a field the others lack, and today
   // that field is always a list of ring radii. A pointer rather than an enum naming the list: the
-  // two rows that fold differ ONLY in which vector the one editor is handed, and an enum would be
-  // two near-identical cases switching on that. (The reference-point markers' two family fields
-  // are NOT here: they belong to their section's header, not to a row in a table.)
+  // two rows that fold differ in which vector the one editor is handed and which preset table it
+  // offers (see fold_presets below), and an enum would be two near-identical cases switching on
+  // that. (The reference-point markers' two family fields are NOT here: they belong to their
+  // section's header, not to a row in a table.)
   std::vector<float>* fold_angles;
+  // The fold's preset buttons — a second thing that differs per family, alongside fold_angles: the
+  // Sun row's presets are halo astronomy's standing radii (9/22/28/46), the Lens Center row's are
+  // framing/calibration radii with a different provenance (22/46/90, matching its own default list).
+  // Null (with fold_presets_count 0) for a row with no fold, set explicitly like fold_angles rather
+  // than defaulted — same reasoning as color_field's "no default member initialiser" above.
+  const float* fold_presets;
+  size_t fold_presets_count;
 };
 
 // The six columns ALL THREE overlay tables use — the main table's three line rows, the Angular
@@ -1150,7 +1163,7 @@ void RenderOverlayRowsTable(const char* table_id, const OverlayRowSpec* rows, in
       ImGui::SetTooltip("Edit angles");
     }
     if (ImGui::BeginPopup(row.fold_id)) {
-      RenderCircleAnglePopup(*row.fold_angles);
+      RenderCircleAnglePopup(*row.fold_angles, row.fold_presets, row.fold_presets_count);
       ImGui::EndPopup();
     }
   }
@@ -1199,13 +1212,22 @@ void RenderAngularDistSection() {
   // 300 px panel the name column has ~96 px, and test_overlay_controls.cpp's
   // the_columns_line_up_and_no_name_is_cut_off is the arbiter of what fits. Display strings only —
   // no id, no serialization key; the ids and keys keep the families' own names.
+  //
+  // The two families' fold presets: Sun keeps halo astronomy's standing radii (9°/28° are pyramid-
+  // crystal halo radii with no meaning about the lens centre); Lens Center's match its own default
+  // list — framing/calibration radii, not halo radii, so they have their own table rather than
+  // sharing Sun's.
+  static const float kSunCirclePresets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+  static const float kLensCenterCirclePresets[] = { 22.0f, 46.0f, 90.0f };
   const OverlayRowSpec rows[] = {
     { "Sun", "##sun_circles_color", g_state.sun_circles_color, "overlay_sun_circles_color", "##sun_circles_line",
       &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
-      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", &g_state.sun_circle_angles },
+      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", &g_state.sun_circle_angles,
+      kSunCirclePresets, std::size(kSunCirclePresets) },
     { "Lens Center", "##view_dist_color", g_state.view_dist_color, "overlay_view_dist_color", "##view_dist_line",
       &g_state.show_view_dist_line, "##view_dist_label", &g_state.show_view_dist_label, "##view_dist_alpha",
-      "overlay_view_dist_alpha", &g_state.view_dist_alpha, "###view_dist_fold", &g_state.view_dist_angles },
+      "overlay_view_dist_alpha", &g_state.view_dist_alpha, "###view_dist_fold", &g_state.view_dist_angles,
+      kLensCenterCirclePresets, std::size(kLensCenterCirclePresets) },
   };
   RenderOverlayRowsTable("##AngularDistTable", rows, 2, /*with_headers=*/false);
 }
@@ -1357,10 +1379,10 @@ void RenderOverlaysTab() {
   const OverlayRowSpec rows[] = {
     { "Horizon", "##horizon_color", g_state.horizon_color, "overlay_horizon_color", "##horizon_line",
       &g_state.show_horizon_line, "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha",
-      "overlay_horizon_alpha", &g_state.horizon_alpha, nullptr, nullptr },
+      "overlay_horizon_alpha", &g_state.horizon_alpha, nullptr, nullptr, nullptr, 0 },
     { "Grid", "##grid_color", g_state.grid_color, "overlay_grid_color", "##grid_line", &g_state.show_grid_line,
       "##grid_label", &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
-      nullptr },
+      nullptr, nullptr, 0 },
     // The lens image circle. No text label (null label id, empty cell) and no fold: unlike the
     // angular-distance circles in the section below, it owns no field of its own — the shader
     // derives the circle from the lens type, the FOV and the viewport, so there is nothing here for
@@ -1370,7 +1392,7 @@ void RenderOverlaysTab() {
     // from consistency with its neighbours.
     { "Lens Border", "##lens_border_color", g_state.lens_border_color, nullptr, "##lens_border_line",
       &g_state.show_lens_border_line, nullptr, nullptr, "##lens_border_alpha", "overlay_lens_border_alpha",
-      &g_state.lens_border_alpha, nullptr, nullptr },
+      &g_state.lens_border_alpha, nullptr, nullptr, nullptr, 0 },
   };
 
   // The Alpha column width is calibrated against THIS panel's width budget, not carried over from

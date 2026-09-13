@@ -570,6 +570,12 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
   // first family would pass every check on the sun circles' row and fail here by adding a 9 deg SUN
   // circle when the Lens Center fold was clicked. Both directions, because a binding that was
   // right for one row and wrong for the other is the shape the defect would take.
+  //
+  // The Lens Center half drives a CUSTOM angle rather than a preset button: its preset table
+  // ({22, 46, 90}) is identical to its default list (gui_state.hpp's view_dist_angles), so every
+  // preset button starts disabled (already present) and clicking one would prove nothing about
+  // which list got mutated. 15 deg is in neither list, so `+##add_circle` after typing it is
+  // unambiguous.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "overlay_controls", "the_two_rows_fold_independently_once_the_section_is_open");
@@ -578,32 +584,32 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       gui::g_state.angular_dist_section_open = true;
       ctx->Yield(3);
-      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      const std::vector<float> view_before = gui::g_state.view_dist_angles;
+      IM_CHECK(!view_before.empty());  // the {22, 46, 90} default: non-empty, so "untouched" means something
       const std::vector<float> sun_before = gui::g_state.sun_circle_angles;
       IM_CHECK(!sun_before.empty());  // the 22/46 pair: the other list is non-empty, so "untouched" means something
 
-      // Lens Center: add 9 deg, the sun list is untouched; delete it, still untouched.
+      // Lens Center: type 15 deg and add it, the sun list is untouched; delete it, still untouched.
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
         ctx->ItemClick("**/###view_dist_fold");
       }
       ctx->Yield(3);
-      IM_CHECK(ctx->ItemExists("**/9\xc2\xb0"));
-      ctx->ItemClick("**/9\xc2\xb0");
+      ctx->ItemInputValue("**/##custom_angle", 15.0f);
+      ctx->ItemClick("**/+##add_circle");
       ctx->Yield(2);
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/9\xc2\xb0")));
-      IM_CHECK_EQ(gui::g_state.view_dist_angles.size(), (size_t)1);
-      IM_CHECK_EQ(gui::g_state.view_dist_angles.front(), 9.0f);
+      IM_CHECK_EQ(gui::g_state.view_dist_angles.size(), view_before.size() + 1);
+      IM_CHECK_EQ(gui::g_state.view_dist_angles.front(), 15.0f);
       IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
       ctx->ItemClick("**/x##del_0");
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      IM_CHECK(gui::g_state.view_dist_angles == view_before);
       IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
 
       // Sun, the other way round: add 9 deg (not in the default pair, so it sorts to the
-      // front), the view list stays empty; delete row 0 — the 9 — and the pair is back.
+      // front), the view list stays untouched; delete row 0 — the 9 — and the pair is back.
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
         ctx->ItemClick("**/###sun_circles_fold");
@@ -614,11 +620,11 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.sun_circle_angles.size(), sun_before.size() + 1);
       IM_CHECK_EQ(gui::g_state.sun_circle_angles.front(), 9.0f);
-      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      IM_CHECK(gui::g_state.view_dist_angles == view_before);
       ctx->ItemClick("**/x##del_0");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
-      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      IM_CHECK(gui::g_state.view_dist_angles == view_before);
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
 

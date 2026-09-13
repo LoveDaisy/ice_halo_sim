@@ -1407,12 +1407,16 @@ struct GuiState {
   // for field, deliberately: one geometry, two centres. There is NO reference-direction field on
   // either side of the seam — the preview shader reads the axis off the view matrix it already
   // uploads, and core derives it from the view's own azimuth/elevation/roll — so the angle list is
-  // the whole of what this family adds to the document. The list defaults EMPTY, unlike the sun
-  // circles' {22, 46}: those two radii are halo astronomy's standing pair, whereas a circle about
-  // the optical axis is a framing / calibration tool whose useful radius depends on the lens.
+  // the whole of what this family adds to the document. Defaults to {22, 46, 90}: toggling the
+  // `Line` checkbox on a new document must produce a visible change, not nothing; 22/46 double as
+  // common halo radii for framing against the lens centre, and 90 marks the front-hemisphere
+  // boundary (the camera's forward 180° of view). Known and accepted: under the default Linear 90°
+  // lens the 90° ring sits off-frame, and it coincides with the image-circle border (already drawn
+  // by Lens Border) at exactly 180° fisheye / dual-fisheye — it only reads as a distinct curve on a
+  // >180° fisheye or the rectangular projection.
   bool show_view_dist_line = false;
   bool show_view_dist_label = false;
-  std::vector<float> view_dist_angles;
+  std::vector<float> view_dist_angles = { 22.0f, 46.0f, 90.0f };
   float view_dist_color[3] = { 0.4f, 0.9f, 1.0f };
   float view_dist_alpha = 0.5f;
   // Whether the panel's "Angular Distance" section — the one section holding BOTH families of
