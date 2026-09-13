@@ -105,6 +105,7 @@ add_executable(unit_correctness_test
   # The online ray allocation at CommitConfig: bound under adaptive, never under proportional,
   # carried across commits that change nothing its tally depends on, and traces nothing there.
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_allocation_online_commit.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_allocation_online_analysis.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_dispatch_grain_fallback.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_scene_batch_publish_order.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
