@@ -640,8 +640,10 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
    （z<1）；pc 双层对照 q 收敛到 ≈p，零回归。因此上面第 1 点与第 3 点描述的样本数迁移现在在
    **两种**会话里都发生，同一份 `"adaptive"` 文档的分析面板与渲染预览看到的是同一种分配。
    回归闸：`test/e2e-correctness/test_raypath_analysis_capi.py`
-   `test_adaptive_allocation_cuts_rare_row_noise_without_moving_the_means`（两臂各 10 session，
-   稀有行 share 相对标准差 adaptive ≤ proportional/5，各行两臂均值差 ≤ 3σ）；绑定本身由
+   `test_adaptive_allocation_cuts_rare_row_noise_without_moving_the_means`（两臂各 30 session——
+   验收要求 ≥10，实测 n=10 时比值在六次复测中出现 5.2–16.9× 的散布、一次压线，故取 30 把安全
+   边际压回约 3σ 之外，不放宽比值/z 阈值本身；稀有行 share 相对标准差
+   adaptive ≤ proportional/5，各行两臂均值差 ≤ 3σ）；绑定本身由
    `test/unit-correctness/server/test_ray_allocation_online_analysis.cpp` 按日志行钉住（每次冷
    启动、绝不 carry）。
 
