@@ -1239,11 +1239,11 @@ void RenderMarkersSection() {
   // steps, so the value read back is the post-click one and the field follows the user rather than
   // fighting them.
   ImGui::SetNextItemOpen(g_state.markers_section_open, ImGuiCond_Always);
-  // No AllowOverlap, because nothing is drawn on the header any more. The [All] / [None] / [...]
-  // trio that used to sit right-aligned on this row needed that flag to be clickable at all (a
-  // CollapsingHeader spans the full content width and claims hover first), and its absence failed
-  // invisibly — the buttons still LOOKED present. Everything family-wide now lives in the table's
-  // own first row, where it is an ordinary cell and needs no hit-test exception.
+  // No overlap flag on the header, because nothing is drawn on it any more. The [All] / [None] /
+  // [...] trio that used to sit right-aligned on this row needed that flag to be clickable at all
+  // (a CollapsingHeader spans the full content width and claims hover first), and its absence
+  // failed invisibly — the buttons still LOOKED present. Everything family-wide now lives in the
+  // table's own first row, where it is an ordinary cell and needs no hit-test exception.
   const bool section_open = ImGui::CollapsingHeader("Reference Points##markers");
   g_state.markers_section_open = section_open;
 
