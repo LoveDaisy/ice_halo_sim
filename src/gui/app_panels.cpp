@@ -902,21 +902,21 @@ void RenderLeftPanel(float window_height) {
 
 namespace {
 
-// The angle list behind the Angular Dist. row's fold: presets, a custom-angle input, and the
+// The angle list behind an angular-distance row's fold: presets, a custom-angle input, and the
 // current list with per-entry delete.
 //
 // A named function rather than statements inside the row loop. A table row IS a loop body here, so
-// a popup written inline would be built once per row — four popups sharing one name, of which the
-// last one submitted wins. Having exactly one construction site is a property worth being able to
-// check by reading, not by trusting the loop's shape to stay what it is today.
+// a popup written inline would be built once per row — several popups sharing one name, of which
+// the last one submitted wins. Having exactly one construction site is a property worth being able
+// to check by reading, not by trusting the loop's shape to stay what it is today.
 //
-// `angles` is a parameter because the editor has TWO callers — the Angular Dist. row's fold edits
-// the sun circles' list, the View Circles section's fold edits the view circles' — and the list is
-// the only thing about the editor that differs between them. The rules it applies (presets,
-// duplicate test, cap, clamp band) are sun_circle_rules.hpp's, already pure functions of the list
-// they are handed; what was left bound to one family was only WHICH vector to draw. The typed
-// scratch value is one `static` shared by both callers on purpose: only one popup is open at a
-// time, and a number half-typed for one family is not a value worth keeping apart per family.
+// `angles` is a parameter because the editor has TWO callers — the From Sun row's fold edits the
+// sun circles' list, the From View Center row's fold edits the view circles' — and the list is the
+// only thing about the editor that differs between them. The rules it applies (presets, duplicate
+// test, cap, clamp band) are angular_dist_rules.hpp's, already pure functions of the list they are
+// handed; what was left bound to one family was only WHICH vector to draw. The typed scratch value
+// is one `static` shared by both callers on purpose: only one popup is open at a time, and a
+// number half-typed for one family is not a value worth keeping apart per family.
 void RenderCircleAnglePopup(std::vector<float>& angles) {
   bool at_limit = AngularDistCirclesAtLimit(angles.size());
 
@@ -1004,14 +1004,6 @@ void RenderMarkersFamilyPopup() {
                  static_cast<float>(radius_c.max_value), radius_c.fmt, radius_c.scale);
 }
 
-// What a row's fold holds, when it holds anything. One of the four overlays has a field the others
-// do not. (The reference-point markers' two family fields are NOT here: they belong to the section
-// below this table, not to a row in it.)
-enum class OverlayFold {
-  kNone,
-  kSunCircleAngles,
-};
-
 // One auxiliary line, as the table reads it. Every row answers the same questions — colour, name,
 // line, text label, opacity — which is exactly why the table is the right shape for them
 // (doc/gui-visual-language.md §4.4). `label` is null for a row that draws no text label at all;
@@ -1038,13 +1030,20 @@ struct OverlayRowSpec {
   // the icon codepoint, so renaming the icon would silently rename the item. "###suffix" hashes the
   // suffix alone. Null for a row with no fold.
   const char* fold_id;
-  OverlayFold fold;
+  // What the fold holds, when it holds anything: the angle list the row's popup edits. Null for a
+  // row with no fold — a row offers a fold exactly when it owns a field the others lack, and today
+  // that field is always a list of ring radii. A pointer rather than an enum naming the list: the
+  // two rows that fold differ ONLY in which vector the one editor is handed, and an enum would be
+  // two near-identical cases switching on that. (The reference-point markers' two family fields
+  // are NOT here: they belong to their section's header, not to a row in a table.)
+  std::vector<float>* fold_angles;
 };
 
-// The six columns BOTH overlay tables use, declared once so the reference-point section's rows line
-// up with the four line rows above it rather than merely looking as if they do. The two tables have
-// to be two — the section between them is collapsible, and a table cannot be half-hidden — so this
-// function is what stops them being two column layouts as well.
+// The six columns ALL THREE overlay tables use — the main table's three line rows, the Angular
+// Distance section's two, the Reference Points section's six — declared once so the sections' rows
+// line up with the rows above them rather than merely looking as if they do. The tables have to be
+// three — each section is collapsible, and a table cannot be half-hidden — so this function is what
+// stops them being three column layouts as well.
 //
 // The Alpha width is calibrated against THIS panel's width budget and not carried over from the
 // wider layout the first table was written for: the right panel is kRightPanelWidth (300 px) wide,
@@ -1071,109 +1070,149 @@ void SetupOverlayTableColumns() {
   ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
 }
 
-// The view circles — constant angular distance from the OPTICAL AXIS, the sun circles' twin — as a
-// collapsed section under the four line rows, holding a one-row table of the same six columns.
+// The body every table of OverlayRowSpec rows shares: the six columns, the optional header row,
+// and one row per spec with its fold popup. The main table (three rows, headed) and the Angular
+// Distance section's table (two rows, unheaded — the main table's headers already stand over these
+// same columns) are the two callers; the reference-point section's rows have a different shape
+// (no per-row alpha or fold, family-wide fields on the header) and keep their own loop.
 //
-// WHY NOT A FIFTH ROW of the table above, where the family's shape says it belongs: the four rows
-// are the overlays a user reaches while reading a halo picture, and the 22/46 deg sun circles are
-// the most reached of all (doc/gui-layout-architecture.md §8 pins the most-often-co-adjusted set
-// to one screen); a circle about the optical axis is a framing / calibration tool, reached seldom
-// and for a different kind of task. That is the reference-point section's own argument — "turning
-// on the anthelion is a different KIND of act from turning on the grid" — so this family takes the
-// same form: a collapsed section, closed by default, one click away. A one-row section is not a
-// defect of the shape; it is what "one seldom-used family" looks like in it.
-//
-// WHY NOT A SECOND ROW under a shared "Angular Distance" section with the sun circles: that would
-// fold the most-used switch on the panel one click away to keep two rows together, which is the
-// hard constraint above read backwards.
-//
-// The header carries ONE button, the angle editor's fold. Not the reference points' [All] / [None]
-// pair — those act on six independent switches, and this family has one line switch and one label
-// switch, so there is nothing for a batch action to act on. The open state is SERIALIZED
-// (angular_dist_section_open), like markers_section_open, so a document that had the section open
-// reopens with it open.
-void RenderViewDistSection() {
-  // Same externally-owned open-state protocol as RenderMarkersSection, for the same reason.
-  ImGui::SetNextItemOpen(g_state.angular_dist_section_open, ImGuiCond_Always);
-  // AllowOverlap is load-bearing here exactly as it is on the markers header: without it the
-  // header claims the hover first and the fold button drawn on top of it never receives the click,
-  // while still looking present. test_overlay_controls.cpp clicks it.
-  const bool section_open = ImGui::CollapsingHeader("View Circles##view_dist", ImGuiTreeNodeFlags_AllowOverlap);
-  g_state.angular_dist_section_open = section_open;
-
-  const ImGuiStyle& style = ImGui::GetStyle();
-  const float fold_w = ImGui::CalcTextSize(ICON_FA_ELLIPSIS).x + style.FramePadding.x * 2.0f;
-  ImGui::SameLine(ImGui::GetContentRegionMax().x - fold_w);
-  // Triple hash for the reason the table's row folds give: the label carries a glyph, and "###"
-  // hashes the suffix alone so renaming the icon cannot rename the item.
-  constexpr const char* kFoldId = "###view_dist_fold";
-  if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + kFoldId).c_str())) {
-    ImGui::OpenPopup(kFoldId);
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Edit angles");
-  }
-  if (ImGui::BeginPopup(kFoldId)) {
-    RenderCircleAnglePopup(g_state.view_dist_angles);
-    ImGui::EndPopup();
-  }
-
-  if (!section_open) {
-    return;
-  }
-
+// `rows` + `count` rather than a container: the callers hold C arrays sized by their initialiser,
+// and this tree is C++17, so there is no std::span to hand over.
+void RenderOverlayRowsTable(const char* table_id, const OverlayRowSpec* rows, int count, bool with_headers) {
+  // Name is the ONLY stretching column. That is the mechanism behind "the name is not cut off":
+  // every other column states the width it needs, and whatever is left goes to the names — rather
+  // than the names getting what is left over after an x anchor derived from the longest of them.
   constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
   const ImVec2 outer_size(ImGui::GetContentRegionAvail().x, 0.0f);
-  if (!ImGui::BeginTable("##ViewDistTable", kOverlayTableColumnCount, kFlags, outer_size)) {
+  if (!ImGui::BeginTable(table_id, kOverlayTableColumnCount, kFlags, outer_size)) {
     return;
   }
-  // No TableHeadersRow, for the reason the markers' table gives none: the main table's headers
-  // already stand over these same columns.
   SetupOverlayTableColumns();
-
-  ImGui::TableNextRow();
-  ImGui::TableSetColumnIndex(0);
-  const FieldEditorConstraint color_c = ConstraintFor("overlay_view_dist_color", g_state);
-  ImGui::BeginDisabled(!color_c.enabled);
-  ImGui::ColorEdit3("##view_dist_color", g_state.view_dist_color, ImGuiColorEditFlags_NoInputs);
-  ImGui::EndDisabled();
-  if (color_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("%s", color_c.disabled_reason);
+  if (with_headers) {
+    ImGui::TableHeadersRow();
   }
 
-  ImGui::TableSetColumnIndex(1);
-  ImGui::AlignTextToFramePadding();
-  // "From Axis" rather than a restatement of the section's own title one line above it — the name
-  // column says what this row is relative to, which the title does not.
-  ImGui::TextUnformatted("From Axis");
+  for (int i = 0; i < count; ++i) {
+    const OverlayRowSpec& row = rows[i];
+    ImGui::TableNextRow();
 
-  ImGui::TableSetColumnIndex(2);
-  Checkbox("##view_dist_line", &g_state.show_view_dist_line);
+    ImGui::TableSetColumnIndex(0);
+    const FieldEditorConstraint color_c =
+        row.color_field != nullptr ? ConstraintFor(row.color_field, g_state) : FieldEditorConstraint{};
+    ImGui::BeginDisabled(!color_c.enabled);
+    ImGui::ColorEdit3(row.color_id, row.color, ImGuiColorEditFlags_NoInputs);
+    ImGui::EndDisabled();
+    if (color_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("%s", color_c.disabled_reason);
+    }
 
-  ImGui::TableSetColumnIndex(3);
-  Checkbox("##view_dist_label", &g_state.show_view_dist_label);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(row.name);
 
-  ImGui::TableSetColumnIndex(4);
-  const FieldEditorConstraint alpha_c = ConstraintFor("overlay_view_dist_alpha", g_state);
-  ImGui::SetNextItemWidth(-FLT_MIN);
-  // The id the table's alpha cells resolve to is "##<row>_alpha" (see the "+ 2" note there); this
-  // cell hands DragFloatField the bare suffix and lets it prepend the same "##" once.
-  DragFloatField("view_dist_alpha", &g_state.view_dist_alpha, static_cast<float>(alpha_c.min_value),
-                 static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
+    ImGui::TableSetColumnIndex(2);
+    Checkbox(row.line_id, row.line);
 
-  // Column 5 (fold) stays EMPTY: the family's angle list hangs off the section header, where the
-  // markers' two family fields hang, and a second fold here would be two buttons to one editor.
+    // Empty cell, on purpose — see OverlayRowSpec::label.
+    if (row.label != nullptr) {
+      ImGui::TableSetColumnIndex(3);
+      Checkbox(row.label_id, row.label);
+    }
+
+    ImGui::TableSetColumnIndex(4);
+    const FieldEditorConstraint alpha_c = ConstraintFor(row.alpha_field, g_state);
+    // A single DragFloat rather than the [slider][input] pair the panel used: the pair needs about
+    // twice this cell's width, and the width it would take comes straight off the name column
+    // (doc/gui-visual-language.md §7 records the cell-sized single control as the verified form).
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    // row.alpha_id already carries its own leading "##" (e.g. "##grid_alpha"); DragFloatField
+    // prepends another "##" itself, so the +2 here skips the one already present — without it the
+    // resolved id would be "####grid_alpha", not the "##grid_alpha" that this table's own gui_test
+    // reference (test_overlay_controls.cpp) and test_defaults_panel.cpp both depend on. Not a typo
+    // — do not "clean up".
+    DragFloatField(row.alpha_id + 2, row.alpha, static_cast<float>(alpha_c.min_value),
+                   static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
+
+    if (row.fold_angles == nullptr) {
+      continue;  // Empty fold cell: this overlay has no field the others lack.
+    }
+    ImGui::TableSetColumnIndex(5);
+    // Unconditional, for every fold. Whether a row offers one is a property of the ROW — of whether
+    // it owns a field the others lack — and the fold cells of a table's rows sit in one column,
+    // directly above one another. A cell left empty by anything else than "this row has no extra
+    // field" says the wrong thing in that column, which is what a condition on the circles being
+    // drawn used to say here: it read as the angle editor having gone missing, not as a considered
+    // state (test_overlay_controls.cpp pins this across both switches).
+    if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
+      ImGui::OpenPopup(row.fold_id);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Edit angles");
+    }
+    if (ImGui::BeginPopup(row.fold_id)) {
+      RenderCircleAnglePopup(*row.fold_angles);
+      ImGui::EndPopup();
+    }
+  }
 
   ImGui::EndTable();
 }
 
-// The sky reference points, as a collapsed section under the four line rows.
+// The two families of iso-angular rings — constant angular distance from the SUN (the 22°/46°
+// halo circles) and constant angular distance from the OPTICAL AXIS (the view circles, a framing /
+// calibration tool) — as one collapsed section under the three line rows, holding a two-row table
+// of the same six columns.
 //
-// WHY NOT A FIFTH ROW of the table above, which is where the zenith/nadir pair used to sit: there
-// are six of these, they arrive together, and a user turning on the anthelion is doing a different
-// KIND of thing than a user turning on the grid. Six more rows in the main table would triple its
-// height for one family and bury the four lines a user reaches far more often; a collapsed section
-// keeps the panel's opening state at four rows and puts the family one click away.
+// WHY ONE SECTION FOR BOTH, and not the sun circles as a fourth row of the main table with the
+// view circles in a section of their own, which is how this panel first shipped: the two rows are
+// the same thing measured from two centres — the same list of radii, the same editor, the same
+// rules (angular_dist_rules.hpp) — and the owner's call on seeing the split form was that they
+// belong together under the name they share. That call knowingly sets aside the argument the
+// split form rested on, doc/gui-layout-architecture.md §8's "keep the most-often-co-adjusted
+// switches on one screen" (the 22°/46° switch now sits one click away, behind this header); it is
+// a decision, recorded here so that §8 is not read back into a reason to split them again.
+//
+// The header carries NO button. Each row owns its fold — the angle editor for ITS list — in the
+// table's fold column, the way the sun circles' row always did; the view circles' editor used to
+// hang off their section's header only because a one-row table had no second row to hold it
+// apart from. Nothing family-wide is left for a header button to act on: two line switches and
+// two label switches are not a batch, and the alphas are per row. The open state is SERIALIZED
+// (angular_dist_section_open), like markers_section_open, so a document that had the section open
+// reopens with it open; it defaults CLOSED.
+void RenderAngularDistSection() {
+  // Same externally-owned open-state protocol as RenderMarkersSection, for the same reason.
+  ImGui::SetNextItemOpen(g_state.angular_dist_section_open, ImGuiCond_Always);
+  // AllowOverlap kept for parity with the two other section headers although nothing is drawn on
+  // this one: a button added to it later would otherwise silently never receive its click (see
+  // RenderMarkersSection for the mechanism).
+  const bool section_open = ImGui::CollapsingHeader("Angular Distance##angular_dist", ImGuiTreeNodeFlags_AllowOverlap);
+  g_state.angular_dist_section_open = section_open;
+  if (!section_open) {
+    return;
+  }
+
+  // "From Sun" / "From View Center": the name column says what the row is measured from, which is
+  // the one thing the two rows differ in and the one thing the section title does not say. Display
+  // strings only — no id, no serialization key; the ids and keys keep the families' own names.
+  const OverlayRowSpec rows[] = {
+    { "From Sun", "##sun_circles_color", g_state.sun_circles_color, "overlay_sun_circles_color", "##sun_circles_line",
+      &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
+      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", &g_state.sun_circle_angles },
+    { "From View Center", "##view_dist_color", g_state.view_dist_color, "overlay_view_dist_color", "##view_dist_line",
+      &g_state.show_view_dist_line, "##view_dist_label", &g_state.show_view_dist_label, "##view_dist_alpha",
+      "overlay_view_dist_alpha", &g_state.view_dist_alpha, "###view_dist_fold", &g_state.view_dist_angles },
+  };
+  RenderOverlayRowsTable("##AngularDistTable", rows, 2, /*with_headers=*/false);
+}
+
+// The sky reference points, as a collapsed section under the line rows and the Angular Distance
+// section.
+//
+// WHY NOT A ROW of the main table, which is where the zenith/nadir pair used to sit: there are six
+// of these, they arrive together, and a user turning on the anthelion is doing a different KIND of
+// thing than a user turning on the grid. Six more rows in the main table would triple its height
+// for one family and bury the lines a user reaches far more often; a collapsed section keeps the
+// panel's opening state at three rows and puts the family one click away.
 //
 // The section is closed by default and its open state is SERIALIZED (markers_section_open), so a
 // document that had the family open reopens with it open.
@@ -1302,9 +1341,9 @@ void RenderMarkersSection() {
   ImGui::EndTable();
 }
 
-// The Overlay group: the four auxiliary lines drawn over the preview, as one table — plus, below
-// it, the sky reference points as a collapsed section of their own (see the header there for why
-// they are not a fifth row).
+// The Overlay group: the three auxiliary lines drawn over the preview, as one table — plus, below
+// it, two collapsed sections of their own: the angular-distance circles (both families, see the
+// header there for why one section) and the sky reference points (see its header for why not rows).
 //
 // It replaces four stacked two-row blocks that repeated the word "Alpha" four times and anchored
 // their checkboxes at an x computed from the width of the longest name — an arrangement in which
@@ -1313,118 +1352,38 @@ void RenderOverlaysTab() {
   const OverlayRowSpec rows[] = {
     { "Horizon", "##horizon_color", g_state.horizon_color, "overlay_horizon_color", "##horizon_line",
       &g_state.show_horizon_line, "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha",
-      "overlay_horizon_alpha", &g_state.horizon_alpha, nullptr, OverlayFold::kNone },
+      "overlay_horizon_alpha", &g_state.horizon_alpha, nullptr, nullptr },
     { "Grid", "##grid_color", g_state.grid_color, "overlay_grid_color", "##grid_line", &g_state.show_grid_line,
       "##grid_label", &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
-      OverlayFold::kNone },
-    // "Angular Dist." rather than the field's full name "Angular Distance": the name column is what
-    // every other column's declared width leaves over, and on this 300 px panel the full spelling is
-    // what the width budget cannot afford. Display string only — no id, no serialization key.
-    { "Angular Dist.", "##sun_circles_color", g_state.sun_circles_color, "overlay_sun_circles_color",
-      "##sun_circles_line", &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label,
-      "##sun_circles_alpha", "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold",
-      OverlayFold::kSunCircleAngles },
+      nullptr },
     // The lens image circle. No text label (null label id, empty cell) and no fold: unlike the
-    // angular-distance circles above it owns no field of its own — the shader derives the circle
-    // from the lens type, the FOV and the viewport, so there is nothing here for a user to set.
-    // Null color_field: the lens border is not one of the four instances doc/print-mode-subtractive-
-    // ink.md §7 enumerates, so its swatch takes no gate — see the matching note in
-    // field_editor_registry.cpp for why the boundary comes from the document rather than from
-    // consistency with its three neighbours.
+    // angular-distance circles in the section below, it owns no field of its own — the shader
+    // derives the circle from the lens type, the FOV and the viewport, so there is nothing here for
+    // a user to set. Null color_field: the lens border is not one of the four instances
+    // doc/print-mode-subtractive-ink.md §7 enumerates, so its swatch takes no gate — see the matching
+    // note in field_editor_registry.cpp for why the boundary comes from the document rather than
+    // from consistency with its neighbours.
     { "Lens Border", "##lens_border_color", g_state.lens_border_color, nullptr, "##lens_border_line",
       &g_state.show_lens_border_line, nullptr, nullptr, "##lens_border_alpha", "overlay_lens_border_alpha",
-      &g_state.lens_border_alpha, nullptr, OverlayFold::kNone },
+      &g_state.lens_border_alpha, nullptr, nullptr },
   };
 
-  // Calibrated against THIS panel's width budget, not carried over from the wider layout this table
-  // was first written for: the right panel is kRightPanelWidth (300 px) wide, which leaves the table
-  // ~274 px, and the fixed columns plus cell padding claim all but ~129 px of it. Anything this
-  // column takes comes straight off the Name column, which is the only stretching one — so this
-  // number is the name column's budget stated from the other side. The arbiter is not this comment
-  // but test_overlay_controls.cpp's the_columns_line_up_and_no_name_is_cut_off: if a font or style
-  // change makes a name overflow, this literal is the one knob to turn. The reference-point
-  // section's table reuses these same widths, so its six names are measured against the same
-  // budget — see RenderMarkersSection.
+  // The Alpha column width is calibrated against THIS panel's width budget, not carried over from
+  // the wider layout this table was first written for: the right panel is kRightPanelWidth (300 px)
+  // wide, which leaves the table ~274 px, and the fixed columns plus cell padding claim all but
+  // ~129 px of it. Anything that column takes comes straight off the Name column, which is the only
+  // stretching one — so that number (kAlphaColWidth in SetupOverlayTableColumns) is the name
+  // column's budget stated from the other side. The arbiter is not this comment but
+  // test_overlay_controls.cpp's the_columns_line_up_and_no_name_is_cut_off: if a font or style
+  // change makes a name overflow, that literal is the one knob to turn. The two sections' tables
+  // reuse these same widths, so their names — "From View Center" the longest of all — are measured
+  // against the same budget.
+  RenderOverlayRowsTable("##OverlaysTable", rows, 3, /*with_headers=*/true);
 
-  // Name is the ONLY stretching column. That is the mechanism behind "the name is not cut off":
-  // every other column states the width it needs, and whatever is left goes to the names — rather
-  // than the names getting what is left over after an x anchor derived from the longest of them.
-  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
-  const ImVec2 outer_size(ImGui::GetContentRegionAvail().x, 0.0f);
-  if (!ImGui::BeginTable("##OverlaysTable", 6, kFlags, outer_size)) {
-    return;
-  }
-  SetupOverlayTableColumns();
-  ImGui::TableHeadersRow();
-
-  for (const OverlayRowSpec& row : rows) {
-    ImGui::TableNextRow();
-
-    ImGui::TableSetColumnIndex(0);
-    const FieldEditorConstraint color_c =
-        row.color_field != nullptr ? ConstraintFor(row.color_field, g_state) : FieldEditorConstraint{};
-    ImGui::BeginDisabled(!color_c.enabled);
-    ImGui::ColorEdit3(row.color_id, row.color, ImGuiColorEditFlags_NoInputs);
-    ImGui::EndDisabled();
-    if (color_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("%s", color_c.disabled_reason);
-    }
-
-    ImGui::TableSetColumnIndex(1);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(row.name);
-
-    ImGui::TableSetColumnIndex(2);
-    Checkbox(row.line_id, row.line);
-
-    // Empty cell, on purpose — see OverlayRowSpec::label.
-    if (row.label != nullptr) {
-      ImGui::TableSetColumnIndex(3);
-      Checkbox(row.label_id, row.label);
-    }
-
-    ImGui::TableSetColumnIndex(4);
-    const FieldEditorConstraint alpha_c = ConstraintFor(row.alpha_field, g_state);
-    // A single DragFloat rather than the [slider][input] pair the panel used: the pair needs about
-    // twice this cell's width, and the width it would take comes straight off the name column
-    // (doc/gui-visual-language.md §7 records the cell-sized single control as the verified form).
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    // row.alpha_id already carries its own leading "##" (e.g. "##grid_alpha"); DragFloatField
-    // prepends another "##" itself, so the +2 here skips the one already present — without it the
-    // resolved id would be "####grid_alpha", not the "##grid_alpha" that this table's own gui_test
-    // reference (test_overlay_controls.cpp) and test_defaults_panel.cpp both depend on. Not a typo
-    // — do not "clean up".
-    DragFloatField(row.alpha_id + 2, row.alpha, static_cast<float>(alpha_c.min_value),
-                   static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
-
-    if (row.fold == OverlayFold::kNone) {
-      continue;  // Empty fold cell: this overlay has no field the others lack.
-    }
-    ImGui::TableSetColumnIndex(5);
-    // Unconditional, for both folds. Whether a row offers one is a property of the ROW — of whether
-    // it owns a field the others lack — and the fold cells of the five rows sit in one column,
-    // directly above one another. A cell left empty by anything else than "this row has no extra
-    // field" says the wrong thing in that column, which is what a condition on the circles being
-    // drawn used to say here: it read as the angle editor having gone missing, not as a considered
-    // state (test_overlay_controls.cpp pins this across both switches).
-    if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
-      ImGui::OpenPopup(row.fold_id);
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Edit angles");
-    }
-    if (ImGui::BeginPopup(row.fold_id)) {
-      RenderCircleAnglePopup(g_state.sun_circle_angles);
-      ImGui::EndPopup();
-    }
-  }
-
-  ImGui::EndTable();
-
-  // The two collapsed sections under the four line rows, in this order: the view circles are a
-  // fifth LINE family and sit against the table they would otherwise be a row of; the reference
-  // points are a different kind of thing and come after.
-  RenderViewDistSection();
+  // The two collapsed sections under the three line rows, in this order: the angular-distance
+  // circles are LINE families and sit against the table they would otherwise be rows of; the
+  // reference points are a different kind of thing and come after.
+  RenderAngularDistSection();
   RenderMarkersSection();
 }
 
