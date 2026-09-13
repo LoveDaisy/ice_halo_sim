@@ -362,3 +362,85 @@
 - 两条臂**是否真的只在清单上分叉**由上面那个用例守；两条臂**各自是否正确**由跨进程的
   CLI↔GUI 出图对照守（`test/gui/parity/`，见 `doc/testing-architecture.md` §4.10）。
   两道闸问的是不同的问题，缺一不可。
+
+## 10. 面板派生态（Analysis / Colors 两面板的字段档位与新鲜度谓词）
+
+> 状态：as-built（2026-09-13）。两面板 39 个字段 × 「面板→主窗口」「主窗口→面板」两个方向做过一次穷尽普查，
+> 结论落在本节；改 Analysis 结果列表的生命周期、`ResetFrontendState` 的 per-reason 分支、或 Colors 面板的
+> ref 索引语义前先读。
+
+### 10.1 Analysis 列表新鲜度：单一 owner 位置
+
+「分析结果列表是否仍描述当前场景」这个问题，此前**没有任何机制回答**——`DoRun` 有意保留列表但不打戳；
+`DoRevert` 走 `ResetFrontendState(kRevert)`，该分支跳过 Analysis 清空块，注释理由是「场景还是同一个」，
+但 `DoAnalyze` 用的是活体 `g_state`（`CanStartAnalysis` 不判 dirty），所以 Analyze-while-dirty → Revert 之后
+列表描述的是**编辑后**的场景、文档却回到了 commit 快照，且 Revert 清了 `dirty`，
+`AnalysisPictureNotice` 随之沉默。两条路径同一根因：**列表所描述的场景从未被记录，也就无从比较**。
+
+现在的形状（三处，各一个职责）：
+
+| 职责 | 位置 | 说明 |
+|---|---|---|
+| 记录「分析所描述的场景」 | `GuiState::AnalysisSceneIdentity`（`src/gui/gui_state.hpp`）+ `AnalysisResultView::analyzed_scene` | `DoAnalyze` 在清空 view 之后紧接 `From(g_state)` 捕获——与 `BuildCommitSceneOrWarn` 读的是同一份 state，中间没有写操作 |
+| 判定新鲜度 | `ComputeAnalysisListFreshness(has_result, scene_still_matches)`（`src/gui/sim_state_rules.hpp`） | `{kNone, kFresh, kStale}`；只吃两个 bool，遵循该文件「谓词不吃 GuiState」的约定，2×2 可枚举 |
+| 展示 | `RenderListFreshnessBanner`（`src/gui/analysis_panel.cpp`） | 面板顶行，`WarningTextColor` + 三角叹号（与主窗口 Modified 芯片同视觉语言）；**只在 kStale 画，且不清列表**——「选一行→Exclude→重跑」是面板主路径，清空会切断它 |
+
+三条设计决定，每条都有一个反面选项被否决：
+
+- **纯派生、每帧比较活体 `g_state`，而不是在 `DoRun` / `DoRevert` 各调用一次「标记」函数。** 这两个触发点本身
+  **零新增代码**——Run 提交了编辑后的新场景、Revert 把结构字段改回旧快照，二者都只是让比较结果翻转。
+  代价是 banner 在编辑本身发生时就会出现（不等按了哪个按钮），编辑被手工改回去时又消失；这是有意的：
+  它回答的是「列表 vs 文档」，不是「列表 vs 上一次 commit」。若产品上认为编辑中即报 stale 过于敏感，
+  局部改法是把比较对象换成 `last_committed_state`，谓词签名与 `AnalysisSceneIdentity` 类型都不用动。
+- **身份字段集 = `{crystals, layers, filters, sun, sim, RenderConfigResimFields}`，显式排除 `raypath_color` 与全部
+  T-view 字段。** 色彩类只在已追踪的光路上做显示分类（commit 自己的溢出告警原文：「the underlying
+  filtering/geometry is unaffected — only color assignment degrades」），相机移动不重跑分析。
+  所以**不复用 `ConfigSnapshot`**（它是 Revert baseline，携带 `raypath_color` / `background` / `paper`，直接
+  `==` 会在用户只改颜色时误报 stale），也**不复用 reconciler 的 commit-baseline diff**（它的硬线特判
+  `AnyEntryFilterPresenceChanged` / `RaypathColorStructChanged` 服务的是 epoch 记账，不是「场景变了没」）。
+  `composition_correctness_test` 用一条「颜色编辑保持 fresh」的对照用例把这条边界钉住，将来若要放宽到
+  `ConfigSnapshot` 是一次显式决定，不是顺手。
+- **`AnalysisPictureNotice` 只断言它检查了的事。** 两条文案原先各带半句「the list describes the configured
+  scene / the current one」——那是一句没有任何机制支撑的承诺，现已裁掉。图像 vs 文档（这条通知）与
+  列表 vs 文档（新鲜度 banner）是两个问题，两行可以同时出现，不合并。
+
+### 10.2 两面板全部字段的档位归类（以当前 `gui_state.hpp` 为准）
+
+档位语言沿用 §2。「面板→主窗口」问的是面板内编辑能否正确抵达主文档 / 仿真；「主窗口→面板」问的是主窗口
+动作（New / Open / Run / Revert / 结构编辑）之后面板派生态是否仍与文档一致。
+
+**Analysis 面板**（`RaypathAnalysisSession` 19 字段 + `AnalysisResultView` 8 字段 + `analysis_run_in_progress`）：
+
+| 字段 | 档位 | 面板→主窗口 | 主窗口→面板 |
+|---|---|---|---|
+| `window_open` | T-session | 不写主文档 | 所有 reason 保留（哪些面板开着不是文档状态） |
+| `roi_mode` / `cone_center_valid` / `cone_center_dir` / `cone_marker_dragging` / `cone_radius_deg` / `ray_num_millions` / `infinite` / `ray_budget_initialized` / `pick_armed` / `symmetry_p/b/d` / `selected_entry` / `fetched_once` / `fetched_generation` / `fetched_symmetry` | T-session（分析**请求**参数与列表读取游标） | 不写主文档（`RaypathAnalysisSession` 注释「none of it reaches the sim commit」，逐字段 grep 零写路径） | 4 个文档切换 reason 整体清空；`kRevert` 保留（请求参数不属于文档） |
+| `analyzed_cone_center_dir` | T-session（派生：请求时刻的锥心副本） | 不写主文档 | 有独立漂移检测 `ConeCenterDriftedFromResult`——它回答「锥心 vs 结果」，与本节谓词正交，不合并 |
+| `started` | reconcile 输入（`run_intent` 的分析侧孪生） | 不写主文档 | `DoRun` 清（server 转回渲染会话）；文档切换清 |
+| `analysis_result.payload` / `entries_symmetry` / `display_energy` / `display_order` / `display_cumulative_pct` / `display_total` / `display_ring_count` | DERIVED（poller 喂入 + display-time 重投影） | 唯一反向写路径「Exclude this raypath」只写 `state.filters`，由 `gui_state_reconcile.cpp` 每帧 diff 接到 `MarkStructHardDirty`，隔一帧生效——一致 | 文档切换清空；**Run / Revert 有意保留**，由 §10.1 谓词标 stale |
+| `analysis_result.analyzed_scene` | DERIVED（§10.1 新增） | 不写主文档 | 随 `analysis_result` 整体清空 / 保留；`DoAnalyze` 每次重写 |
+| `analysis_run_in_progress` | DERIVED（每帧从 `started` + poller 观测派生） | 不写主文档 | 文档切换清；其余由 reconcile 每帧重算 |
+
+**Colors 面板**（`ColorClassConfig` = `ColorClassStructState` + `ColorClassDisplayState`；`ColorClassRefConfig` 7 字段；
+`raypath_color_mode`；面板自身无 TU-local 编辑缓冲）：
+
+| 字段 | 档位 | 面板→主窗口 | 主窗口→面板 |
+|---|---|---|---|
+| `combine` / `match`（含每个 ref 的 `layer_idx` / `crystal_pool_id` / `match_all` / `predicate_text` / `sym_p/b/d`） | T-struct·hard | 面板直接改 `state.raypath_color` 本体，`RaypathColorStructChanged` 每帧 diff → `MarkStructHardDirty` | New：整体替换；Open：文档内容整体赋值；Revert：`ConfigSnapshot::raypath_color` 与 `crystals` / `layers` 在同一次 `ApplyTo` 里原子回滚——**ref 索引不失配**。⚠️ 例外：**删层**只修编辑弹窗自己的层索引，不重指向任何 ref 的 `layer_idx`，且 `ResolveColorRef` 的两种检测（越界 / 新层不含该 crystal）都是副作用式的，当后一层恰好复用同一 `crystal_pool_id` 时零提示——姊妹任务处理，本节只记录归类 |
+| `color[3]` / `visible` / `solo` / `z_order` / `raypath_color_mode` | T-display | `DiffAgainstDisplayBaseline` 每帧 diff → `PushDisplayState` 直推 server，不经 dirty / epoch（有意双通道） | Revert 回滚字段后由 `InvalidateEffectsBaselines` 强制下一帧重推 |
+| 面板「选中 / 展开」态 | T-session（ImGui 折叠态，按 widget ID） | 不存在于 `GuiState` | 无可回滚之物——Colors 的编辑就是改本体，本体已随 Revert 回滚 |
+
+`crystal_pool_id` 的重指向半支**结构性不适用**：crystal 池 append-only（全仓无 `crystals.erase`）。这是「当前不存在
+这个攻击面」，不是「验证过没问题」；若将来加入 crystal 删除 / 压缩，本行要重审。
+
+### 10.3 两条可迁移判据（普查阶段产出，不依赖具体任务）
+
+- **副作用式检测 ≠ 为该场景设计的检测。** 一个检测函数恰好挡住了某个失效场景的**部分**输入（如越界检测、归属检测
+  恰好覆盖了「删层后重指向」的常见子情形），不代表它是为这个场景写的。审计任何「索引引用 + 部分检测覆盖」的派生态时，
+  先问检测函数的实现意图是什么，再**反向构造「巧合不成立」的输入**去验证真实覆盖面——常见路径不报错不构成
+  该类缺陷不存在的证据。
+- **节点覆盖 ≠ 数据覆盖。** `ResetFrontendState` 是 session-tier 派生态的单一 owner，但**只对 session-tier 生效**；
+  document-tier 派生态（如 `raypath_color`）走完全不同的路线（整体赋值 / `ConfigSnapshot::ApplyTo`）。两条路线各自
+  可以是对的，但审计时必须**先分清一个派生态归哪个 tier，再检查对应的 owner**——不能默认所有派生态都归
+  `ResetFrontendState` 管。§10.1 的缺口正是「猜对了机制类型、猜错了面板和 reason」的产物：Colors 的 Revert
+  由 document-tier 路线正确覆盖，Analysis 的 Revert 落在 session-tier 路线的一条显式跳过分支上。
