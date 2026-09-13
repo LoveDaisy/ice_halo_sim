@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789258761805,
+  "lastUpdate": 1789258764438,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4766,54 +4766,6 @@ window.BENCHMARK_DATA = {
       {
         "commit": {
           "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "35c7cd3f1734523f8812d509152a6b3ff8ab2ea7",
-          "message": "Merge pull request #258 from LoveDaisy/fix/preview-drag-gain-fov\n\nfix(gui): scale preview drag by the lens's angular resolution",
-          "timestamp": "2026-08-07T16:10:31+08:00",
-          "tree_id": "91628e3757321fdf8723aac188f3c9c5be6aa3e5",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/35c7cd3f1734523f8812d509152a6b3ff8ab2ea7"
-        },
-        "date": 1786090778999,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 732415.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1180061.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 766855.2,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 763813.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
             "email": "49699333+dependabot[bot]@users.noreply.github.com",
             "name": "dependabot[bot]",
             "username": "dependabot[bot]"
@@ -9518,6 +9470,54 @@ window.BENCHMARK_DATA = {
             "value": 661972.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51fa59e29850545fd09b7f6041faaed4a4bea4cd",
+          "message": "Merge pull request #356 from LoveDaisy/feat/cuda-hostgen-black-and-energy-accounting\n\nfix(cuda): host root-gen fallback renders again; landed weight reduced per warp so the energy ledger matches legacy",
+          "timestamp": "2026-09-13T08:09:28+08:00",
+          "tree_id": "5310d81311d369114cdde3eb97a22ec84b3b27c2",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/51fa59e29850545fd09b7f6041faaed4a4bea4cd"
+        },
+        "date": 1789258763979,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1045324.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1180404.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 813138.5,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 812113,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
