@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789275330189,
+  "lastUpdate": 1789275332570,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e9c3c21619ce17f2552afeae2398ef33fbce4ee4",
-          "message": "Merge pull request #260 from LoveDaisy/fix/closedform-tolerance-residuals\n\nfix(core): remove the closed-form pyramid's unit-of-measure assumption from its tolerances",
-          "timestamp": "2026-08-08T12:02:24+08:00",
-          "tree_id": "9f892f4c5b6e1fef411a3819fa50d9ab8f4ccfe7",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e9c3c21619ce17f2552afeae2398ef33fbce4ee4"
-        },
-        "date": 1786162368321,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 81.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 90.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "e9f15c07a86a7eb9878e5a43e149b5137e846df3",
           "message": "Merge pull request #261 from LoveDaisy/feat/gui-test-suite-rebuild\n\ntest(gui): rebuild the GUI test suite into three layers, and gate the cascade defect family",
           "timestamp": "2026-08-10T22:24:25+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 88.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "682bf9aadbd77a61c2d7697ccd4b353bb70a06be",
+          "message": "Merge pull request #358 from LoveDaisy/fix/equidistant-focal-length-factor-two\n\nfix(config): equidistant lens f→fov conversion was half the documented value",
+          "timestamp": "2026-09-13T12:42:20+08:00",
+          "tree_id": "ad66fbc16fa5d96511d2e7667a3348c6c69b86d5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/682bf9aadbd77a61c2d7697ccd4b353bb70a06be"
+        },
+        "date": 1789275331756,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 87.8,
             "unit": "%"
           }
         ]
