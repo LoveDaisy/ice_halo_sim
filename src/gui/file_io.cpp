@@ -3982,9 +3982,9 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 }
 
 
-// ========== Export Config JSON ==========
+// ========== Text exports (config JSON, analysis CSV) ==========
 
-bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str) {
+bool WriteTextFile(const std::filesystem::path& path, const std::string& text) {
   if (path.empty()) {
     return false;
   }
@@ -3992,8 +3992,16 @@ bool ExportConfigJson(const std::filesystem::path& path, const std::string& json
   if (!out.is_open()) {
     return false;
   }
-  out << json_str;
+  out << text;
   return out.good();
+}
+
+bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str) {
+  return WriteTextFile(path, json_str);
+}
+
+bool ExportAnalysisResultsCsv(const std::filesystem::path& path, const std::string& csv) {
+  return WriteTextFile(path, csv);
 }
 
 bool ConfigJsonExportNeedsOverwriteConfirm(const std::filesystem::path& path) {
@@ -4085,6 +4093,20 @@ std::filesystem::path ShowExportJsonDialog() {
   nfdchar_t* out_path = nullptr;
   nfdfilteritem_t filter_item[1] = { { "JSON Config", "json" } };
   nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "config.json");
+  std::filesystem::path path;
+  if (result == NFD_OKAY && out_path) {
+    path = PathFromU8(out_path);
+    NFD_FreePath(out_path);
+  }
+  NFD_Quit();
+  return path;
+}
+
+std::filesystem::path ShowExportCsvDialog() {
+  NFD_Init();
+  nfdchar_t* out_path = nullptr;
+  nfdfilteritem_t filter_item[1] = { { "CSV", "csv" } };
+  nfdresult_t result = NFD_SaveDialog(&out_path, filter_item, 1, nullptr, "raypath_analysis.csv");
   std::filesystem::path path;
   if (result == NFD_OKAY && out_path) {
     path = PathFromU8(out_path);

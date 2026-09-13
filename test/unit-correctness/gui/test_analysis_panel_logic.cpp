@@ -195,6 +195,86 @@ TEST(AnalysisPanelLogic, OtherRowLabelNamesNoEntryAndExcludeReadsNoSelection) {
   EXPECT_NE(std::string(kAnalysisOtherRowLabel).find_first_not_of("0123456789-() >C"), std::string::npos);
 }
 
+// ---- Export CSV ----
+
+// The CSV is the list as shown, byte for byte. Three propositions, each against a hand-written
+// expectation (derived from the same numbers the cumulative-percent case above pins, so the two
+// cannot both be wrong the same way): a whole-sky result with an "other" bucket writes the head,
+// the rows in display order and the other line; a cone result writes the cone lines of the head and
+// hides the rows the radius hides; no result writes the head and the column header alone.
+TEST(AnalysisPanelLogic, ExportCsvWritesTheListAsShownWithHeadAndOtherRow) {
+  GuiState state;
+  auto p = MakePayload(8, LUMICE_RAYPATH_ROI_FULL_SKY, { 1.0, 5.0, 3.0 });
+  p->other_energy = 3.0;
+  p->other_count = 30;
+  p->truncated_chain_count = 4;
+  // Row "3-4" (energy 3, count 300) took over an evicted slot: a takeover bound of 0.6 of its 3.0.
+  p->entries[2].error_bound = 0.6;
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, p));
+  state.analysis_result.entries_symmetry = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_D;
+  const std::string csv = BuildAnalysisResultsCsv(state, "2026-09-13 10:30:00");
+  // total 12: rows 5/12, 3/12, 1/12 -> 41.6667, 25.0000, 8.3333; cumulative 41.6667, 66.6667, 75;
+  // other 25 closes at 100. Rays: 200, 300, 100 (100*(i+1)); +/- 1/sqrt: 7.07, 5.77, 10.00.
+  const std::string want =
+      "# Lumice raypath analysis\n"
+      "# exported_at: 2026-09-13 10:30:00\n"
+      "# region: whole sky\n"
+      "# symmetry: P|D\n"
+      "# total_rays: 630\n"
+      "# total_energy: 12\n"
+      "# record_full_hits: 4\n"
+      "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n"
+      "2-3,5,41.6667,41.6667,200,7.07,\n"
+      "3-4,3,25.0000,66.6667,300,5.77,20.00\n"
+      "1-2,1,8.3333,75.0000,100,10.00,\n"
+      "other (not recorded),3,25.0000,100.0000,30,,\n";
+  EXPECT_EQ(csv, want);
+}
+
+TEST(AnalysisPanelLogic, ExportCsvOfAConeResultCarriesTheConeLinesAndHidesRowsOutsideTheRadius) {
+  GuiState state;
+  state.analysis.cone_radius_deg = 1.0f;  // ring 0 of 4 only
+  // The centre the result was requested with: straight down the +x axis, i.e. light travelling
+  // horizontally from the sky point at altitude 0, azimuth 180 (DirToAltAz's convention).
+  state.analysis.analyzed_cone_center_dir[0] = 1.0f;
+  auto c = MakePayload(9, LUMICE_RAYPATH_ROI_CONE, { 2.0, 9.0, 50.0, 60.0 }, 4, 4.0f);
+  c->other_energy = 8.0;
+  c->other_count = 80;
+  ASSERT_TRUE(AdoptAnalysisPayloadIfNew(state, c));
+  state.analysis_result.entries_symmetry = 0;
+  const std::string csv = BuildAnalysisResultsCsv(state, "t");
+  // Only entry 0 (ring 0) shows energy: 2 of a 10 total; the three rows outside the radius are
+  // absent, as they are from the table; the bucket enters whole and closes at 100.
+  const std::string want =
+      "# Lumice raypath analysis\n"
+      "# exported_at: t\n"
+      "# region: point\n"
+      "# cone_centre_altitude_deg: -0.00\n"
+      "# cone_centre_azimuth_deg: -180.00\n"
+      "# cone_request_radius_deg: 4.0\n"
+      "# cone_display_radius_deg: 1.0\n"
+      "# cone_rings_summed: 1 / 4\n"
+      "# symmetry: no symmetry\n"
+      "# total_rays: 1080\n"
+      "# total_energy: 10\n"
+      "# record_full_hits: 0\n"
+      "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n"
+      "1-2,2,20.0000,20.0000,100,10.00,\n"
+      "other (not recorded),8,80.0000,100.0000,80,,\n";
+  EXPECT_EQ(csv, want);
+}
+
+TEST(AnalysisPanelLogic, ExportCsvWithNoResultIsHeadAndColumnsOnly) {
+  GuiState state;
+  const std::string csv = BuildAnalysisResultsCsv(state, "t");
+  const std::string want =
+      "# Lumice raypath analysis\n"
+      "# exported_at: t\n"
+      "# region: none (no result)\n"
+      "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n";
+  EXPECT_EQ(csv, want);
+}
+
 // The generation gate. The same result observed over many polls (the poller carries the payload
 // forward, and `present` is true on every one of them) must not reset the selection or reorder
 // the list; only a payload with a NEW generation does. Red-state probe: make the gate adopt on

@@ -1,9 +1,12 @@
 #include "gui/analysis_panel.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <map>
 #include <numeric>
 #include <string>
@@ -29,6 +32,7 @@
 #include "gui/theme.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
+#include "util/path_utils.hpp"
 #include "util/result_frame.hpp"
 #include "util/thousands_format.hpp"
 
@@ -775,6 +779,115 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
   return true;
 }
 
+// ---- CSV export ----------------------------------------------------------------------------------
+
+namespace {
+
+// RFC 4180 quoting, applied only when the field needs it. Today no field does — a chain's display
+// text is digits, '-', parentheses, "C<id>" and " -> " — but the rule is cheap and the text's
+// grammar is core's to grow.
+std::string EscapeCsvField(std::string_view field) {
+  if (field.find_first_of(",\"\n\r") == std::string_view::npos) {
+    return std::string(field);
+  }
+  std::string out = "\"";
+  for (const char c : field) {
+    if (c == '"') {
+      out += '"';
+    }
+    out += c;
+  }
+  out += '"';
+  return out;
+}
+
+// printf into a std::string; every number in the file goes through one of these three so the
+// precision rules are stated once. Percentages carry two more decimals than the table (the file
+// is for a tool, the table for an eye); energies are %g at six digits, the raw double's shape.
+std::string Fmt(const char* fmt, double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), fmt, v);
+  return buf;
+}
+std::string Pct(double v) {
+  return Fmt("%.4f", v);
+}
+std::string Energy(double v) {
+  return Fmt("%.6g", v);
+}
+
+}  // namespace
+
+std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view exported_at) {
+  const auto& view = state.analysis_result;
+  const AnalysisPayload* payload = view.payload.get();
+  std::string out;
+  out += "# Lumice raypath analysis\n";
+  out += "# exported_at: " + std::string(exported_at) + "\n";
+  if (payload != nullptr) {
+    out += std::string("# region: ") + RoiModeLabel(payload->roi_mode) + "\n";
+    if (payload->roi_mode == LUMICE_RAYPATH_ROI_CONE) {
+      // The centre the result was ASKED for (analyzed_cone_center_dir), not the live marker, which
+      // may have moved since; the radius and ring count are the display-time reduction on show.
+      float alt = 0.0f;
+      float az = 0.0f;
+      DirToAltAz(state.analysis.analyzed_cone_center_dir, &alt, &az);
+      out += "# cone_centre_altitude_deg: " + Fmt("%.2f", alt) + "\n";
+      out += "# cone_centre_azimuth_deg: " + Fmt("%.2f", az) + "\n";
+      out += "# cone_request_radius_deg: " + Fmt("%.1f", payload->cone_radius_rad * kRad2Deg) + "\n";
+      out += "# cone_display_radius_deg: " + Fmt("%.1f", state.analysis.cone_radius_deg) + "\n";
+      out += "# cone_rings_summed: " + std::to_string(view.display_ring_count) + " / " +
+             std::to_string(payload->cone_ring_count) + "\n";
+    }
+    out += "# symmetry: " + SymmetryBitsLabel(view.entries_symmetry) + "\n";
+    std::uint64_t total_rays = static_cast<std::uint64_t>(payload->other_count);
+    for (const auto& e : payload->entries) {
+      total_rays += static_cast<std::uint64_t>(e.count);
+    }
+    out += "# total_rays: " + std::to_string(total_rays) + "\n";
+    out += "# total_energy: " + Energy(view.display_total) + "\n";
+    out += "# record_full_hits: " + std::to_string(payload->truncated_chain_count) + "\n";
+  } else {
+    out += "# region: none (no result)\n";
+  }
+  // "Energy" is the row's share of total_energy as the table shows it; "Energy raw" is the sum of
+  // Y * weight it is a share of. "+/-" is the count's relative statistical error, 1/sqrt(Rays), as
+  // a percentage; "Takeover" is the share of the row that may belong to another raypath when the
+  // record was full (the table's parenthesised second figure), empty when none.
+  out += "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n";
+  if (payload == nullptr) {
+    return out;
+  }
+  const double total = view.display_total;
+  for (size_t row = 0; row < view.display_order.size(); ++row) {
+    const int idx = view.display_order[row];
+    const auto& e = payload->entries[static_cast<size_t>(idx)];
+    const double energy = view.display_energy[static_cast<size_t>(idx)];
+    if (!(energy > 0.0)) {
+      continue;  // the table hides these rows too
+    }
+    const double rel = e.count > 0 ? 1.0 / std::sqrt(static_cast<double>(e.count)) : 1.0;
+    out += EscapeCsvField(e.display);
+    out += ',' + Energy(energy);
+    out += ',' + Pct(total > 0.0 ? energy / total * 100.0 : 0.0);
+    out += ',' + Pct(view.display_cumulative_pct[row]);
+    out += ',' + std::to_string(static_cast<std::uint64_t>(e.count));
+    out += ',' + Fmt("%.2f", rel * 100.0);
+    out += ',';
+    if (e.error_bound > 0.0 && e.energy > 0.0) {
+      out += Fmt("%.2f", e.error_bound / e.energy * 100.0);
+    }
+    out += '\n';
+  }
+  if (payload->other_count > 0) {
+    const double other_pct = AnalysisOtherPct(state);
+    const double cum = (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct;
+    out += std::string(kAnalysisOtherRowLabel) + ',' + Energy(payload->other_energy) + ',' + Pct(other_pct) + ',' +
+           Pct(cum) + ',' + std::to_string(static_cast<std::uint64_t>(payload->other_count)) + ",,\n";
+  }
+  return out;
+}
+
 // ---- Rendering -----------------------------------------------------------------------------------
 
 namespace {
@@ -961,7 +1074,9 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       // count above is not read as "every raypath there was".
       if (state.analysis_result.payload->truncated_chain_count > 0) {
         ImGui::SameLine();
-        ImGui::TextDisabled("; record full (%d hits)", state.analysis_result.payload->truncated_chain_count);
+        ImGui::TextDisabled(
+            "; record full (%s hits)",
+            FormatThousands(static_cast<std::uint64_t>(state.analysis_result.payload->truncated_chain_count)).c_str());
         if (ImGui::IsItemHovered()) {
           ImGui::SetTooltip(
               "The record keeps a fixed number of distinct raypaths per worker. This many times a ray reached a\n"
@@ -1142,7 +1257,20 @@ void RenderResultList(GuiState& state) {
   ImGui::EndTable();
 }
 
-void RenderExcludeButton(GuiState& state) {
+// The local wall-clock time as "YYYY-MM-DD HH:MM:SS", for the CSV's exported_at line. Inline here:
+// this is its only consumer, and the CSV builder takes the string so a test never needs a clock.
+std::string LocalTimeNow() {
+  const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  char buf[32] = { 0 };
+  if (const std::tm* tm = std::localtime(&now)) {
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+  }
+  return buf;
+}
+
+// The one row of buttons under the list: Exclude, and Export CSV beside it. One row, not two —
+// RenderResultList keeps exactly one row's height back for them.
+void RenderActionButtons(GuiState& state) {
   std::string why;
   const ExcludeEligibility elig = EvaluateExcludeEligibility(state, &why);
   ImGui::BeginDisabled(elig != ExcludeEligibility::kOk);
@@ -1163,6 +1291,27 @@ void RenderExcludeButton(GuiState& state) {
     } else {
       ImGui::SetTooltip("%s", why.c_str());
     }
+  }
+  ImGui::SameLine();
+  const auto& payload = state.analysis_result.payload;
+  const bool has_rows = payload && !payload->entries.empty();
+  ImGui::BeginDisabled(!has_rows);
+  if (ImGui::Button(ICON_FA_FILE_CSV " Export CSV")) {
+    const std::filesystem::path path = ShowExportCsvDialog();
+    if (!path.empty()) {
+      if (ExportAnalysisResultsCsv(path, BuildAnalysisResultsCsv(state, LocalTimeNow()))) {
+        GUI_LOG_INFO("[Analysis] exported result list to {}", PathToU8(path));
+      } else {
+        GUI_LOG_ERROR("[Analysis] failed to write {}", PathToU8(path));
+      }
+    }
+  }
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip(has_rows ?
+                          "Save the list as shown \xe2\x80\x94 this radius, this symmetry \xe2\x80\x94 as a CSV file\n"
+                          "with a header that records the region, the symmetry and the ray total." :
+                          "Nothing to export yet.");
   }
 }
 
@@ -1189,7 +1338,7 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
   RenderSymmetryControls(state, server);
   ImGui::Separator();
   RenderResultList(state);
-  RenderExcludeButton(state);
+  RenderActionButtons(state);
   ImGui::End();
 }
 
