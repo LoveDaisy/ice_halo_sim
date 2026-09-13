@@ -1075,18 +1075,36 @@ struct LinesOnlyScene {
 // note), so the reading is the honest one. The smallest break each row is placed against is the
 // column's minimum above the honest line: 73, 8 and 11 px.
 // clang-format off
-// view_dist_lines calibration, N=6 category runs on an otherwise idle machine, same protocol as
-// the three rows above. Honest reading (both arms ON): n_diff=0 / maxcc=0 on all 6 runs — the
-// view circle is drawn from the same AngularDistDegOfDir
-// definition the sun circles already are, evaluated from a different reference direction, so it
-// is "one curve twice" exactly like its sibling and the two arms agree to the pixel, same as
-// full_sky_dual_fisheye_lines' own honest reading above. K=4 is carried over from the other three
-// rows by analogy rather than re-derived from a fresh single-sided break on this row specifically:
-// the view circle is drawn by the SAME blendAnnotationColor/lineCoverage shader code and the same
-// UploadCircleLevels upload path the sun circles already exercise on the row directly above (only
-// the uniform names and the reference direction differ), so a broken insertion order or a wrong
-// per-pixel angle would fail the same way and by the same margin the "the CLI shifts every circle
-// 1deg" break already demonstrates for that shared code path.
+// view_dist_lines calibration, N=6 runs of this one row (--filter "view_dist_lines") on an
+// otherwise idle machine, the same ruler and the same honest/break protocol as the three rows
+// above. The view circle is drawn from the same AngularDistDegOfDir definition the sun circles
+// already are, evaluated from a different reference direction, so it is "one curve twice" exactly
+// like its sibling; the honest reading is n_diff=0 / maxcc=0 in all six runs, identical to the
+// pixel, same as full_sky_dual_fisheye_lines' own honest reading above (both arms mark 161053
+// pixels). K = 4 is this row's own reading, not the siblings' by analogy: it sits under the
+// smallest break below by 72x.
+//
+// Two breaks, one per arm, because the reference direction is not a field of the export
+// document: the CLI derives the optical axis from the view's own az/el/roll, so no edit to the
+// document can move the centre of the view circles while leaving the rest of the scene alone.
+// The only way to make the two arms disagree about the reference direction in isolation is on
+// the GUI arm, in the shader (view_axis = u_reference_dir in place of -u_view_matrix[2], i.e. the
+// view family drawn around the sun). Dropping a level, by contrast, is a document edit like the
+// sibling rows' dropped parallel, and it is the smaller of the two — the XOR is one missing ring,
+// cut at every crossing with the grid that is still there.
+//
+//   break                                              | view_dist_lines
+//   ---------------------------------------------------|----------------
+//   honest (N=6, identical)                            |     0 /   0
+//   the CLI drops the last view_dist level (60 deg)    |  2286 / 291
+//   the GUI centres the view circles on the sun        |  8479 / 359
+//     (shader: view_axis = u_reference_dir)            |
+//
+// Read as n_xor / maxcc. Both breaks red on 6/6 runs, and both readings were the same in all
+// six. The sun-centred break is the one that would come from wiring the wrong uniform into the
+// second family's distance, which is the defect this row exists to catch. The dropped level is
+// the twin of the sibling row's "draws only the first of two angular_dist lines" break (360 px
+// on the same base scene, 291 here), and it is the smallest break this row is placed against.
 const LinesOnlyScene kLinesOnlyScenes[] = {
   {"single_lens_angled_lines", "single_lens_angled", /*max_cc_threshold=*/4},
   {"full_sky_dual_fisheye_lines", "full_sky_dual_fisheye", /*max_cc_threshold=*/4},
