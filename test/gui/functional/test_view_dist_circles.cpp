@@ -413,11 +413,11 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       IM_CHECK(CaptureViewport(ctx, &baseline));
 
       // Unfold the Angular Distance section by a click on its header, add an angle through the
-      // From Axis row's own fold, then switch the line on. Named ref for the panel clicks (a
+      // Lens Center row's own fold, then switch the line on. Named ref for the panel clicks (a
       // control scrolled out of view reads as missing to a wildcard lookup); released for the
       // popup, which is a different window.
       ctx->SetRef("//##RightPanel");
-      ctx->ItemClick("**/Angular Distance##angular_dist");
+      ctx->ItemClick("**/Angular Distance from...##angular_dist");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.angular_dist_section_open);
       ctx->ItemClick("**/###view_dist_fold");
