@@ -219,15 +219,33 @@ Server configuration structure for `LUMICE_CreateServerEx()`.
 
 ```c
 typedef struct LUMICE_ServerConfig_ {
-  int num_workers;        // Number of simulator worker threads. 0 = default (hardware_concurrency - 2)
+  int num_workers;        // CPU worker count. 0 = automatic: min(physical core count, 10) —
+                          // kMaxDefaultWorkerCount in server.cpp is the cap and carries the
+                          // measurements behind it. A value > 0 is honoured verbatim, above
+                          // the cap included.
   unsigned int sim_seed;  // Deterministic seed for worker RNGs. 0 = random (default).
                           // Non-zero collapses to 1 worker for bit-stable results.
+  int preferred_backend;  // LUMICE_BACKEND_CPU / LUMICE_BACKEND_METAL / LUMICE_BACKEND_CUDA
 } LUMICE_ServerConfig;
 ```
 
 **Notes**:
-- Zero-initialized struct (`= {0}`) is equivalent to default behavior (auto worker count, random seed)
-- When `sim_seed != 0`, the server forces `num_workers = 1` to ensure deterministic ray tracing results.
+- Zero-initialized struct (`= {0}`) is equivalent to default behavior (auto worker count, random seed,
+  CPU backend)
+- `num_workers` sizes the server's CPU worker group on **both** routes. On the CPU route these are the
+  render workers, which also run an analysis. On the GPU route (Metal/CUDA) the render engine stays a
+  single `Simulator` whatever this says (N engines would contend one GPU — see
+  `doc/gpu-single-engine-implementation.md`), and the count sizes the server's **standing CPU analysis
+  pool**: the workers `LUMICE_StartRaypathAnalysis` runs on, built at construction and woken only by an
+  analysis session.
+  **⚠️ BEHAVIOUR CHANGE** (with the standing pool): before it existed the field was ignored on the GPU
+  route — an analysis there ran on the single engine with CPU forced, one core. A caller that passed a
+  non-zero `num_workers` to a GPU-preferred server now gets an analysis pool of that size; a caller that
+  left it 0 gets the automatic size. The render is unaffected either way.
+- When `sim_seed != 0`, the server forces `num_workers = 1` to ensure deterministic ray tracing results —
+  on the GPU route this collapses the analysis pool to one worker by the same rule, and that worker holds
+  `sim_seed` exactly as the CPU route's one worker does, so a seeded analysis reproduces across the
+  backend toggle, not only across sessions of one server.
   The determinism is per run, for EVERY run of the server's life: each `LUMICE_CommitScene` /
   `LUMICE_StartRaypathAnalysis` session re-seeds the worker from `sim_seed` at its start, so the tenth
   session of one server reproduces the first bit for bit (the worker's RNG used to be seeded at

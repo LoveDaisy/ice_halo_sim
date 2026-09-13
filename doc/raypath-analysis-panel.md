@@ -113,6 +113,16 @@ owner 在 2026-09-11 提出第三种形态，不再试图同时满足「渲染�
    （`src/include/lumice.h:2448`，`src/server/c_api.cpp:3320`）把它读出来给调用方核对「强制是否生效」。
    GUI 侧**没有**为这条加任何可见提示或按钮禁用——Analyze 在 GPU 偏好会话下一样可点，只是内部
    静默走 CPU、可能比渲染慢；这是子任务 5 范围内的非目标（GUI 的 GPU 路径体验留给未来子任务）。
+   **多 worker（as-built，2026-09-13 起）**：CPU 路的分析本来就跑在多 worker 上；GPU 偏好的
+   server 现在亦然——`ServerImpl` 构造期在单引擎之外额外建一组 CPU 偏好的**常备分析池**
+   （`analysis_pool_simulators_`，`num_workers > 0 ? num_workers : min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`
+   个 `Simulator`，`sim_seed != 0` 时与 CPU 路同规则坍缩为 1），`Start()` 按 `SessionKind` 只
+   唤醒对应的那一组（`RunPersistentLoop` 的 `required_mode` 等待谓词：渲染唤醒引擎，分析唤醒池，
+   另一组在 `Start()`/`Stop()` 间沉睡），`Stop()` 的 `active_workers_ → 0` 等待因此只计醒着的组。
+   在此之前 GPU 偏好 server 上的分析是「对唯一那个引擎 simulator 强制 CPU」——单核。
+   `AnalysisWorkers()` 是「分析会话属性下发到哪一组」的唯一权威（CPU 路 = `simulators_` 本身，
+   GPU 路 = 池）；`LUMICE_ServerConfig.num_workers` 由此对 GPU 偏好 server 第一次产生效果
+   （决定池大小，此前被忽略），`doc/c_api.md` 有行为变化标记。
 2. **「光路」= 从光源到相机的完整链，不是单晶体内的一段。**
    例如 `crystal1(1-3-5)-crystal2(3-2)`；单晶体 MS 或单层退化为链长 1，不特判成另一种数据形状。
    理由（机制约束）：现有数据结构拿不到全链——`ExitRayRecord::path` 只装最后一层的面序列，
@@ -466,9 +476,12 @@ entry 共享）/ 多个 Out 槽位 / 还有未筛选子组分别措辞。实施�
   `SimData` 携带本批新增的表增量，consumer 按 `ChainIdMerger` 合并（见 §3.2）；未采用「强制
   `worker_count=1`」的备选方案，多 worker 吞吐未被牺牲。诚实边界：这条合并逻辑只有合成数据 +
   白盒单测覆盖（`test_chain_id_merger.cpp`），真实多线程并发场景的端到端验证由子任务 4 的
-  `test_server_analysis_run.cpp` 补齐（互斥/强制 CPU 场景），但**没有**一个测试是「多 worker
-  并发跑分析会话，断言合并结果与已知答案一致」这种端到端形状——仍然是合成/白盒覆盖，
-  没有再往上升级。
+  `test_server_analysis_run.cpp` 补齐（互斥/强制 CPU 场景）。2026-09-13 起补上了端到端形状：
+  `ServerAnalysisRunMultiWorker.FourWorkersMergeIntoTheSameHistogramAsOne`（同文件）在 CPU 路上
+  对同一场景跑 1-worker 与 4-worker 两次分析，精确断言预算被全额追踪、每条链只占一行（跨 worker
+  合并失败的形状是同一条链被拆到多行），并在该场景实测噪声（总能量 ±7%、主链份额相对 ≤11%、
+  计数 0.14%）给出的容差内断言总能量、计数与每条主链的份额双向一致。仍是统计比对，不是
+  「与已知答案一致」——随机 seed 下没有已知答案可比。
 - **ROI 圈随视角错位**（2026-09-12 前的已知限制，仅记在 `GuiState::analysis` 的代码注释与
   `doc/user-manual/06-raypath-analysis{,_zh}.md` 的「已知限制」小节里，本设计文档从未记录这条限制——
   全部历史版本无此措辞，可用 `git log --all -p -- doc/raypath-analysis-panel.md` 核实）——**已修复**：
@@ -553,7 +566,9 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
 
 - **GPU 直方图 kernel**（对应 §2 第 1 条的「GPU 不覆盖」）：触发条件——用户反馈 CPU-only 的
   分析等待时间在大 `ray_num` / 多晶体场景下不可接受，且 Metal/CUDA 补上 per-ray 记录回传
-  （当前 `ReadbackExitRays` 直接返回空）的工程代价被证明值得投入。
+  （当前 `ReadbackExitRays` 直接返回空）的工程代价被证明值得投入。⚠️ GPU 偏好 server 上的分析
+  在 2026-09-13 之前是单核的（见 §2 第 1 条「多 worker」段），那个时代测得的等待时间数字不构成
+  触发证据，须以常备分析池落地后的实测数字重判。
 - **密度排序（能量 / 覆盖立体角）**（对应 §2 第 4 条）：触发条件——用户明确反馈「总能量降序」
   把弥散但总量大的链排到了他们认为不重要的位置靠前。需要给每个链 key 配一张粗天球栅格才能算出
   覆盖立体角，存储与实现复杂度上升一个量级，不是加一个排序 comparator 就能做到。

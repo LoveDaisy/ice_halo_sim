@@ -687,7 +687,9 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
     取代「一次运行既渲染又按像素存分解」，拆开 N×W×H 的两处耦合各消解一处：专用运行拆掉与渲染的耦合，
     统计量而非图拆掉像素维度，内存降为 O(不同光路数)，是路线 E「不存、需要时算回来」的泛化。
     四条 owner 裁决均已落地：v1 只走 CPU 路且显式（`SessionMode::kAnalysis` 强制
-    `ResolveGpuRoute`/`CreateBackend` 走 CPU，GUI 不禁用/不提示）/ 完整链（跨 MS 层）= per-ray 链 id
+    `ResolveGpuRoute`/`CreateBackend` 走 CPU，GUI 不禁用/不提示；⭐2026-09-13 起 GPU 偏好 server
+    也是**多 worker**——构造期常备一组 CPU 偏好的分析池 `analysis_pool_simulators_`，`Start()` 按
+    `SessionKind` 只唤醒对应组，`num_workers` 由此对 GPU 路第一次生效=决定池大小）/ 完整链（跨 MS 层）= per-ray 链 id
     （`RayBuffer::chain_ids_`）interning（`ChainIdInterningTable`）前向携带，与 `components_` 同一套
     六个传播点（已用红态探针逐点验证）/ ROI = 方向空间锥形 + 分环 + 角半径滑杆 display-time 生效（GUI
     专测钉住）/ 总能量降序必有，密度排序（能量/立体角）v1 未做。顺带闭环：列表行 →「Exclude this
