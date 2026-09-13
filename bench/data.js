@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789283178469,
+  "lastUpdate": 1789283180524,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e9f15c07a86a7eb9878e5a43e149b5137e846df3",
-          "message": "Merge pull request #261 from LoveDaisy/feat/gui-test-suite-rebuild\n\ntest(gui): rebuild the GUI test suite into three layers, and gate the cascade defect family",
-          "timestamp": "2026-08-10T22:24:25+08:00",
-          "tree_id": "e9887d79b9e35fe3454a3514c13308ca2f68fc03",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e9f15c07a86a7eb9878e5a43e149b5137e846df3"
-        },
-        "date": 1786372560563,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 77.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "5c2b1a9cd1daae6d11f8b670faca311a48723059",
           "message": "Merge pull request #262 from LoveDaisy/fix/gui-blocked-production-defects\n\nfix(gui): four defects around blank filter rows, slider drags and failed loads",
           "timestamp": "2026-08-11T11:22:23+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 87.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b10d1bbc134afb64423fa842b7740de5a59934f2",
+          "message": "Merge pull request #359 from LoveDaisy/feat/analysis-panel-polish\n\nfeat(gui): raypath analysis panel polish — first-picture gate, draw layer, geometry, thousands grouping, Export CSV",
+          "timestamp": "2026-09-13T14:55:21+08:00",
+          "tree_id": "ffbfcccfae868fd3b9504d3d98acd998d41a1933",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b10d1bbc134afb64423fa842b7740de5a59934f2"
+        },
+        "date": 1789283180008,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 88.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 89.1,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.4,
             "unit": "%"
           }
         ]
