@@ -14,6 +14,7 @@ add_executable(gui_test
     functional/test_filter_editor.cpp
     functional/test_gui_face_number_overlay.cpp
     functional/test_angular_dist_circles.cpp
+    functional/test_view_dist_circles.cpp
     functional/test_annotation_line_tracking.cpp
     functional/test_annotation_line_seam.cpp
     functional/test_run_lifecycle.cpp
