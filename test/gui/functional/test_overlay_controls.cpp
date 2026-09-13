@@ -77,11 +77,12 @@ struct ScopedRef {
 const char* const kRows[] = { "horizon", "grid", "lens_border" };
 
 // The two rows of the Angular Distance section's table, by id suffix and by the name each displays.
-// Mirrored for the reason NameOfRow gives. "From Axis" is the shorter of the two spellings the
-// panel could have used, and it is this case that made it so: "From View Center" measured 103 px
-// against the 96 the name column has.
+// Mirrored for the reason NameOfRow gives. The section header now carries the "from"
+// ("Angular Distance from...##angular_dist"), so the rows only name what they are measured from —
+// "Lens Center" rather than "Axis" or "View Center" (an owner naming call, PR #362); the width
+// check the_columns_line_up_and_no_name_is_cut_off is still the arbiter of whether it fits.
 const char* const kAngularDistRows[] = { "sun_circles", "view_dist" };
-const char* const kAngularDistNames[] = { "From Sun", "From Axis" };
+const char* const kAngularDistNames[] = { "Sun", "Lens Center" };
 
 // The six reference-point rows of the second table, by the id suffix their widgets carry. Mirrored
 // from kMarkerSerialNames for the same reason NameOfRow mirrors the display names: a rename there
@@ -369,7 +370,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P32, restated. Reaching the angle editor is a property of the From Sun row itself — the row
+  // P32, restated. Reaching the angle editor is a property of the Sun row itself — the row
   // owns a field the others lack, so it offers a fold — and not of whether the circles happen to
   // be drawn at the moment. All four combinations of the row's two switches, because "reachable
   // regardless" is a claim about the whole square and not about the one corner a new document
@@ -418,7 +419,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         return opened;
       };
 
-      click_in_panel("**/Angular Distance##angular_dist");
+      click_in_panel("**/Angular Distance from...##angular_dist");
       ctx->Yield(3);
       IM_CHECK(gui::g_state.angular_dist_section_open);
 
@@ -567,7 +568,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
   // The two rows' folds, once the section is open, each edit THEIR OWN list. This is the point of
   // parameterising the popup (RenderCircleAnglePopup takes the vector): a popup still bound to the
   // first family would pass every check on the sun circles' row and fail here by adding a 9 deg SUN
-  // circle when the From Axis fold was clicked. Both directions, because a binding that was
+  // circle when the Lens Center fold was clicked. Both directions, because a binding that was
   // right for one row and wrong for the other is the shape the defect would take.
   {
     ImGuiTest* t =
@@ -581,7 +582,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const std::vector<float> sun_before = gui::g_state.sun_circle_angles;
       IM_CHECK(!sun_before.empty());  // the 22/46 pair: the other list is non-empty, so "untouched" means something
 
-      // From Axis: add 9 deg, the sun list is untouched; delete it, still untouched.
+      // Lens Center: add 9 deg, the sun list is untouched; delete it, still untouched.
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
         ctx->ItemClick("**/###view_dist_fold");
@@ -601,7 +602,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
 
-      // From Sun, the other way round: add 9 deg (not in the default pair, so it sorts to the
+      // Sun, the other way round: add 9 deg (not in the default pair, so it sorts to the
       // front), the view list stays empty; delete row 0 — the 9 — and the pair is back.
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
@@ -646,7 +647,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // own any more, which is what the sun_circles half of this negative says.
         IM_CHECK(!ctx->ItemExists("**/##sun_circles_line"));
         IM_CHECK(!ctx->ItemExists("**/##view_dist_line"));
-        ctx->ItemClick("**/Angular Distance##angular_dist");
+        ctx->ItemClick("**/Angular Distance from...##angular_dist");
         ctx->Yield(2);
         IM_CHECK(gui::g_state.angular_dist_section_open);
         IM_CHECK(ctx->ItemExists("**/##sun_circles_line"));
