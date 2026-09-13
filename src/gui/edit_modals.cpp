@@ -1432,15 +1432,39 @@ void NotifyEntryDeleted(int layer_idx, int deleted_entry_idx) {
   }
 }
 
-void NotifyLayerDeleted(int deleted_layer_idx) {
-  if (g_active_modal != ActiveModal::kOpen) {
-    return;
+namespace {
+// Three-state positional-index compensation shared by every consumer that holds a layer_idx into
+// state.layers: the referenced layer is gone (-1), shifted down (decremented), or unaffected.
+// The -1 is deliberate rather than "leave it and let it fall out of range": only a deleted LAST
+// layer goes out of range on its own; a deleted middle layer leaves the old index in range and
+// pointing at whichever layer moved into that slot.
+int CompensateLayerIndexForDeletion(int idx, int deleted_layer_idx) {
+  if (idx == deleted_layer_idx) {
+    return -1;
   }
-  if (deleted_layer_idx == g_modal_layer_idx) {
-    // Every entry the modal could have been editing went with the layer.
-    g_active_modal = ActiveModal::kNone;
-  } else if (deleted_layer_idx < g_modal_layer_idx) {
-    --g_modal_layer_idx;
+  if (idx > deleted_layer_idx) {
+    return idx - 1;
+  }
+  return idx;
+}
+}  // namespace
+
+void NotifyLayerDeleted(GuiState& state, int deleted_layer_idx) {
+  if (g_active_modal == ActiveModal::kOpen) {
+    const int compensated = CompensateLayerIndexForDeletion(g_modal_layer_idx, deleted_layer_idx);
+    if (compensated < 0) {
+      // Every entry the modal could have been editing went with the layer.
+      g_active_modal = ActiveModal::kNone;
+    } else {
+      g_modal_layer_idx = compensated;
+    }
+  }
+  // Independent of the modal: colour-class refs name layers by position too, and they outlive any
+  // modal, so they follow the erase every time.
+  for (ColorClassConfig& cls : state.raypath_color) {
+    for (ColorClassRefConfig& ref : cls.match) {
+      ref.layer_idx = CompensateLayerIndexForDeletion(ref.layer_idx, deleted_layer_idx);
+    }
   }
 }
 
