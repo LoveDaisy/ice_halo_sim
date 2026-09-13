@@ -21,11 +21,12 @@ namespace lumice {
 // lifetime. The MSL mirror (src/core/metal/lumice_trace.metal) and the CUDA
 // device-side struct MUST match this 20-byte layout (static_assert below).
 //   * n_idx / spd_weight: read on-device (refraction + ray weight).
-//   * cmf_x/y/z: Metal's on-device XYZ projection. The exit-seam path (CUDA, and
-//     Metal's live path) instead reconstructs the wavelength host-side from
-//     wl_idx (simulator.cpp) and applies CMF in the consumer, so CUDA's device
-//     pool leaves cmf_* unused — they stay in the shared struct for layout
-//     parity and Metal's harness path.
+//   * cmf_x/y/z: read on-device by BOTH device-fused emit gates — Metal's
+//     (lumice_trace.metal) and CUDA's (`EmitToDeviceXyz` in
+//     cuda_trace_backend.cu) — which project each exit straight into the XYZ
+//     image with these weights. Only the host-side exit-seam path (a backend
+//     that hands exits back through DrainExits) reconstructs the wavelength
+//     from wl_idx and applies CMF in the consumer instead.
 struct WlEntry {
   float n_idx;
   float spd_weight;
