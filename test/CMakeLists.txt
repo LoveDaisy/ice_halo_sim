@@ -460,7 +460,11 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_absolute_ev_additivity_chain.cpp"
     # Analysis result -> Exclude -> filter pool -> exported core JSON: the closure the Raypath
     # Analysis panel promises the CLI, asserted on the JSON the export hands over.
-    "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_analysis_filter_exclude_chain.cpp")
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_analysis_filter_exclude_chain.cpp"
+    # Analyze -> (edit, Run | Revert) -> the list-freshness banner's verdict: the one comparison
+    # both lifecycle paths are meant to reach, asserted through the real DoAnalyze / DoRun /
+    # DoRevert against a live server.
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_analysis_freshness_chain.cpp")
   target_include_directories(composition_correctness_test
     PRIVATE ${PROJ_TEST_DIR})
   # Same three definitions gui_unit_test carries, for the same reasons (see its block above):

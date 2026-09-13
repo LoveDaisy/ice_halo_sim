@@ -75,33 +75,55 @@ inline bool HasEverShownPicture(RunIntent intent) {
 // The panel's Analyze button. An analysis submits the document on the panels itself
 // (DoAnalyze builds the scene the way DoRun does and hands it to LUMICE_StartRaypathAnalysis), so
 // it needs no picture that MATCHES: a loaded .lmc that was never run and an edited (kModified)
-// document both analyse — what the list describes is always the configured scene, and the panel
-// says so in a status line when the picture on screen is not of it. What it does need, besides a
-// backend with nothing in flight (the C API's mutual exclusion, surfaced as a disabled button
-// rather than as an error line after the click), is a document that has shown a picture at least
-// once: analysing a scene the user has never seen rendered reads as a request out of nowhere, so
-// a fresh / New / JSON-imported / blank-.lmc document waits for its first Run. The In frame and
-// Point region radios read the same predicate, so the three cannot disagree on what "no picture
-// yet" means.
+// document both analyse — the list describes the document as it was when Analyze was pressed
+// (AnalysisPictureNotice below says when the picture on screen is not of that document;
+// ComputeAnalysisListFreshness says when the document has since moved away from it). What it
+// does need, besides a backend with nothing in flight (the C API's mutual exclusion, surfaced as
+// a disabled button rather than as an error line after the click), is a document that has shown
+// a picture at least once: analysing a scene the user has never seen rendered reads as a request
+// out of nowhere, so a fresh / New / JSON-imported / blank-.lmc document waits for its first Run.
+// The In frame and Point region radios read the same predicate, so the three cannot disagree on
+// what "no picture yet" means.
 inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool analysis_in_progress, RunIntent intent) {
   return has_server && !IsBackendBusy(state, analysis_in_progress) && HasEverShownPicture(intent);
 }
 
-// The panel's notice that the picture on screen is not of the document the list describes —
-// the text to show, or nullptr when there is nothing to say. Two cases and they cannot both
-// hold: an intent of kNone (fresh / New / a JSON import / an .lmc with no baked picture) means no
-// picture of this document was ever made, and it reconciles to kIdle, which dirty never lifts
-// to kModified; kModified means there is a picture, of the configuration before the edit. A
-// notice, not a refusal — though the kNone case is now also the one CanStartAnalysis refuses
-// (HasEverShownPicture), so that line is read beside a disabled button.
+// The panel's notice that the picture on screen is not of the document on the panels — the text
+// to show, or nullptr when there is nothing to say. Two cases and they cannot both hold: an
+// intent of kNone (fresh / New / a JSON import / an .lmc with no baked picture) means no picture
+// of this document was ever made, and it reconciles to kIdle, which dirty never lifts to
+// kModified; kModified means there is a picture, of the configuration before the edit. A notice,
+// not a refusal — though the kNone case is now also the one CanStartAnalysis refuses
+// (HasEverShownPicture), so that line is read beside a disabled button. It says nothing about the
+// LIST — whether the list still describes the document is a different question, answered by
+// ComputeAnalysisListFreshness below from a comparison this function does not have.
 inline const char* AnalysisPictureNotice(RunIntent intent, GuiState::SimState state) {
   if (intent == RunIntent::kNone) {
     return "No rendered image for this document yet \xe2\x80\x94 press Run once before analysing.";
   }
   if (IsModified(state)) {
-    return "Image is from a previous configuration \xe2\x80\x94 the list describes the current one.";
+    return "Image is from a previous configuration.";
   }
   return nullptr;
+}
+
+// Whether the analysis list on show still describes the document on the panels. kNone: there is
+// no list (no payload adopted — before the first Analyze, or while one is in flight after
+// DoAnalyze cleared the previous view). Otherwise fresh iff the document still matches the scene
+// the result was captured from, stale iff it does not — whichever way it got there: an edit, a
+// Run that committed one, a Revert that restored the previous commit. One comparison, evaluated
+// each frame, is what makes those three the same case instead of three call sites.
+//
+// The caller computes both inputs — `has_result` = analysis_result.payload != nullptr,
+// `scene_still_matches` = analysis_result.analyzed_scene && analyzed_scene->Matches(state) — so
+// this stays a function of two bools a test can enumerate, like everything else in this file.
+enum class AnalysisListFreshness { kNone, kFresh, kStale };
+
+inline AnalysisListFreshness ComputeAnalysisListFreshness(bool has_result, bool scene_still_matches) {
+  if (!has_result) {
+    return AnalysisListFreshness::kNone;
+  }
+  return scene_still_matches ? AnalysisListFreshness::kFresh : AnalysisListFreshness::kStale;
 }
 
 }  // namespace lumice::gui

@@ -167,6 +167,17 @@ TEST(SimStateRules, AnalysisPictureNoticeNamesTheTwoCasesAndNoOther) {
   }
 }
 
+// The list-freshness predicate over its whole domain: no result is kNone whatever the scene
+// says (a match without a list is not a fresh list), and with a result the verdict is the
+// comparison's alone. Four rows, each pinned to a named value so a predicate that never returned
+// kStale — or always did — fails on the row that says so.
+TEST(SimStateRules, AnalysisListFreshnessIsTheSceneComparisonOnlyWhenThereIsAList) {
+  EXPECT_EQ(ComputeAnalysisListFreshness(false, false), AnalysisListFreshness::kNone);
+  EXPECT_EQ(ComputeAnalysisListFreshness(false, true), AnalysisListFreshness::kNone);
+  EXPECT_EQ(ComputeAnalysisListFreshness(true, true), AnalysisListFreshness::kFresh);
+  EXPECT_EQ(ComputeAnalysisListFreshness(true, false), AnalysisListFreshness::kStale);
+}
+
 // ---- Zero-contribution layer notice (panels.cpp scattering-layer header) ----
 
 // The notice under a scattering layer's header says the layer produces no rays. Three different
