@@ -426,12 +426,15 @@
 
 | 字段 | 档位 | 面板→主窗口 | 主窗口→面板 |
 |---|---|---|---|
-| `combine` / `match`（含每个 ref 的 `layer_idx` / `crystal_pool_id` / `match_all` / `predicate_text` / `sym_p/b/d`） | T-struct·hard | 面板直接改 `state.raypath_color` 本体，`RaypathColorStructChanged` 每帧 diff → `MarkStructHardDirty` | New：整体替换；Open：文档内容整体赋值；Revert：`ConfigSnapshot::raypath_color` 与 `crystals` / `layers` 在同一次 `ApplyTo` 里原子回滚——**ref 索引不失配**。⚠️ 例外：**删层**只修编辑弹窗自己的层索引，不重指向任何 ref 的 `layer_idx`，且 `ResolveColorRef` 的两种检测（越界 / 新层不含该 crystal）都是副作用式的，当后一层恰好复用同一 `crystal_pool_id` 时零提示——姊妹任务处理，本节只记录归类 |
+| `combine` / `match`（含每个 ref 的 `layer_idx` / `crystal_pool_id` / `match_all` / `predicate_text` / `sym_p/b/d`） | T-struct·hard | 面板直接改 `state.raypath_color` 本体，`RaypathColorStructChanged` 每帧 diff → `MarkStructHardDirty` | New：整体替换；Open：文档内容整体赋值；Revert：`ConfigSnapshot::raypath_color` 与 `crystals` / `layers` 在同一次 `ApplyTo` 里原子回滚——**ref 索引不失配**。**删层**（`NotifyLayerDeleted`，`src/gui/edit_modals.cpp:1452`）现同时遍历每个 ref 做位置补偿，规则与编辑弹窗 `g_modal_layer_idx` 的补偿共用同一个纯函数 `CompensateLayerIndexForDeletion`（同文件 `:1441`，同一模式的第二个消费者）：`layer_idx == deleted` → `-1` 悬空（`ResolveColorRef` 走既有 `kLayerMissing` 分支，面板显示 " (deleted)"）；`layer_idx > deleted` → `--layer_idx`；小于 → 不动。这一遍历**不**挂在「模态是否开着」的门槛之后。之前的缺口：ref 保留旧下标而静默指向前移进来的那一层，且 `ResolveColorRef` 的两种检测（越界 / 新层不含该 crystal）都是副作用式的，当后一层恰好复用同一 `crystal_pool_id` 时零提示——`test/composition-correctness/gui/test_color_ref_layer_delete_chain.cpp` 钉住的正是「下标 + 物理层身份」这一对，而不是单独的 `kResolved` |
 | `color[3]` / `visible` / `solo` / `z_order` / `raypath_color_mode` | T-display | `DiffAgainstDisplayBaseline` 每帧 diff → `PushDisplayState` 直推 server，不经 dirty / epoch（有意双通道） | Revert 回滚字段后由 `InvalidateEffectsBaselines` 强制下一帧重推 |
 | 面板「选中 / 展开」态 | T-session（ImGui 折叠态，按 widget ID） | 不存在于 `GuiState` | 无可回滚之物——Colors 的编辑就是改本体，本体已随 Revert 回滚 |
 
 `crystal_pool_id` 的重指向半支**结构性不适用**：crystal 池 append-only（全仓无 `crystals.erase`）。这是「当前不存在
-这个攻击面」，不是「验证过没问题」；若将来加入 crystal 删除 / 压缩，本行要重审。
+这个攻击面」，不是「验证过没问题」；若将来加入 crystal 删除 / 压缩，本行要重审。同理，`state.layers` 今天只有
+**一个**会改变既有下标含义的写点——`src/gui/panels.cpp` 里那次 `erase`（全仓无 `layers.insert` / swap / 重排入口；
+`ConfigSnapshot::ApplyTo` 是整体赋值且与 `raypath_color` 同一次原子回滚），所以补偿只为删除而写，不为不存在的
+重排预留路径；将来加入层重排时，`CompensateLayerIndexForDeletion` 旁边就是它的第二条规则该住的地方。
 
 ### 10.3 两条可迁移判据（普查阶段产出，不依赖具体任务）
 
