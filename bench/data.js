@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789273863441,
+  "lastUpdate": 1789273865524,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9526,50 +9526,6 @@ window.BENCHMARK_DATA = {
       {
         "commit": {
           "author": {
-            "email": "49699333+dependabot[bot]@users.noreply.github.com",
-            "name": "dependabot[bot]",
-            "username": "dependabot[bot]"
-          },
-          "committer": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "distinct": true,
-          "id": "f1fab1851731a56919ca3ade95ffca37f3ea8d01",
-          "message": "build(deps): bump Jimver/cuda-toolkit from 0.2.35 to 0.2.36\n\nBumps [Jimver/cuda-toolkit](https://github.com/jimver/cuda-toolkit) from 0.2.35 to 0.2.36.\n- [Release notes](https://github.com/jimver/cuda-toolkit/releases)\n- [Commits](https://github.com/jimver/cuda-toolkit/compare/v0.2.35...v0.2.36)\n\n---\nupdated-dependencies:\n- dependency-name: Jimver/cuda-toolkit\n  dependency-version: 0.2.36\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
-          "timestamp": "2026-08-08T08:35:42+08:00",
-          "tree_id": "e00d185b3a3bebca6b8e9c131180275191f5fc28",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f1fab1851731a56919ca3ade95ffca37f3ea8d01"
-        },
-        "date": 1786149844097,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 75.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
             "email": "zhangjiajie043@gmail.com",
             "name": "Jiajie Zhang",
             "username": "LoveDaisy"
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 91.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "22166140295c68e58e6375028394d4587a351c11",
+          "message": "Merge pull request #357 from LoveDaisy/feat/view-center-angular-dist-grid\n\nfeat(annotation): view_dist — circles of constant angular distance from the optical axis, config → core → C API → GUI",
+          "timestamp": "2026-09-13T12:02:01+08:00",
+          "tree_id": "6875aee1957344381ca66a902bb0dc2ba20f8f02",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/22166140295c68e58e6375028394d4587a351c11"
+        },
+        "date": 1789273864943,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 83.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.2,
             "unit": "%"
           }
         ]
