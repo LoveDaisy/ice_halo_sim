@@ -23,7 +23,8 @@
 #include <vector>
 
 #include "IconsFontAwesome6.h"
-#include "gui/server_poller.hpp"  // LUMICE_CreateServer / StopServer / DestroyServer
+#include "gui/defaults_panel.hpp"  // OpenDefaultsPanel / DefaultsPanelSection (Settings modal)
+#include "gui/server_poller.hpp"   // LUMICE_CreateServer / StopServer / DestroyServer
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -55,6 +56,33 @@ struct ScopedServer {
     gui::g_state.dirty = false;
   }
   bool ok() const { return gui::g_server != nullptr; }
+};
+
+// Opens the Settings modal for the length of one case and closes it again even on a failing
+// IM_CHECK (which expands to `return`) — a popup left on ImGui's stack eats the next case's first
+// clicks. A narrower sibling of test_defaults_panel.cpp's own ScopedPanel: this file's cases do
+// not need that guard's per-case user-config isolation, only its open/close discipline, so it is
+// not reused across the two translation units.
+struct ScopedSettingsPanel {
+  explicit ScopedSettingsPanel(ImGuiTestContext* ctx) : ctx_(ctx) {
+    gui::OpenDefaultsPanel(gui::g_state, gui::DefaultsPanelSection::kSettings);
+    ctx_->Yield(4);
+  }
+  ScopedSettingsPanel(const ScopedSettingsPanel&) = delete;
+  ScopedSettingsPanel& operator=(const ScopedSettingsPanel&) = delete;
+  ~ScopedSettingsPanel() {
+    if (!gui::g_state.defaults_panel_open) {
+      gui::OpenDefaultsPanel(gui::g_state, gui::DefaultsPanelSection::kSettings);
+      ctx_->Yield(4);
+    }
+    ctx_->ItemClick("**/###defaults_close");
+    ctx_->Yield(2);
+    gui::g_state.defaults_panel_open = false;
+    ctx_->Yield(2);
+  }
+
+ private:
+  ImGuiTestContext* ctx_;
 };
 
 // The run-intent latch, handed back on every exit path, for the one case that fakes a run without
@@ -276,12 +304,15 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The allocation switch is reachable from the panel, edits the document field, and — being a
-  // SimConfig field the reconciler auto-diffs — dirties the document without a MarkDirty of its
-  // own. Both directions are clicked so a checkbox wired to a copy of the field, or one that only
-  // ever set it, would show. The fresh document's state is asserted first: a new document (and an
-  // .lmc saved before the key existed, which reads the same factory value) opens with the switch
-  // ON, which is the GUI default the user manual describes.
+  // The allocation switch's only editor is now the Settings modal's Current value column
+  // (field-editor registry key "sim.ray_allocation") — this chore removed the main panel's
+  // checkbox, so driving the Settings cell is itself the new contract worth a case for. It still
+  // edits the document field, and — being a SimConfig field the reconciler auto-diffs — still
+  // dirties the document without a MarkDirty of its own. Both directions are clicked so a cell
+  // wired to a copy of the field, or one that only ever set it, would show. The fresh document's
+  // state is asserted first: a new document (and an .lmc saved before the key existed, which reads
+  // the same factory value) opens with the switch ON, which is the GUI default the user manual
+  // describes.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "toggling_adaptive_ray_allocation_dirties_the_document");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -297,15 +328,24 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.dirty);
 
-      ctx->ItemClick("**/Adaptive ray allocation");
-      ctx->Yield();
-      IM_CHECK(!gui::g_state.sim.ray_allocation_adaptive);
-      IM_CHECK(gui::g_state.dirty);
+      {
+        ScopedSettingsPanel panel(ctx);
+        ctx->ItemInputValue("**/###defaults_search", "sim.ray_allocation");
+        ctx->Yield(3);
 
-      ctx->ItemClick("**/Adaptive ray allocation");
-      ctx->Yield();
-      IM_CHECK(gui::g_state.sim.ray_allocation_adaptive);
-      // Teardown is the guard's; see ScopedServer for why it cannot be written here.
+        ctx->ItemClick("**/##value_sim.ray_allocation");
+        ctx->Yield();
+        IM_CHECK(!gui::g_state.sim.ray_allocation_adaptive);
+        IM_CHECK(gui::g_state.dirty);
+
+        ctx->ItemClick("**/##value_sim.ray_allocation");
+        ctx->Yield();
+        IM_CHECK(gui::g_state.sim.ray_allocation_adaptive);
+
+        ctx->ItemInputValue("**/###defaults_search", "");
+      }
+      // Teardown is the guards'; see ScopedServer and ScopedSettingsPanel for why it cannot be
+      // written here.
     };
   }
 

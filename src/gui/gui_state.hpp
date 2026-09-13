@@ -309,9 +309,10 @@ struct SimConfig {
   int max_hits = 8;
   bool infinite = false;
   // scene.ray_allocation, held as a bool because the wire field is two-valued ("proportional" |
-  // "adaptive") and the panel control is a checkbox; the string spelling lives only at the .lmc /
-  // JSON / C-API seams. Were the field ever to grow a third value, this bool, the two serializers
-  // in file_io.cpp, the field-editor registration and the panel checkbox all change together.
+  // "adaptive") and the only editor is the Settings modal's Current value column (field-editor
+  // registry `sim.ray_allocation`) — there is no control on the main panel. The string spelling
+  // lives only at the .lmc / JSON / C-API seams. Were the field ever to grow a third value, this
+  // bool, the two serializers in file_io.cpp, and the field-editor registration all change together.
   // The factory value here is the GUI DOCUMENT default — a new document, an .lmc saved before the
   // key existed, and a core JSON imported without it all land on it — and it is deliberately not
   // core's own default (proportional, which guards CLI regression batteries that never pass

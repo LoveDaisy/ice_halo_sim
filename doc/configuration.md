@@ -493,10 +493,10 @@ The scene configuration defines the simulation scene, including the light source
 > always deals by `proportion`. A misspelled value is not an error — the loader warns
 > (`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`) and
 > behaves as if the key were absent, which is the safe default but also the noisy image the
-> author was trying to leave, so check the log. In the GUI the mode is the Simulation panel's
-> `Adaptive ray allocation` checkbox, saved in the `.lmc` and written to every exported config —
+> author was trying to leave, so check the log. In the GUI the mode is the `Adaptive ray
+> allocation` setting in Settings, saved in the `.lmc` and written to every exported config —
 > and there the *document* default is `adaptive` (a new document, an `.lmc` saved before the
-> control existed, or a config imported without the key all open with it on), which is not the
+> setting existed, or a config imported without the key all open with it on), which is not the
 > absent-key default above: the GUI always writes the key out, so a GUI-authored config never
 > relies on it. The engine-side owners are `ResolveLayerRayAllocation` (the one place that
 > decides whether a layer deals by `p` or by `q`), `ComputeAdaptiveRayAllocationWeights`
