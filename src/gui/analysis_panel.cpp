@@ -850,12 +850,14 @@ std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view expo
   } else {
     out += "# region: none (no result)\n";
   }
-  // Five columns, matching RenderResultList's header one for one: the file's schema is a single
+  // Four columns, matching RenderResultList's header one for one: the file's schema is a single
   // authoritative definition, not a superset the table happens to be a projection of. "Energy" and
   // "+/-" are the same percentages the table cell shows, not the underlying raw doubles; "+/-"
   // embeds the takeover figure in parentheses exactly as the table cell does, so a row that took
-  // over an evicted slot still carries that information in its one cell.
-  out += "Raypath,Energy,Cumulative %,Rays,+/-\n";
+  // over an evicted slot still carries that information in its one cell. The per-row hit count is
+  // not a column, here or in the table (RenderResultList says why); the run-level total_rays line
+  // above is the one ray count the file carries.
+  out += "Raypath,Energy,Cumulative %,+/-\n";
   if (payload == nullptr) {
     return out;
   }
@@ -871,7 +873,6 @@ std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view expo
     out += EscapeCsvField(e.display);
     out += ',' + Pct(total > 0.0 ? energy / total * 100.0 : 0.0);
     out += ',' + Pct(view.display_cumulative_pct[row]);
-    out += ',' + std::to_string(static_cast<std::uint64_t>(e.count));
     out += ',' + Fmt("%.2f", rel * 100.0);
     if (e.error_bound > 0.0 && e.energy > 0.0) {
       out += " (-" + Fmt("%.2f", e.error_bound / e.energy * 100.0) + ")";
@@ -881,8 +882,7 @@ std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view expo
   if (payload->other_count > 0) {
     const double other_pct = AnalysisOtherPct(state);
     const double cum = (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct;
-    out += std::string(kAnalysisOtherRowLabel) + ',' + Pct(other_pct) + ',' + Pct(cum) + ',' +
-           std::to_string(static_cast<std::uint64_t>(payload->other_count)) + ",-\n";
+    out += std::string(kAnalysisOtherRowLabel) + ',' + Pct(other_pct) + ',' + Pct(cum) + ",-\n";
   }
   return out;
 }
@@ -1194,14 +1194,17 @@ void RenderResultList(GuiState& state) {
   // One row kept back below the table, for the button row that follows it (Exclude and Export CSV
   // share the line); GetFrameHeightWithSpacing already carries the item spacing between the two.
   const float avail_h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing();
-  if (!ImGui::BeginTable("##analysis_rows", 5, flags, ImVec2(0.0f, std::max(avail_h, 120.0f)))) {
+  // No "Rays" column, on purpose: under adaptive ray allocation a row's hit count is how many
+  // rays the online deal SENT its crystal, which is proportional neither to the crystal's
+  // `proportion` nor to the row's Energy — shown, it only asks "why does this row get many rays
+  // and little energy". Energy (the share) is the strength; the count's one job is the +/- cell.
+  if (!ImGui::BeginTable("##analysis_rows", 4, flags, ImVec2(0.0f, std::max(avail_h, 120.0f)))) {
     return;
   }
   ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableSetupColumn("Raypath", ImGuiTableColumnFlags_WidthStretch, 3.0f);
   ImGui::TableSetupColumn("Energy", ImGuiTableColumnFlags_WidthStretch, 1.0f);
   ImGui::TableSetupColumn("Cumulative %", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-  ImGui::TableSetupColumn("Rays", ImGuiTableColumnFlags_WidthStretch, 1.0f);
   ImGui::TableSetupColumn("+/-", ImGuiTableColumnFlags_WidthStretch, 0.8f);
   ImGui::TableHeadersRow();
 
@@ -1231,11 +1234,11 @@ void RenderResultList(GuiState& state) {
     ImGui::TableSetColumnIndex(2);
     ImGui::Text("%.1f%%", view.display_cumulative_pct[row]);
     ImGui::TableSetColumnIndex(3);
-    ImGui::TextUnformatted(FormatThousands(static_cast<std::uint64_t>(e.count)).c_str());
-    ImGui::TableSetColumnIndex(4);
-    // 1/sqrt(N): the relative statistical error of the count, so the noise in the tail reads as
-    // noise rather than as signal. A row that took over an evicted slot (error_bound > 0) may
-    // also hold energy of some other chain; that bound is shown beside it, as a share of the row.
+    // The statistical noise of this row's Energy share, estimated from the row's internal hit
+    // count as 1/sqrt(N), so the noise in the tail reads as noise rather than as signal — the one
+    // cue the reader has for "is this thin row noise or genuinely small". A row that took over an
+    // evicted slot (error_bound > 0) may also hold energy of some other chain; that bound is
+    // shown beside it, as a share of the row.
     const double rel = e.count > 0 ? 1.0 / std::sqrt(static_cast<double>(e.count)) : 1.0;
     if (e.error_bound > 0.0 && e.energy > 0.0) {
       ImGui::Text("%.0f%% (-%.0f%%)", rel * 100.0, e.error_bound / e.energy * 100.0);
@@ -1270,8 +1273,6 @@ void RenderResultList(GuiState& state) {
     ImGui::TextDisabled("%.1f%%",
                         (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct);
     ImGui::TableSetColumnIndex(3);
-    ImGui::TextDisabled("%s", FormatThousands(static_cast<std::uint64_t>(view.payload->other_count)).c_str());
-    ImGui::TableSetColumnIndex(4);
     ImGui::TextDisabled("-");
   }
   ImGui::EndTable();
