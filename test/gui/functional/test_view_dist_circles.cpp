@@ -402,12 +402,17 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
       ctx->Yield(6);
 
-      // The premise: a new document opens with the section folded, the list empty and both
-      // switches off. Stated so the arithmetic below measures the task it names.
+      // The premise: a new document opens with the section folded, both switches off, and the
+      // list at its non-empty default (view_dist_angles in gui_state.hpp, so toggling `Line` on a
+      // brand-new document has something to show). Captured rather than hardcoded, then cleared:
+      // both switches stay off through the clear and the capture right after, so the baseline is
+      // unaffected either way, and the rest of this test's "one circle added, one ring on screen"
+      // arithmetic still holds.
       IM_CHECK(!gui::g_state.angular_dist_section_open);
-      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      IM_CHECK(!gui::g_state.view_dist_angles.empty());
       IM_CHECK(!gui::g_state.show_view_dist_line);
       IM_CHECK(!gui::g_state.show_view_dist_label);
+      gui::g_state.view_dist_angles.clear();
 
       Frame baseline;
       IM_CHECK(CaptureViewport(ctx, &baseline));

@@ -359,33 +359,96 @@ void RegisterMarkerPanelTests(ImGuiTestEngine* engine) {
         IM_CHECK_EQ(interactions, 1);
       }
 
-      // [All] is the third path, and the one that makes the count irrelevant for the "I want them
-      // all" case: one interaction, six markers. Asserted here rather than in its own case because
-      // it is the same proposition — how many acts does switching a reference point on cost.
-      for (gui::MarkerAppearance& m : gui::g_state.markers) {
-        m.show = false;
-      }
-      ctx->Yield(2);
-      {
-        const ScopedRefForMarkers panel_ref(ctx, "//##RightPanel");
-        ctx->ItemClick("**/All##markers_all");
-      }
-      ctx->Yield(2);
-      for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
-        if (!gui::g_state.markers[i].show) {
-          IM_ERRORF("[All] left marker %s off", gui::kMarkerSerialNames[i]);
-          break;
+      // The All row is the third path, and the one that makes the count irrelevant for the "I want
+      // them all" case: one interaction, six markers. Asserted here rather than in its own case
+      // because it is the same proposition — how many acts does switching a reference point on
+      // cost. The row is DERIVED (the AND of the six, drawn tri-state), so its click rule is the
+      // select-all convention and every branch of it is driven, for BOTH columns: all off → on,
+      // all on → off, mixed → on. Each column is asserted to leave the other alone, from a state
+      // where the other column has something to lose — a fan-out that wrote both fields, or read
+      // the wrong one, would pass a check that only ever looked at the column it clicked.
+      struct AllRowColumn {
+        const char* cell;                    // the All row's cell for this column
+        bool gui::MarkerAppearance::*field;  // the per-entry field it derives from
+        bool gui::MarkerAppearance::*other;  // the column it must not touch
+        const char* name;
+      };
+      const AllRowColumn kColumns[] = {
+        { "**/##marker_line_all", &gui::MarkerAppearance::show, &gui::MarkerAppearance::label, "Line" },
+        { "**/##marker_label_all", &gui::MarkerAppearance::label, &gui::MarkerAppearance::show, "Label" },
+      };
+      for (const AllRowColumn& col : kColumns) {
+        // The other column's witness: a single entry on, at the far end from the one this column
+        // singles out below, so "untouched" is checked against a value that is not the default.
+        const int witness = LUMICE_ANNOTATION_MARKER_COUNT - 1;
+        for (gui::MarkerAppearance& m : gui::g_state.markers) {
+          m.*col.field = false;
+          m.*col.other = false;
         }
-      }
-      if (!ctx->IsError()) {
-        const ScopedRefForMarkers panel_ref(ctx, "//##RightPanel");
-        ctx->ItemClick("**/None##markers_none");
+        gui::g_state.markers[witness].*col.other = true;
+        ctx->Yield(2);
+
+        // all off → click → all on
+        {
+          const ScopedRefForMarkers panel_ref(ctx, "//##RightPanel");
+          ctx->ItemClick(col.cell);
+        }
         ctx->Yield(2);
         for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
-          if (gui::g_state.markers[i].show) {
-            IM_ERRORF("[None] left marker %s on", gui::kMarkerSerialNames[i]);
+          if (!(gui::g_state.markers[i].*col.field)) {
+            IM_ERRORF("%s: All from all-off left marker %s off", col.name, gui::kMarkerSerialNames[i]);
             break;
           }
+        }
+        if (ctx->IsError()) {
+          break;
+        }
+
+        // all on → click → all off
+        {
+          const ScopedRefForMarkers panel_ref(ctx, "//##RightPanel");
+          ctx->ItemClick(col.cell);
+        }
+        ctx->Yield(2);
+        for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+          if (gui::g_state.markers[i].*col.field) {
+            IM_ERRORF("%s: All from all-on left marker %s on", col.name, gui::kMarkerSerialNames[i]);
+            break;
+          }
+        }
+        if (ctx->IsError()) {
+          break;
+        }
+
+        // mixed (one on) → click → all on. The one is entry 0, at the other end from the witness.
+        gui::g_state.markers[0].*col.field = true;
+        ctx->Yield(2);
+        {
+          const ScopedRefForMarkers panel_ref(ctx, "//##RightPanel");
+          ctx->ItemClick(col.cell);
+        }
+        ctx->Yield(2);
+        for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+          if (!(gui::g_state.markers[i].*col.field)) {
+            IM_ERRORF("%s: All from mixed left marker %s off", col.name, gui::kMarkerSerialNames[i]);
+            break;
+          }
+        }
+        if (ctx->IsError()) {
+          break;
+        }
+
+        // Three clicks on this column; the other column reads exactly as it was set up.
+        for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+          const bool expected = (i == witness);
+          if ((gui::g_state.markers[i].*col.other) != expected) {
+            IM_ERRORF("%s: clicking the All cell moved the OTHER column on marker %s", col.name,
+                      gui::kMarkerSerialNames[i]);
+            break;
+          }
+        }
+        if (ctx->IsError()) {
+          break;
         }
       }
     };

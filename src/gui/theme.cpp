@@ -7,6 +7,8 @@
 #include "gui/gui_logger.hpp"
 #include "gui/roboto_medium_embed.h"
 #include "imgui.h"
+// For ImGuiItemFlags_MixedValue only: PushItemFlag/PopItemFlag are public, the flag is not.
+#include "imgui_internal.h"
 
 namespace lumice::gui {
 
@@ -334,6 +336,15 @@ bool Checkbox(const char* label, bool* v) {
                                         ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, kUncheckedBoxBorderAlpha)),
                                         ImGui::GetStyle().FrameRounding);
   }
+  return changed;
+}
+
+bool TriStateCheckbox(const char* label, bool* all_true, bool mixed) {
+  // Pushed rather than OR-ed into NextItemData the way ImGui's own CheckboxFlags does it: the
+  // public pair is the supported spelling, and it scopes the flag to exactly this one item.
+  ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, mixed);
+  const bool changed = Checkbox(label, all_true);
+  ImGui::PopItemFlag();
   return changed;
 }
 
