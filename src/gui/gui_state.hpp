@@ -1478,9 +1478,10 @@ struct GuiState {
   // physical core, capped (LUMICE_ServerConfig::num_workers's own meaning for 0, server.cpp —
   // deliberately the same convention rather than a second answer to "what does 0 mean here"). Like use_gpu_backend this
   // is a construction-time property, so changing it reconstructs the server on the next DoRun via
-  // MaybeReconstructServerForConstructionProperties; the GPU route is a single engine and ignores
-  // it. UI-only: not serialized into a document (.lmc) and not in the Revert baseline
-  // (ConfigSnapshot).
+  // MaybeReconstructServerForConstructionProperties. On the GPU route the render engine is a single
+  // Simulator whatever this says; there the value sizes the server's standing CPU analysis pool
+  // instead (the workers a raypath analysis runs on), so it is not ignored on that route either.
+  // UI-only: not serialized into a document (.lmc) and not in the Revert baseline (ConfigSnapshot).
   //
   // WHY IT IS AN app PREFERENCE AND NOT A DOCUMENT FIELD. A worker count is a property of the
   // MACHINE, not of the halo being simulated: the same document opened on a laptop and on a

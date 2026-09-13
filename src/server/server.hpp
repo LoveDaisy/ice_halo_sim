@@ -541,12 +541,16 @@ class Server {
 
   /**
    * @brief Construct a new Server
-   * @param num_workers CPU route only: worker count (0 = automatic: the physical core count,
-   *        capped — see kMaxDefaultWorkerCount in server.cpp). A value > 0 is honoured verbatim,
-   *        above that cap included.
-   *        Ignored on the GPU/Metal route, which is always a single engine
-   *        (task-268.7). The route is fixed at construction (see preferred_backend).
-   * @param sim_seed Deterministic RNG seed. 0 = random; non-zero clamps CPU route to 1 worker.
+   * @param num_workers CPU worker count (0 = automatic: the physical core count, capped — see
+   *        kMaxDefaultWorkerCount in server.cpp). A value > 0 is honoured verbatim, above that
+   *        cap included. On the CPU route these are the render workers, which also run an
+   *        analysis. On the GPU/Metal/CUDA route the render engine is always a single
+   *        Simulator (doc/gpu-single-engine-implementation.md) and this count sizes the standing
+   *        CPU analysis pool instead —
+   *        the workers a StartRaypathAnalysis session runs on. The route is fixed at
+   *        construction (see preferred_backend).
+   * @param sim_seed Deterministic RNG seed. 0 = random; non-zero clamps the CPU group (render
+   *        workers on the CPU route, the analysis pool on the GPU route) to 1 worker.
    * @param preferred_backend BackendKind::kCpu (multi-worker), kMetal (single engine)
    *        or kCuda (future). An env LUMICE_TRACE_BACKEND override takes precedence.
    *        The GUI reconstructs the server when the backend selection changes.
