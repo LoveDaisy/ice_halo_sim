@@ -2141,7 +2141,7 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // GUI's line width there would export a number that changes no pixel.
       // No overflow check here, unlike the grid below: `state.sun_circle_angles` is not an expanded
       // list, it is the user's own typed list, and it is capped at `kMaxAnnotationCircles` (16) the moment
-      // an angle is added (gui_constants.hpp / sun_circle_rules.hpp) — well under
+      // an angle is added (gui_constants.hpp / angular_dist_rules.hpp) — well under
       // `LUMICE_MAX_CONFIG_GRID_LINES` (64). Widening this gate to `|| label` therefore does not
       // open a reachable overflow path the way it does for the grid, whose list is FOV-derived and
       // can genuinely exceed the ABI cap; there is nothing to refuse here.
@@ -3362,7 +3362,7 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["overlay_view_dist_angles"] = state.view_dist_angles;
   root["overlay_view_dist_color"] = { state.view_dist_color[0], state.view_dist_color[1], state.view_dist_color[2] };
   root["overlay_view_dist_alpha"] = state.view_dist_alpha;
-  root[kViewDistSectionOpenKey] = state.view_dist_section_open;
+  root[kAngularDistSectionOpenKey] = state.angular_dist_section_open;
   // The reference-point markers: THREE FLAT KEYS PER MARKER, not one array key holding six
   // objects. The shape is forced by what reads this document downstream — defaults_diff.cpp walks
   // it into the personal-defaults panel and treats an ARRAY AS ONE LEAF (see its header), so an
@@ -3657,7 +3657,11 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   }
   read_color3("overlay_view_dist_color", state.view_dist_color);
   state.view_dist_alpha = root.value("overlay_view_dist_alpha", GuiState{}.view_dist_alpha);
-  state.view_dist_section_open = root.value(kViewDistSectionOpenKey, GuiState{}.view_dist_section_open);
+  // Read the current key, then the legacy one (the section was "View Circles" before both
+  // angular-distance families moved under one header), then the struct default; only the current
+  // key is ever written back.
+  state.angular_dist_section_open = root.value(
+      kAngularDistSectionOpenKey, root.value(kLegacyAngularDistSectionOpenKey, GuiState{}.angular_dist_section_open));
   // The reference-point markers, with the legacy zenith/nadir pair as the fallback source.
   //
   // WHICH SOURCE WINS is decided PER MARKER by whether this document carries that marker's own new

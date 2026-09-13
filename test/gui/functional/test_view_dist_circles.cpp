@@ -404,7 +404,7 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
 
       // The premise: a new document opens with the section folded, the list empty and both
       // switches off. Stated so the arithmetic below measures the task it names.
-      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
       IM_CHECK(gui::g_state.view_dist_angles.empty());
       IM_CHECK(!gui::g_state.show_view_dist_line);
       IM_CHECK(!gui::g_state.show_view_dist_label);
@@ -430,7 +430,7 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       ctx->SetRef("//##RightPanel");
       ctx->ItemClick("**/View Circles##view_dist");
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.view_dist_section_open);
+      IM_CHECK(gui::g_state.angular_dist_section_open);
       ctx->ItemClick("**/##view_dist_line");
       ctx->SetRef("");
       ctx->Yield(2);
@@ -489,7 +489,7 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       IM_CHECK(CaptureViewport(ctx, &restored));
       IM_CHECK_EQ(DifferingPixels(baseline, restored), static_cast<std::size_t>(0));
 
-      gui::g_state.view_dist_section_open = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
     };
   }

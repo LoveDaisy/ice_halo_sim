@@ -158,7 +158,7 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     // field and a panel-fold bool that are nonetheless eligible, because the tier decides, and
     // neither key path carries a document-local index.
     { "view_dist_angles", DefaultEligibility::kEligible, IneligibleReason::kNone },
-    { "view_dist_section_open", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "angular_dist_section_open", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_lens_border_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 4 — collections. A key path into these carries a document-local index.
     { "crystals", DefaultEligibility::kIneligible, IneligibleReason::kCollection },

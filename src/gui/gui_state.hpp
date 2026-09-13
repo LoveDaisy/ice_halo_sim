@@ -1277,8 +1277,12 @@ inline std::string MarkerFieldKey(int marker_id, MarkerKeyPart part) {
 inline constexpr const char* kMarkersAlphaKey = "overlay_markers_alpha";
 inline constexpr const char* kMarkersRadiusKey = "overlay_markers_radius_px";
 inline constexpr const char* kMarkersSectionOpenKey = "overlay_markers_section_open";
-// The View Circles section's fold state, the same kind of key for the same kind of field.
-inline constexpr const char* kViewDistSectionOpenKey = "overlay_view_dist_section_open";
+// The Angular Distance section's fold state, the same kind of key for the same kind of field.
+inline constexpr const char* kAngularDistSectionOpenKey = "overlay_angular_dist_section_open";
+// The key the same field was written under while the section held only the view circles (before
+// the two angular-distance families shared one section). READ-ONLY: a loader accepts it as an
+// alias when the current key is absent; nothing writes it, so a re-saved document migrates.
+inline constexpr const char* kLegacyAngularDistSectionOpenKey = "overlay_view_dist_section_open";
 
 struct GuiState {
   // ID-pool model (restored from pre-card-redesign): EntryCard holds indices
@@ -1410,9 +1414,10 @@ struct GuiState {
   std::vector<float> view_dist_angles;
   float view_dist_color[3] = { 0.4f, 0.9f, 1.0f };
   float view_dist_alpha = 0.5f;
-  // Whether the panel's "View Circles" section is unfolded. Serialized for the same reason
-  // markers_section_open below is.
-  bool view_dist_section_open = false;
+  // Whether the panel's "Angular Distance" section — the one section holding BOTH families of
+  // iso-angular rings, sun-centred (`sun_circle_angles`) and axis-centred (`view_dist_angles`) —
+  // is unfolded. Serialized for the same reason markers_section_open below is.
+  bool angular_dist_section_open = false;
 
   // The sky reference points: pixel-space ring markers at N named directions. Indexed BY THE CORE
   // ID — markers[LUMICE_ANNOTATION_MARKER_SUN] is the sun's entry — which is what lets the request,

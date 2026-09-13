@@ -212,7 +212,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       // AND over the View Circles section's one-row table, which shares the same column layout
       // for the same reason and is the third table drawn against it. Its swatch and Line cell are
       // found by the same three-seed reconstruction, against that table's own id.
-      gui::g_state.view_dist_section_open = true;
+      gui::g_state.angular_dist_section_open = true;
       ctx->Yield(3);
       {
         const ImGuiTestItemInfo line = ctx->ItemInfo("**/##view_dist_line");
@@ -228,7 +228,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // "From Axis" is the name the row displays, mirrored here for the reason NameOfRow gives.
         IM_CHECK_GE(line.RectFull.Min.x - color.RectFull.Max.x, ImGui::CalcTextSize("From Axis").x);
       }
-      gui::g_state.view_dist_section_open = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
 
       // The header row. The name column draws none, because the group's own CollapsingHeader
@@ -299,7 +299,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // The View Circles section's fold, on ITS header, likewise offered while the section is
         // closed: the angle list is the family's one extra field, and reaching it must not require
         // unfolding the row.
-        IM_CHECK(!gui::g_state.view_dist_section_open);
+        IM_CHECK(!gui::g_state.angular_dist_section_open);
         IM_CHECK(ctx->ItemExists("**/###view_dist_fold"));
 
         // ...and no marker ROW offers one, with the section open. A per-row fold here would be six
@@ -530,7 +530,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(3);
-      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
       IM_CHECK(gui::g_state.view_dist_angles.empty());
       const std::vector<float> sun_before = gui::g_state.sun_circle_angles;
 
@@ -542,7 +542,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       // The editor is on screen — a preset button exists — and the section is STILL closed: the
       // click went to the button, not to the header underneath it.
       IM_CHECK(ctx->ItemExists("**/9\xc2\xb0"));
-      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
 
       ctx->ItemClick("**/9\xc2\xb0");
       ctx->Yield(2);
@@ -571,14 +571,14 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(3);
-      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
 
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
         IM_CHECK(!ctx->ItemExists("**/##view_dist_line"));  // folded: the row is not submitted
         ctx->ItemClick("**/View Circles##view_dist");
         ctx->Yield(2);
-        IM_CHECK(gui::g_state.view_dist_section_open);
+        IM_CHECK(gui::g_state.angular_dist_section_open);
         IM_CHECK(ctx->ItemExists("**/##view_dist_line"));
         IM_CHECK(ctx->ItemExists("**/##view_dist_label"));
         IM_CHECK(ctx->ItemExists("**/##view_dist_alpha"));
@@ -587,11 +587,11 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const std::string doc = gui::SerializeGuiStateJson(gui::g_state);
       gui::GuiState reopened;
       IM_CHECK(gui::DeserializeGuiStateJson(doc, reopened));
-      IM_CHECK(reopened.view_dist_section_open);
+      IM_CHECK(reopened.angular_dist_section_open);
       // And a fresh document, which is what a new-file action produces, is folded again.
-      IM_CHECK(!gui::MakeNewDocumentState().view_dist_section_open);
+      IM_CHECK(!gui::MakeNewDocumentState().angular_dist_section_open);
 
-      gui::g_state.view_dist_section_open = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
     };
   }

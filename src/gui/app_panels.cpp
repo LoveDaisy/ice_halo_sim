@@ -10,6 +10,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/analysis_panel.hpp"
+#include "gui/angular_dist_rules.hpp"
 #include "gui/annotation_anchors.hpp"
 #include "gui/app.hpp"
 #include "gui/aspect_ratio_rules.hpp"
@@ -28,7 +29,6 @@
 #include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / kBgModifierName / SampleBgColorAtScreenPos
 #include "gui/semantic_colors.hpp"
 #include "gui/sim_state_rules.hpp"
-#include "gui/sun_circle_rules.hpp"
 #include "gui/theme.hpp"
 #include "gui/view_look_at.hpp"
 #include "imgui.h"
@@ -918,12 +918,12 @@ namespace {
 // scratch value is one `static` shared by both callers on purpose: only one popup is open at a
 // time, and a number half-typed for one family is not a value worth keeping apart per family.
 void RenderCircleAnglePopup(std::vector<float>& angles) {
-  bool at_limit = SunCirclesAtLimit(angles.size());
+  bool at_limit = AngularDistCirclesAtLimit(angles.size());
 
   // Preset buttons
   const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
   for (float p : presets) {
-    const bool already = SunCircleAlreadyPresent(angles, p);
+    const bool already = AngularDistCircleAlreadyPresent(angles, p);
     char label[16];
     std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
     ImGui::BeginDisabled(already || at_limit);
@@ -944,7 +944,7 @@ void RenderCircleAnglePopup(std::vector<float>& angles) {
   ImGui::SameLine();
   ImGui::BeginDisabled(at_limit);
   if (ImGui::Button("+##add_circle")) {
-    custom_angle = ClampSunCircleAngle(custom_angle);
+    custom_angle = ClampAngularDistCircleAngle(custom_angle);
     angles.push_back(custom_angle);
     std::sort(angles.begin(), angles.end());
   }
@@ -1090,16 +1090,16 @@ void SetupOverlayTableColumns() {
 // The header carries ONE button, the angle editor's fold. Not the reference points' [All] / [None]
 // pair — those act on six independent switches, and this family has one line switch and one label
 // switch, so there is nothing for a batch action to act on. The open state is SERIALIZED
-// (view_dist_section_open), like markers_section_open, so a document that had the section open
+// (angular_dist_section_open), like markers_section_open, so a document that had the section open
 // reopens with it open.
 void RenderViewDistSection() {
   // Same externally-owned open-state protocol as RenderMarkersSection, for the same reason.
-  ImGui::SetNextItemOpen(g_state.view_dist_section_open, ImGuiCond_Always);
+  ImGui::SetNextItemOpen(g_state.angular_dist_section_open, ImGuiCond_Always);
   // AllowOverlap is load-bearing here exactly as it is on the markers header: without it the
   // header claims the hover first and the fold button drawn on top of it never receives the click,
   // while still looking present. test_overlay_controls.cpp clicks it.
   const bool section_open = ImGui::CollapsingHeader("View Circles##view_dist", ImGuiTreeNodeFlags_AllowOverlap);
-  g_state.view_dist_section_open = section_open;
+  g_state.angular_dist_section_open = section_open;
 
   const ImGuiStyle& style = ImGui::GetStyle();
   const float fold_w = ImGui::CalcTextSize(ICON_FA_ELLIPSIS).x + style.FramePadding.x * 2.0f;

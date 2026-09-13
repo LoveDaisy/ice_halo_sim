@@ -336,7 +336,7 @@ const std::vector<FieldProbe>& FieldProbes() {
         s.view_dist_color[1] = 0.2f;
         s.view_dist_color[2] = 0.3f;
         s.view_dist_alpha = 0.7f;
-        s.view_dist_section_open = true;
+        s.angular_dist_section_open = true;
       },
       [](const GuiState& s) {
         std::string out = std::to_string(s.show_view_dist_line) + " " + std::to_string(s.show_view_dist_label) + " ";
@@ -344,7 +344,7 @@ const std::vector<FieldProbe>& FieldProbes() {
           out += std::to_string(a) + ";";
         }
         out += " " + JoinFloats(s.view_dist_color, 3) + " " + std::to_string(s.view_dist_alpha) + " " +
-               std::to_string(s.view_dist_section_open);
+               std::to_string(s.angular_dist_section_open);
         return out;
       } },
     // The GUI had no control for this field until the crystal edit modal grew a Name box, so

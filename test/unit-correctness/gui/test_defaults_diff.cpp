@@ -757,7 +757,7 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "overlay_view_dist_angles", false, Kind::kCheckbox },
     { "overlay_view_dist_color", true, Kind::kColor },
     { "overlay_view_dist_alpha", true, Kind::kFloatSlider },
-    { "overlay_view_dist_section_open", true, Kind::kCheckbox },
+    { "overlay_angular_dist_section_open", true, Kind::kCheckbox },
     // The reference-point markers: three rows per marker, spelled out rather than generated from
     // MarkerFieldKey. This table is a hand-written mirror ON PURPOSE — generating it from the same
     // function the registry and the serializer call would compare one line of code against itself,

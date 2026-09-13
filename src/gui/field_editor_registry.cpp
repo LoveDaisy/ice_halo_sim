@@ -660,7 +660,7 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace(kMarkersRadiusKey,
                 FloatField([](GuiState& s) { return &s.markers_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
     map.emplace(kMarkersSectionOpenKey, BoolField([](GuiState& s) { return &s.markers_section_open; }));
-    map.emplace(kViewDistSectionOpenKey, BoolField([](GuiState& s) { return &s.view_dist_section_open; }));
+    map.emplace(kAngularDistSectionOpenKey, BoolField([](GuiState& s) { return &s.angular_dist_section_open; }));
     map.emplace("overlay_lens_border_line", BoolField([](GuiState& s) { return &s.show_lens_border_line; }));
     // NO NotUnderPrintMode here, unlike the three line families and the markers above, and it is a
     // scope decision rather than an omission: the four instances of the print rule are enumerated in
