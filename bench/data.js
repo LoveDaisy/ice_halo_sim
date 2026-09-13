@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789302343211,
+  "lastUpdate": 1789302345713,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9531,50 +9531,6 @@ window.BENCHMARK_DATA = {
             "username": "LoveDaisy"
           },
           "committer": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "distinct": true,
-          "id": "a1957e028279c05871bc50cbd1001cacb1aa2ee8",
-          "message": "docs: make a completeness claim carry the same burden of proof as adding code\n\n\"Covers all 20 panels with zero omissions\" reads as an achievement and passes\nreview unchallenged; \"this class is not worth covering\" has to be argued for.\nThat asymmetry is the default state rather than anyone's choice, so completeness\nwins every conflict without a single person advocating for it -- including\nconflicts against the budget the same task committed to.\n\nPR #261 is the measured instance: a pre-committed target of -30% de-commented\ntest lines (baseline 21,336, pinned by two independent counters with 52/52 files\nzero diff) landed at -8.7%, and the coverage backfill demanded by \"20 panels,\nzero omissions\" accounts for roughly a third of the miss. Escape-defect density\nover those same files had already been measured and spans 8x; the equal-weight-\nper-panel split discarded that measurement.\n\nThe rule asks for the justification, not the reduction. Whether a leaner suite\nwould have let more defects escape is a counterfactual and untestable, so this\nis explicitly not a mandate to cut -- only a requirement that an equal-weight\npartition state its reason when a per-member value measure is available.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>",
-          "timestamp": "2026-08-12T08:19:41+08:00",
-          "tree_id": "45eab6bd9bc7f45bb51575ce022fbe40ff3e9e32",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a1957e028279c05871bc50cbd1001cacb1aa2ee8"
-        },
-        "date": 1786494694783,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 67.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.8,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
             "email": "noreply@github.com",
             "name": "GitHub",
             "username": "web-flow"
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1a6c43be3f9fa9d8d89a3115d1fdf2f994e3a984",
+          "message": "Merge pull request #363 from LoveDaisy/chore/angular-distance-from-naming\n\nfeat(gui): name the Angular Distance section \"from...\" and its rows Sun / Lens Center",
+          "timestamp": "2026-09-13T20:15:08+08:00",
+          "tree_id": "042b5e14f5fbae521e6d1e53edc4d0889e44bcf5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1a6c43be3f9fa9d8d89a3115d1fdf2f994e3a984"
+        },
+        "date": 1789302344891,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 86,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 89.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.6,
             "unit": "%"
           }
         ]
