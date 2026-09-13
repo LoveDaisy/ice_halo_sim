@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789320643959,
+  "lastUpdate": 1789320646483,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,50 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7da5553043fc957ef127227fd09c6bd2a434969a",
-          "message": "Merge pull request #270 from LoveDaisy/docs/gui-blueprints\n\ndocs(gui): 落盘视觉语言与布局架构两份 GUI 蓝图",
-          "timestamp": "2026-08-14T01:14:13+08:00",
-          "tree_id": "d80b51f210e34913cdcdae277891c8370b111d51",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7da5553043fc957ef127227fd09c6bd2a434969a"
-        },
-        "date": 1786641957961,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 72.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 92.8,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "de2400d72e0c74815654b5c0798537d321c36342",
           "message": "Merge pull request #271 from LoveDaisy/task/gui-visual-language\n\nfeat(gui): 落地 GUI 视觉语言——单一 owner、比例字体、量化节奏、调色板与语义色",
           "timestamp": "2026-08-14T08:18:19+08:00",
@@ -13901,6 +13857,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 88.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd1bb1cffe3edfbbf7c4de2a1eff5ff0ecb5ea1a",
+          "message": "Merge pull request #367 from LoveDaisy/chore/release-4.6.0\n\nchore(release): cut 4.6.0",
+          "timestamp": "2026-09-14T01:21:05+08:00",
+          "tree_id": "bd318927bfaf54e9b78b5aacd9ba6b7628b02941",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fd1bb1cffe3edfbbf7c4de2a1eff5ff0ecb5ea1a"
+        },
+        "date": 1789320645631,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 73.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 83.5,
             "unit": "%"
           }
         ]
