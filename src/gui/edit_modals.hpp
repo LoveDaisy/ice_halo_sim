@@ -85,8 +85,8 @@ EditModalTarget GetEditModalTarget();
 // The layer flavour has a second consumer: every ColorClassRefConfig in state.raypath_color holds
 // a positional layer_idx into state.layers too, and it is NOT gated on a modal being open. After
 // an erase those refs are re-indexed by the same three-outcome rule (deleted layer -> the ref is
-// left dangling at -1, so ResolveColorRef reports kLayerMissing; a layer before it -> decrement;
-// after it -> untouched). Without this the ref keeps its old number and silently denotes the
+// left dangling at -1, so ResolveColorRef reports kLayerMissing; a layer before it -> untouched;
+// after it -> decrement). Without this the ref keeps its old number and silently denotes the
 // layer that shifted into that slot — and when that layer happens to reuse the same crystal pool
 // slot, ResolveColorRef's two checks (bounds, crystal-in-layer) both pass and nothing tells the user.
 void NotifyEntryDeleted(int layer_idx, int deleted_entry_idx);
