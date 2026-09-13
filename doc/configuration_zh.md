@@ -719,6 +719,12 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "elevation": [ ... ],
   "longitude": [ ... ],
   "horizon": <布尔值>,
+  "horizon_label": <布尔值>,
+  "label": <布尔值>,
+  "angular_dist_label": <布尔值>,
+  "elevation_line": <布尔值>,
+  "longitude_line": <布尔值>,
+  "angular_dist_line": <布尔值>,
   "view_dist_line": <布尔值>,
   "view_dist_label": <布尔值>,
   "zenith_nadir": { ... }
@@ -734,6 +740,12 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `elevation` | 对象数组 | 否 | [] | 等高线——仰角恒定的线，单位为度。**会被绘制**（自 v4.18 起；此前版本只解析、不画）。规则与 `angular_dist` 相同：`value`、`opacity`、`color` 生效，`width` 不生效。 |
 | `longitude` | 对象数组 | 否 | [] | 经度线——方位角恒定的线，单位为度。**会被绘制。** 规则与 `elevation` 相同。v4.18 新增；文件里没有这个键时得到空列表，即什么都不画。 |
 | `horizon` | 布尔值 | 否 | false | 沿天球地平线（仰角 0）画一条线，只画在可见半球内。默认关闭，需显式设为 `true` 才绘制。 |
+| `horizon_label` | 布尔值 | 否 | false | 是否绘制地平线的**文字**标注（`0°`）。v4.21 新增。与 `horizon` 独立：线关掉时标注照样出现。 |
+| `label` | 布尔值 | 否 | false | 是否绘制 `elevation` 与 `longitude` 的**文字**标注——每条线所代表的角度。两族共用一个开关，对应 GUI 里唯一的网格标签控件。v4.21 新增。 |
+| `angular_dist_label` | 布尔值 | 否 | false | 是否绘制 `angular_dist` 的**文字**标注（`22°`、`46°`）。v4.21 新增。 |
+| `elevation_line` | 布尔值 | 否 | true | 是否绘制 `elevation` 的**线**。列表说等高线在哪里，这个开关说画不画线——所以 `label: true` 配 `elevation_line: false` 得到只有数字、没有线。默认为 `true`，与 `horizon` 不同：这个键出现之前写的文件里，非空列表本来就画着线，必须继续画。v4.26 新增。 |
+| `longitude_line` | 布尔值 | 否 | true | 是否绘制 `longitude` 的**线**。形状与默认开启的理由同 `elevation_line`。v4.26 新增。 |
+| `angular_dist_line` | 布尔值 | 否 | true | 是否绘制 `angular_dist` 的**线**。形状与默认开启的理由同 `elevation_line`；`angular_dist_label: true` 配它为 `false` 得到 `22°` / `46°` 的数字、没有圈。v4.26 新增。 |
 | `view_dist_line` | 布尔值 | 否 | true | 是否绘制 `view_dist` 的**线**。与另外三族的独立线开关（`elevation_line` / `longitude_line` / `angular_dist_line`，v4.26）同形：列表说圈在哪里，这个开关说画不画线，所以 `view_dist_label: true` 配 `view_dist_line: false` 得到只有数字、没有圈。默认为 `true`，因为写了列表就是要画的。v4.39 新增。 |
 | `view_dist_label` | 布尔值 | 否 | false | 是否绘制 `view_dist` 的**文字**标注（`30°`、`60°`……）。v4.39 新增。 |
 | `zenith_nadir` | 对象 | 否 | 见下 | 在天顶与天底绘制的像素空间圆环标记。两个标记共用一个对象，而不是线数组：这两个方向是固定的，没有需要逐条命名的东西；GUI 也只对这一对标记给一个开关、一个颜色、一个半径。v4.19 新增。 |
@@ -757,6 +769,24 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 
 **注意**：每个键都是可选的，包括 `enabled`——对象里出现但省略的字段沿用上面的结构体默认值。
 `enabled` 默认为 false，所以完全不写 `zenith_nadir` 的配置什么都不画。
+
+**四个 `*_label` 开关，以及它们**不**控制的那一件事**
+
+它们决定的是标注**几何**是否被计算，这与该族自己的线画不画无关。对地平线来说这份独立性可以直接
+用：`horizon_label: true` 配 `horizon: false` 渲染出数字、不画线。对其余几族，这份独立性从
+v4.26 起可用——那一版给每族加了自己的 `*_line` 开关：`label: true` 配 `elevation_line: false`
+渲染出等高线的数字、不画等高线。在那之前 schema 里无法表达这件事——"这族画不画"就等于"它的角度
+列表非空与否"，所以要 `elevation` 的标注就等于要等高线本身。
+
+它们**不**控制的是标注的**不透明度**。标注用它所属那族自己的颜色与不透明度绘制——`angular_dist`
+/ `view_dist` / `elevation` / `longitude` 各条目自己的 `opacity` 与 `color`，地平线则用一个固定常量——
+所以 `"opacity": 0` 的线连同它的标注一起不可见。这与 GUI 一致：标注从来都取它所属那族的外观；
+让标注比线活得久的渲染器，画出来的东西是预览里看不到的。
+
+渲染由 core 自己完成：CLI 没有 ImGui，所以它内嵌一套字体、自己栅格化标注，锚点与 GUI 预览读的
+是同一份。两边在**哪些**标注出现、曲线把它们放在哪里这两点上一致。有两处差异是有意为之、不会用
+阈值去抹平的：字形来自两个不同的栅格化器；GUI 还会把标注钳制在视口内、丢掉彼此碰撞的那个，而 CLI
+把每个锚点画在它落下的位置。
 
 **`central` 是 `angular_dist` 的旧名**
 

@@ -149,7 +149,7 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "view_dist_angles",           FieldTier::kView,       false },
     { "view_dist_color",            FieldTier::kView,       false },
     { "view_dist_alpha",            FieldTier::kView,       false },
-    { "view_dist_section_open",     FieldTier::kView,       false },
+    { "angular_dist_section_open",     FieldTier::kView,       false },
     // Sky reference-point markers. One row for the whole array, which is this table's grain (the
     // same grain `renderer` is registered at) — the array's members are per-marker appearance, not
     // top-level GuiState fields, so there is nothing finer for the gate to require here.

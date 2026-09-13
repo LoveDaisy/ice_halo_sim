@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "gui/angular_dist_rules.hpp"
 #include "gui/aspect_ratio_rules.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/edit_modal_rules.hpp"
@@ -31,7 +32,6 @@
 #include "gui/sim_state_rules.hpp"
 #include "gui/slider_format_rules.hpp"
 #include "gui/slider_mapping.hpp"
-#include "gui/sun_circle_rules.hpp"
 #include "gui/window_sizing.hpp"
 
 namespace lumice::gui {
@@ -285,30 +285,30 @@ TEST(AspectRatioRules, FlipIsOfferedOnlyByPresetsWithTwoOrientations) {
 
 // ---- Sun-circle (angular distance) overlay rules ----
 
-TEST(SunCircleRules, DuplicateTestUsesTheHundredthDegreeBand) {
+TEST(AngularDistRules, DuplicateTestUsesTheHundredthDegreeBand) {
   const std::vector<float> angles = { 22.0f, 46.0f };
-  EXPECT_TRUE(SunCircleAlreadyPresent(angles, 22.0f));
+  EXPECT_TRUE(AngularDistCircleAlreadyPresent(angles, 22.0f));
   // Just inside the band reads as the same circle; just outside is a new one.
-  EXPECT_TRUE(SunCircleAlreadyPresent(angles, 22.0f + kSunCircleDuplicateEpsilonDeg * 0.5f));
-  EXPECT_FALSE(SunCircleAlreadyPresent(angles, 22.0f + kSunCircleDuplicateEpsilonDeg * 2.0f));
-  EXPECT_FALSE(SunCircleAlreadyPresent(angles, 9.0f));
-  EXPECT_FALSE(SunCircleAlreadyPresent({}, 22.0f));
+  EXPECT_TRUE(AngularDistCircleAlreadyPresent(angles, 22.0f + kAngularDistCircleDuplicateEpsilonDeg * 0.5f));
+  EXPECT_FALSE(AngularDistCircleAlreadyPresent(angles, 22.0f + kAngularDistCircleDuplicateEpsilonDeg * 2.0f));
+  EXPECT_FALSE(AngularDistCircleAlreadyPresent(angles, 9.0f));
+  EXPECT_FALSE(AngularDistCircleAlreadyPresent({}, 22.0f));
 }
 
-TEST(SunCircleRules, LimitBitesExactlyAtTheBufferSize) {
-  EXPECT_FALSE(SunCirclesAtLimit(0));
-  EXPECT_FALSE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles) - 1));
-  EXPECT_TRUE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles)));
-  EXPECT_TRUE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles) + 1));
+TEST(AngularDistRules, LimitBitesExactlyAtTheBufferSize) {
+  EXPECT_FALSE(AngularDistCirclesAtLimit(0));
+  EXPECT_FALSE(AngularDistCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles) - 1));
+  EXPECT_TRUE(AngularDistCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles)));
+  EXPECT_TRUE(AngularDistCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles) + 1));
 }
 
-TEST(SunCircleRules, CustomAngleIsClampedToADrawableBand) {
-  EXPECT_FLOAT_EQ(ClampSunCircleAngle(0.0f), 0.1f);
-  EXPECT_FLOAT_EQ(ClampSunCircleAngle(-30.0f), 0.1f);
-  EXPECT_FLOAT_EQ(ClampSunCircleAngle(0.1f), 0.1f);
-  EXPECT_FLOAT_EQ(ClampSunCircleAngle(22.0f), 22.0f);
-  EXPECT_FLOAT_EQ(ClampSunCircleAngle(180.0f), 180.0f);
-  EXPECT_FLOAT_EQ(ClampSunCircleAngle(400.0f), 180.0f);
+TEST(AngularDistRules, CustomAngleIsClampedToADrawableBand) {
+  EXPECT_FLOAT_EQ(ClampAngularDistCircleAngle(0.0f), 0.1f);
+  EXPECT_FLOAT_EQ(ClampAngularDistCircleAngle(-30.0f), 0.1f);
+  EXPECT_FLOAT_EQ(ClampAngularDistCircleAngle(0.1f), 0.1f);
+  EXPECT_FLOAT_EQ(ClampAngularDistCircleAngle(22.0f), 22.0f);
+  EXPECT_FLOAT_EQ(ClampAngularDistCircleAngle(180.0f), 180.0f);
+  EXPECT_FLOAT_EQ(ClampAngularDistCircleAngle(400.0f), 180.0f);
 }
 
 // ---- Edit-modal list rules ----

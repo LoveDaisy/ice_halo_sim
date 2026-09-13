@@ -1593,10 +1593,11 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::g_state.sim.max_hits = 8;
       ctx->Yield(2);
       // Window-relative, for the reason the grid_alpha step above gives, and it became necessary
-      // here the moment the Overlay group grew its View Circles section: the alpha step scrolled
-      // the right panel to that table, the panel is now one header row taller, and the Scene
-      // group's Max hits control is left clipped above the fold — where a `**/` wildcard cannot
-      // see it. The window-relative id resolves and pans to it.
+      // here the moment the Overlay group grew a second collapsed section (today "Angular
+      // Distance"): the alpha step scrolled the right panel to that table, the panel is taller by
+      // that section's header row, and the Scene group's Max hits control is left clipped above
+      // the fold — where a `**/` wildcard cannot see it. The window-relative id resolves and pans
+      // to it.
       ctx->SetRef("##RightPanel");
       ctx->ItemInputValue("##Max hits_input", 4096);
       ctx->SetRef("");

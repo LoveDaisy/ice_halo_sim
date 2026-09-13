@@ -747,6 +747,9 @@ The render configuration defines the renderer parameters.
   "horizon_label": <boolean>,
   "label": <boolean>,
   "angular_dist_label": <boolean>,
+  "elevation_line": <boolean>,
+  "longitude_line": <boolean>,
+  "angular_dist_line": <boolean>,
   "view_dist_line": <boolean>,
   "view_dist_label": <boolean>,
   "zenith_nadir": { ... }
@@ -765,6 +768,9 @@ The render configuration defines the renderer parameters.
 | `horizon_label` | boolean | no | false | Draw the horizon's TEXT label (`0°`). Added in v4.21. Independent of `horizon`: the label appears with the line switched off. |
 | `label` | boolean | no | false | Draw the TEXT labels for `elevation` and `longitude` — the angle each line stands for. One switch for both families, matching the GUI's single grid label control. Added in v4.21. |
 | `angular_dist_label` | boolean | no | false | Draw the TEXT labels for `angular_dist` (`22°`, `46°`). Added in v4.21. |
+| `elevation_line` | boolean | no | true | Draw the `elevation` LINES. The list says where the parallels are, this says whether they are drawn — so `label: true` with `elevation_line: false` gives the numbers and no line. Defaults to `true`, unlike `horizon`: a file written before this key existed has a non-empty list that already drew its lines, and must keep drawing them. Added in v4.26. |
+| `longitude_line` | boolean | no | true | Draw the `longitude` LINES. Same shape and same default-on reasoning as `elevation_line`. Added in v4.26. |
+| `angular_dist_line` | boolean | no | true | Draw the `angular_dist` LINES. Same shape and same default-on reasoning as `elevation_line`; `angular_dist_label: true` with this `false` gives `22°` / `46°` and no ring. Added in v4.26. |
 | `view_dist_line` | boolean | no | true | Draw the `view_dist` LINES. Same shape as the other three families' independent line switches (`elevation_line` / `longitude_line` / `angular_dist_line`, v4.26): the list says where the circles are, this says whether the lines are drawn, so `view_dist_label: true` with `view_dist_line: false` gives the numbers and no ring. Defaults to `true` because a list that is present was written to be drawn. Added in v4.39. |
 | `view_dist_label` | boolean | no | false | Draw the TEXT labels for `view_dist` (`30°`, `60°`, …). Added in v4.39. |
 | `zenith_nadir` | object | no | see below | Pixel-space ring markers drawn at the zenith and the nadir. One object for both, not a line list: the two directions are fixed (there is nothing per-line to name), and the GUI exposes a single switch, colour and radius for the pair. Added in v4.19. |
@@ -794,10 +800,11 @@ omits `zenith_nadir` entirely draws nothing.
 
 They decide whether the label GEOMETRY is computed, which is independent of whether the family's
 own line is drawn. For the horizon that independence is directly usable — `horizon_label: true`
-with `horizon: false` renders the numbers and no line. For the other two families it is not, and
-the reason is the schema rather than the switch: "is this family drawn" IS "is its angle list
-non-empty", so there is no way to ask for `elevation` labels without also asking for the parallels
-themselves.
+with `horizon: false` renders the numbers and no line. For the other families it became usable in
+v4.26, when each got its own `*_line` switch: `label: true` with `elevation_line: false` renders
+the parallels' numbers and no parallels. Before that the schema had no way to say it — "is this
+family drawn" WAS "is its angle list non-empty", so asking for `elevation` labels meant asking for
+the parallels themselves.
 
 What they do NOT control is the label's OPACITY. A label is painted in its family's own colour and
 opacity — each `angular_dist` / `view_dist` / `elevation` / `longitude` entry's own `opacity` and `color`, and a

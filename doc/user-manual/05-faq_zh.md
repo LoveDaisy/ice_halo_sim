@@ -71,7 +71,7 @@ GUI 包了同一个引擎，但**并非** JSON config 的完全超集 — 一些
 | 多 `render` 条目 | ❌（只一个预览）| ✅ | JSON 可声明任意多个 `render: [...]`；CLI 每个 entry 出一张图 |
 | 多层 scattering（≥ 2 个 entry） | ❌ | ✅ | 配方 3 在 [`04-recipes_zh.md`](04-recipes_zh.md) 中要求 JSON |
 | 镜头投影切换 | ✅（浮动镜头条）| ✅（`render[].lens.type`） | GUI 实时重投影；JSON 一次设定每个 render 的镜头 |
-| Overlay 网格 | ✅（实时，仅 GUI） | ❌ | GUI overlay 是观察辅助，**不**写进 `.lmc`；JSON 的 `render[].grid` 字段 parser 接受但 CLI 渲染路径不消费 — 详见 §4 |
+| Overlay 网格 / 圈 / 参考点 | ✅（实时） | ✅（`render[].grid`） | 两边都画。GUI 把每个 overlay 开关、颜色、角度列表都存进 `.lmc`，`File ▶ Export Config` 把它们写成 `render[].grid`；CLI 把同样的线、圈、标注、标记合成到输出图上（自 v4.18 起）。详见 [`../configuration_zh.md`](../configuration_zh.md) "grid" |
 | 晶体预览样式（线框 / 隐藏线 / 透视 / 着色）| ✅ | ❌ | 纯 GUI 状态，与模拟无关 |
 | `.lmc` 保存/加载 | ✅ | ✅ | `.lmc` 即 JSON，两边读同一个文件 |
 
@@ -81,7 +81,7 @@ GUI 包了同一个引擎，但**并非** JSON config 的完全超集 — 一些
 
 少数 JSON 字段在 schema 里存在但当前实现未生效（前向兼容）。parser 不会报错，引擎也不会使用 — 它们就是没效果而已：
 
-- `render[].grid` — 引擎只渲染模拟数据；网格 overlay 是 GUI 在渲染图上后叠加的。无头 CLI 渲染路径不消费 JSON 里的 `grid` 块。
+- `render[].grid[*].width` — 每个 grid 条目的 `width` 会被读取、校验并原样写回，但不影响任何像素；线宽由投影推导（见 [`../configuration_zh.md`](../configuration_zh.md) "四族线各自画什么、忽略什么"）。`grid` 块本身 CLI **是**会渲染的——它曾被列在这里当作"仅 GUI"，自 v4.18 起已不成立。
 - 个别 `crystal[].shape` 分布字段在异常组合下不生效 — 详见与文档任务并行维护的 `known_mismatch.md` 登记。
 
 如果你"在 JSON 里设了 X 但没效果"，先查这一节，再查 [`../configuration_zh.md`](../configuration_zh.md)，最后再开 issue。

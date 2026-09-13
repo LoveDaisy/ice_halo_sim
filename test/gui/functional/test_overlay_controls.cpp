@@ -1,12 +1,14 @@
-// The right panel's Overlay group: the auxiliary lines drawn over the preview and the angle list
-// behind the Angular Dist. row's fold.
+// The right panel's Overlay group: the auxiliary lines drawn over the preview and the angle lists
+// behind the two angular-distance rows' folds.
 //
-// What this suite is for. `RenderOverlaysTab` (src/gui/app_panels.cpp) draws four rows of the same
-// record — colour, name, line, text label, opacity — as one ImGui table, followed by a collapsed
-// "Reference Points" section holding a SECOND table of six sky-marker rows. Its one non-obvious
-// property is a LAYOUT one: the columns have to line up across rows whose names have very different
-// widths — ACROSS BOTH TABLES, which are two tables only because the section between them folds —
-// and the longest name must not be cut off. That is only checkable against a rendered
+// What this suite is for. `RenderOverlaysTab` (src/gui/app_panels.cpp) draws three rows of the same
+// record — colour, name, line, text label, opacity — as one ImGui table, followed by two collapsed
+// sections each holding a table of its own: "Angular Distance", two rows of that same record (the
+// sun-centred and the axis-centred ring families, each with a fold to its own angle list), and
+// "Reference Points", six sky-marker rows. Its one non-obvious property is a LAYOUT one: the
+// columns have to line up across rows whose names have very different widths — ACROSS ALL THREE
+// TABLES, which are three tables only because the sections fold — and the longest name must not be
+// cut off. That is only checkable against a rendered
 // frame, and it is the kind of thing that silently stops being true when a name is added or a
 // column's width budget grows. It matters more here than it would in a wider container: the group
 // lives in a 300 px panel, so the name column is what every other column's declared width leaves
@@ -17,9 +19,10 @@
 // table's own column rectangles, which is a stronger reading of the same claim — an anchor can be
 // consistent across rows and still overlap a name, whereas a column cannot.
 //
-// The angle editor behind the Angular Dist. row's fold is the other half: it is a popup that only
-// exists while a sun-circle overlay is on, and its preset buttons have to know which angles are
-// already in the list, or the user gets duplicates that draw on top of each other.
+// The angle editor behind each angular-distance row's fold is the other half: it is a popup, its
+// preset buttons have to know which angles are already in the list, or the user gets duplicates
+// that draw on top of each other — and there are two lists, so the editor a row opens has to edit
+// that row's.
 //
 // Deliberately NOT here, with where each lives instead. Where the labels are PLACED around the sky
 // is unit-correctness/gui/test_overlay_labels.cpp; the overlay colours reaching the renderer is
@@ -70,8 +73,15 @@ struct ScopedRef {
   ImGuiTestContext* ctx_;
 };
 
-// The four line rows of the main table, by the id suffix their widgets carry.
-const char* const kRows[] = { "horizon", "grid", "sun_circles", "lens_border" };
+// The three line rows of the main table, by the id suffix their widgets carry.
+const char* const kRows[] = { "horizon", "grid", "lens_border" };
+
+// The two rows of the Angular Distance section's table, by id suffix and by the name each displays.
+// Mirrored for the reason NameOfRow gives. "From Axis" is the shorter of the two spellings the
+// panel could have used, and it is this case that made it so: "From View Center" measured 103 px
+// against the 96 the name column has.
+const char* const kAngularDistRows[] = { "sun_circles", "view_dist" };
+const char* const kAngularDistNames[] = { "From Sun", "From Axis" };
 
 // The six reference-point rows of the second table, by the id suffix their widgets carry. Mirrored
 // from kMarkerSerialNames for the same reason NameOfRow mirrors the display names: a rename there
@@ -81,17 +91,13 @@ const char* const kMarkerNames[] = { "Zenith", "Nadir", "Sun", "Subsun", "Anthel
 
 // The name each row displays. Mirrored rather than read from the panel because the panel's row table
 // is file-local to app_panels.cpp — and because a name that changed there without changing here is
-// precisely the event the width check below exists to catch. "Angular Dist." is abbreviated in the
-// panel too, and deliberately: spelled out it does not fit this panel's name column.
+// precisely the event the width check below exists to catch.
 const char* NameOfRow(const std::string& row) {
   if (row == "horizon") {
     return "Horizon";
   }
   if (row == "grid") {
     return "Grid";
-  }
-  if (row == "sun_circles") {
-    return "Angular Dist.";
   }
   return "Lens Border";
 }
@@ -159,23 +165,22 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
           break;
         }
       }
-      IM_CHECK_GT(line_x, 0.0f);  // a run of four misses would leave this unset
+      IM_CHECK_GT(line_x, 0.0f);  // a run of three misses would leave this unset
 
       // "Empty cell IS the information" (doc/gui-visual-language.md §4.4): the lens border row draws
       // a circle, not a word, so its Label cell holds nothing — not a disabled checkbox, not a dash.
-      // Asserted against the three rows that DO have one, so the claim is about that row and not
+      // Asserted against the two rows that DO have one, so the claim is about that row and not
       // about the id being spelled some other way.
       IM_CHECK_EQ(ctx->ItemInfo("**/##lens_border_label", ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##horizon_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##grid_label").ID, (ImGuiID)0);
-      IM_CHECK_NE(ctx->ItemInfo("**/##sun_circles_label").ID, (ImGuiID)0);
 
-      // THE SAME TWO CLAIMS over the reference-point section's own table, which is where they are
-      // now easiest to break: six names arrived at once, "Anthelion" and "Antisolar" are longer than
-      // anything the four rows above carry, and the two tables share a column layout
-      // (SetupOverlayTableColumns) rather than merely looking as though they do. A drift between
-      // them would show up here as the marker rows' Line column starting at a different x from the
-      // line rows' — which is why line_x is carried over from the loop above rather than re-seeded.
+      // THE SAME TWO CLAIMS over the reference-point section's own table: six names arrived at
+      // once, "Anthelion" and "Antisolar" are longer than anything the three rows above carry, and
+      // the tables share a column layout (SetupOverlayTableColumns) rather than merely looking as
+      // though they do. A drift between them would show up here as the marker rows' Line column
+      // starting at a different x from the line rows' — which is why line_x is carried over from
+      // the loop above rather than re-seeded.
       gui::g_state.markers_section_open = true;
       ctx->Yield(3);
       for (size_t i = 0; i < IM_ARRAYSIZE(kMarkerRows); ++i) {
@@ -209,31 +214,50 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.markers_section_open = false;
       ctx->Yield(2);
 
-      // AND over the View Circles section's one-row table, which shares the same column layout
-      // for the same reason and is the third table drawn against it. Its swatch and Line cell are
-      // found by the same three-seed reconstruction, against that table's own id.
-      gui::g_state.view_dist_section_open = true;
+      // AND over the Angular Distance section's two-row table, which shares the same column layout
+      // for the same reason and is the third table drawn against it. Swatch and Line cell are
+      // found by the same three-seed reconstruction, against that table's own id. Both rows carry a
+      // text label, which is asserted in the same pass (the lens-border check above is about the
+      // one row that does not).
+      gui::g_state.angular_dist_section_open = true;
       ctx->Yield(3);
-      {
-        const ImGuiTestItemInfo line = ctx->ItemInfo("**/##view_dist_line");
+      for (size_t i = 0; i < IM_ARRAYSIZE(kAngularDistRows); ++i) {
+        const std::string row = kAngularDistRows[i];
+        const ImGuiTestItemInfo line = ctx->ItemInfo(("**/##" + row + "_line").c_str());
         ImGuiID color_id = 0;
         if (line.Window != nullptr) {
-          const ImGuiID table_id = ImGui::GetIDWithSeed("##ViewDistTable", nullptr, line.Window->ID);
-          const ImGuiID swatch_group = ImGui::GetIDWithSeed("##view_dist_color", nullptr, table_id);
+          const ImGuiID table_id = ImGui::GetIDWithSeed("##AngularDistTable", nullptr, line.Window->ID);
+          const ImGuiID swatch_group = ImGui::GetIDWithSeed(("##" + row + "_color").c_str(), nullptr, table_id);
           color_id = ColorEditSwatchId(swatch_group);
         }
         const ImGuiTestItemInfo color = ctx->ItemInfo(color_id, ImGuiTestOpFlags_NoError);
-        IM_CHECK(line.ID != 0 && color.ID != 0);
-        IM_CHECK_EQ(line.RectFull.Min.x, line_x);
-        // "From Axis" is the name the row displays, mirrored here for the reason NameOfRow gives.
-        IM_CHECK_GE(line.RectFull.Min.x - color.RectFull.Max.x, ImGui::CalcTextSize("From Axis").x);
+        if (line.ID == 0 || color.ID == 0) {
+          IM_ERRORF("angular-distance row %s: the Line checkbox or the colour swatch is missing", row.c_str());
+          break;
+        }
+        if (line.RectFull.Min.x != line_x) {
+          IM_ERRORF("angular-distance row %s: Line starts at x=%.1f, the line rows measured %.1f", row.c_str(),
+                    static_cast<double>(line.RectFull.Min.x), static_cast<double>(line_x));
+          break;
+        }
+        const float name_w = ImGui::CalcTextSize(kAngularDistNames[i]).x;
+        const float name_room = line.RectFull.Min.x - color.RectFull.Max.x;
+        if (name_room < name_w) {
+          IM_ERRORF("angular-distance row %s: %.1f px between the swatch and Line, the name needs %.1f", row.c_str(),
+                    static_cast<double>(name_room), static_cast<double>(name_w));
+          break;
+        }
+        if (ctx->ItemInfo(("**/##" + row + "_label").c_str(), ImGuiTestOpFlags_NoError).ID == 0) {
+          IM_ERRORF("angular-distance row %s: no Label checkbox", row.c_str());
+          break;
+        }
       }
-      gui::g_state.view_dist_section_open = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
 
       // The header row. The name column draws none, because the group's own CollapsingHeader
       // already says "Overlay" one line above it and a word repeated directly under itself reads as
-      // a second, different thing. Stated together with the four that DO draw one, so "blank"
+      // a second, different thing. Stated together with the three that DO draw one, so "blank"
       // cannot be satisfied by a header row that failed to render at all. The table is found by the
       // same three-seed id the swatch lookup above reconstructs.
       const ImGuiTestItemInfo any_row = ctx->ItemInfo("**/##horizon_line");
@@ -255,13 +279,20 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The other half of "empty cell is the information": the fold column. Only one of the four line
-  // rows has a field the others lack, and only it offers the button — a fold button on every row
-  // would say the opposite of what this layout is for. The six reference-point rows below extend
-  // the claim rather than qualify it: NONE of them offers one, because the two fields their family
-  // owns (alpha, radius) are family-wide and hang off the section header instead. That header fold
-  // is asserted here too, and the two are different statements — "this ROW owns a field the other
-  // rows do not" against "this FAMILY owns a field no row can express".
+  // The other half of "empty cell is the information": the fold column. None of the three line
+  // rows of the main table has a field the others lack, so none offers the button; the two rows of
+  // the Angular Distance section each own an angle list, so each offers one — a fold button on
+  // every row would say the opposite of what this layout is for. The six reference-point rows
+  // extend the claim rather than qualify it: NONE of them offers one, because the two fields their
+  // family owns (alpha, radius) are family-wide and hang off the section header instead. That
+  // header fold is asserted here too, and the two are different statements — "this ROW owns a
+  // field the other rows do not" against "this FAMILY owns a field no row can express".
+  //
+  // The angular-distance folds live IN THE ROWS, and the rows exist only while their section is
+  // open — so with the section closed neither fold exists, and with it open both do. That is the
+  // merged section's shape stated as a claim (the view circles' fold used to sit on their own
+  // section's header, reachable while it was closed; it no longer does, by design: nothing
+  // family-wide is left for a header button to act on).
   //
   // Read in the DEFAULT document state, both sun-circle switches off, and that is the point: which
   // rows offer a fold is a property of the ROWS — of which of them owns a field the others lack —
@@ -285,7 +316,6 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
 
         IM_CHECK(!ctx->ItemExists("**/###horizon_fold"));
         IM_CHECK(!ctx->ItemExists("**/###grid_fold"));
-        IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
         // No fold: unlike the angular-distance circles, the lens border owns no field of its own —
         // the shader derives the circle from the lens, the FOV and the viewport, so there is
         // nothing to edit.
@@ -296,10 +326,16 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // reaching them must not require unfolding the six.
         IM_CHECK(!gui::g_state.markers_section_open);
         IM_CHECK(ctx->ItemExists("**/###markers_family_fold"));
-        // The View Circles section's fold, on ITS header, likewise offered while the section is
-        // closed: the angle list is the family's one extra field, and reaching it must not require
-        // unfolding the row.
-        IM_CHECK(!gui::g_state.view_dist_section_open);
+
+        // The two angular-distance folds: absent with their section closed (the rows are not
+        // submitted, and the header carries no button of its own), present — both of them — once
+        // it is open.
+        IM_CHECK(!gui::g_state.angular_dist_section_open);
+        IM_CHECK(!ctx->ItemExists("**/###sun_circles_fold"));
+        IM_CHECK(!ctx->ItemExists("**/###view_dist_fold"));
+        gui::g_state.angular_dist_section_open = true;
+        ctx->Yield(3);
+        IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
         IM_CHECK(ctx->ItemExists("**/###view_dist_fold"));
 
         // ...and no marker ROW offers one, with the section open. A per-row fold here would be six
@@ -328,14 +364,17 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
 
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
+      gui::g_state.angular_dist_section_open = false;
+      ctx->Yield(2);
     };
   }
 
-  // P32, restated. Reaching the angle editor is a property of the Angular Dist. row itself — the
-  // row owns a field the others lack, so it offers a fold — and not of whether the circles happen
-  // to be drawn at the moment. All four combinations of the row's two switches, because "reachable
+  // P32, restated. Reaching the angle editor is a property of the From Sun row itself — the row
+  // owns a field the others lack, so it offers a fold — and not of whether the circles happen to
+  // be drawn at the moment. All four combinations of the row's two switches, because "reachable
   // regardless" is a claim about the whole square and not about the one corner a new document
-  // opens in.
+  // opens in. The section is unfolded first, by a click on its header: the row lives in it, and
+  // "regardless of the row's own switches" is not a claim about the section's fold.
   //
   // It used to be the opposite claim: the button appeared only once a sun-circle overlay was on.
   // Stacked vertically that condition had nothing to be read against; in the table its cell sits
@@ -352,6 +391,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK(!gui::g_state.show_sun_circles_line);
       IM_CHECK(!gui::g_state.show_sun_circles_label);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
 
       // Both helpers name the right panel for their lookup, for the reason the cases above give: a
       // fold button scrolled out of view is indistinguishable from one that is not offered unless
@@ -378,6 +418,10 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         return opened;
       };
 
+      click_in_panel("**/Angular Distance##angular_dist");
+      ctx->Yield(3);
+      IM_CHECK(gui::g_state.angular_dist_section_open);
+
       IM_CHECK(editor_opens());  // neither switch: the state a new document opens in
 
       click_in_panel("**/##sun_circles_line");
@@ -397,6 +441,8 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
 
       click_in_panel("**/##sun_circles_label");
       ctx->Yield(2);
+      gui::g_state.angular_dist_section_open = false;
+      ctx->Yield(2);
     };
   }
 
@@ -412,6 +458,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       gui::g_state.show_sun_circles_line = true;
       gui::g_state.sun_circle_angles.clear();
+      gui::g_state.angular_dist_section_open = true;  // the row, and so its fold, live in the section
       ctx->Yield(3);
 
       // Named ref for the fold button only, for the reason given in the case above. Scoped to just
@@ -464,6 +511,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->KeyPress(ImGuiKey_Escape);  // dismiss the popup
       ctx->Yield(2);
       gui::g_state.show_sun_circles_line = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
     };
   }
@@ -516,69 +564,94 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The View Circles section's fold: the button drawn ON the section header must receive its
-  // click (AllowOverlap on the header is what lets it — without that flag the header takes the
-  // hover first and the button, still visibly present, never fires; the failure is invisible from
-  // a rendered frame, which is why it is a click here and not a screenshot), and the editor it
-  // opens must edit THIS family's list. The second half is the point of parameterising the popup:
-  // the sun circles' list is asserted untouched, so a popup still bound to the first family would
-  // fail here rather than silently add a 9 deg SUN circle.
+  // The two rows' folds, once the section is open, each edit THEIR OWN list. This is the point of
+  // parameterising the popup (RenderCircleAnglePopup takes the vector): a popup still bound to the
+  // first family would pass every check on the sun circles' row and fail here by adding a 9 deg SUN
+  // circle when the From Axis fold was clicked. Both directions, because a binding that was
+  // right for one row and wrong for the other is the shape the defect would take.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls",
-                                    "the_view_circles_fold_is_reachable_on_the_closed_header_and_edits_its_own_list");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "overlay_controls", "the_two_rows_fold_independently_once_the_section_is_open");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
+      gui::g_state.angular_dist_section_open = true;
       ctx->Yield(3);
-      IM_CHECK(!gui::g_state.view_dist_section_open);
       IM_CHECK(gui::g_state.view_dist_angles.empty());
       const std::vector<float> sun_before = gui::g_state.sun_circle_angles;
+      IM_CHECK(!sun_before.empty());  // the 22/46 pair: the other list is non-empty, so "untouched" means something
 
+      // From Axis: add 9 deg, the sun list is untouched; delete it, still untouched.
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
         ctx->ItemClick("**/###view_dist_fold");
       }
       ctx->Yield(3);
-      // The editor is on screen — a preset button exists — and the section is STILL closed: the
-      // click went to the button, not to the header underneath it.
       IM_CHECK(ctx->ItemExists("**/9\xc2\xb0"));
-      IM_CHECK(!gui::g_state.view_dist_section_open);
-
       ctx->ItemClick("**/9\xc2\xb0");
       ctx->Yield(2);
       IM_CHECK(IsDisabled(ctx->ItemInfo("**/9\xc2\xb0")));
       IM_CHECK_EQ(gui::g_state.view_dist_angles.size(), (size_t)1);
       IM_CHECK_EQ(gui::g_state.view_dist_angles.front(), 9.0f);
       IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
-
       ctx->ItemClick("**/x##del_0");
       ctx->Yield(2);
       IM_CHECK(gui::g_state.view_dist_angles.empty());
       IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
-
       ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+
+      // From Sun, the other way round: add 9 deg (not in the default pair, so it sorts to the
+      // front), the view list stays empty; delete row 0 — the 9 — and the pair is back.
+      {
+        const ScopedRef panel_ref(ctx, "//##RightPanel");
+        ctx->ItemClick("**/###sun_circles_fold");
+      }
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists("**/9\xc2\xb0"));
+      ctx->ItemClick("**/9\xc2\xb0");
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.sun_circle_angles.size(), sun_before.size() + 1);
+      IM_CHECK_EQ(gui::g_state.sun_circle_angles.front(), 9.0f);
+      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      ctx->ItemClick("**/x##del_0");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
+      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
     };
   }
 
   // The section's fold state is DOCUMENT state: a new document opens folded, a click on the header
-  // unfolds it and exposes the row's controls, and a document saved with it open reopens open.
+  // unfolds it and exposes BOTH rows' controls, and a document saved with it open reopens open.
   // Built by serializing and reading back rather than by assigning the field — the claim is about
   // what a saved document carries, and an assignment would skip exactly the half that can break.
-  // Same proposition, and the same shape, as the Reference Points section's own case.
+  // Same proposition, and the same shape, as the Reference Points section's own case. (The legacy
+  // spelling of the key, from when the section held the view circles alone, is the legacy document
+  // chain's to assert — composition-correctness/gui/test_legacy_document_chain.cpp.)
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls", "the_view_circles_section_fold_state_round_trips");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls", "the_angular_dist_section_fold_state_round_trips");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(3);
-      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
 
       {
         const ScopedRef panel_ref(ctx, "//##RightPanel");
-        IM_CHECK(!ctx->ItemExists("**/##view_dist_line"));  // folded: the row is not submitted
-        ctx->ItemClick("**/View Circles##view_dist");
+        // Folded: neither row is submitted — and the main table has no angular-distance row of its
+        // own any more, which is what the sun_circles half of this negative says.
+        IM_CHECK(!ctx->ItemExists("**/##sun_circles_line"));
+        IM_CHECK(!ctx->ItemExists("**/##view_dist_line"));
+        ctx->ItemClick("**/Angular Distance##angular_dist");
         ctx->Yield(2);
-        IM_CHECK(gui::g_state.view_dist_section_open);
+        IM_CHECK(gui::g_state.angular_dist_section_open);
+        IM_CHECK(ctx->ItemExists("**/##sun_circles_line"));
+        IM_CHECK(ctx->ItemExists("**/##sun_circles_label"));
+        IM_CHECK(ctx->ItemExists("**/##sun_circles_alpha"));
         IM_CHECK(ctx->ItemExists("**/##view_dist_line"));
         IM_CHECK(ctx->ItemExists("**/##view_dist_label"));
         IM_CHECK(ctx->ItemExists("**/##view_dist_alpha"));
@@ -587,16 +660,17 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const std::string doc = gui::SerializeGuiStateJson(gui::g_state);
       gui::GuiState reopened;
       IM_CHECK(gui::DeserializeGuiStateJson(doc, reopened));
-      IM_CHECK(reopened.view_dist_section_open);
+      IM_CHECK(reopened.angular_dist_section_open);
       // And a fresh document, which is what a new-file action produces, is folded again.
-      IM_CHECK(!gui::MakeNewDocumentState().view_dist_section_open);
+      IM_CHECK(!gui::MakeNewDocumentState().angular_dist_section_open);
 
-      gui::g_state.view_dist_section_open = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
     };
   }
 
-  // The four alpha cells, at both ends of each declared domain. Literals throughout, for the reason
+  // The five alpha cells — three in the main table, two in the Angular Distance section — at both
+  // ends of each declared domain. Literals throughout, for the reason
   // spelled out at the head of functional/test_scene_controls.cpp: the call site reads the registry,
   // so asking the registry what to expect would compare one line of code against itself.
   //
@@ -611,32 +685,41 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       const ScopedRef panel_ref(ctx, "//##RightPanel");
 
-      float* const kSlots[] = {
-        &gui::g_state.horizon_alpha,
-        &gui::g_state.grid_alpha,
-        &gui::g_state.sun_circles_alpha,
-        &gui::g_state.lens_border_alpha,
+      // One flat list over both tables: the section is opened up front so every row is submitted,
+      // and the cells are the same DragFloatField whichever table drew them.
+      gui::g_state.angular_dist_section_open = true;
+      ctx->Yield(3);
+      struct AlphaCell {
+        const char* row;
+        float* slot;
       };
-      for (size_t i = 0; i < IM_ARRAYSIZE(kRows); ++i) {
-        const std::string ref = "**/##" + std::string(kRows[i]) + "_alpha";
+      const AlphaCell kCells[] = {
+        { "horizon", &gui::g_state.horizon_alpha },         { "grid", &gui::g_state.grid_alpha },
+        { "lens_border", &gui::g_state.lens_border_alpha }, { "sun_circles", &gui::g_state.sun_circles_alpha },
+        { "view_dist", &gui::g_state.view_dist_alpha },
+      };
+      for (const AlphaCell& cell : kCells) {
+        const std::string ref = "**/##" + std::string(cell.row) + "_alpha";
         ctx->ItemInputValue(ref.c_str(), 100.0f);
         ctx->Yield();
-        if (*kSlots[i] != 1.0f) {
-          IM_ERRORF("%s: clamped to %f, expected the 1.0 maximum", ref.c_str(), static_cast<double>(*kSlots[i]));
+        if (*cell.slot != 1.0f) {
+          IM_ERRORF("%s: clamped to %f, expected the 1.0 maximum", ref.c_str(), static_cast<double>(*cell.slot));
         }
         if (ctx->IsError()) {
           break;
         }
         ctx->ItemInputValue(ref.c_str(), -100.0f);
         ctx->Yield();
-        if (*kSlots[i] != 0.0f) {
-          IM_ERRORF("%s: clamped to %f, expected the 0.0 minimum", ref.c_str(), static_cast<double>(*kSlots[i]));
+        if (*cell.slot != 0.0f) {
+          IM_ERRORF("%s: clamped to %f, expected the 0.0 minimum", ref.c_str(), static_cast<double>(*cell.slot));
         }
 
         if (ctx->IsError()) {
           break;
         }
       }
+      gui::g_state.angular_dist_section_open = false;
+      ctx->Yield(2);
     };
   }
 }

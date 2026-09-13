@@ -51,7 +51,7 @@ While running:
 
 - The Status Bar shows ray count and elapsed time.
 - The Floating Lens Bar lets you switch lens projection without stopping the simulation — the same data is re-projected on the fly.
-- The grid overlay (visible above) is **GUI-only** and is not saved into the JSON config — it only helps you read angles in the preview.
+- The grid overlay (visible above) helps you read angles in the preview, and it travels with the document: its switches, colours and angle lists are saved into the `.lmc`, and an exported JSON carries them as `render[].grid`, which the CLI draws onto its output image too.
 
 To stop early, press **Stop** in the Top Bar; partial results stay on screen.
 
@@ -73,7 +73,7 @@ Want to build a halo recipe yourself instead of opening the example? The shortes
 
 ## 6. Save and reload
 
-`File ▶ Save As` writes a `.lmc` (a JSON document Lumice can also run from the CLI). Reopening it in the GUI restores **crystal / light / render** data — but **not** the GUI-only state (lens projection choice, grid overlay, crystal preview style). See [`05-faq.md`](05-faq.md) "GUI vs JSON capabilities" for the full divergence list.
+`File ▶ Save As` writes a `.lmc` (a JSON document Lumice can also run from the CLI). Reopening it in the GUI restores **crystal / light / render** data, the lens projection and the overlay settings — but **not** pure viewing state such as the crystal preview style. See [`05-faq.md`](05-faq.md) "GUI vs JSON capabilities" for the full divergence list.
 
 ## Further reading
 

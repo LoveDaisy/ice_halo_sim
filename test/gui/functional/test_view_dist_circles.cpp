@@ -404,7 +404,7 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
 
       // The premise: a new document opens with the section folded, the list empty and both
       // switches off. Stated so the arithmetic below measures the task it names.
-      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(!gui::g_state.angular_dist_section_open);
       IM_CHECK(gui::g_state.view_dist_angles.empty());
       IM_CHECK(!gui::g_state.show_view_dist_line);
       IM_CHECK(!gui::g_state.show_view_dist_label);
@@ -412,11 +412,14 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       Frame baseline;
       IM_CHECK(CaptureViewport(ctx, &baseline));
 
-      // Add an angle through the header's fold — with the section still CLOSED, which is part of
-      // the claim (the editor is one click away regardless of the fold), then unfold and switch
-      // the line on. Named ref for the panel clicks (a control scrolled out of view reads as
-      // missing to a wildcard lookup); released for the popup, which is a different window.
+      // Unfold the Angular Distance section by a click on its header, add an angle through the
+      // From Axis row's own fold, then switch the line on. Named ref for the panel clicks (a
+      // control scrolled out of view reads as missing to a wildcard lookup); released for the
+      // popup, which is a different window.
       ctx->SetRef("//##RightPanel");
+      ctx->ItemClick("**/Angular Distance##angular_dist");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.angular_dist_section_open);
       ctx->ItemClick("**/###view_dist_fold");
       ctx->SetRef("");
       ctx->Yield(3);
@@ -428,9 +431,6 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.view_dist_angles[0], kCircleDeg);
 
       ctx->SetRef("//##RightPanel");
-      ctx->ItemClick("**/View Circles##view_dist");
-      ctx->Yield(2);
-      IM_CHECK(gui::g_state.view_dist_section_open);
       ctx->ItemClick("**/##view_dist_line");
       ctx->SetRef("");
       ctx->Yield(2);
@@ -489,7 +489,7 @@ void RegisterViewDistCircleTests(ImGuiTestEngine* engine) {
       IM_CHECK(CaptureViewport(ctx, &restored));
       IM_CHECK_EQ(DifferingPixels(baseline, restored), static_cast<std::size_t>(0));
 
-      gui::g_state.view_dist_section_open = false;
+      gui::g_state.angular_dist_section_open = false;
       ctx->Yield(2);
     };
   }
