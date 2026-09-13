@@ -31,7 +31,10 @@ Requires the shared-lib build (``./scripts/build.sh -sj release``); run with
 from __future__ import annotations
 
 import ctypes
+import json
 import math
+import warnings
+from pathlib import Path
 
 import pytest
 
@@ -346,3 +349,132 @@ def test_unproject_pixel_round_trip_through_ctypes():
     view.lens_fov = 150.0
     assert lib.LUMICE_UnprojectPixel(ctypes.byref(view), 0, 0, out, ctypes.byref(valid)) == 0
     assert valid.value == 0, "the corner of a 150° fisheye canvas is outside the image circle"
+
+
+# ---------------------------------------------------------------------------------------------
+# The analysis session follows scene.ray_allocation (the same field the render commit reads,
+# owner ruling 2026-09-13): `adaptive` binds the online Neyman deal to an analysis too. Three
+# prisms, proportions 100 / 100 / 0.2, each with one `filter_in` raypath, so the third crystal's
+# one row is rare under the population share: under `proportional` it gets 0.1% of the rays.
+_CONFIG_CHALLENGE = str(
+    get_project_root() / "test" / "e2e" / "configs" / "raypath_analysis_challenge_98_120_144.json")
+_RARE_CRYSTAL_ID = 3
+# Measured on this scene at its 1M-ray budget, one server, sessions back to back, sim_seed=0:
+# the rare row's relative standard deviation across sessions is ~0.2 under proportional and
+# ~0.02 under adaptive — 10.5× on the first measurement — and every row's mean agrees between
+# the arms to z < 1 over 5M × 12. The thresholds sit at half and three times those figures.
+# They are NOT to be relaxed on a red: both assertions compare statistics of two random arms,
+# the shape that turns into a flake when its margin is thin, and the margin is what makes them
+# stand. What the margin has to absorb is the estimate's OWN noise — a sample sd from n
+# sessions is itself uncertain by ~1/√(2(n−1)), so the measured ratio scattered 5.2–16.9× over
+# six repeats at n = 10 (one of them on the threshold) — so a red that is not a real regression
+# is answered with more sessions (30 puts the ratio's own spread at ~0.19 in log, the 5×
+# floor ≈3σ below a true ~9×), never with a looser ratio.
+_CHALLENGE_SESSIONS = 30
+_RARE_ROW_MIN_IMPROVEMENT = 5.0
+_MEAN_AGREEMENT_Z = 3.0
+
+
+def _shares(r: cr.RaypathAnalysisResult) -> dict:
+    """Each row's share of the run's counted energy (entries + the unrecorded remainder)."""
+    total = sum(e.energy for e in r.entries) + r.other_energy
+    assert total > 0.0
+    return {e.display: e.energy / total for e in r.entries}
+
+
+def _rare_row_display(results) -> str:
+    """The one row on the rare crystal — its `filter_in` admits a single orbit under P|B|D."""
+    names = {e.display for r in results for e in r.entries if e.chain and e.chain[0][0] == _RARE_CRYSTAL_ID}
+    assert len(names) == 1, f"expected one row on crystal {_RARE_CRYSTAL_ID} under P|B|D, saw {sorted(names)}"
+    return next(iter(names))
+
+
+def _mean_sd(xs):
+    n = len(xs)
+    mean = sum(xs) / n
+    var = sum((x - mean) ** 2 for x in xs) / (n - 1)
+    return mean, math.sqrt(var)
+
+
+def _run_arm(tmp_path, ray_allocation: str):
+    doc = json.loads(Path(_CONFIG_CHALLENGE).read_text(encoding="utf-8"))
+    doc["scene"]["ray_allocation"] = ray_allocation
+    path = tmp_path / f"challenge_{ray_allocation}.json"
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    # sim_seed=0: a fresh random stream per session, so the spread ACROSS sessions is the
+    # estimator's real noise (a fixed seed would make ten identical sessions and a sd of 0).
+    return cr.run_raypath_analysis_capi_sessions(
+        str(path), _full_sky_request(), sessions=_CHALLENGE_SESSIONS, sim_seed=0, max_entries=None,
+        chain_id_symmetry=cr.LUMICE_RAYPATH_SYMMETRY_ALL)
+
+
+@pytest.mark.slow
+def test_adaptive_allocation_cuts_rare_row_noise_without_moving_the_means(tmp_path):
+    """`adaptive` on an analysis: the rare row's share is ≥5× less noisy across sessions than
+    under `proportional`, and no row's mean share moved between the arms.
+
+    Two arms of thirty sessions each on one server per arm, sim_seed=0 (random), the scene's
+    own 1M-ray budget. The first assertion is the reason the analysis binds the online deal at
+    all (the histogram's Σ(Y·w) carries the p/q correction, so what changes is variance, not
+    expectation); the second is that unbiasedness, per row, at 3σ of the two arms' pooled
+    standard error. Both arms are also each a positive/negative control for the bind: the
+    proportional arm must log no online tally line, the adaptive arm one cold start per
+    session from the analysis site.
+    """
+    prop = _run_arm(tmp_path, "proportional")
+    adap = _run_arm(tmp_path, "adaptive")
+    assert len(prop) == _CHALLENGE_SESSIONS and len(adap) == _CHALLENGE_SESSIONS
+    assert prop[0].sim_ray_num == 1_000_000, "the scene's own budget"
+
+    # The bind itself, off the log lines the server emits (their wording is pinned by the C++
+    # unit test on the same site, test_ray_allocation_online_analysis.cpp).
+    cold = "StartRaypathAnalysis: ray-allocation online tally started"
+    for r in prop:
+        assert not any(cold in line for line in r.log_lines), "proportional bound an online tally"
+        assert not any("RayAllocationOnline(final)" in line for line in r.log_lines)
+    for i, r in enumerate(adap, start=1):
+        assert sum(cold in line for line in r.log_lines) == 1, f"adaptive session {i}: not one cold start"
+        assert not any("keeping the online tally" in line for line in r.log_lines), \
+            f"adaptive session {i}: an analysis carried a tally forward"
+
+    rare = _rare_row_display(prop + adap)
+    shares_p = [_shares(r) for r in prop]
+    shares_a = [_shares(r) for r in adap]
+    rows = sorted(set().union(*(s.keys() for s in shares_p + shares_a)))
+
+    # 1. The rare row's noise. If proportional never hit it in ten sessions its rel_sd is
+    #    undefined (0/0): that is an even louder statement of the same fact (a row adaptive
+    #    measures and proportional cannot see at all), so it reads as an infinite ratio and
+    #    is warned about rather than divided by. The measured 0.206 says it is hit at this
+    #    budget; the guard is for the tail of that distribution.
+    mean_p, sd_p = _mean_sd([s.get(rare, 0.0) for s in shares_p])
+    mean_a, sd_a = _mean_sd([s.get(rare, 0.0) for s in shares_a])
+    assert mean_a > 0.0, f"adaptive never counted the rare row {rare!r}"
+    rel_a = sd_a / mean_a
+    if mean_p == 0.0:
+        warnings.warn(f"proportional never counted the rare row {rare!r} in {_CHALLENGE_SESSIONS} sessions; "
+                      f"its rel_sd is undefined and taken as infinite (adaptive: {rel_a:.4f})")
+        rel_p = math.inf
+    else:
+        rel_p = sd_p / mean_p
+    assert rel_a * _RARE_ROW_MIN_IMPROVEMENT <= rel_p, (
+        f"rare row {rare!r}: rel_sd adaptive {rel_a:.4f} vs proportional {rel_p:.4f} "
+        f"({rel_p / rel_a if rel_a > 0 else float('inf'):.1f}×, need ≥ {_RARE_ROW_MIN_IMPROVEMENT}×)")
+
+    # 2. Every row's mean share agrees between the arms. A row seen in one arm only counts
+    #    as 0 in the other's sessions, which is what its estimator says.
+    n = _CHALLENGE_SESSIONS
+    worst = 0.0
+    for row in rows:
+        m_p, s_p = _mean_sd([s.get(row, 0.0) for s in shares_p])
+        m_a, s_a = _mean_sd([s.get(row, 0.0) for s in shares_a])
+        pooled_se = math.sqrt((s_p * s_p + s_a * s_a) / n)
+        diff = abs(m_a - m_p)
+        if pooled_se == 0.0:
+            assert diff == 0.0, f"row {row!r}: constant in both arms yet different ({m_p} vs {m_a})"
+            continue
+        z = diff / pooled_se
+        worst = max(worst, z)
+        assert z <= _MEAN_AGREEMENT_Z, (
+            f"row {row!r}: mean share proportional {m_p:.5f} vs adaptive {m_a:.5f}, z = {z:.2f} "
+            f"> {_MEAN_AGREEMENT_Z} — the p/q correction is not carrying this row's expectation")

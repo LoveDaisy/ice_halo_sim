@@ -413,16 +413,22 @@ class ServerImpl {
   // every batch, and a colour config left over from the last render can name a crystal
   // the analysis's scene does not have — that is a throw on a worker thread.
   std::shared_ptr<const RaypathColorConfig> active_raypath_color_;
-  // The online ray-allocation authority of the committed RENDER scene when it is
-  // scene.ray_allocation = adaptive; null otherwise (proportional, or an analysis
-  // submission — which deals by p on purpose, doc/raypath-analysis-panel.md §10).
+  // The online ray-allocation authority of the committed scene when it is
+  // scene.ray_allocation = adaptive; null when it is proportional. One field for both
+  // scene publishers: a render commit (CommitConfig) and an analysis submission
+  // (StartRaypathAnalysis) read the same scene field and bind the same object, so the
+  // GUI's one "Adaptive ray allocation" switch decides how BOTH paths deal rays across
+  // crystals — the analysis histogram's rows are as much at the mercy of the sampling
+  // share as the image's pixels are, which is why the analysis no longer deals by p.
   // Bound in the same scene_mutex_ critical section as the three above and attached
   // to every SimBatch, which is the whole of the server's involvement: the workers
   // Load q from it and Accumulate into it themselves, so no server thread reads or
-  // writes the tally while a run is live. CommitConfig KEEPS the object across a
-  // recommit whose RayAllocationInputsChanged is false (a view, a lens, the ray
-  // budget), so a slider drag does not throw the accumulated statistic away, and
-  // builds a fresh one — a cold start — otherwise.
+  // writes the tally while a run is live. The two publishers differ only in what they
+  // start from: CommitConfig KEEPS the object across a recommit whose
+  // RayAllocationInputsChanged is false (a view, a lens, the ray budget), so a slider
+  // drag does not throw the accumulated statistic away, and builds a fresh one — a
+  // cold start — otherwise; StartRaypathAnalysis always starts cold (its bind site
+  // says why).
   std::shared_ptr<RayAllocationOnline> active_ray_alloc_;
   std::atomic<uint64_t> scene_generation_{ 0 };
   // Published lifecycle epoch (the backend-owned truth authority). Distinct from
@@ -1100,9 +1106,10 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   // the statistic depends on changed; a previous scene that was proportional has no
   // object to carry (active_ray_alloc_ is null) and starts cold. No ray is traced
   // here, on any branch: the statistic comes from the render's own batches.
-  // The other scene publisher, StartRaypathAnalysis, binds no object on purpose: an
-  // analysis session renders no image, and lower image variance is the only thing
-  // adaptive dealing buys, so its layers deal by p there.
+  // The other scene publisher, StartRaypathAnalysis, reads the same field and binds
+  // the same object, but always cold — it has no high-frequency recommit to debounce
+  // (see its bind site). The two sites are kept as two `if`s on purpose: the
+  // condition is one line, and the carry-forward half is the part that differs.
   std::shared_ptr<RayAllocationOnline> next_ray_alloc;
   if (new_config.scene_.ray_allocation_ == SceneConfig::RayAllocationMode::kAdaptive) {
     const bool carry =
@@ -1331,13 +1338,27 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
   // drained every worker, so no in-flight batch reads a half-updated triple, and
   // PublishDrainedEpochIfSettled's invariant (the epoch only moves past a drained one)
   // holds for the same reason it does in CommitConfig. renders and raypath_color are bound
-  // null on purpose — their declarations say why.
+  // null on purpose — their declarations say why. ray_alloc follows the same field
+  // CommitConfig reads (scene.ray_allocation): adaptive binds a fresh RayAllocationOnline,
+  // proportional binds none. Always a cold start, unlike CommitConfig's carry-forward:
+  // that debounce exists for the GUI's 70ms slider recommits, and an Analyze is one
+  // deliberate click whose tally has no successor to hand over to. The histogram's
+  // Σ(Y·w) carries the p/q correction every ray is born with, so the expectation of every
+  // row is unchanged; what the online deal buys is the rare row's variance (the 98/120/144
+  // three-crystal scene: share noise 10.5× lower at 1M rays, 112× fewer rays to 5%).
   {
     std::lock_guard<std::mutex> lock(scene_mutex_);
     active_scene_ = std::make_shared<const SceneConfig>(new_config.scene_);
     active_renders_.reset();
     active_raypath_color_.reset();
-    active_ray_alloc_.reset();
+    if (new_config.scene_.ray_allocation_ == SceneConfig::RayAllocationMode::kAdaptive) {
+      active_ray_alloc_ = std::make_shared<RayAllocationOnline>(new_config.scene_);
+      ILOG_INFO(logger_,
+                "StartRaypathAnalysis: ray-allocation online tally started (cold start: uniform deal; an "
+                "analysis session never carries a tally forward)");
+    } else {
+      active_ray_alloc_.reset();
+    }
     scene_generation_.fetch_add(1);
     committed_epoch_.fetch_add(1, std::memory_order_release);
   }

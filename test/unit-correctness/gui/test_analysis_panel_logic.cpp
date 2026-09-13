@@ -214,7 +214,8 @@ TEST(AnalysisPanelLogic, ExportCsvWritesTheListAsShownWithHeadAndOtherRow) {
   state.analysis_result.entries_symmetry = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_D;
   const std::string csv = BuildAnalysisResultsCsv(state, "2026-09-13 10:30:00");
   // total 12: rows 5/12, 3/12, 1/12 -> 41.6667, 25.0000, 8.3333; cumulative 41.6667, 66.6667, 75;
-  // other 25 closes at 100. Rays: 200, 300, 100 (100*(i+1)); +/- 1/sqrt: 7.07, 5.77, 10.00.
+  // other 25 closes at 100. Counts 200, 300, 100 (100*(i+1)) are not a column; they set +/-
+  // 1/sqrt: 7.07, 5.77, 10.00.
   const std::string want =
       "# Lumice raypath analysis\n"
       "# exported_at: 2026-09-13 10:30:00\n"
@@ -223,11 +224,11 @@ TEST(AnalysisPanelLogic, ExportCsvWritesTheListAsShownWithHeadAndOtherRow) {
       "# total_rays: 630\n"
       "# total_energy: 12\n"
       "# record_full_hits: 4\n"
-      "Raypath,Energy,Cumulative %,Rays,+/-\n"
-      "2-3,41.6667,41.6667,200,7.07\n"
-      "3-4,25.0000,66.6667,300,5.77 (-20.00)\n"
-      "1-2,8.3333,75.0000,100,10.00\n"
-      "other (not recorded),25.0000,100.0000,30,-\n";
+      "Raypath,Energy,Cumulative %,+/-\n"
+      "2-3,41.6667,41.6667,7.07\n"
+      "3-4,25.0000,66.6667,5.77 (-20.00)\n"
+      "1-2,8.3333,75.0000,10.00\n"
+      "other (not recorded),25.0000,100.0000,-\n";
   EXPECT_EQ(csv, want);
 }
 
@@ -258,9 +259,9 @@ TEST(AnalysisPanelLogic, ExportCsvOfAConeResultCarriesTheConeLinesAndHidesRowsOu
       "# total_rays: 1080\n"
       "# total_energy: 10\n"
       "# record_full_hits: 0\n"
-      "Raypath,Energy,Cumulative %,Rays,+/-\n"
-      "1-2,20.0000,20.0000,100,10.00\n"
-      "other (not recorded),80.0000,100.0000,80,-\n";
+      "Raypath,Energy,Cumulative %,+/-\n"
+      "1-2,20.0000,20.0000,10.00\n"
+      "other (not recorded),80.0000,100.0000,-\n";
   EXPECT_EQ(csv, want);
 }
 
@@ -271,7 +272,7 @@ TEST(AnalysisPanelLogic, ExportCsvWithNoResultIsHeadAndColumnsOnly) {
       "# Lumice raypath analysis\n"
       "# exported_at: t\n"
       "# region: none (no result)\n"
-      "Raypath,Energy,Cumulative %,Rays,+/-\n";
+      "Raypath,Energy,Cumulative %,+/-\n";
   EXPECT_EQ(csv, want);
 }
 

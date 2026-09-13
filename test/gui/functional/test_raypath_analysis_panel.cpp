@@ -1398,7 +1398,15 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
         has_cumulative = has_cumulative || std::strcmp(ImGui::TableGetColumnName(table, n), "Cumulative %") == 0;
       }
       IM_CHECK(has_cumulative);
-      IM_CHECK_EQ(table->ColumnsCount, 5);
+      // Raypath, Energy, Cumulative %, +/- — and no Rays column: under adaptive ray allocation
+      // a row's hit count follows the online deal, not the crystal's proportion, so it was
+      // dropped from the table and the CSV alike.
+      bool has_rays = false;
+      for (int n = 0; n < table->ColumnsCount; n++) {
+        has_rays = has_rays || std::strcmp(ImGui::TableGetColumnName(table, n), "Rays") == 0;
+      }
+      IM_CHECK(!has_rays);
+      IM_CHECK_EQ(table->ColumnsCount, 4);
       const ImGuiTestItemInfo other =
           ctx->ItemInfo(std::string("**/").append(gui::kAnalysisOtherRowLabel).c_str(), ImGuiTestOpFlags_NoError);
       IM_CHECK(other.ID != 0);

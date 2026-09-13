@@ -58,9 +58,10 @@ struct SimBatch {
   // configured" (AC3 zero-cost path) by both CPU emit gates.
   std::shared_ptr<const RaypathColorConfig> raypath_color_;
   // The online ray-allocation authority of the scene this batch belongs to
-  // (scene.ray_allocation = adaptive on a RENDER commit); null on every other
-  // batch — proportional scenes, analysis sessions — which then deal by p with
-  // every correction 1.0f, the zero-cost path. Captured in GenerateScene under
+  // (scene.ray_allocation = adaptive, on a render commit and on an analysis
+  // submission alike — the same field binds both); null on a proportional scene's
+  // batches, which then deal by p with every correction 1.0f, the zero-cost path.
+  // Captured in GenerateScene under
   // scene_mutex_ with the three above, so a CommitConfig cannot pair a batch with
   // another scene's tally. Not a snapshot itself: the worker Loads one snapshot
   // from it when it STARTS the batch (not when the batch was queued — the queue
@@ -79,8 +80,10 @@ struct SimBatch {
 // per-(layer, entry) tally every batch of every worker adds into, and the
 // immutable q snapshot derived from it that the next batch deals by. One object
 // per committed adaptive scene, owned by the server and bound into every SimBatch
-// of that scene (SimBatch::ray_alloc_online_); an analysis session binds none and
-// so deals by p (doc/raypath-analysis-panel.md §10, unchanged).
+// of that scene (SimBatch::ray_alloc_online_). Both scene publishers bind one —
+// a render commit and an analysis submission — off the same scene field; the
+// analysis starts cold on every submission where the render may carry its tally
+// across a recommit (doc/raypath-analysis-panel.md §10).
 //
 // Two operations, both thread-safe, both O(entries):
 //   Load()       — the snapshot to deal the NEXT batch by. Never null: the
