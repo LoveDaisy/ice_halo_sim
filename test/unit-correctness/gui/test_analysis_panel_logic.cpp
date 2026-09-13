@@ -223,11 +223,11 @@ TEST(AnalysisPanelLogic, ExportCsvWritesTheListAsShownWithHeadAndOtherRow) {
       "# total_rays: 630\n"
       "# total_energy: 12\n"
       "# record_full_hits: 4\n"
-      "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n"
-      "2-3,5,41.6667,41.6667,200,7.07,\n"
-      "3-4,3,25.0000,66.6667,300,5.77,20.00\n"
-      "1-2,1,8.3333,75.0000,100,10.00,\n"
-      "other (not recorded),3,25.0000,100.0000,30,,\n";
+      "Raypath,Energy,Cumulative %,Rays,+/-\n"
+      "2-3,41.6667,41.6667,200,7.07\n"
+      "3-4,25.0000,66.6667,300,5.77 (-20.00)\n"
+      "1-2,8.3333,75.0000,100,10.00\n"
+      "other (not recorded),25.0000,100.0000,30,-\n";
   EXPECT_EQ(csv, want);
 }
 
@@ -258,9 +258,9 @@ TEST(AnalysisPanelLogic, ExportCsvOfAConeResultCarriesTheConeLinesAndHidesRowsOu
       "# total_rays: 1080\n"
       "# total_energy: 10\n"
       "# record_full_hits: 0\n"
-      "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n"
-      "1-2,2,20.0000,20.0000,100,10.00,\n"
-      "other (not recorded),8,80.0000,100.0000,80,,\n";
+      "Raypath,Energy,Cumulative %,Rays,+/-\n"
+      "1-2,20.0000,20.0000,100,10.00\n"
+      "other (not recorded),80.0000,100.0000,80,-\n";
   EXPECT_EQ(csv, want);
 }
 
@@ -271,7 +271,7 @@ TEST(AnalysisPanelLogic, ExportCsvWithNoResultIsHeadAndColumnsOnly) {
       "# Lumice raypath analysis\n"
       "# exported_at: t\n"
       "# region: none (no result)\n"
-      "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n";
+      "Raypath,Energy,Cumulative %,Rays,+/-\n";
   EXPECT_EQ(csv, want);
 }
 

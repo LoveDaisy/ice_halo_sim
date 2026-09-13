@@ -850,11 +850,12 @@ std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view expo
   } else {
     out += "# region: none (no result)\n";
   }
-  // "Energy" is the row's share of total_energy as the table shows it; "Energy raw" is the sum of
-  // Y * weight it is a share of. "+/-" is the count's relative statistical error, 1/sqrt(Rays), as
-  // a percentage; "Takeover" is the share of the row that may belong to another raypath when the
-  // record was full (the table's parenthesised second figure), empty when none.
-  out += "Raypath,Energy raw,Energy %,Cumulative %,Rays,+/- %,Takeover %\n";
+  // Five columns, matching RenderResultList's header one for one: the file's schema is a single
+  // authoritative definition, not a superset the table happens to be a projection of. "Energy" and
+  // "+/-" are the same percentages the table cell shows, not the underlying raw doubles; "+/-"
+  // embeds the takeover figure in parentheses exactly as the table cell does, so a row that took
+  // over an evicted slot still carries that information in its one cell.
+  out += "Raypath,Energy,Cumulative %,Rays,+/-\n";
   if (payload == nullptr) {
     return out;
   }
@@ -868,22 +869,20 @@ std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view expo
     }
     const double rel = e.count > 0 ? 1.0 / std::sqrt(static_cast<double>(e.count)) : 1.0;
     out += EscapeCsvField(e.display);
-    out += ',' + Energy(energy);
     out += ',' + Pct(total > 0.0 ? energy / total * 100.0 : 0.0);
     out += ',' + Pct(view.display_cumulative_pct[row]);
     out += ',' + std::to_string(static_cast<std::uint64_t>(e.count));
     out += ',' + Fmt("%.2f", rel * 100.0);
-    out += ',';
     if (e.error_bound > 0.0 && e.energy > 0.0) {
-      out += Fmt("%.2f", e.error_bound / e.energy * 100.0);
+      out += " (-" + Fmt("%.2f", e.error_bound / e.energy * 100.0) + ")";
     }
     out += '\n';
   }
   if (payload->other_count > 0) {
     const double other_pct = AnalysisOtherPct(state);
     const double cum = (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct;
-    out += std::string(kAnalysisOtherRowLabel) + ',' + Energy(payload->other_energy) + ',' + Pct(other_pct) + ',' +
-           Pct(cum) + ',' + std::to_string(static_cast<std::uint64_t>(payload->other_count)) + ",,\n";
+    out += std::string(kAnalysisOtherRowLabel) + ',' + Pct(other_pct) + ',' + Pct(cum) + ',' +
+           std::to_string(static_cast<std::uint64_t>(payload->other_count)) + ",-\n";
   }
   return out;
 }
@@ -1261,9 +1260,15 @@ void RenderResultList(GuiState& state) {
 // this is its only consumer, and the CSV builder takes the string so a test never needs a clock.
 std::string LocalTimeNow() {
   const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm tm{};
+#if defined(_WIN32)
+  const bool ok = localtime_s(&tm, &now) == 0;
+#else
+  const bool ok = localtime_r(&now, &tm) != nullptr;
+#endif
   char buf[32] = { 0 };
-  if (const std::tm* tm = std::localtime(&now)) {
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+  if (ok) {
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
   }
   return buf;
 }
