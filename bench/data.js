@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789284493617,
+  "lastUpdate": 1789284496015,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5c2b1a9cd1daae6d11f8b670faca311a48723059",
-          "message": "Merge pull request #262 from LoveDaisy/fix/gui-blocked-production-defects\n\nfix(gui): four defects around blank filter rows, slider drags and failed loads",
-          "timestamp": "2026-08-11T11:22:23+08:00",
-          "tree_id": "86c4753b809868150c88ccfedc5bd8d90ea97394",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c2b1a9cd1daae6d11f8b670faca311a48723059"
-        },
-        "date": 1786419212572,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 82.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.8,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 98.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "1a021d0025f312751971b24b6417dc1662c14555",
           "message": "Merge pull request #263 from LoveDaisy/chore/doc-stale-state-claims\n\nMake the docs and comments say what the code actually does now",
           "timestamp": "2026-08-11T12:09:28+08:00",
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "90d23cafd492e0f65663df5a681c439b0fa09f35",
+          "message": "Merge pull request #360 from LoveDaisy/feat/analysis-standing-cpu-pool\n\nfeat(server): standing CPU analysis pool on the GPU route, woken by session kind",
+          "timestamp": "2026-09-13T15:15:21+08:00",
+          "tree_id": "0e81a696990d2128a156faf657717d6b2838d130",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/90d23cafd492e0f65663df5a681c439b0fa09f35"
+        },
+        "date": 1789284495186,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 63.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.7,
             "unit": "%"
           }
         ]
