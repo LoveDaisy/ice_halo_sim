@@ -661,7 +661,8 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       OpenWindow(ctx);
       ctx->SetRef(kWindowRef);
       IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
-      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, gui::g_state.analysis_run_in_progress));
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, gui::g_state.analysis_run_in_progress,
+                                      gui::g_state.run_intent));
       // A click on it does nothing: no intent, no run.
       ctx->ItemClick(kAnalyzeButton);
       ctx->Yield(2);
@@ -1422,11 +1423,13 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // A document that never had a picture (kNone / kIdle, no preview): Analyze is enabled, the
-  // panel says there is no picture, the list fills from the configured scene, and nothing was
-  // rendered by it — then a Run from the top bar renders as it always did, and the notice goes.
+  // A document that never had a picture (kNone / kIdle, no preview): Analyze and the In frame /
+  // Point radios are all disabled, the panel says there is no picture, and a click on Analyze
+  // starts nothing. Then a Run from the top bar renders as it always did, the notice goes, the
+  // three come alive, and an edit afterwards (kModified) leaves them alive — the picture need
+  // only have existed, not match.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_never_run_document_analyses_then_runs");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_never_run_document_waits_for_its_first_run");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedServerGuard guard;
       ResetTestState();
@@ -1445,27 +1448,97 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       const char* notice = gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state);
       IM_CHECK(notice != nullptr);
       IM_CHECK(std::strstr(notice, "No rendered image") != nullptr);
+      // A server and an idle backend: the picture is the only denial left.
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, false, gui::g_state.run_intent));
 
       OpenWindow(ctx);
-      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
-      bool saw_simulating = false;
-      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, &saw_simulating));
-      IM_CHECK(!saw_simulating);
-      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kIdle);
-      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
-      IM_CHECK_STR_EQ(TopChainDisplay().c_str(), "3-5");
-      IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
-      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) != nullptr);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("Point")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Whole sky")));
+      // A click on the disabled button does nothing: no intent, no run.
+      ctx->ItemClick(kAnalyzeButton);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.started);
+      IM_CHECK(!gui::g_state.analysis_run_in_progress);
+      ctx->SetRef("");
 
-      // The Run after it, from the top bar: it renders, and the notice is gone.
+      // The first Run, from the top bar: it renders, and the notice is gone.
+      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
       IM_CHECK(!IsDisabled(ctx->ItemInfo("##TopBar/" ICON_FA_PLAY " Run")));
       ctx->ItemClick("##TopBar/" ICON_FA_PLAY " Run");
       IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kSimulating; }, 10));
       IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 60));
       IM_CHECK(DriveUntil(ctx, [uploads_before] { return gui::g_state.texture_upload_count > uploads_before; }, 10));
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunCompleted);
       IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) == nullptr);
-      // The analysis list is still on show: a render does not take it away.
-      IM_CHECK(gui::g_state.analysis_result.payload != nullptr);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Point")));
+      ctx->SetRef("");
+
+      // An edit after the run: the picture is of the previous configuration, and that is a
+      // notice, not a refusal — all three stay alive and the analysis completes.
+      gui::g_state.crystals[0].height = 0.1f;
+      gui::g_state.dirty = true;
+      IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kModified; }, 5));
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Point")));
+      ctx->SetRef("");
+      bool saw_simulating = false;
+      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, &saw_simulating));
+      IM_CHECK(!saw_simulating);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kModified);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+    };
+  }
+
+  // The regression the gate was changed for: a background photograph on a document that has never
+  // been rendered. The preview publishes its viewport for a photograph alone (g_preview_vp.active
+  // reads true — the positive control that the OLD gate, which read that flag, would have lit In
+  // frame and Pick), but a photograph is not a picture of the document: run_intent is still
+  // kNone, and In frame, Point and Analyze all stay disabled.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_background_photograph_alone_is_not_a_picture");
+    static bool s_bg_requested = false;
+    static bool s_bg_done = false;
+    // The upload is a GL call, so it runs on the render thread: GuiFunc, once the TestFunc asks.
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (s_bg_requested && !s_bg_done) {
+        const std::vector<unsigned char> grey(static_cast<size_t>(16 * 16 * 3), 128);
+        gui::g_preview.UploadBgTexture(grey.data(), 16, 16);
+        s_bg_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      s_bg_requested = false;
+      s_bg_done = false;
+      ResetTestState();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      gui::ResetServerConstructionTrackers();
+      IM_CHECK(gui::DeserializeFromJson(kHalo22Json, gui::g_state));
+      s_bg_requested = true;
+      IM_CHECK(DriveUntil(ctx, [] { return s_bg_done; }, 5));
+      gui::g_state.bg_show = true;
+      ctx->Yield(2);
+      IM_CHECK(gui::g_preview.HasBackground());
+      IM_CHECK(!gui::g_preview.HasTexture());
+      IM_CHECK(gui::g_preview_vp.active);  // the flag the old gate read: it IS up
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kNone);
+
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("Point")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      ctx->SetRef("");
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, false, gui::g_state.run_intent));
     };
   }
 

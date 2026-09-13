@@ -784,17 +784,27 @@ void RenderRoiControls(GuiState& state) {
   const int prev_mode = a.roi_mode;
   ImGui::RadioButton("Whole sky", &a.roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
   ImGui::SameLine();
-  // "In frame" is the frame on screen; the radio waits for a preview so the choice is made
-  // against a picture. A mode already selected still analyses without one — DoAnalyze sizes the
-  // frame at the document's own resolution then — so this gates the radio, not the button.
-  ImGui::BeginDisabled(!g_preview_vp.active);
+  // "In frame" and "Point" are choices made against a picture of the document, so both radios
+  // wait for the document to have shown one — the same predicate the Analyze button reads
+  // (CanStartAnalysis), so the three cannot disagree on what "no picture yet" means. Not the
+  // preview's own "texture bound" flag: a background photograph alone raises that too, and a
+  // photograph is not a picture of the document. A mode already selected still analyses without
+  // a live preview — DoAnalyze sizes the frame at the document's own resolution then — so this
+  // gates the radio, not the button.
+  const bool has_picture = HasEverShownPicture(state.run_intent);
+  ImGui::BeginDisabled(!has_picture);
   ImGui::RadioButton("In frame", &a.roi_mode, LUMICE_RAYPATH_ROI_IN_FRAME);
   ImGui::EndDisabled();
-  if (!g_preview_vp.active && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("Needs a preview on screen: 'in frame' means inside the picture as it is shown.");
+  if (!has_picture && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Needs a picture of this document: press Run once first.");
   }
   ImGui::SameLine();
+  ImGui::BeginDisabled(!has_picture);
   ImGui::RadioButton("Point", &a.roi_mode, LUMICE_RAYPATH_ROI_CONE);
+  ImGui::EndDisabled();
+  if (!has_picture && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Needs a picture of this document to pick a point on: press Run once first.");
+  }
   if (a.roi_mode != LUMICE_RAYPATH_ROI_CONE && prev_mode == LUMICE_RAYPATH_ROI_CONE) {
     a.pick_armed = false;  // never leave a click armed for a mode that does not read it
     a.cone_marker_dragging = false;
@@ -810,7 +820,9 @@ void RenderRoiControls(GuiState& state) {
       EnsureDefaultConeCenter(state, PreviewAnnotationView(state, g_preview_vp.vp_w, g_preview_vp.vp_h),
                               g_preview_vp.vp_w, g_preview_vp.vp_h);
     }
-    const bool can_pick = g_preview_vp.active;
+    // Same predicate as the radio above, not the viewport flag: a background photograph must not
+    // arm a pick on a document that has never been rendered.
+    const bool can_pick = has_picture;
     ImGui::BeginDisabled(!can_pick);
     // Read once: the button below flips pick_armed, and the pop must match the push made
     // for the value the frame STARTED with, not the one the click just wrote.
@@ -830,7 +842,7 @@ void RenderRoiControls(GuiState& state) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip(can_pick ? "Then click a point on the preview. Esc cancels.\n"
                                    "Or drag the marker on the preview directly." :
-                                   "Needs a preview on screen to click on.");
+                                   "Needs a picture of this document to click on: press Run once first.");
     }
     ImGui::SameLine();
     if (a.cone_center_valid) {
@@ -901,7 +913,9 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
   // No frame gate for IN_FRAME: the frame is the document's own view at the preview's canvas
   // when there is one and at the document's own resolution otherwise (DoAnalyze), so the mode
   // always names a frame — a mode left selected before the preview went away still analyses.
-  const bool can_start = CanStartAnalysis(server != nullptr, state.sim_state, in_progress) && !needs_centre;
+  // The one picture condition is CanStartAnalysis's own: the document has shown one at least once.
+  const bool can_start =
+      CanStartAnalysis(server != nullptr, state.sim_state, in_progress, state.run_intent) && !needs_centre;
 
   if (in_progress) {
     PushDestructiveStyle();
@@ -930,6 +944,8 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
         why = "No simulation server.";
       } else if (IsBusy(state.sim_state)) {
         why = "A render is in progress. Wait for it, or stop it.";
+      } else if (!HasEverShownPicture(state.run_intent)) {
+        why = "No rendered image for this document yet. Press Run once first.";
       } else if (needs_centre) {
         why = "Pick the point on the preview first.";
       }
