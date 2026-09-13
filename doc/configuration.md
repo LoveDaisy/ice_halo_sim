@@ -488,9 +488,12 @@ The scene configuration defines the simulation scene, including the light source
 > far; a change to crystals, filters, proportions, the light source or the layer structure
 > starts it over. The log reports the running shares at each doubling of the dealt count
 > (`RayAllocationOnline: layer L entry E: p=… q=… rays=…`) and once more, as
-> `RayAllocationOnline(final)`, when the run stops. It is also a *render*-commit feature only:
-> a raypath analysis session (`doc/raypath-analysis-panel.md` §10) never measures it and
-> always deals by `proportion`. A misspelled value is not an error — the loader warns
+> `RayAllocationOnline(final)`, when the run stops. The same field governs both scene
+> publishers: a raypath analysis session (`doc/raypath-analysis-panel.md` §10) reads it too
+> and, when it is `adaptive`, binds the same online tally — with one difference in what it
+> starts from: an analysis starts cold on every submission and never carries a tally forward,
+> where a render commit keeps its tally across the unchanged-input recommits described above.
+> A misspelled value is not an error — the loader warns
 > (`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`) and
 > behaves as if the key were absent, which is the safe default but also the noisy image the
 > author was trying to leave, so check the log. In the GUI the mode is the `Adaptive ray

@@ -444,9 +444,10 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 > 依赖内容的提交（视角、镜头、`ray_num`……）会保留已累计的统计，而改晶体、filter、比例、光源或
 > 层结构则从头开始。日志在分到的光线数每翻一倍时报告当前份额
 > （`RayAllocationOnline: layer L entry E: p=… q=… rays=…`），run 停止时再以
-> `RayAllocationOnline(final)` 报告一次。它也只是*渲染*提交才有的功能：光路分析会话
-> （`doc/raypath-analysis-panel.md` §10）从不做这份统计，始终按 `proportion` 分配。
-> 拼错的取值不是错误——加载器会告警
+> `RayAllocationOnline(final)` 报告一次。这一个字段同时管两条提交路：光路分析会话
+> （`doc/raypath-analysis-panel.md` §10）也读它，取 `adaptive` 时绑定同一份在线统计——只在起点上
+> 有一处不同：分析每次提交都冷启动、从不把统计带到下一次，而渲染提交会在上面所说的「输入未变」
+> 重提交之间保留统计。拼错的取值不是错误——加载器会告警
 > （`scene.ray_allocation: unrecognized value "..." ignored; falling back to "proportional"`）
 > 并当作该键不存在处理；这是安全的默认，但也正是作者想要摆脱的那张噪声图，所以要看日志。
 > 在 GUI 里该模式就是 Settings 里的 `Adaptive ray allocation` 设置，保存进 `.lmc`，也写进每一份

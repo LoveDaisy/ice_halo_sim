@@ -564,11 +564,16 @@ kSymP|kSymB|kSymD`），当时判定为「仍然开放的唯一产品级决策�
 B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整记录见 §7 末尾）、
 锥形分环参数（见 §3.4）、反投影落点（见 §6）。以下是**明确未做、留作后续升级**的项，各附触发条件：
 
-- **GPU 直方图 kernel**（对应 §2 第 1 条的「GPU 不覆盖」）：触发条件——用户反馈 CPU-only 的
-  分析等待时间在大 `ray_num` / 多晶体场景下不可接受，且 Metal/CUDA 补上 per-ray 记录回传
-  （当前 `ReadbackExitRays` 直接返回空）的工程代价被证明值得投入。⚠️ GPU 偏好 server 上的分析
-  在 2026-09-13 之前是单核的（见 §2 第 1 条「多 worker」段），那个时代测得的等待时间数字不构成
-  触发证据，须以常备分析池落地后的实测数字重判。
+- **GPU 直方图 kernel**（对应 §2 第 1 条的「GPU 不覆盖」）：触发条件——**在分析会话已绑在线
+  光线分配（§10 第 4 点）之后**，仍有场景在 CPU 池上的等待时间超过可接受范围，且 Metal/CUDA
+  补上 per-ray 记录回传（当前 `ReadbackExitRays` 直接返回空）的工程代价被证明值得投入。实测
+  （2026-09-13，单 worker、CPU 池）：常规场景（halo22 约 3.1M rays/s、pc 双层约 1.2M rays/s）
+  1 s 内所有行到 1% 相对不确定度；挑战场景（三晶体，proportion 100/100/0.2，各挂一条
+  `filter_in` 光路）按 `proportion` 分配时稀有行到 5% / 2% / 1% 分别需要约 3 s / 20 s / 78 s，
+  绑在线分配后 <1 s；GPU trace-only 的理论上界约 14×（78 s → ~6 s，是投影不是实测）——即绑分配
+  这一步买到的（112× 更少的光线）已经大于 GPU kernel 能买到的，GPU kernel 在它之后才有触发
+  资格。⚠️ GPU 偏好 server 上的分析在 2026-09-13 之前是单核的（见 §2 第 1 条「多 worker」段），
+  那个时代测得的等待时间数字不构成触发证据，须以常备分析池落地后的实测数字重判。
 - **密度排序（能量 / 覆盖立体角）**（对应 §2 第 4 条）：触发条件——用户明确反馈「总能量降序」
   把弥散但总量大的链排到了他们认为不重要的位置靠前。需要给每个链 key 配一张粗天球栅格才能算出
   覆盖立体角，存储与实现复杂度上升一个量级，不是加一个排序 comparator 就能做到。
@@ -599,12 +604,14 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
 （`ResolveLayerRayAllocation` / `ComputeAdaptiveRayAllocationWeights` / `RayAllocationOnline`，
 `src/core/simulator.hpp`）。它与本面板的交互面有四点：
 
-1. **计数列语义**：GUI「Rays」列与 `LUMICE_RaypathHistogramEntry::count` 是**样本数**（命中
-   次数），不是能量。`RaypathHistogramConsumer` 的能量累加 Σ(Y·w)（见 §3.3）对权重校正无偏——w
-   已经是校正后的光线权重——但同一条链的「样本数」会随分配策略系统性变化：当
-   `ray_allocation: "adaptive"` 让一条链所在的晶体分配到更少的光线，即使它汇报的能量占比不变，
-   样本数也会更少，GUI「+/-」列（相对统计噪声 = 1/√count）会随之显著上升；反之被分到更多光线的
-   晶体，其链的「Rays」上升、「+/-」下降。这是分配策略变化的正常影响，不是回归。
+1. **计数语义**：`LUMICE_RaypathHistogramEntry::count` 是**样本数**（命中次数），不是能量。
+   `RaypathHistogramConsumer` 的能量累加 Σ(Y·w)（见 §3.3）对权重校正无偏——w 已经是校正后的
+   光线权重——但同一条链的「样本数」会随分配策略系统性变化：当 `ray_allocation: "adaptive"`
+   让一条链所在的晶体分配到更少的光线，即使它汇报的能量占比不变，样本数也会更少，GUI「+/-」列
+   （该行 Energy 份额的相对统计噪声，= 1/√count）会随之显著上升；反之被分到更多光线的晶体，其链
+   的 count 上升、「+/-」下降。这是分配策略变化的正常影响，不是回归。正因为 `adaptive` 下 count
+   与 `proportion`、与 Energy 都没有固定关系，GUI 表格与 CSV **不展示** count 列（2026-09-13
+   owner 裁决：删列而不是解释它）；C API 仍交付它，它是「+/-」的输入。
 2. **无早停可依赖**：§2 第 3 条与 §3.4 已记录，v4.34 起三档 ROI 都不再有「到达某计数即停」的
    机制——分配策略的任何变化都不会影响分析「什么时候停」，只影响停下之后各行的相对样本数与噪声。
 3. **与有界记录（§3.6）的交互**：分配策略若让原本命中率极低的链获得系统性更多样本，这些链会
@@ -612,21 +619,31 @@ B——2026-09-12 更新把 symmetry 搬到读取侧而结构性消失，完整�
    采样份额被压得更低，它名下的链更可能连一次命中都拿不到，从而根本不出现在 finest 记录里——
    这与「记录满被截断进 `other`」是两种不同的缺失（前者是 `other` 桶，后者是完全不可见，两者
    都不会体现在 `error_bound` 里）。
-4. **分析会话独立提交（§2 第 3 条 v4.36 更新）——但 `adaptive` 在这条路径上不生效，这是有意的
-   设计边界**：分析提交的是**当前文档自己的 scene**，与渲染提交共用同一个编码器
+4. **分析会话独立提交（§2 第 3 条 v4.36 更新）——`adaptive` 现在在这条路径上同样生效
+   （2026-09-13）**：分析提交的是**当前文档自己的 scene**，与渲染提交共用同一个编码器
    （`BuildCommitSceneOrWarn`），编码器层面没有分叉：GUI 文档里的 `sim.ray_allocation`
    （Settings 里的 `Adaptive ray allocation` 设置，经 `LUMICE_SceneSetRayAllocation` 写入）
-   两条路径都会带上它，经 C API 直接递 JSON scene 的调用者也一样——但分析会话仍然不消费它。分叉在下一层：`q` 从来不写进
-   `SceneConfig`，它由一个 per-scene 的 `RayAllocationOnline` 对象（累计统计 + 每批所用的不可变
-   快照）交付给 worker，而这个对象只在 `CommitConfig`（渲染提交）里绑定到 `SimBatch`
-   （`src/server/server.cpp`，`ServerImpl::active_ray_alloc_`）；`StartRaypathAnalysis` **不**绑定
-   它。于是分析会话的每一批都因为没有快照而被 `ResolveLayerRayAllocation` 判为按 `p` 分配，校正
-   因子恒为 1.0——与 `"proportional"` 逐位等价，并且这一回退**不打日志**。理由（`server.cpp`
-   该处注释原文的意思）：分析会话不产出图像，而降低图像方差是 `adaptive` 存在的唯一理由，对分析
-   会话不成立。因此，上面第 1 点与第 3 点描述的样本数迁移只在**渲染**会话里发生；同一份
-   `"adaptive"` 文档的分析面板看到的仍然是按 `proportion` 分配下的计数，与渲染预览的噪声形态可能
-   不一致——这不是分叉缺陷，而是两条提交路径对同一字段的既定分工。若将来要让分析会话也按 `q`
-   分配，改的是 `StartRaypathAnalysis` 是否绑定 `RayAllocationOnline`，而不是编码器。
+   两条路径都会带上它，经 C API 直接递 JSON scene 的调用者也一样。消费侧也不再分叉：`q` 从来
+   不写进 `SceneConfig`，它由一个 per-scene 的 `RayAllocationOnline` 对象（累计统计 + 每批所用
+   的不可变快照）交付给 worker，而这个对象现在由**两个** scene publisher 各自绑定到同一个
+   `ServerImpl::active_ray_alloc_`（`src/server/server.cpp`）：`CommitConfig`（渲染提交）与
+   `StartRaypathAnalysis`（分析提交）读同一个 `scene.ray_allocation_` 字段，`adaptive` 绑、
+   `proportional` 不绑。**同一个开关同时决定渲染与分析两条路的光线分配**（owner 裁决第 2 点）。
+   两者只在「起点」上不同：渲染提交在 `RayAllocationInputsChanged` 为假的重提交之间保留统计
+   （GUI 滑杆 70 ms 一次 recommit 的去抖），分析提交**每次冷启动**（一次 Analyze 是一次主动
+   点击，没有下一次可交接），并打一行 INFO（`StartRaypathAnalysis: ray-allocation online tally
+   started (cold start: ...)`）；`proportional` 下分析行为与之前逐位一致。
+   为什么改：as-built 不绑的理由（「分析不产出图像，降低图像方差是 adaptive 存在的唯一理由」）
+   被 2026-09-13 的实测推翻——分析表的每一行同样受采样份额支配：三晶体挑战场景（proportion
+   100/100/0.2、各一条 `filter_in` 光路）里稀有行的 share 噪声在 1M 光线下 0.206，绑分配后
+   0.0195（10.5×）；到 5% 相对不确定度所需光线 17M → 152k（112×）；5M×12 复核各行均值无偏
+   （z<1）；pc 双层对照 q 收敛到 ≈p，零回归。因此上面第 1 点与第 3 点描述的样本数迁移现在在
+   **两种**会话里都发生，同一份 `"adaptive"` 文档的分析面板与渲染预览看到的是同一种分配。
+   回归闸：`test/e2e-correctness/test_raypath_analysis_capi.py`
+   `test_adaptive_allocation_cuts_rare_row_noise_without_moving_the_means`（两臂各 10 session，
+   稀有行 share 相对标准差 adaptive ≤ proportional/5，各行两臂均值差 ≤ 3σ）；绑定本身由
+   `test/unit-correctness/server/test_ray_allocation_online_analysis.cpp` 按日志行钉住（每次冷
+   启动、绝不 carry）。
 
 ### 10.1 固定 seed 下分析结果的可复现性（2026-09-12，`Simulator::Run()` 入口重播 `rng_`）
 
