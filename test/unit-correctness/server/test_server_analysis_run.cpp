@@ -29,12 +29,22 @@
 //        holds for every session of one server, not only its first — a later analysis
 //        (after a render + Stop(), or after another analysis) reproduces the first row
 //        for row.
+//   FourWorkersMergeIntoTheSameHistogramAsOne: an N-worker analysis is the same
+//        histogram as a 1-worker one, up to the scene's measured noise — the worker
+//        count is a merge-correctness axis of its own now that a server sizes it.
+//   ServerAnalysisRunGpuPool.*: the GPU-preferred server's standing CPU analysis pool —
+//        that it runs (a rate no single worker reaches), that a fixed seed collapses it,
+//        that render and analysis alternate without deadlock or leaked results, and
+//        that the dtor returns with an analysis in flight.
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -42,6 +52,7 @@
 
 #include "core/math.hpp"
 #include "server/server.hpp"
+#include "util/cpu_info.hpp"
 
 namespace lumice {
 namespace {
@@ -628,6 +639,356 @@ TEST(ServerAnalysisRunGpu, AnalysisForcesCpuUnderGpuPreference) {
   server.Stop();
 #else
   GTEST_SKIP() << "no GPU backend in this build; the CPU-route half is covered by the fixture above";
+#endif
+}
+
+
+// ---------------------------------------------------------------------------
+// Multi-worker analysis correctness (the standing-pool change made the worker count of an
+// analysis a first-class property, so "N workers merge into the same histogram as one"
+// needs a proposition of its own; until now no test compared an N>1 analysis to anything).
+// Same scene, same ROI, same budget on a 1-worker and a 4-worker CPU-route server. The two
+// runs are different random draws, so the comparison is statistical wherever it can be and
+// exact only where the mechanism makes it so:
+//   exact   — sim_ray_num equals the budget on both (the batch schedule sums to it);
+//             no two rows carry the same chain (ChainIdMerger keyed the four producers'
+//             tables into one id space: a merge failure shows as one chain split across
+//             per-producer rows, which the 1-worker run cannot produce).
+//   bounded — every major chain (>= kMajorFrac of the energy) of either run is a row of
+//             the other with at least half that share (hysteresis, so a chain sitting on
+//             the threshold cannot flip the verdict), and its energy share agrees within
+//             kShareTol; the total counted rays and the total energy agree within a
+//             tolerance set by the noise measured on this scene, not chosen.
+// The tolerances come from measured noise, 5 + 5 runs at 200k rays on this scene
+// (2026-09-13): the total energy spreads 4.89M-5.57M (about +-7% around a mean that is
+// the same for N=1 and N=4, 5.16M vs 5.20M — the legacy grain draws one wavelength per
+// 128-ray batch, so 1563 draws of Y(wl) set that spread), the eight ~3% chains' shares
+// move 0.0296-0.0329 (up to ~11% relative between two runs), the ~2% chains 0.0196-0.0212,
+// and the counted-ray total 962949-964260 (0.14%). A merge defect is not a few percent:
+// a chain split across workers loses 75% of its share, a chain double-counted doubles it.
+// ---------------------------------------------------------------------------
+struct ChainShare {
+  std::string display;
+  double frac;
+  size_t count;
+};
+
+std::vector<ChainShare> SharesOf(const AnalysisFingerprint& fp, double total) {
+  std::vector<ChainShare> out;
+  out.reserve(fp.rows.size());
+  for (const auto& row : fp.rows) {
+    out.push_back({ std::get<0>(row), std::get<1>(row) / total, std::get<2>(row) });
+  }
+  return out;
+}
+
+const ChainShare* FindShare(const std::vector<ChainShare>& shares, const std::string& display) {
+  for (const auto& s : shares) {
+    if (s.display == display) {
+      return &s;
+    }
+  }
+  return nullptr;
+}
+
+TEST(ServerAnalysisRunMultiWorker, FourWorkersMergeIntoTheSameHistogramAsOne) {
+  constexpr size_t kRays = 200000;
+  constexpr double kMajorFrac = 0.015;  // a chain worth >= 1.5% of the energy is "major"
+  constexpr double kShareTol = 0.25;    // relative, on a major chain's energy share
+  constexpr double kTotalTol = 0.25;    // relative, on the total energy (4% noise per run)
+  constexpr double kCountTol = 0.02;    // relative, on the counted-ray total (0.2% noise)
+  const nlohmann::json scene = Halo22Config(kRays);
+
+  AnalysisFingerprint one;
+  AnalysisFingerprint four;
+  {
+    Server server(1, 0, BackendKind::kCpu);
+    one = RunAnalysisAndFingerprint(server, scene);
+    server.Stop();
+  }
+  {
+    Server server(4, 0, BackendKind::kCpu);
+    four = RunAnalysisAndFingerprint(server, scene);
+    server.Stop();
+  }
+  ASSERT_FALSE(one.rows.empty());
+  ASSERT_FALSE(four.rows.empty());
+
+  // Exact: the budget is traced in full on both, whatever the worker count.
+  EXPECT_EQ(one.sim_ray_num, kRays);
+  EXPECT_EQ(four.sim_ray_num, kRays);
+
+  // Exact: one row per chain. Keyed on the display text, which is the chain's own
+  // formatting (a per-producer split would show as the same text on several rows).
+  {
+    std::set<std::string> seen;
+    for (const auto& row : four.rows) {
+      EXPECT_TRUE(seen.insert(std::get<0>(row)).second) << "duplicate chain row: " << std::get<0>(row);
+    }
+  }
+
+  const double total_one = TotalEnergy(one);
+  const double total_four = TotalEnergy(four);
+  ASSERT_GT(total_one, 0.0);
+  ASSERT_GT(total_four, 0.0);
+  EXPECT_NEAR(total_four / total_one, 1.0, kTotalTol)
+      << "total energy: 1 worker " << total_one << ", 4 workers " << total_four;
+  size_t count_one = one.other_count;
+  size_t count_four = four.other_count;
+  for (const auto& row : one.rows) {
+    count_one += std::get<2>(row);
+  }
+  for (const auto& row : four.rows) {
+    count_four += std::get<2>(row);
+  }
+  EXPECT_NEAR(static_cast<double>(count_four) / static_cast<double>(count_one), 1.0, kCountTol)
+      << "counted rays: 1 worker " << count_one << ", 4 workers " << count_four;
+
+  // Bounded: the major chains are the same set with the same shares, both directions.
+  const std::vector<ChainShare> shares_one = SharesOf(one, total_one);
+  const std::vector<ChainShare> shares_four = SharesOf(four, total_four);
+  size_t major_checked = 0;
+  const auto check_direction = [&](const std::vector<ChainShare>& a, const std::vector<ChainShare>& b,
+                                   const char* a_name, const char* b_name) {
+    for (const auto& sa : a) {
+      if (sa.frac < kMajorFrac) {
+        continue;  // rows are energy-descending, but the tail is what we skip, so keep scanning cheap
+      }
+      const ChainShare* sb = FindShare(b, sa.display);
+      if (sb == nullptr) {
+        ADD_FAILURE() << "chain " << sa.display << " holds " << sa.frac << " of the energy on " << a_name
+                      << " and has no row on " << b_name;
+        continue;
+      }
+      EXPECT_GE(sb->frac, sa.frac * 0.5) << "chain " << sa.display << ": " << a_name << " " << sa.frac << ", " << b_name
+                                         << " " << sb->frac;
+      EXPECT_NEAR(sb->frac / sa.frac, 1.0, kShareTol) << "chain " << sa.display << ": share " << sa.frac << " ("
+                                                      << a_name << ") vs " << sb->frac << " (" << b_name << ")";
+      major_checked++;
+    }
+  };
+  check_direction(shares_one, shares_four, "1 worker", "4 workers");
+  check_direction(shares_four, shares_one, "4 workers", "1 worker");
+  // The 22-degree scene has eight ~3% chains and a dozen ~2% ones; a scene that yielded
+  // no major chain at all would make the checks above vacuous.
+  EXPECT_GE(major_checked, 8u) << "too few major chains to compare: " << major_checked;
+}
+
+// ---------------------------------------------------------------------------
+// The standing analysis pool of a GPU-preferred server — four propositions, all
+// GPU-gated the way AnalysisForcesCpuUnderGpuPreference is (the pool only exists on the
+// GPU route, and the route only resolves where a GPU backend does):
+//   PoolIsUsedUnderGpuPreference — existence: with num_workers=4 the analysis advances
+//        its ray count at least twice as fast as with num_workers=1 over the same window,
+//        which a single engine Simulator with CPU forced (the shape before the pool) could
+//        not do; while it runs the lifecycle reads kRunning (GetStatus polls the pool, not
+//        the idle engine); and the render after it is GPU again (the reset reached the
+//        group that carried the analysis properties).
+//   FixedSeedCollapsesThePoolToOneWorker — the deterministic contract: num_workers=4 with
+//        a seed still reproduces bit for bit across sessions, and equals the CPU-route
+//        server's own fixed-seed analysis of the same scene (both trace on one worker
+//        seeded sim_seed), so the backend toggle does not change a seeded analysis.
+//   AlternatingRenderAndAnalysisNeitherDeadlocksNorLeaks — the wake-up selection under the
+//        two switch shapes that matter, five times over, every wait bounded: a render
+//        submitted over a running analysis is refused and the analysis keeps running; a
+//        render Stop()ped and an analysis started at once reaches its first rays; and no
+//        frame of either session kind carries the other kind's result.
+//   DestructionDuringAnalysisTerminates — the dormant engine thread and the busy pool
+//        threads both leave on kTerminating: the wait predicate checks termination ahead
+//        of the group filter, and a mistake there would hang the dtor's join.
+// ---------------------------------------------------------------------------
+#if defined(__APPLE__) || defined(LUMICE_CUDA_ENABLED)
+#if defined(__APPLE__)
+constexpr BackendKind kGpuBackend = BackendKind::kMetal;
+#else
+constexpr BackendKind kGpuBackend = BackendKind::kCuda;
+#endif
+
+bool GpuRouteAvailable() {
+  Logger probe{ "ServerAnalysisRunGpuPool" };
+  return ResolveGpuRoute(kGpuBackend, probe);
+}
+
+// Rays traced by an unbounded analysis over `window` after its first rays arrive.
+size_t AnalysisRaysOverWindow(Server& server, const nlohmann::json& scene, std::chrono::milliseconds window) {
+  EXPECT_FALSE(server.StartRaypathAnalysis(scene, FullSkyRequest()));
+  EXPECT_TRUE(WaitForFirstRays(server, 10000));
+  EXPECT_EQ(server.GetSimLifecycle(), SimLifecycle::kRunning) << "an analysis in flight must read as running";
+  const size_t before = server.GetLiveSimRayCount();
+  std::this_thread::sleep_for(window);
+  const size_t after = server.GetLiveSimRayCount();
+  server.Stop();
+  return after - before;
+}
+#endif
+
+TEST(ServerAnalysisRunGpuPool, PoolIsUsedUnderGpuPreference) {
+#if defined(__APPLE__) || defined(LUMICE_CUDA_ENABLED)
+  if (!GpuRouteAvailable()) {
+    GTEST_SKIP() << "GPU route unavailable on this machine (or overridden by LUMICE_TRACE_BACKEND)";
+  }
+  if (PhysicalCoreCount() < 4) {
+    GTEST_SKIP() << "fewer than 4 physical cores; a 4-worker pool cannot show a rate gain here";
+  }
+  const nlohmann::json scene = Halo22Config("infinite");
+  constexpr auto kWindow = std::chrono::milliseconds(1500);
+  // One worker first, then four, on separate servers: the pool is a construction-time
+  // property. An existence threshold, not a performance figure: four pool workers measured
+  // 3.4x, 4.3x and 5.0x one over this window on a 12-core development machine (2026-09-13);
+  // 2x is what separates "the pool ran" from "one worker ran" with room for a loaded box.
+  size_t rays_one = 0;
+  {
+    Server server(1, 0, kGpuBackend);
+    rays_one = AnalysisRaysOverWindow(server, scene, kWindow);
+  }
+  ASSERT_GT(rays_one, 0u);
+  Server server(4, 0, kGpuBackend);
+  const size_t rays_four = AnalysisRaysOverWindow(server, scene, kWindow);
+  EXPECT_GE(rays_four, rays_one * 2) << "1 worker traced " << rays_one << " rays over the window, 4 workers "
+                                     << rays_four << ": the pool did not run";
+
+  // The withdrawal of the analysis properties reached the pool: the render after it is
+  // GPU, and its frame carries no histogram.
+  ASSERT_FALSE(server.CommitConfig(Halo22Config(20000)));
+  ASSERT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
+  EXPECT_EQ(server.GetActiveBackend(), kGpuBackend);
+  EXPECT_FALSE(server.BackendFellBack());
+  EXPECT_FALSE(server.AcquireResultFrame()->raypath_histogram_result_.has_value());
+  server.Stop();
+#else
+  GTEST_SKIP() << "no GPU backend in this build; there is no standing pool on the CPU route";
+#endif
+}
+
+TEST(ServerAnalysisRunGpuPool, FixedSeedCollapsesThePoolToOneWorker) {
+#if defined(__APPLE__) || defined(LUMICE_CUDA_ENABLED)
+  if (!GpuRouteAvailable()) {
+    GTEST_SKIP() << "GPU route unavailable on this machine (or overridden by LUMICE_TRACE_BACKEND)";
+  }
+  constexpr uint32_t kSeed = 1;
+  const nlohmann::json scene = Halo22Config(20000);
+  // num_workers=4 asks for a four-worker pool; the seed must win (one worker), or the
+  // sessions below diverge — the merge order of four producers is not deterministic.
+  Server server(4, kSeed, kGpuBackend);
+  const AnalysisFingerprint first = RunAnalysisAndFingerprint(server, scene);
+  ASSERT_FALSE(first.rows.empty());
+  ASSERT_EQ(first.sim_ray_num, 20000u);
+  ASSERT_FALSE(server.CommitConfig(scene));  // a GPU render in between, then Stop()
+  ASSERT_EQ(WaitForRunToEnd(server, 30000), SimLifecycle::kCompleted);
+  server.Stop();
+  const AnalysisFingerprint after_render = RunAnalysisAndFingerprint(server, scene);
+  const AnalysisFingerprint after_analysis = RunAnalysisAndFingerprint(server, scene);
+  EXPECT_TRUE(after_render == first) << "session 2 (after a GPU render + Stop) differs from session 1";
+  EXPECT_TRUE(after_analysis == first) << "session 3 (after an analysis) differs from session 1";
+  server.Stop();
+
+  // And the same as the CPU-route server's: the pool's one worker and the CPU route's one
+  // worker both hold sim_seed, so a seeded analysis does not depend on the backend toggle.
+  Server cpu_server(0, kSeed, BackendKind::kCpu);
+  const AnalysisFingerprint cpu = RunAnalysisAndFingerprint(cpu_server, scene);
+  EXPECT_TRUE(cpu == first) << "the GPU-preferred server's seeded analysis differs from the CPU-preferred server's";
+  cpu_server.Stop();
+#else
+  GTEST_SKIP() << "no GPU backend in this build";
+#endif
+}
+
+TEST(ServerAnalysisRunGpuPool, AlternatingRenderAndAnalysisNeitherDeadlocksNorLeaks) {
+#if defined(__APPLE__) || defined(LUMICE_CUDA_ENABLED)
+  if (!GpuRouteAvailable()) {
+    GTEST_SKIP() << "GPU route unavailable on this machine (or overridden by LUMICE_TRACE_BACKEND)";
+  }
+  const nlohmann::json unbounded = Halo22Config("infinite");
+  Server server(4, 0, kGpuBackend);
+  // One round, as a callable: every step's precondition is the step before it, so a
+  // fatal assert must end the round (it returns from this lambda) — and the rounds are
+  // not independent rows either, each starts from the Stop()ped state the last one left,
+  // so a failed round ends the loop below explicitly rather than driving four more rounds
+  // off a state that is not their precondition.
+  const auto run_round = [&](int round) {
+    SCOPED_TRACE("round " + std::to_string(round));
+    // Shape 1: a render submitted over a running analysis. Refused, and the analysis is
+    // untouched — still running, still counting.
+    ASSERT_FALSE(server.StartRaypathAnalysis(unbounded, FullSkyRequest()));
+    ASSERT_TRUE(WaitForFirstRays(server, 10000)) << "the analysis never reached its first rays";
+    ASSERT_EQ(server.GetSimLifecycle(), SimLifecycle::kRunning);
+    ASSERT_EQ(server.GetSessionKind(), SessionKind::kAnalysis);
+    EXPECT_TRUE(server.CommitConfig(unbounded)) << "a commit over a running analysis must be refused";
+    ASSERT_EQ(server.GetSessionKind(), SessionKind::kAnalysis);
+    const size_t before = server.GetLiveSimRayCount();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_GT(server.GetLiveSimRayCount(), before) << "the refused commit stalled the analysis";
+    EXPECT_EQ(server.GetActiveBackend(), BackendKind::kCpu);
+    {
+      auto frame = server.AcquireResultFrame();
+      EXPECT_TRUE(frame->raypath_histogram_result_.has_value());
+      EXPECT_TRUE(frame->render_results_.empty()) << "a render result inside an analysis session";
+    }
+    server.Stop();
+    ASSERT_NE(server.GetSimLifecycle(), SimLifecycle::kRunning) << "Stop() returned with the analysis running";
+
+    // Shape 2: a render, Stop()ped mid-flight, and an analysis started at once. The
+    // engine must let go and the pool must take over, with no batch of the render in
+    // the analysis's frame.
+    ASSERT_FALSE(server.CommitConfig(unbounded));
+    ASSERT_TRUE(WaitForFirstRays(server, 10000)) << "the render never reached its first rays";
+    ASSERT_EQ(server.GetSessionKind(), SessionKind::kRender);
+    EXPECT_EQ(server.GetActiveBackend(), kGpuBackend);
+    {
+      auto frame = server.AcquireResultFrame();
+      EXPECT_FALSE(frame->raypath_histogram_result_.has_value()) << "a histogram inside a render session";
+    }
+    server.Stop();
+    ASSERT_NE(server.GetSimLifecycle(), SimLifecycle::kRunning) << "Stop() returned with the render running";
+    ASSERT_FALSE(server.StartRaypathAnalysis(unbounded, FullSkyRequest()));
+    ASSERT_TRUE(WaitForFirstRays(server, 10000)) << "the analysis after a stopped render never started";
+    {
+      auto frame = server.AcquireResultFrame();
+      EXPECT_TRUE(frame->raypath_histogram_result_.has_value());
+      EXPECT_TRUE(frame->render_results_.empty()) << "the stopped render's result leaked into the analysis";
+    }
+    server.Stop();
+    ASSERT_NE(server.GetSimLifecycle(), SimLifecycle::kRunning);
+  };
+  for (int round = 0; round < 5; round++) {
+    run_round(round);
+    if (::testing::Test::HasFailure()) {
+      break;
+    }
+  }
+#else
+  GTEST_SKIP() << "no GPU backend in this build";
+#endif
+}
+
+TEST(ServerAnalysisRunGpuPool, DestructionDuringAnalysisTerminates) {
+#if defined(__APPLE__) || defined(LUMICE_CUDA_ENABLED)
+  if (!GpuRouteAvailable()) {
+    GTEST_SKIP() << "GPU route unavailable on this machine (or overridden by LUMICE_TRACE_BACKEND)";
+  }
+  auto server = std::make_unique<Server>(4, 0, kGpuBackend);
+  ASSERT_FALSE(server->StartRaypathAnalysis(Halo22Config("infinite"), FullSkyRequest()));
+  ASSERT_TRUE(WaitForFirstRays(*server, 10000));
+  // Destroy from another thread so a hang is a bounded failure here, not a silent one at
+  // the process's exit. A dtor that never returns leaves that thread blocked; the test
+  // reports it and the process-level timeout finishes the job.
+  std::atomic_bool destroyed{ false };
+  std::thread destroyer([&] {
+    server.reset();
+    destroyed.store(true);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (!destroyed.load() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_TRUE(destroyed.load()) << "~Server() did not return within 20 s with an analysis in flight";
+  if (destroyed.load()) {
+    destroyer.join();
+  } else {
+    destroyer.detach();
+  }
+#else
+  GTEST_SKIP() << "no GPU backend in this build";
 #endif
 }
 
