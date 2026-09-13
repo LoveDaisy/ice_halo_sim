@@ -71,7 +71,7 @@ The GUI wraps the same engine as the CLI but is **not a complete superset** of J
 | Multiple `render` entries | ❌ (only one preview) | ✅ | A JSON config can declare any number of `render: [...]` entries; CLI emits one image per entry. |
 | Multi-layer scattering (≥ 2 `scattering` entries) | ❌ | ✅ | Recipe 3 in [`04-recipes.md`](04-recipes.md) requires JSON. |
 | Lens projection switch | ✅ (Floating Lens Bar) | ✅ (`render[].lens.type`) | GUI re-projects on the fly; JSON sets it once per render entry. |
-| Overlay grid | ✅ (live, GUI-only) | ❌ | The GUI overlay is a viewing aid and is **not** written into the saved `.lmc`. The JSON `render[].grid` field is accepted by the parser but is not consumed by the CLI render path — see §4. |
+| Overlay grid / circles / reference points | ✅ (live) | ✅ (`render[].grid`) | Both sides draw them. The GUI saves every overlay switch, colour and angle list into the `.lmc`, and `File ▶ Export Config` writes them out as `render[].grid`; the CLI composites the same lines, circles, labels and markers onto its output image (since v4.18). See [`../configuration.md`](../configuration.md) "grid". |
 | Crystal preview style (wireframe / hidden line / x-ray / shaded) | ✅ | ❌ | Pure GUI state; not part of the simulation. |
 | Save/load `.lmc` | ✅ | ✅ | The `.lmc` is plain JSON; both sides read the same file. |
 
@@ -81,7 +81,7 @@ Rule of thumb: **interactive exploration** in the GUI, **batch / reproducible ru
 
 A few JSON fields exist in the schema for forward compatibility but are not active in the current build. They are accepted by the parser and ignored by the engine, so they will not error — they just have no effect:
 
-- `render[].grid` — the engine renders the simulation; grid overlays are added by the GUI on top of the rendered image at view time. The `grid` block in JSON is not used by the headless CLI render path.
+- `render[].grid[*].width` — every grid entry's `width` is read, validated and round-tripped but changes no pixel; a line's thickness is derived from the projection (see [`../configuration.md`](../configuration.md) "What the four line families draw, and what they ignore"). The `grid` block itself IS rendered by the CLI — it used to be listed here as GUI-only, which stopped being true in v4.18.
 - Some `crystal[].shape` distribution fields under unusual combinations — see the `known_mismatch.md` registry maintained alongside the documentation tasks for the current set.
 
 If you hit "I set X in the JSON and nothing happened", check this list first, then [`../configuration.md`](../configuration.md), then file an issue.
