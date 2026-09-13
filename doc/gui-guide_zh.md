@@ -146,6 +146,10 @@ Render Preview 上的辅助线，以一张表格呈现——每条辅助线回�
 
 生效于存在这种边界的七种鱼眼系镜头——`fisheye_equal_area`、`fisheye_equidistant`、`fisheye_orthographic` 以及四种 `dual_fisheye_*`；对 `linear`、`fisheye_stereographic`、`rectangular`、`globe` 不画任何线。`linear` 与 `rectangular` 确实没有有界成像圆；`globe` 则是**有**的（球的轮廓），它被排除是产品判断，不是因为没有边界。单镜头 stereographic 被排除，是因为它的成像总能填满显示区；四种 dual fisheye 全部纳入，是因为它们的黑区来自一道与投影公式无关的硬圆裁剪。FOV 使边界圆落到屏幕外时什么都不画，这是正确行为而非缺线。边框的绘制不受 `Visible` 半天选择的影响：它是镜头的画幅，所以即使它所框住的那半天正被隐藏，圆仍然是完整的。
 
+表格下方另有两个独立分段，各是一个默认折叠的 CollapsingHeader，不占表格的行：先是 `View Circles`，其后是 `Reference Points`（天顶/天底标记的泛化——六个具名天球参考点组成的一族，放在一次点击之外而不是再加六行）。两者的展开/折叠状态随文档一起保存。
+
+`View Circles` 是第五个线族：以相机**光轴**（即视野中心）而非太阳为圆心的等角距环，所以转动视角时它固定在画布上不动，而 `Angular Dist.` 的环会从它旁边滑过。持久化键为 `grid.view_dist` / `view_dist_line` / `view_dist_label`，与 `angular_dist` 三键完全同形。展开后是一行，列与主表相同：颜色块、`From Axis`（名称列说的是这一行**相对什么**度量——它是什么，表头已经说了）、`Line` 与 `Label` 复选框、`Alpha` 单元格。角度编辑器挂在分段表头自己的 `⋯` 按钮上——与 `Angular Dist.` 行折叠里那个"预设 + 自定义"编辑器同一个（所以它给出的预设是晕环半径 9° / 22° / 28° / 46°；光轴环有用的半径取决于镜头，按自定义角度键入即可）。这份列表初始为**空**，不像太阳环默认带 22° / 46°：新文档里只勾上 `Line` 什么都不会画，要先加一个角度。行自己的折叠单元格留空，因为通向同一个编辑器的第二个按钮是多余的。这个表头没有 `Reference Points` 那样的 `All` / `None` 按钮：只有一个线开关和一个标签开关，没有可批量操作的东西。
+
 ## Render Preview（渲染预览）
 
 中央区域显示实时的、按 lens 投影的冰晕图像。空闲时显示禁用态的 `Render Preview` 占位文本；模拟一开始累积光线，纹理就会逐帧更新。Horizon / Grid / Angular Distance / Compass 等 overlay 标签会按当前 lens 同步投影叠加在纹理之上。

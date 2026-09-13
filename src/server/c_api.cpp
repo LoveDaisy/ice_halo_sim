@@ -634,15 +634,16 @@ static std::vector<ns::MarkerStyleParam> MarkerStylesToCore(const LUMICE_MarkerS
 // being re-derived here, so there is exactly one implementation of each formula.
 // Throws std::invalid_argument on an invalid lens_type / visible / grid count; callers wrap.
 // The grid-count check lives here (not only in the entry points) because this is the single place
-// that dereferences angular_dist[]/elevation_grid[]/longitude_grid[] — ConfigToJson accepts a
-// caller-assembled struct with no bounds pass of its own.
+// that dereferences angular_dist[]/view_dist[]/elevation_grid[]/longitude_grid[] — ConfigToJson
+// accepts a caller-assembled struct with no bounds pass of its own.
 static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
-  if (r.angular_dist_count < 0 || r.angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
+  if (r.angular_dist_count < 0 || r.angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES || r.view_dist_count < 0 ||
+      r.view_dist_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
       r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.longitude_grid_count < 0 ||
       r.longitude_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
     throw std::invalid_argument(
         "LUMICE_RenderParam grid count out of range: angular_dist=" + std::to_string(r.angular_dist_count) +
-        ", elevation=" + std::to_string(r.elevation_grid_count) +
+        ", view_dist=" + std::to_string(r.view_dist_count) + ", elevation=" + std::to_string(r.elevation_grid_count) +
         ", longitude=" + std::to_string(r.longitude_grid_count));
   }
   // Same check for the marker list, and for the same reason the grid counts are checked here: this
@@ -689,6 +690,7 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   // spellings, exactly as MapEvModeFromCApi's result does for "relative" / "absolute".
   jr["tone"] = MapToneFromCApi(r.tone);
   jr["grid"]["angular_dist"] = GridLinesToCore(r.angular_dist, r.angular_dist_count);
+  jr["grid"]["view_dist"] = GridLinesToCore(r.view_dist, r.view_dist_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["longitude"] = GridLinesToCore(r.longitude_grid, r.longitude_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
@@ -697,11 +699,13 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["grid"]["elevation_line"] = r.elevation_line != 0;
   jr["grid"]["longitude_line"] = r.longitude_line != 0;
   jr["grid"]["angular_dist_line"] = r.angular_dist_line != 0;
+  jr["grid"]["view_dist_line"] = r.view_dist_line != 0;
   // The three text-label switches, next to the lines they annotate. Same key names core's own
   // to_json writes (render_config.cpp), which is what test_json_parser_parity.cpp compares.
   jr["grid"]["horizon_label"] = r.horizon_label != 0;
   jr["grid"]["label"] = r.grid_label != 0;
   jr["grid"]["angular_dist_label"] = r.angular_dist_label != 0;
+  jr["grid"]["view_dist_label"] = r.view_dist_label != 0;
   // Through core's own to_json, like every other value here: the key names and the sRGB convention
   // then have exactly one spelling in the tree.
   ns::ZenithNadirParam zn;
@@ -1078,8 +1082,9 @@ LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_Rende
   }
   // Grid counts index the fixed-capacity inline arrays RendererToJson reads; validate before the
   // encode so an out-of-range count cannot walk off the end of
-  // angular_dist[]/elevation_grid[]/longitude_grid[].
+  // angular_dist[]/view_dist[]/elevation_grid[]/longitude_grid[].
   if (renderer->angular_dist_count < 0 || renderer->angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES ||
+      renderer->view_dist_count < 0 || renderer->view_dist_count > LUMICE_MAX_CONFIG_GRID_LINES ||
       renderer->elevation_grid_count < 0 || renderer->elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES ||
       renderer->longitude_grid_count < 0 || renderer->longitude_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
     return LUMICE_ERR_INVALID_CONFIG;
@@ -2668,6 +2673,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     }
 
     r.angular_dist_count = 0;
+    r.view_dist_count = 0;
     r.elevation_grid_count = 0;
     r.longitude_grid_count = 0;
     r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
@@ -2679,10 +2685,12 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     r.elevation_line = 1;
     r.longitude_line = 1;
     r.angular_dist_line = 1;
-    // Same default and same reason as `horizon` above: core's three *_label_ fields are opt-in.
+    r.view_dist_line = 1;
+    // Same default and same reason as `horizon` above: core's *_label_ fields are opt-in.
     r.horizon_label = 0;
     r.grid_label = 0;
     r.angular_dist_label = 0;
+    r.view_dist_label = 0;
     // The marker block's defaults come from core's struct rather than being spelled again here,
     // and they are written BEFORE the "grid" branch so a document with no key at all lands on the
     // same four values ParseRenderConfig leaves. Zeroing them instead would be a real divergence
@@ -2726,6 +2734,13 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
       }
+      // The axis-referenced twin. No legacy spelling: the key was born with this name.
+      if (gj.contains("view_dist")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("view_dist"), r.view_dist, &r.view_dist_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      }
       if (gj.contains("elevation")) {
         const LUMICE_ErrorCode err = JsonToGridLines(gj.at("elevation"), r.elevation_grid, &r.elevation_grid_count);
         if (err != LUMICE_OK) {
@@ -2755,6 +2770,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           { "elevation_line", &r.elevation_line },
           { "longitude_line", &r.longitude_line },
           { "angular_dist_line", &r.angular_dist_line },
+          { "view_dist_line", &r.view_dist_line },
         };
         for (const auto& [key, field] : kLineKeys) {
           if (!gj.contains(key)) {
@@ -2776,6 +2792,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           { "horizon_label", &r.horizon_label },
           { "label", &r.grid_label },
           { "angular_dist_label", &r.angular_dist_label },
+          { "view_dist_label", &r.view_dist_label },
         };
         for (const auto& [key, field] : kLabelKeys) {
           if (!gj.contains(key)) {
@@ -3717,6 +3734,20 @@ static_assert(static_cast<int>(lumice::annotation::kMarkerAntisolar) == LUMICE_A
 static_assert(static_cast<int>(lumice::annotation::kMarkerCount) == LUMICE_ANNOTATION_MARKER_COUNT,
               "a marker id was added to one side of the C API boundary only");
 
+// The label kinds cross the same boundary the same way (`dst.kind = static_cast<int>(l.kind)` in
+// LUMICE_ComputeAnnotationAnchors) and had no such guard until the fifth family was added; a
+// consumer that styles by kind would otherwise learn about a divergence from a mis-coloured label.
+static_assert(static_cast<int>(lumice::annotation::kLabelHorizon) == LUMICE_ANNOTATION_HORIZON,
+              "core LabelKind and LUMICE_ANNOTATION_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kLabelElevation) == LUMICE_ANNOTATION_ELEVATION,
+              "core LabelKind and LUMICE_ANNOTATION_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kLabelLongitude) == LUMICE_ANNOTATION_LONGITUDE,
+              "core LabelKind and LUMICE_ANNOTATION_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kLabelAngularDist) == LUMICE_ANNOTATION_ANGULAR_DIST,
+              "core LabelKind and LUMICE_ANNOTATION_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kLabelViewDist) == LUMICE_ANNOTATION_VIEW_DIST,
+              "core LabelKind and LUMICE_ANNOTATION_* have diverged");
+
 // A request marker id list, validated and converted. Returns false with `err` set on a malformed
 // list. The range check is not redundant with ResolveMarkerDir's own default branch: it is what
 // turns a caller's bad id into a reported error instead of a silent fallback to the zenith.
@@ -3798,6 +3829,8 @@ LUMICE_ErrorCode LUMICE_ComputeAnnotationAnchors(const LUMICE_AnnotationRequest*
                      &err) ||
       !ReadAngleList(request->angular_dist_deg, request->angular_dist_count, LUMICE_MAX_ANNOTATION_CIRCLES,
                      &req.angular_dist_deg, &err) ||
+      !ReadAngleList(request->view_dist_deg, request->view_dist_count, LUMICE_MAX_ANNOTATION_CIRCLES,
+                     &req.view_dist_deg, &err) ||
       !ReadMarkerIdList(request->marker_ids, request->marker_count, &req.markers, &err)) {
     return err;
   }

@@ -749,6 +749,15 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "overlay_horizon_alpha", true, Kind::kFloatSlider },
     { "overlay_grid_alpha", true, Kind::kFloatSlider },
     { "overlay_sun_circles_alpha", true, Kind::kFloatSlider },
+    // The view circles: the sun circles' six keys with the family's own prefix and the same
+    // dispositions — the angle list unregistered for the same reason, the fold state registered
+    // like overlay_markers_section_open below.
+    { "overlay_view_dist_line", true, Kind::kCheckbox },
+    { "overlay_view_dist_label", true, Kind::kCheckbox },
+    { "overlay_view_dist_angles", false, Kind::kCheckbox },
+    { "overlay_view_dist_color", true, Kind::kColor },
+    { "overlay_view_dist_alpha", true, Kind::kFloatSlider },
+    { "overlay_view_dist_section_open", true, Kind::kCheckbox },
     // The reference-point markers: three rows per marker, spelled out rather than generated from
     // MarkerFieldKey. This table is a hand-written mirror ON PURPOSE — generating it from the same
     // function the registry and the serializer call would compare one line of code against itself,

@@ -40,7 +40,9 @@
 #include <string>
 #include <vector>
 
+#include "gui/file_io.hpp"  // SerializeGuiStateJson / DeserializeGuiStateJson
 #include "gui/gui_state.hpp"
+#include "gui/user_defaults.hpp"  // MakeNewDocumentState
 // imgui_internal.h is normally an anti-pattern in this suite. One claim below has no public
 // reading: what text a table's HEADER draws. A blank header submits no addressable item, and the
 // word this one stopped drawing ("Overlay") is still on screen one line above it as the group's
@@ -207,6 +209,28 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.markers_section_open = false;
       ctx->Yield(2);
 
+      // AND over the View Circles section's one-row table, which shares the same column layout
+      // for the same reason and is the third table drawn against it. Its swatch and Line cell are
+      // found by the same three-seed reconstruction, against that table's own id.
+      gui::g_state.view_dist_section_open = true;
+      ctx->Yield(3);
+      {
+        const ImGuiTestItemInfo line = ctx->ItemInfo("**/##view_dist_line");
+        ImGuiID color_id = 0;
+        if (line.Window != nullptr) {
+          const ImGuiID table_id = ImGui::GetIDWithSeed("##ViewDistTable", nullptr, line.Window->ID);
+          const ImGuiID swatch_group = ImGui::GetIDWithSeed("##view_dist_color", nullptr, table_id);
+          color_id = ColorEditSwatchId(swatch_group);
+        }
+        const ImGuiTestItemInfo color = ctx->ItemInfo(color_id, ImGuiTestOpFlags_NoError);
+        IM_CHECK(line.ID != 0 && color.ID != 0);
+        IM_CHECK_EQ(line.RectFull.Min.x, line_x);
+        // "From Axis" is the name the row displays, mirrored here for the reason NameOfRow gives.
+        IM_CHECK_GE(line.RectFull.Min.x - color.RectFull.Max.x, ImGui::CalcTextSize("From Axis").x);
+      }
+      gui::g_state.view_dist_section_open = false;
+      ctx->Yield(2);
+
       // The header row. The name column draws none, because the group's own CollapsingHeader
       // already says "Overlay" one line above it and a word repeated directly under itself reads as
       // a second, different thing. Stated together with the four that DO draw one, so "blank"
@@ -272,6 +296,11 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // reaching them must not require unfolding the six.
         IM_CHECK(!gui::g_state.markers_section_open);
         IM_CHECK(ctx->ItemExists("**/###markers_family_fold"));
+        // The View Circles section's fold, on ITS header, likewise offered while the section is
+        // closed: the angle list is the family's one extra field, and reaching it must not require
+        // unfolding the row.
+        IM_CHECK(!gui::g_state.view_dist_section_open);
+        IM_CHECK(ctx->ItemExists("**/###view_dist_fold"));
 
         // ...and no marker ROW offers one, with the section open. A per-row fold here would be six
         // buttons leading to the same two family-wide values.
@@ -483,6 +512,86 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.markers_alpha, 0.0f);
 
       ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+    };
+  }
+
+  // The View Circles section's fold: the button drawn ON the section header must receive its
+  // click (AllowOverlap on the header is what lets it — without that flag the header takes the
+  // hover first and the button, still visibly present, never fires; the failure is invisible from
+  // a rendered frame, which is why it is a click here and not a screenshot), and the editor it
+  // opens must edit THIS family's list. The second half is the point of parameterising the popup:
+  // the sun circles' list is asserted untouched, so a popup still bound to the first family would
+  // fail here rather than silently add a 9 deg SUN circle.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls",
+                                    "the_view_circles_fold_is_reachable_on_the_closed_header_and_edits_its_own_list");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(3);
+      IM_CHECK(!gui::g_state.view_dist_section_open);
+      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      const std::vector<float> sun_before = gui::g_state.sun_circle_angles;
+
+      {
+        const ScopedRef panel_ref(ctx, "//##RightPanel");
+        ctx->ItemClick("**/###view_dist_fold");
+      }
+      ctx->Yield(3);
+      // The editor is on screen — a preset button exists — and the section is STILL closed: the
+      // click went to the button, not to the header underneath it.
+      IM_CHECK(ctx->ItemExists("**/9\xc2\xb0"));
+      IM_CHECK(!gui::g_state.view_dist_section_open);
+
+      ctx->ItemClick("**/9\xc2\xb0");
+      ctx->Yield(2);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/9\xc2\xb0")));
+      IM_CHECK_EQ(gui::g_state.view_dist_angles.size(), (size_t)1);
+      IM_CHECK_EQ(gui::g_state.view_dist_angles.front(), 9.0f);
+      IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
+
+      ctx->ItemClick("**/x##del_0");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.view_dist_angles.empty());
+      IM_CHECK(gui::g_state.sun_circle_angles == sun_before);
+
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+    };
+  }
+
+  // The section's fold state is DOCUMENT state: a new document opens folded, a click on the header
+  // unfolds it and exposes the row's controls, and a document saved with it open reopens open.
+  // Built by serializing and reading back rather than by assigning the field — the claim is about
+  // what a saved document carries, and an assignment would skip exactly the half that can break.
+  // Same proposition, and the same shape, as the Reference Points section's own case.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls", "the_view_circles_section_fold_state_round_trips");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+      IM_CHECK(!gui::g_state.view_dist_section_open);
+
+      {
+        const ScopedRef panel_ref(ctx, "//##RightPanel");
+        IM_CHECK(!ctx->ItemExists("**/##view_dist_line"));  // folded: the row is not submitted
+        ctx->ItemClick("**/View Circles##view_dist");
+        ctx->Yield(2);
+        IM_CHECK(gui::g_state.view_dist_section_open);
+        IM_CHECK(ctx->ItemExists("**/##view_dist_line"));
+        IM_CHECK(ctx->ItemExists("**/##view_dist_label"));
+        IM_CHECK(ctx->ItemExists("**/##view_dist_alpha"));
+      }
+
+      const std::string doc = gui::SerializeGuiStateJson(gui::g_state);
+      gui::GuiState reopened;
+      IM_CHECK(gui::DeserializeGuiStateJson(doc, reopened));
+      IM_CHECK(reopened.view_dist_section_open);
+      // And a fresh document, which is what a new-file action produces, is folded again.
+      IM_CHECK(!gui::MakeNewDocumentState().view_dist_section_open);
+
+      gui::g_state.view_dist_section_open = false;
       ctx->Yield(2);
     };
   }

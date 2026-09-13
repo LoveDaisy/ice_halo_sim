@@ -265,17 +265,17 @@
 | `overlap` | 双鱼眼重叠带：commit 臂写 `kDualFisheyeOverlap`（预览 shader 靠它在源**纹理**的两半球拼缝上混合）vs export 臂写 `0`（屏幕上那张画的双鱼眼目标投影 `dualFisheyeInverse` 每盘恰好一个半球，根本没有重叠带；带着它导出会让 CLI 把每个盘画大 4%，地平线缩进盘沿十几像素——用户从没看过那张画）。加入理由见 §9.4 |
 | `front` | 第二道裁剪：恒关 vs 用户的开关（与 `visible` 正交，见 §9.3） |
 | `grid.horizon` | 恒开 vs 用户的开关 |
-| `grid.angular_dist` / `grid.elevation` / `grid.longitude` | 角度表：commit 臂留空 vs export 臂写用户的表（理由见 §9.4） |
-| `grid.horizon_label` / `grid.label` / `grid.angular_dist_label` | 文字标注开关：commit 臂恒关 vs 用户的开关。文字烤进纹理会被重投影一起重采样，再被预览自己的 label 层画第二遍 |
-| `grid.elevation_line` / `grid.longitude_line` / `grid.angular_dist_line` | 三族各自的**线**开关：commit 臂恒 `true` vs 用户的开关 |
+| `grid.angular_dist` / `grid.view_dist` / `grid.elevation` / `grid.longitude` | 角度表：commit 臂留空 vs export 臂写用户的表（理由见 §9.4）。`view_dist`（v4.39）是 `angular_dist` 的孪生：同一个分叉理由、同一份家族形状，圆心换成相机光轴而不是太阳 |
+| `grid.horizon_label` / `grid.label` / `grid.angular_dist_label` / `grid.view_dist_label` | 文字标注开关：commit 臂恒关 vs 用户的开关。文字烤进纹理会被重投影一起重采样，再被预览自己的 label 层画第二遍 |
+| `grid.elevation_line` / `grid.longitude_line` / `grid.angular_dist_line` / `grid.view_dist_line` | 四族各自的**线**开关：commit 臂恒 `true` vs 用户的开关 |
 | `grid.markers` / `grid.markers_opacity` / `grid.markers_radius_px` | 参考点标记：commit 臂留空表 vs export 臂写全六项 + 家族级外观 |
 
-⚠️ **`grid` 是按子键豁免的，不是整键。** 上表列出的是 `grid` 下**已分叉**的十三个子键；其余 grid
+⚠️ **`grid` 是按子键豁免的，不是整键。** 上表列出的是 `grid` 下**已分叉**的十六个子键；其余 grid
 子字段（每条线的 colors / opacity…）在两条臂上应当相同，整键 erase 会连带停止检查它们是否意外漂移。
 
-⚠️ 三个 `*_line` 子键有一处**只靠声明成立**的特殊性：commit 臂恒 `true`、export 臂写用户开关，
-而那个用例的 fixture 恰好把两个 GUI 线开关都置为开 ⇒ 不把它们加进清单，比较照样通过。清单在这里
-不是「让红转绿」的补丁，而是唯一记录了「这三个键允许分叉」的地方。
+⚠️ 四个 `*_line` 子键有一处**只靠声明成立**的特殊性：commit 臂恒 `true`、export 臂写用户开关，
+而那个用例的 fixture 恰好把 GUI 线开关都置为开 ⇒ 不把它们加进清单，比较照样通过。清单在这里
+不是「让红转绿」的补丁，而是唯一记录了「这四个键允许分叉」的地方。
 
 ### 9.3 四处具名例外（有意不分叉，且都不是遗漏）
 
@@ -313,9 +313,12 @@
 ### 9.4 改动纪律
 
 - 动分叉面（增/删/改一个键）时，**先在本节说明理由再改清单**。⛔ 不得因为那道闸红了就把键加进清单绕开。
-- **辅助线相关的键全部已经分叉**：四个线族的角度表与开关（`grid.horizon` / `grid.angular_dist` /
-  `grid.elevation` / `grid.longitude`）、三个文字标注开关，以及后来补上的三个 `*_line` 开关，
-  在 `kDivergingKeys` 处一律按子键豁免。
+- **辅助线相关的键全部已经分叉**：五个线族的角度表与开关（`grid.horizon` / `grid.angular_dist` /
+  `grid.view_dist` / `grid.elevation` / `grid.longitude`）、四个文字标注开关，以及后来补上的四个 `*_line`
+  开关，在 `kDivergingKeys` 处一律按子键豁免。`grid.view_dist` 三键（v4.39）没有自己的加入理由段：
+  它们与 `angular_dist` 三键逐项同形、走同一条 export 路（line 或 label 任一为真就填表，再写线开关），
+  唯一的差别——圆心是相机光轴而不是太阳——在 export 文档里不是字段（CLI 从 `view` 的 az/el/roll 推出
+  光轴），所以分叉面上没有多出任何一个键。
   上一版这里写的是「`grid.angular_dist` 已分叉、`grid.elevation` 仍不分叉」，后半句已经过期。
   裁定结果是上面两个候选里的**第一个**：core 算注解几何（当时是 `LUMICE_ComputeAnnotationOverlay`
   产掩码；v4.28 起 GUI 的线由预览 shader 按同一水平集定义逐 fragment 求值、只向 core 要文字锚点与

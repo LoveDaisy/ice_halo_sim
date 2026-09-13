@@ -43,7 +43,8 @@ namespace {
 
 // The half of an annotation::Request that is the same for every mask this consumer builds: the
 // view geometry, straight off the config, and masks-only. The caller adds the one angle list (and,
-// for angular_dist, the reference direction) that distinguishes its family. Single-sourced because
+// for angular_dist, the reference direction; view_dist needs none — core derives its centre, the
+// optical axis, from the view fields written here) that distinguishes its family. Single-sourced because
 // a view field written into one family's request and forgotten in another's would put that
 // family's lines on a different projection than the image they are drawn onto.
 annotation::Request MakeMaskRequest(const RenderConfig& config) {
@@ -182,6 +183,7 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
   // single build covers the whole lifetime.
   visible_mask_ = BuildVisibleMask(config_, rot_, short_pix_);
   RebuildAngularDistMasks();
+  RebuildViewDistMasks();
   RebuildGridMasks();
   // Where every named reference direction lands, whether or not the config asks to draw it. Not
   // gated on which markers are enabled, and deliberately so — that is an appearance question, so a
@@ -784,6 +786,12 @@ RenderConsumer::AnnotationLayers RenderConsumer::BuildAnnotationLayers() const {
   if (config_.angular_dist_grid_line_) {
     collect_layers(angular_dist_masks_, config_.angular_dist_grid_, layers.angular_dist);
   }
+  // The axis-referenced circles, a layer of their own so their place in the order is explicit:
+  // above the sun circles, below the outline — see the blend loop.
+  layers.view_dist.reserve(view_dist_masks_.size());
+  if (config_.view_dist_grid_line_) {
+    collect_layers(view_dist_masks_, config_.view_dist_grid_, layers.view_dist);
+  }
 
   // The ring markers, on top of everything else — the layer order the preview shader uses
   // (overlayAuxLines draws them last). No mask: the ring is a circle of a config-named radius
@@ -884,6 +892,14 @@ void RenderConsumer::CompositeAnnotations(AnnotationLayers& layers, int i, bool 
       }
     }
     for (const auto& layer : layers.angular_dist) {
+      if (layer.mask[i] != 0) {
+        rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
+      }
+    }
+    // The view circles sit directly above the sun circles they are the twin of and below the
+    // outline, so the horizon still wins over every ring family — the same relation the sun
+    // circles already had to it.
+    for (const auto& layer : layers.view_dist) {
       if (layer.mask[i] != 0) {
         rgb[j] = BlendAnnotation(rgb[j], layer.alpha, layer.rgb[j], print_mode);
       }
@@ -1130,6 +1146,7 @@ void RenderConsumer::PaintLabels() {
   collect(elevation_labels_, config_.elevation_grid_);
   collect(longitude_labels_, config_.longitude_grid_);
   collect(angular_dist_labels_, config_.angular_dist_grid_);
+  collect(view_dist_labels_, config_.view_dist_grid_);
   // The horizon's, in the line's own fixed colour — it has no GridLineParam to read, and no
   // user-facing opacity knob either.
   {
@@ -1256,9 +1273,10 @@ void RenderConsumer::ResetWith(const RenderConfig& new_config, const SunParam& n
   config_ = new_config;
   sun_ = new_sun;
   // The annotation inputs this consumer holds that NeedsRebuild does NOT cover (the sun and the
-  // three grid-line lists), so this is where a change in any of them has to be noticed. No-ops
+  // four grid-line lists), so this is where a change in any of them has to be noticed. No-ops
   // when nothing moved.
   RebuildAngularDistMasks();
+  RebuildViewDistMasks();
   RebuildGridMasks();
   RebuildHorizonAnnotation();
   // AND the markers, which the zenith/nadir pair this generalizes did NOT need here. Those two are
@@ -1368,6 +1386,45 @@ void RenderConsumer::RebuildAngularDistMasks() {
     annotation::Overlay overlay = annotation::ComputeOverlay(req);
     angular_dist_masks_.push_back(std::move(overlay.angular_dist));
     AppendLabels(overlay.labels, static_cast<int>(k), angular_dist_labels_);
+  }
+}
+
+void RenderConsumer::RebuildViewDistMasks() {
+  const auto& lines = config_.view_dist_grid_;
+  std::vector<float> angles;
+  angles.reserve(lines.size());
+  for (const auto& line : lines) {
+    angles.push_back(line.value_);
+  }
+
+  // Angle list and label switch only — no sun term, and no direction term at all. The centre is
+  // the camera forward, which core derives from the view fields MakeMaskRequest copies in, and the
+  // view is a NeedsRebuild field: a consumer that sees a different view is a different consumer.
+  // So unlike RebuildAngularDistMasks above there is nothing here that can move under ResetWith
+  // except the two appearance inputs compared below.
+  const bool want_labels = config_.view_dist_label_;
+  if (view_dist_masks_built_ && angles == view_dist_mask_angles_ && want_labels == view_dist_labels_built_for_) {
+    return;
+  }
+  view_dist_mask_angles_ = angles;
+  view_dist_masks_built_ = true;
+  view_dist_labels_built_for_ = want_labels;
+  view_dist_masks_.clear();
+  view_dist_labels_.clear();
+  if (angles.empty()) {
+    return;
+  }
+
+  // One ComputeOverlay call per line, for the reason spelled out in RebuildAngularDistMasks: each
+  // entry has its own appearance, and a union mask cannot say which line lit a pixel.
+  annotation::Request req = MakeMaskRequest(config_);
+  req.labels = want_labels;
+  view_dist_masks_.reserve(angles.size());
+  for (size_t k = 0; k < angles.size(); ++k) {
+    req.view_dist_deg = { angles[k] };
+    annotation::Overlay overlay = annotation::ComputeOverlay(req);
+    view_dist_masks_.push_back(std::move(overlay.view_dist));
+    AppendLabels(overlay.labels, static_cast<int>(k), view_dist_labels_);
   }
 }
 

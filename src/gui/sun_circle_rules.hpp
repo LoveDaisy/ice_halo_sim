@@ -4,6 +4,11 @@
 // The angular-distance ("sun circle") overlay's edit rules: when a preset may be added, when the
 // list is full, and what an angle typed by hand is clamped to.
 //
+// Also the view circles' rules, unchanged: the axis-referenced family is the same list of ring
+// radii with a different centre, so its popup calls these same three functions on its own vector.
+// The file keeps the name of the family that first needed them rather than growing a second copy
+// under a neutral one — one rule set, two callers.
+//
 // These lived inside the Edit-Angles popup's draw loop, where the duplicate test in particular
 // was a nested for-loop over the current list — reachable only by opening the popup in a live
 // frame and clicking a preset. Extracted as pure functions of their arguments so the tolerance
@@ -17,7 +22,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "gui/gui_constants.hpp"  // kMaxSunCircles
+#include "gui/gui_constants.hpp"  // kMaxAnnotationCircles
 
 namespace lumice::gui {
 
@@ -36,9 +41,9 @@ inline bool SunCircleAlreadyPresent(const std::vector<float>& angles, float cand
 }
 
 // The overlay's fixed-size upload buffer is full (preview_renderer.hpp sizes its array by
-// kMaxSunCircles), so no further angle can be accepted.
+// kMaxAnnotationCircles), so no further angle can be accepted.
 inline bool SunCirclesAtLimit(std::size_t count) {
-  return static_cast<int>(count) >= kMaxSunCircles;
+  return static_cast<int>(count) >= kMaxAnnotationCircles;
 }
 
 // What the custom-angle input accepts. 0 is excluded (a zero-radius circle is not drawable) and

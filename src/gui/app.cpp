@@ -460,6 +460,9 @@ void DoExportPreviewPng() {
   if (g_state.show_sun_circles_label) {
     curve_labels.push_back(BuildSunCirclesLabelSet(PreviewAnnotationAnchors(), g_state, label_w, label_h));
   }
+  if (g_state.show_view_dist_label) {
+    curve_labels.push_back(BuildViewDistLabelSet(PreviewAnnotationAnchors(), g_state, label_w, label_h));
+  }
   if (g_state.show_grid_label) {
     curve_labels.push_back(BuildGridLabelSet(PreviewAnnotationAnchors(), g_state, label_w, label_h));
   }

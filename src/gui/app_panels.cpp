@@ -151,6 +151,9 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
   if (state.show_sun_circles_line || state.show_sun_circles_label) {
     in.angular_dist_deg = state.sun_circle_angles;
   }
+  if (state.show_view_dist_line || state.show_view_dist_label) {
+    in.view_dist_deg = state.view_dist_angles;
+  }
   if (state.show_grid_line || state.show_grid_label) {
     const float step = ComputeGridStep(rc.fov);
     in.elevation_deg = ComputeGridElevationAngles(step);
@@ -175,6 +178,9 @@ AnnotationViewInput AnnotationAnchorRequestFor(const GuiState& state, const Rend
   AnnotationViewInput in = AnnotationViewInputFor(state, rc);
   if (!state.show_sun_circles_label) {
     in.angular_dist_deg.clear();
+  }
+  if (!state.show_view_dist_label) {
+    in.view_dist_deg.clear();
   }
   if (!state.show_grid_label) {
     in.elevation_deg.clear();
@@ -245,6 +251,16 @@ CurveLabelSet BuildSunCirclesLabelSet(const AnnotationAnchors& cache, const GuiS
   set.alpha = state.sun_circles_alpha;
   set.group = kGroupSunCircles;
   FillCurveLabelSet(cache, cache.AngularDistLabels(), vp_w, vp_h, &set);
+  ApplyPrintInk(state.renderer, &set);
+  return set;
+}
+
+CurveLabelSet BuildViewDistLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h) {
+  CurveLabelSet set;
+  std::copy(std::begin(state.view_dist_color), std::end(state.view_dist_color), std::begin(set.color));
+  set.alpha = state.view_dist_alpha;
+  set.group = kGroupViewCircles;
+  FillCurveLabelSet(cache, cache.ViewDistLabels(), vp_w, vp_h, &set);
   ApplyPrintInk(state.renderer, &set);
   return set;
 }
@@ -893,19 +909,27 @@ namespace {
 // a popup written inline would be built once per row — four popups sharing one name, of which the
 // last one submitted wins. Having exactly one construction site is a property worth being able to
 // check by reading, not by trusting the loop's shape to stay what it is today.
-void RenderSunCirclesAnglePopup() {
-  bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
+//
+// `angles` is a parameter because the editor has TWO callers — the Angular Dist. row's fold edits
+// the sun circles' list, the View Circles section's fold edits the view circles' — and the list is
+// the only thing about the editor that differs between them. The rules it applies (presets,
+// duplicate test, cap, clamp band) are sun_circle_rules.hpp's, already pure functions of the list
+// they are handed; what was left bound to one family was only WHICH vector to draw. The typed
+// scratch value is one `static` shared by both callers on purpose: only one popup is open at a
+// time, and a number half-typed for one family is not a value worth keeping apart per family.
+void RenderCircleAnglePopup(std::vector<float>& angles) {
+  bool at_limit = SunCirclesAtLimit(angles.size());
 
   // Preset buttons
   const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
   for (float p : presets) {
-    const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
+    const bool already = SunCircleAlreadyPresent(angles, p);
     char label[16];
     std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
     ImGui::BeginDisabled(already || at_limit);
     if (ImGui::Button(label)) {
-      g_state.sun_circle_angles.push_back(p);
-      std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+      angles.push_back(p);
+      std::sort(angles.begin(), angles.end());
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -921,16 +945,16 @@ void RenderSunCirclesAnglePopup() {
   ImGui::BeginDisabled(at_limit);
   if (ImGui::Button("+##add_circle")) {
     custom_angle = ClampSunCircleAngle(custom_angle);
-    g_state.sun_circle_angles.push_back(custom_angle);
-    std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+    angles.push_back(custom_angle);
+    std::sort(angles.begin(), angles.end());
   }
   ImGui::EndDisabled();
 
   // Current list with delete buttons
   ImGui::Separator();
   int remove_idx = -1;
-  for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
-    ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+  for (int i = 0; i < static_cast<int>(angles.size()); i++) {
+    ImGui::Text("%.1f\xc2\xb0", angles[i]);
     ImGui::SameLine();
     char del_label[32];
     std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
@@ -939,7 +963,7 @@ void RenderSunCirclesAnglePopup() {
     }
   }
   if (remove_idx >= 0) {
-    g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+    angles.erase(angles.begin() + remove_idx);
   }
 }
 
@@ -1045,6 +1069,102 @@ void SetupOverlayTableColumns() {
   ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
   ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
   ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
+}
+
+// The view circles — constant angular distance from the OPTICAL AXIS, the sun circles' twin — as a
+// collapsed section under the four line rows, holding a one-row table of the same six columns.
+//
+// WHY NOT A FIFTH ROW of the table above, where the family's shape says it belongs: the four rows
+// are the overlays a user reaches while reading a halo picture, and the 22/46 deg sun circles are
+// the most reached of all (doc/gui-layout-architecture.md §8 pins the most-often-co-adjusted set
+// to one screen); a circle about the optical axis is a framing / calibration tool, reached seldom
+// and for a different kind of task. That is the reference-point section's own argument — "turning
+// on the anthelion is a different KIND of act from turning on the grid" — so this family takes the
+// same form: a collapsed section, closed by default, one click away. A one-row section is not a
+// defect of the shape; it is what "one seldom-used family" looks like in it.
+//
+// WHY NOT A SECOND ROW under a shared "Angular Distance" section with the sun circles: that would
+// fold the most-used switch on the panel one click away to keep two rows together, which is the
+// hard constraint above read backwards.
+//
+// The header carries ONE button, the angle editor's fold. Not the reference points' [All] / [None]
+// pair — those act on six independent switches, and this family has one line switch and one label
+// switch, so there is nothing for a batch action to act on. The open state is SERIALIZED
+// (view_dist_section_open), like markers_section_open, so a document that had the section open
+// reopens with it open.
+void RenderViewDistSection() {
+  // Same externally-owned open-state protocol as RenderMarkersSection, for the same reason.
+  ImGui::SetNextItemOpen(g_state.view_dist_section_open, ImGuiCond_Always);
+  // AllowOverlap is load-bearing here exactly as it is on the markers header: without it the
+  // header claims the hover first and the fold button drawn on top of it never receives the click,
+  // while still looking present. test_overlay_controls.cpp clicks it.
+  const bool section_open = ImGui::CollapsingHeader("View Circles##view_dist", ImGuiTreeNodeFlags_AllowOverlap);
+  g_state.view_dist_section_open = section_open;
+
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float fold_w = ImGui::CalcTextSize(ICON_FA_ELLIPSIS).x + style.FramePadding.x * 2.0f;
+  ImGui::SameLine(ImGui::GetContentRegionMax().x - fold_w);
+  // Triple hash for the reason the table's row folds give: the label carries a glyph, and "###"
+  // hashes the suffix alone so renaming the icon cannot rename the item.
+  constexpr const char* kFoldId = "###view_dist_fold";
+  if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + kFoldId).c_str())) {
+    ImGui::OpenPopup(kFoldId);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Edit angles");
+  }
+  if (ImGui::BeginPopup(kFoldId)) {
+    RenderCircleAnglePopup(g_state.view_dist_angles);
+    ImGui::EndPopup();
+  }
+
+  if (!section_open) {
+    return;
+  }
+
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
+  const ImVec2 outer_size(ImGui::GetContentRegionAvail().x, 0.0f);
+  if (!ImGui::BeginTable("##ViewDistTable", kOverlayTableColumnCount, kFlags, outer_size)) {
+    return;
+  }
+  // No TableHeadersRow, for the reason the markers' table gives none: the main table's headers
+  // already stand over these same columns.
+  SetupOverlayTableColumns();
+
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
+  const FieldEditorConstraint color_c = ConstraintFor("overlay_view_dist_color", g_state);
+  ImGui::BeginDisabled(!color_c.enabled);
+  ImGui::ColorEdit3("##view_dist_color", g_state.view_dist_color, ImGuiColorEditFlags_NoInputs);
+  ImGui::EndDisabled();
+  if (color_c.disabled_reason != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("%s", color_c.disabled_reason);
+  }
+
+  ImGui::TableSetColumnIndex(1);
+  ImGui::AlignTextToFramePadding();
+  // "From Axis" rather than a restatement of the section's own title one line above it — the name
+  // column says what this row is relative to, which the title does not.
+  ImGui::TextUnformatted("From Axis");
+
+  ImGui::TableSetColumnIndex(2);
+  Checkbox("##view_dist_line", &g_state.show_view_dist_line);
+
+  ImGui::TableSetColumnIndex(3);
+  Checkbox("##view_dist_label", &g_state.show_view_dist_label);
+
+  ImGui::TableSetColumnIndex(4);
+  const FieldEditorConstraint alpha_c = ConstraintFor("overlay_view_dist_alpha", g_state);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  // The id the table's alpha cells resolve to is "##<row>_alpha" (see the "+ 2" note there); this
+  // cell hands DragFloatField the bare suffix and lets it prepend the same "##" once.
+  DragFloatField("view_dist_alpha", &g_state.view_dist_alpha, static_cast<float>(alpha_c.min_value),
+                 static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
+
+  // Column 5 (fold) stays EMPTY: the family's angle list hangs off the section header, where the
+  // markers' two family fields hang, and a second fold here would be two buttons to one editor.
+
+  ImGui::EndTable();
 }
 
 // The sky reference points, as a collapsed section under the four line rows.
@@ -1294,13 +1414,17 @@ void RenderOverlaysTab() {
       ImGui::SetTooltip("Edit angles");
     }
     if (ImGui::BeginPopup(row.fold_id)) {
-      RenderSunCirclesAnglePopup();
+      RenderCircleAnglePopup(g_state.sun_circle_angles);
       ImGui::EndPopup();
     }
   }
 
   ImGui::EndTable();
 
+  // The two collapsed sections under the four line rows, in this order: the view circles are a
+  // fifth LINE family and sit against the table they would otherwise be a row of; the reference
+  // points are a different kind of thing and come after.
+  RenderViewDistSection();
   RenderMarkersSection();
 }
 
@@ -2035,13 +2159,17 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.overlay.show_horizon = g_state.show_horizon_line;
     pp.overlay.show_grid = g_state.show_grid_line;
     pp.overlay.show_sun_circles = g_state.show_sun_circles_line;
+    pp.overlay.show_view_dist = g_state.show_view_dist_line;
     std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color), std::begin(pp.overlay.horizon_color));
     std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(pp.overlay.grid_color));
     std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
               std::begin(pp.overlay.sun_circles_color));
+    std::copy(std::begin(g_state.view_dist_color), std::end(g_state.view_dist_color),
+              std::begin(pp.overlay.view_dist_color));
     pp.overlay.horizon_alpha = g_state.horizon_alpha;
     pp.overlay.grid_alpha = g_state.grid_alpha;
     pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
+    pp.overlay.view_dist_alpha = g_state.view_dist_alpha;
     // WHERE the curves are, as the definition the shader evaluates per fragment, and WHERE their
     // text and the markers go, as core's answer for this frame — both from the ONE builder
     // (AnnotationViewInputFor), so the line and the label on it, or the ring and its name, cannot
@@ -2065,6 +2193,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       pp.overlay.elevation_deg = curves.elevation_deg;
       pp.overlay.longitude_deg = curves.longitude_deg;
       pp.overlay.angular_dist_deg = curves.angular_dist_deg;
+      pp.overlay.view_dist_deg = curves.view_dist_deg;
       GuiSunWorldDir(curves.sun_altitude_deg, pp.overlay.reference_dir);
       g_annotation_anchors.Compute(
           MakeAnnotationViewKey(AnnotationAnchorRequestFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
@@ -2123,7 +2252,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // there also lands the positions correctly, which is why the export path's half-done version
     // of this conversion looked right while rendering the text at 1/dpi of its size.
     if (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label ||
-        AnyMarkerLabelShown(g_state)) {
+        g_state.show_view_dist_label || AnyMarkerLabelShown(g_state)) {
       const float vp_sw = panel_width;
       const float vp_sh = preview_height;
       // Every set goes into ONE vector so they take part in one collision pass, which is where
@@ -2133,6 +2262,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
       if (g_state.show_sun_circles_label) {
         g_preview_vp.curve_labels.push_back(BuildSunCirclesLabelSet(g_annotation_anchors, g_state, vp_sw, vp_sh));
+      }
+      if (g_state.show_view_dist_label) {
+        g_preview_vp.curve_labels.push_back(BuildViewDistLabelSet(g_annotation_anchors, g_state, vp_sw, vp_sh));
       }
       if (g_state.show_grid_label) {
         g_preview_vp.curve_labels.push_back(BuildGridLabelSet(g_annotation_anchors, g_state, vp_sw, vp_sh));
@@ -2161,6 +2293,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       pp.overlay.show_horizon = false;
       pp.overlay.show_grid = false;
       pp.overlay.show_sun_circles = false;
+      pp.overlay.show_view_dist = false;
       pp.overlay.show_lens_border = false;
       pp.overlay.marker_screen_pos = MakeAllSentinelMarkerPositions();
       // Not part of `pp`: the curve labels are rasterized by the deferred pass from this vector,

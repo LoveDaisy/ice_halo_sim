@@ -1239,6 +1239,62 @@ TEST_F(V3TestJson, RenderGrid_MissingLongitudeKeyLeavesTheListEmpty) {
   }
 }
 
+// The axis-referenced twin of `grid.angular_dist`: three NEW keys (`view_dist`, `view_dist_line`,
+// `view_dist_label`), no alias to honour, read through the whole parse path. The values are chosen
+// to differ from the fixture's angular_dist entry (22 / 0.4 / 1.2) on every field, so a decoder
+// that filled the new list from the twin's key — the most likely paste error — fails on value,
+// not just on count.
+TEST_F(V3TestJson, RenderGrid_ViewDistThreeKeysParse) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    if (jr.at("id").get<int>() != 3) {
+      continue;
+    }
+    jr["grid"]["view_dist"] = nlohmann::json::array({ { { "value", 35.0f }, { "opacity", 0.6f }, { "width", 2.5f } } });
+    jr["grid"]["view_dist_line"] = false;
+    jr["grid"]["view_dist_label"] = true;
+  }
+
+  auto manager = j.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  ASSERT_EQ(r.view_dist_grid_.size(), 1u);
+  EXPECT_NEAR(r.view_dist_grid_[0].value_, 35.0f, 1e-5f);
+  EXPECT_NEAR(r.view_dist_grid_[0].opacity_, 0.6f, 1e-5f);
+  EXPECT_NEAR(r.view_dist_grid_[0].width_, 2.5f, 1e-5f);
+  EXPECT_FALSE(r.view_dist_grid_line_);
+  EXPECT_TRUE(r.view_dist_label_);
+  // The twin is read from its own key and keeps the fixture's legacy `central` entry.
+  ASSERT_EQ(r.angular_dist_grid_.size(), 1u);
+  EXPECT_NEAR(r.angular_dist_grid_[0].value_, 22.0f, 1e-5f);
+  EXPECT_TRUE(r.angular_dist_grid_line_);
+  EXPECT_FALSE(r.angular_dist_label_);
+
+  // And back out: the encoder writes the three keys under "grid" with the same spelling, so a
+  // document re-saved by this version reads back to the same struct.
+  nlohmann::json out = r;
+  ASSERT_TRUE(out["grid"].contains("view_dist"));
+  ASSERT_TRUE(out["grid"].contains("view_dist_line"));
+  ASSERT_TRUE(out["grid"].contains("view_dist_label"));
+  EXPECT_NEAR(out["grid"]["view_dist"][0]["value"].get<float>(), 35.0f, 1e-5f);
+  EXPECT_FALSE(out["grid"]["view_dist_line"].get<bool>());
+  EXPECT_TRUE(out["grid"]["view_dist_label"].get<bool>());
+}
+
+// A file written before the family existed loads with it OFF: empty list, line switch at its
+// default-on, label switch at its default-off. Checked through the decoder on every renderer of
+// the fixture rather than through the struct's initialisers alone — a decoder that wrote a
+// default of its own would pass the initialiser check and still change what old files render.
+TEST_F(V3TestJson, RenderGrid_MissingViewDistKeysLeaveTheFamilyOff) {
+  auto manager = config_json_.get<ConfigManager>();
+  ASSERT_FALSE(manager.renderers_.empty());
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_TRUE(r.view_dist_grid_.empty()) << "renderer " << id;
+    EXPECT_TRUE(r.view_dist_grid_line_) << "renderer " << id;
+    EXPECT_FALSE(r.view_dist_label_) << "renderer " << id;
+  }
+}
+
 // ===== render.tone / render.paper through the WHOLE parse path =====
 //
 // test_render_config.cpp already pins RenderConfig::Tone's own codec in isolation. What these add

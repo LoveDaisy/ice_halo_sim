@@ -65,6 +65,7 @@ uniform vec2 u_bg_uv_offset;
 uniform int u_show_horizon;
 uniform int u_show_grid;
 uniform int u_show_sun_circles;
+uniform int u_show_view_dist;
 // The level lists, PACKED FOUR TO A vec4. Not `float u_x[N]`: default-block uniform packing is
 // implementation-defined and a float array commonly costs one whole vec4 register per element,
 // which at these lengths would exceed GL_MAX_FRAGMENT_UNIFORM_COMPONENTS on drivers that report
@@ -77,13 +78,20 @@ uniform int u_show_sun_circles;
 // the uniform in place through an index range — a uniform array handed to a GLSL function as a
 // parameter is passed BY VALUE, and this driver honours that with a copy of all 256 vec4 per
 // call per fragment (measured: 3 ms -> 950 ms a frame). The literal sizes are
-// 2 * kMaxOverlayLevels / 4 and kMaxSunCircles / 4 (preview_renderer.hpp / gui_constants.hpp);
+// 2 * kMaxOverlayLevels / 4 and kMaxAnnotationCircles / 4 (preview_renderer.hpp / gui_constants.hpp);
 // static_asserts after this string pin the two spellings together.
 uniform vec4 u_grid_levels_deg[512];
 uniform int u_elevation_count;
 uniform int u_longitude_count;
 uniform vec4 u_angular_dist_deg[4];
 uniform int u_angular_dist_count;
+// The view circles' levels: the same packing and the same capacity as the sun circles', in an
+// array of their own — the two families have separate switches, colours and alphas, so they are
+// two lists and not two ranges of one (the grid packs its two families together because they
+// share one appearance; these do not). Centred on the optical axis, -u_view_matrix[2], which is
+// why there is no u_reference_dir twin beside them.
+uniform vec4 u_view_dist_deg[4];
+uniform int u_view_dist_count;
 // The direction the angular-distance circles are centred on (the sun), a unit vector in the world
 // frame this shader's world_dir lives in — the direction light TRAVELS, altitude = asin(-z).
 uniform vec3 u_reference_dir;
@@ -96,9 +104,11 @@ uniform float u_line_half_width_px;
 uniform vec3 u_horizon_color;
 uniform vec3 u_grid_color;
 uniform vec3 u_sun_circles_color;
+uniform vec3 u_view_dist_color;
 uniform float u_horizon_alpha;
 uniform float u_grid_alpha;
 uniform float u_sun_circles_alpha;
+uniform float u_view_dist_alpha;
 
 // Sky reference-point ring marker uniforms. One array slot per core marker id
 // (LUMICE_ANNOTATION_MARKER_*), so the CPU uploads all six in two calls and the
@@ -683,14 +693,21 @@ R"glsl(
 vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix, vec2 pos, float half_fov) {
   const float DEG = 180.0 / PI;
 
-  // The three angle fields. Each formula is the shader-side twin of a core function, named here so
+  // The four angle fields. Each formula is the shader-side twin of a core function, named here so
   // a change on either side has somewhere to look:
   //   altitude_deg      mask_detail::AltitudeDeg           (src/core/lens_proj_build.hpp)
   //   azimuth_deg       annotation::AzimuthDegOfDir        (src/core/annotation_overlay.cpp)
   //   angular_dist_deg  annotation::AngularDistDegOfDir    (src/core/annotation_overlay.cpp)
+  //   view_dist_val     the same function about the camera forward (RequestFrame::forward there)
+  // The optical axis is -u_view_matrix[2]: BuildViewMatrix's third column is -forward (the front
+  // clip in main() reads the same column for the same fact). For the full-sky lenses, whose
+  // picture skips the view matrix, the panel pins the view angles to zero every frame, so this
+  // column is the same axis core derives from the zeroed angles it is asked with.
   float altitude_deg = asin(clamp(-world_dir.z, -1.0, 1.0)) * DEG;
   float azimuth_deg = atan(-world_dir.y, -world_dir.x) * DEG;
   float angular_dist_deg = acos(clamp(dot(world_dir, u_reference_dir), -1.0, 1.0)) * DEG;
+  vec3 view_axis = -u_view_matrix[2];
+  float view_dist_val = acos(clamp(dot(world_dir, view_axis), -1.0, 1.0)) * DEG;
 
   // The local gradient of each field, in degrees per pixel, as the FORWARD DIFFERENCE against the
   // right and lower neighbours — the same two differences, against the same two pixels, that
@@ -723,19 +740,23 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix, vec2 pos, float h
   float fw_alt = 0.0;
   float fw_az = 0.0;
   float fw_dist = 0.0;
+  float fw_view = 0.0;
   if (nx.w >= 0.5) {
     fw_alt += abs(asin(clamp(-nx.z, -1.0, 1.0)) * DEG - altitude_deg);
     fw_az += abs(wrapAngleDiffDeg(atan(-nx.y, -nx.x) * DEG - azimuth_deg));
     fw_dist += abs(acos(clamp(dot(nx.xyz, u_reference_dir), -1.0, 1.0)) * DEG - angular_dist_deg);
+    fw_view += abs(acos(clamp(dot(nx.xyz, view_axis), -1.0, 1.0)) * DEG - view_dist_val);
   }
   if (ny.w >= 0.5) {
     fw_alt += abs(asin(clamp(-ny.z, -1.0, 1.0)) * DEG - altitude_deg);
     fw_az += abs(wrapAngleDiffDeg(atan(-ny.y, -ny.x) * DEG - azimuth_deg));
     fw_dist += abs(acos(clamp(dot(ny.xyz, u_reference_dir), -1.0, 1.0)) * DEG - angular_dist_deg);
+    fw_view += abs(acos(clamp(dot(ny.xyz, view_axis), -1.0, 1.0)) * DEG - view_dist_val);
   }
   float grad_alt = lineGradientDeg(fw_alt);
   float grad_az = lineGradientDeg(fw_az);
   float grad_dist = lineGradientDeg(fw_dist);
+  float grad_view = lineGradientDeg(fw_view);
 
   // Coordinate grid — drawn first so the other lines overlay on top. Parallels and meridians share
   // one colour and one alpha, so their coverages are merged before the blend, exactly as the CLI
@@ -748,13 +769,26 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix, vec2 pos, float h
   }
 
   // Circles of constant angular distance from u_reference_dir. A linear pass: the list is at most
-  // kMaxSunCircles long, so there is nothing for a search to save.
+  // kMaxAnnotationCircles long, so there is nothing for a search to save.
   if (u_show_sun_circles != 0) {
     float t = 0.0;
     for (int i = 0; i < u_angular_dist_count; ++i) {
       t = max(t, lineCoverage(angular_dist_deg - u_angular_dist_deg[i >> 2][i & 3], grad_dist));
     }
     color = blendAnnotationColor(color, u_sun_circles_color, t, u_sun_circles_alpha, u_tone);
+  }
+
+  // Circles of constant angular distance from the optical axis. AFTER the sun circles and BEFORE
+  // the horizon, which is the CLI's compositing order for the same layers (render.cpp
+  // PostSnapshot: grid, sun circles, view circles, outline, markers) — the order is a parity
+  // contract, not a taste: where two families cross, whichever is blended second wins the pixel,
+  // and the two renderers have to agree on which that is.
+  if (u_show_view_dist != 0) {
+    float t = 0.0;
+    for (int i = 0; i < u_view_dist_count; ++i) {
+      t = max(t, lineCoverage(view_dist_val - u_view_dist_deg[i >> 2][i & 3], grad_view));
+    }
+    color = blendAnnotationColor(color, u_view_dist_color, t, u_view_dist_alpha, u_tone);
   }
 
   // Horizon line (altitude = 0) — drawn last of the curves so it's most visible.
@@ -979,14 +1013,15 @@ static_assert(LUMICE_ANNOTATION_MARKER_COUNT == 6,
               "the fragment shader hard-codes 6 marker uniform slots; update kFragmentShader's "
               "u_marker_screen_pos[6] / u_marker_color[6] and its loop bound together with this");
 
-// The `512` and `4` written into u_grid_levels_deg[512] / u_angular_dist_deg[4] above, pinned the
-// same way: four levels per vec4, two grid families in one array, so the length is 2 * capacity / 4.
+// The `512` and `4` written into u_grid_levels_deg[512] / u_angular_dist_deg[4] / u_view_dist_deg[4]
+// above, pinned the same way: four levels per vec4, two grid families in one array (so that length
+// is 2 * capacity / 4), and each ring family in an array of its own (capacity / 4).
 static_assert(kMaxOverlayLevels % 4 == 0 && 2 * kMaxOverlayLevels / 4 == 512,
               "the fragment shader hard-codes vec4 u_grid_levels_deg[512]; update kFragmentShader together "
               "with kMaxOverlayLevels");
-static_assert(kMaxSunCircles % 4 == 0 && kMaxSunCircles / 4 == 4,
-              "the fragment shader hard-codes vec4 u_angular_dist_deg[4]; update kFragmentShader together "
-              "with kMaxSunCircles");
+static_assert(kMaxAnnotationCircles % 4 == 0 && kMaxAnnotationCircles / 4 == 4,
+              "the fragment shader hard-codes vec4 u_angular_dist_deg[4] and vec4 u_view_dist_deg[4]; update "
+              "kFragmentShader together with kMaxAnnotationCircles");
 
 // clang-format on
 
@@ -1813,15 +1848,19 @@ static void UploadGridLevels(unsigned int program, const std::vector<float>& ele
   glUniform1i(glGetUniformLocation(program, "u_longitude_count"), lc);
 }
 
-static void UploadCircleLevels(unsigned int program, const std::vector<float>& angular_dist_deg) {
-  const int count = std::min(static_cast<int>(angular_dist_deg.size()), kMaxSunCircles);
+// One ring family's level list, packed four to a vec4. Called once per family with that family's
+// two uniform names — the packing is written once, the destination is a parameter, so the sun
+// circles and the view circles cannot come to pack their lists two different ways.
+static void UploadCircleLevels(unsigned int program, const char* deg_uniform_first_elem, const char* count_uniform,
+                               const std::vector<float>& circle_deg) {
+  const int count = std::min(static_cast<int>(circle_deg.size()), kMaxAnnotationCircles);
   const int vec4_count = (count + 3) / 4;
   std::vector<float> packed(static_cast<size_t>(vec4_count) * 4, 0.0f);
-  std::copy(angular_dist_deg.begin(), angular_dist_deg.begin() + count, packed.begin());
+  std::copy(circle_deg.begin(), circle_deg.begin() + count, packed.begin());
   if (vec4_count > 0) {
-    glUniform4fv(glGetUniformLocation(program, "u_angular_dist_deg[0]"), vec4_count, packed.data());
+    glUniform4fv(glGetUniformLocation(program, deg_uniform_first_elem), vec4_count, packed.data());
   }
-  glUniform1i(glGetUniformLocation(program, "u_angular_dist_count"), count);
+  glUniform1i(glGetUniformLocation(program, count_uniform), count);
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {
@@ -1900,11 +1939,13 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), ov.show_horizon ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), ov.show_grid ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), ov.show_sun_circles ? 1 : 0);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_view_dist"), ov.show_view_dist ? 1 : 0);
   // The curve definitions: level lists, packed four to a vec4 (see the uniform block in
   // kFragmentShader for why), the circles' centre, and the line-width rule's constants — the
   // latter from their single owner in src/util/, never as digits in the GLSL source.
   UploadGridLevels(shader_program_, ov.elevation_deg, ov.longitude_deg);
-  UploadCircleLevels(shader_program_, ov.angular_dist_deg);
+  UploadCircleLevels(shader_program_, "u_angular_dist_deg[0]", "u_angular_dist_count", ov.angular_dist_deg);
+  UploadCircleLevels(shader_program_, "u_view_dist_deg[0]", "u_view_dist_count", ov.view_dist_deg);
   glUniform3f(glGetUniformLocation(shader_program_, "u_reference_dir"), ov.reference_dir[0], ov.reference_dir[1],
               ov.reference_dir[2]);
   glUniform1f(glGetUniformLocation(shader_program_, "u_line_fwidth_min_deg"), kAnnotationLineFwidthMinDeg);
@@ -1916,9 +1957,12 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
               ov.grid_color[2]);
   glUniform3f(glGetUniformLocation(shader_program_, "u_sun_circles_color"), ov.sun_circles_color[0],
               ov.sun_circles_color[1], ov.sun_circles_color[2]);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_view_dist_color"), ov.view_dist_color[0], ov.view_dist_color[1],
+              ov.view_dist_color[2]);
   glUniform1f(glGetUniformLocation(shader_program_, "u_horizon_alpha"), ov.horizon_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), ov.grid_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), ov.sun_circles_alpha);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_view_dist_alpha"), ov.view_dist_alpha);
 
   // "[0]" and not the bare array name: glGetUniformLocation is specified to resolve the FIRST
   // ELEMENT of an array, and while most drivers also accept the bare name, the spec does not

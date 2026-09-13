@@ -459,15 +459,17 @@ FieldEditorEntry AspectPresetField() {
 // THE REGISTRY.
 //
 // Ordered as the serialized document is, so a reader can hold it against SerializeGuiStateJson and
-// see at a glance which leaves have an editor. Two leaves deliberately have NO entry:
+// see at a glance which leaves have an editor. Three leaves deliberately have NO entry:
 //
 //   overlay_sun_circle_angles — a variable-length list. Its main UI is a whole add/remove popup
 //                               with a hard cap, not a single control; there is nothing to place in
 //                               a cell that would not be a worse version of it.
+//   overlay_view_dist_angles  — the same list for the axis-referenced ring family, behind the same
+//                               popup, for the same reason.
 //   bg_path                   — a filesystem path. The main UI has no text control for it either
 //                               (it is set by a file dialog), and a free-text path in a table is a
 //                               way to store a path that does not exist.
-// Both stay visible as read-only rows: the panel's row set is generated from the document, so a
+// All three stay visible as read-only rows: the panel's row set is generated from the document, so a
 // field with no editor is still SHOWN — the user can see it, see what it holds, and (un)check it.
 // ------------------------------------------------------------------------------------------------
 const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
@@ -626,6 +628,16 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.grid_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
     map.emplace("overlay_sun_circles_alpha",
                 FloatField([](GuiState& s) { return &s.sun_circles_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
+    // The axis-referenced ring family: the same four editors the sun circles get, under the same
+    // print gate on the colour (doc/print-mode-subtractive-ink.md §7 instance 4 is the annotation
+    // colour fields, and this is one). Its angle list is the third deliberately unregistered leaf
+    // (see the header); its section fold state is registered further down beside the markers'.
+    map.emplace("overlay_view_dist_line", BoolField([](GuiState& s) { return &s.show_view_dist_line; }));
+    map.emplace("overlay_view_dist_label", BoolField([](GuiState& s) { return &s.show_view_dist_label; }));
+    map.emplace("overlay_view_dist_color",
+                ColorField([](GuiState& s) { return s.view_dist_color; }, NotUnderPrintMode));
+    map.emplace("overlay_view_dist_alpha",
+                FloatField([](GuiState& s) { return &s.view_dist_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
     // The reference-point markers: three entries per marker, registered in a LOOP rather than
     // written out eighteen times. The accessors capture the marker's index and the key comes from
     // MarkerFieldKey — the same function file_io.cpp writes and reads the document with — so the
@@ -648,6 +660,7 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace(kMarkersRadiusKey,
                 FloatField([](GuiState& s) { return &s.markers_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
     map.emplace(kMarkersSectionOpenKey, BoolField([](GuiState& s) { return &s.markers_section_open; }));
+    map.emplace(kViewDistSectionOpenKey, BoolField([](GuiState& s) { return &s.view_dist_section_open; }));
     map.emplace("overlay_lens_border_line", BoolField([](GuiState& s) { return &s.show_lens_border_line; }));
     // NO NotUnderPrintMode here, unlike the three line families and the markers above, and it is a
     // scope decision rather than an omission: the four instances of the print rule are enumerated in

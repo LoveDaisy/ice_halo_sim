@@ -3,7 +3,7 @@
 
 #include <cstddef>
 
-#include "include/lumice.h"  // LUMICE_MAX_ANNOTATION_CIRCLES (kMaxSunCircles invariant below)
+#include "include/lumice.h"  // LUMICE_MAX_ANNOTATION_CIRCLES (kMaxAnnotationCircles invariant below)
 
 namespace lumice::gui {
 
@@ -181,17 +181,20 @@ static_assert(kAnalysisConeDefaultRadiusDeg > 0.0f && kAnalysisConeDefaultRadius
 // one place.
 constexpr float kAnalysisConeMarkerHitRadiusPt = 12.0f;
 
-// Auxiliary line overlay
-constexpr int kMaxSunCircles = 16;
-// AnnotationAnchors::Compute() (annotation_anchors.cpp) clamps the angular-distance-circle list to
-// kMaxSunCircles before it ever reaches LUMICE_ComputeAnnotationAnchors, so the API's own ceiling
-// (LUMICE_MAX_ANNOTATION_CIRCLES) is never actually tested there — this assert is what makes that
-// clamp a real bound instead of a coincidence. If kMaxSunCircles is ever raised past the API
-// ceiling, a request the GUI itself built would be REJECTED rather than truncated
+// Auxiliary line overlay. The per-family ceiling on a ring list — the sun circles' angle list and
+// the view circles' alike, since the bound is the shader's canvas for ONE family's levels
+// (vec4 u_*_deg[4] in preview_renderer.cpp) rather than anything about the sun. Named for what it
+// bounds rather than for the family that first needed it.
+constexpr int kMaxAnnotationCircles = 16;
+// MakeAnnotationViewKey (annotation_anchors.cpp) clamps each ring family's list to
+// kMaxAnnotationCircles before it ever reaches LUMICE_ComputeAnnotationAnchors, so the API's own
+// ceiling (LUMICE_MAX_ANNOTATION_CIRCLES) is never actually tested there — this assert is what makes
+// that clamp a real bound instead of a coincidence. If kMaxAnnotationCircles is ever raised past
+// the API ceiling, a request the GUI itself built would be REJECTED rather than truncated
 // (LUMICE_ComputeAnnotationAnchors's contract), which clears the whole frame's result (grid,
 // horizon and markers included, not just the circles) instead of just dropping the excess circles.
-static_assert(kMaxSunCircles <= LUMICE_MAX_ANNOTATION_CIRCLES,
-              "kMaxSunCircles must not exceed LUMICE_MAX_ANNOTATION_CIRCLES: see comment above");
+static_assert(kMaxAnnotationCircles <= LUMICE_MAX_ANNOTATION_CIRCLES,
+              "kMaxAnnotationCircles must not exceed LUMICE_MAX_ANNOTATION_CIRCLES: see comment above");
 
 // Lens projection types. Order must match kLensTypeNames in gui_state.hpp
 // and Core's LensParam::LensType enum. Static asserts in gui_state.hpp guard

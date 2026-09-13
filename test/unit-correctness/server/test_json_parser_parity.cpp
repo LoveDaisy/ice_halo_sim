@@ -346,7 +346,7 @@ void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vecto
 // already being wasted between ZenithNadirParam and markers_. So the assert below is a tripwire
 // for MOST additions, not for all of them, and adding a field is not licensed by it staying quiet.
 std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
-  static_assert(sizeof(lumice::RenderConfig) == 240, "Update FieldDiff when RenderConfig fields change");
+  static_assert(sizeof(lumice::RenderConfig) == 272, "Update FieldDiff when RenderConfig fields change");
   static_assert(sizeof(lumice::GridLineParam) == 24, "Update AddGridLines when GridLineParam fields change");
   static_assert(sizeof(lumice::MarkerStyleParam) == 20, "Update AddMarkers when MarkerStyleParam fields change");
   std::string out;
@@ -370,6 +370,7 @@ std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig&
   AddScalar("ev_mode", static_cast<int>(a.ev_mode_), static_cast<int>(b.ev_mode_), &out);
   AddScalar("tone", static_cast<int>(a.tone_), static_cast<int>(b.tone_), &out);
   AddGridLines("grid.angular_dist", a.angular_dist_grid_, b.angular_dist_grid_, &out);
+  AddGridLines("grid.view_dist", a.view_dist_grid_, b.view_dist_grid_, &out);
   AddGridLines("grid.elevation", a.elevation_grid_, b.elevation_grid_, &out);
   AddGridLines("grid.longitude", a.longitude_grid_, b.longitude_grid_, &out);
   AddScalar("grid.horizon", static_cast<int>(a.horizon_), static_cast<int>(b.horizon_), &out);
@@ -379,6 +380,9 @@ std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig&
             &out);
   AddScalar("grid.angular_dist_line", static_cast<int>(a.angular_dist_grid_line_),
             static_cast<int>(b.angular_dist_grid_line_), &out);
+  AddScalar("grid.view_dist_line", static_cast<int>(a.view_dist_grid_line_), static_cast<int>(b.view_dist_grid_line_),
+            &out);
+  AddScalar("grid.view_dist_label", static_cast<int>(a.view_dist_label_), static_cast<int>(b.view_dist_label_), &out);
   AddScalar("zenith_nadir.enabled", static_cast<int>(a.zenith_nadir_.enabled_),
             static_cast<int>(b.zenith_nadir_.enabled_), &out);
   AddFloat("zenith_nadir.radius_px", a.zenith_nadir_.radius_px_, b.zenith_nadir_.radius_px_, &out);
@@ -1259,6 +1263,54 @@ TEST(JsonParserParity, GridFamilyLineSwitchesExplicitTrueIsNotConfusedWithOmitte
   ASSERT_TRUE(ParseWithBoth(text, &p));
   EXPECT_TRUE(p.via_capi.renderers_.begin()->second == p.core.renderers_.begin()->second);
   EXPECT_TRUE(p.via_capi.renderers_.begin()->second.elevation_grid_line_);
+}
+
+// --- render.grid.view_dist / view_dist_line / view_dist_label: the axis-referenced family (v4.39) ---
+//
+// Three new keys with the same default shape as the angular_dist three (list empty, line switch
+// default-TRUE, label switch default-false), so the same two decoder failure shapes apply: a
+// memset-seeded line switch, and a paste that reads the twin's key. The values differ from the
+// angular_dist entry beside them on every field so the second shape fails on value, not on count.
+
+TEST(JsonParserParity, GridViewDistThreeKeysSurviveBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "angular_dist": [ { "value": 22.0, "opacity": 0.4 } ],
+           "view_dist": [ { "value": 35.0, "opacity": 0.6, "width": 2.5, "color": [0.1, 0.9, 0.2] } ],
+           "angular_dist_line": true, "view_dist_line": false,
+           "angular_dist_label": false, "view_dist_label": true })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  ASSERT_EQ(renderer.view_dist_grid_.size(), 1u);
+  EXPECT_FLOAT_EQ(renderer.view_dist_grid_[0].value_, 35.0f);
+  EXPECT_FLOAT_EQ(renderer.view_dist_grid_[0].opacity_, 0.6f);
+  EXPECT_FALSE(renderer.view_dist_grid_line_);
+  EXPECT_TRUE(renderer.view_dist_label_);
+  // The twin is read from its own keys.
+  ASSERT_EQ(renderer.angular_dist_grid_.size(), 1u);
+  EXPECT_FLOAT_EQ(renderer.angular_dist_grid_[0].value_, 22.0f);
+  EXPECT_TRUE(renderer.angular_dist_grid_line_);
+  EXPECT_FALSE(renderer.angular_dist_label_);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridViewDistOmittedLeavesBothParsersAtTheFamilyOffDefaults) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const auto& via_capi = p.via_capi.renderers_.begin()->second;
+  const auto& core = p.core.renderers_.begin()->second;
+  EXPECT_TRUE(via_capi.view_dist_grid_.empty());
+  EXPECT_TRUE(via_capi.view_dist_grid_line_) << "a memset-seeded decoder answers false here";
+  EXPECT_FALSE(via_capi.view_dist_label_);
+  EXPECT_TRUE(core.view_dist_grid_.empty());
+  EXPECT_TRUE(core.view_dist_grid_line_);
+  EXPECT_FALSE(core.view_dist_label_);
+  EXPECT_TRUE(via_capi == core);
 }
 
 // --- render.front: the second clip dimension (v4.20) ---

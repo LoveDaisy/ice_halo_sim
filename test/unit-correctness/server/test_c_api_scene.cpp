@@ -589,6 +589,15 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   negative_elevation.elevation_grid_count = -1;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_elevation, &id), LUMICE_ERR_INVALID_CONFIG);
 
+  // v4.39: the axis-referenced circles are a fourth fixed-capacity array with the same bounds pass.
+  LUMICE_RenderParam bad_view_dist = base;
+  bad_view_dist.view_dist_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_view_dist, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_RenderParam negative_view_dist = base;
+  negative_view_dist.view_dist_count = -1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_view_dist, &id), LUMICE_ERR_INVALID_CONFIG);
+
   // v4.18: the meridian list is a third fixed-capacity array and gets the same bounds pass. Both
   // ends, because a count validated at one end only is the shape of the defect this checks for.
   LUMICE_RenderParam bad_longitude = base;
@@ -617,6 +626,7 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   // The exact cap is accepted (the bound is inclusive).
   LUMICE_RenderParam at_cap = base;
   at_cap.angular_dist_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  at_cap.view_dist_count = LUMICE_MAX_CONFIG_GRID_LINES;
   at_cap.elevation_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
   at_cap.longitude_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &at_cap, &id), LUMICE_OK);

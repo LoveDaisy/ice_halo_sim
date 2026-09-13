@@ -1592,7 +1592,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       gui::g_state.sim.max_hits = 8;
       ctx->Yield(2);
-      ctx->ItemInputValue("**/##Max hits_input", 4096);
+      // Window-relative, for the reason the grid_alpha step above gives, and it became necessary
+      // here the moment the Overlay group grew its View Circles section: the alpha step scrolled
+      // the right panel to that table, the panel is now one header row taller, and the Scene
+      // group's Max hits control is left clipped above the fold — where a `**/` wildcard cannot
+      // see it. The window-relative id resolves and pans to it.
+      ctx->SetRef("##RightPanel");
+      ctx->ItemInputValue("##Max hits_input", 4096);
+      ctx->SetRef("");
       ctx->Yield(3);
       IM_CHECK_EQ(hits_from_table, gui::g_state.sim.max_hits);
       IM_CHECK_EQ(hits_from_table, 64);
@@ -1691,13 +1698,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // is asserted rather than inferred from what got drawn.
       IM_CHECK(gui::FindFieldEditor("bg_path") == nullptr);
       IM_CHECK(gui::FindFieldEditor("overlay_sun_circle_angles") == nullptr);
+      IM_CHECK(gui::FindFieldEditor("overlay_view_dist_angles") == nullptr);
       IM_CHECK(gui::FindFieldEditor("overlay_grid_alpha") != nullptr);
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
 
-      // Per key, non-fatally: the two are different unregistered SHAPES (a path string, an array),
-      // and which of them grew an editor is the diagnosis.
-      for (const char* unregistered : { "bg_path", "overlay_sun_circle_angles" }) {
+      // Per key, non-fatally: they are different unregistered SHAPES (a path string, two arrays
+      // owned by two families), and which of them grew an editor is the diagnosis.
+      for (const char* unregistered : { "bg_path", "overlay_sun_circle_angles", "overlay_view_dist_angles" }) {
         FilterTo(ctx, unregistered);
         if (!ctx->ItemExists(AdoptCheckboxRef(unregistered).c_str())) {
           IM_ERRORF("row '%s' was not rendered at all, so its cell says nothing", unregistered);

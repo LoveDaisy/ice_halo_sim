@@ -715,9 +715,12 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 ```json
 {
   "angular_dist": [ ... ],
+  "view_dist": [ ... ],
   "elevation": [ ... ],
   "longitude": [ ... ],
   "horizon": <布尔值>,
+  "view_dist_line": <布尔值>,
+  "view_dist_label": <布尔值>,
   "zenith_nadir": { ... }
 }
 ```
@@ -727,9 +730,12 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `angular_dist` | 对象数组 | 否 | [] | 距太阳角距恒定的圈——最常见的就是 22° 与 46° 晕。**会被绘制。** `value`、`opacity`、`color` 均生效，`width` 不生效（见下）。本键缺失时会回退读取旧键 `central`。 |
+| `view_dist` | 对象数组 | 否 | [] | 距相机**光轴**角距恒定的圈——`angular_dist` 的孪生，只是参考方向从太阳换成光轴。**会被绘制。** 规则相同：`value`、`opacity`、`color` 生效，`width` 不生效。圆心不是字段：它就是 `view` 自己的朝向（`azimuth` / `elevation` / `roll`），所以 `lens_shift` 不会让它漂移——镜头位移改变的是光轴落在画布上的位置，不是光轴本身，而圆跟着光轴走。v4.39 新增；文件里没有这个键时不画这族圈。 |
 | `elevation` | 对象数组 | 否 | [] | 等高线——仰角恒定的线，单位为度。**会被绘制**（自 v4.18 起；此前版本只解析、不画）。规则与 `angular_dist` 相同：`value`、`opacity`、`color` 生效，`width` 不生效。 |
 | `longitude` | 对象数组 | 否 | [] | 经度线——方位角恒定的线，单位为度。**会被绘制。** 规则与 `elevation` 相同。v4.18 新增；文件里没有这个键时得到空列表，即什么都不画。 |
 | `horizon` | 布尔值 | 否 | false | 沿天球地平线（仰角 0）画一条线，只画在可见半球内。默认关闭，需显式设为 `true` 才绘制。 |
+| `view_dist_line` | 布尔值 | 否 | true | 是否绘制 `view_dist` 的**线**。与另外三族的独立线开关（`elevation_line` / `longitude_line` / `angular_dist_line`，v4.26）同形：列表说圈在哪里，这个开关说画不画线，所以 `view_dist_label: true` 配 `view_dist_line: false` 得到只有数字、没有圈。默认为 `true`，因为写了列表就是要画的。v4.39 新增。 |
+| `view_dist_label` | 布尔值 | 否 | false | 是否绘制 `view_dist` 的**文字**标注（`30°`、`60°`……）。v4.39 新增。 |
 | `zenith_nadir` | 对象 | 否 | 见下 | 在天顶与天底绘制的像素空间圆环标记。两个标记共用一个对象，而不是线数组：这两个方向是固定的，没有需要逐条命名的东西；GUI 也只对这一对标记给一个开关、一个颜色、一个半径。v4.19 新增。 |
 
 **`zenith_nadir` 对象**：
@@ -763,9 +769,9 @@ C API 字段同步改名（`LUMICE_RenderParam.angular_dist` / `angular_dist_cou
 `central_grid` / `central_grid_count`）。这是**源码级**兼容性破坏，内存布局不变；详见
 `src/include/lumice.h` 中 `LUMICE_API_VERSION` 处的 BREAKING 说明。
 
-**三族线各自画什么、忽略什么**
+**四族线各自画什么、忽略什么**
 
-`value`、`opacity`、`color` 对三者全部生效：每条线各自成曲线、各自上色、各自按自己的不透明度
+`value`、`opacity`、`color` 对四者全部生效：每条线各自成曲线、各自上色、各自按自己的不透明度
 混合。`width` 会被读取、校验并原样写回，但**不影响任何像素**——线的粗细来自它所属那个场的局部
 梯度，这样一条曲线穿过投影被拉伸的区域时仍保持一条线的宽度，而这个算法没有任何宽度入口。设置了
 `width` 的配置不算错误，只是画出来一样。

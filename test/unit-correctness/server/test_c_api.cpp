@@ -4951,6 +4951,12 @@ TEST(AnnotationAnchorsApi, RejectsOutOfRangeEnumsAndCounts) {
   too_many_circles.angular_dist_count = LUMICE_MAX_ANNOTATION_CIRCLES + 1;
   EXPECT_EQ(LUMICE_ComputeAnnotationAnchors(&too_many_circles, &out), LUMICE_ERR_INVALID_VALUE);
 
+  // v4.39: the axis-referenced circle list goes through the same validator with the same cap.
+  LUMICE_AnnotationRequest too_many_view_circles = MakeAnnotationRequest(64, 32);
+  too_many_view_circles.view_dist_deg = angles;
+  too_many_view_circles.view_dist_count = LUMICE_MAX_ANNOTATION_CIRCLES + 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationAnchors(&too_many_view_circles, &out), LUMICE_ERR_INVALID_VALUE);
+
   // A rejected call must leave nothing to release: `out` is still zero-initialized, so the
   // NULL-safe Release below is a no-op rather than a free of a wild pointer.
   EXPECT_EQ(out.storage, nullptr);
@@ -4961,6 +4967,7 @@ TEST(AnnotationAnchorsApi, FillsLabelsAndMarkers) {
   const float parallels[] = { -30.0f, 30.0f };
   const float meridians[] = { 0.0f, 90.0f, 180.0f, -90.0f };
   const float circles[] = { 22.0f };
+  const float view_circles[] = { 30.0f, 60.0f };
   const int ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
 
   LUMICE_AnnotationRequest req = MakeAnnotationRequest(128, 64);
@@ -4970,6 +4977,8 @@ TEST(AnnotationAnchorsApi, FillsLabelsAndMarkers) {
   req.longitude_count = 4;
   req.angular_dist_deg = circles;
   req.angular_dist_count = 1;
+  req.view_dist_deg = view_circles;
+  req.view_dist_count = 2;
   req.marker_ids = ids;
   req.marker_count = 2;
 
@@ -4984,7 +4993,7 @@ TEST(AnnotationAnchorsApi, FillsLabelsAndMarkers) {
 
   // Every family asked for is answered, each label lands inside the canvas, and each maps back to
   // the curve it came from — read through the C pointers, which is the ABI's job.
-  bool saw[4] = { false, false, false, false };
+  bool saw[5] = { false, false, false, false, false };
   for (int i = 0; i < out.label_count; ++i) {
     const LUMICE_AnnotationLabel& l = out.labels[i];
     EXPECT_GE(l.px, 0.0f);
@@ -4993,7 +5002,7 @@ TEST(AnnotationAnchorsApi, FillsLabelsAndMarkers) {
     EXPECT_LT(l.py, 64.0f);
     // NUL-terminated within the fixed buffer, which is what makes the field usable as a C string.
     EXPECT_LT(std::strlen(l.text), sizeof(l.text));
-    if (l.kind < 0 || l.kind > 3) {
+    if (l.kind < 0 || l.kind > 4) {
       ADD_FAILURE() << "label " << i << " carries an unknown kind " << l.kind;
       continue;
     }
@@ -5014,11 +5023,21 @@ TEST(AnnotationAnchorsApi, FillsLabelsAndMarkers) {
       EXPECT_EQ(l.index, 0);
       EXPECT_FLOAT_EQ(l.value_deg, 22.0f);
     }
+    // The axis-referenced family indexes into ITS list, not the angular_dist one — the two lists
+    // are different lengths here precisely so a label carrying the wrong list's index is caught.
+    if (l.kind == LUMICE_ANNOTATION_VIEW_DIST) {
+      EXPECT_GE(l.index, 0);
+      EXPECT_LT(l.index, 2);
+      if (l.index >= 0 && l.index < 2) {
+        EXPECT_FLOAT_EQ(l.value_deg, view_circles[l.index]);
+      }
+    }
   }
   EXPECT_TRUE(saw[LUMICE_ANNOTATION_HORIZON]);
   EXPECT_TRUE(saw[LUMICE_ANNOTATION_ELEVATION]);
   EXPECT_TRUE(saw[LUMICE_ANNOTATION_LONGITUDE]);
   EXPECT_TRUE(saw[LUMICE_ANNOTATION_ANGULAR_DIST]);
+  EXPECT_TRUE(saw[LUMICE_ANNOTATION_VIEW_DIST]);
 
   LUMICE_ReleaseAnnotationAnchors(&out);
   // Release nulls the whole view, so a caller reading the struct afterwards sees "nothing here"

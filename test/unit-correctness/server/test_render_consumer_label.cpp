@@ -47,6 +47,9 @@ struct LabelSwitches {
   bool horizon = false;
   bool grid = false;
   bool angular_dist = false;
+  // Appended LAST so the three-value aggregate initialisers throughout this file keep meaning what
+  // they meant; a case that wants it names it.
+  bool view_dist = false;
 };
 
 // Which LINE switches a case wants on, the same shape and for the same reason. All four default to
@@ -58,6 +61,7 @@ struct LineSwitches {
   bool elevation = true;
   bool longitude = true;
   bool angular_dist = true;
+  bool view_dist = true;  // appended last, same reason as LabelSwitches::view_dist
 };
 
 // A linear 120 deg view centred 45 deg up: wide enough that the horizon, a 30 deg parallel, a
@@ -85,9 +89,11 @@ RenderConfig MakeLabelConfig(LabelSwitches on, LineSwitches lines = {}, float li
   cfg.elevation_grid_line_ = lines.elevation;
   cfg.longitude_grid_line_ = lines.longitude;
   cfg.angular_dist_grid_line_ = lines.angular_dist;
+  cfg.view_dist_grid_line_ = lines.view_dist;
   cfg.horizon_label_ = on.horizon;
   cfg.grid_label_ = on.grid;
   cfg.angular_dist_label_ = on.angular_dist;
+  cfg.view_dist_label_ = on.view_dist;
 
   GridLineParam parallel;
   parallel.value_ = 30.0f;
@@ -108,6 +114,17 @@ RenderConfig MakeLabelConfig(LabelSwitches on, LineSwitches lines = {}, float li
   circle.color_[1] = 1.0f;
   circle.color_[2] = 0.2f;
   cfg.angular_dist_grid_.push_back(circle);
+
+  // The axis-referenced twin: a 35 deg circle about the optical axis (the canvas centre here). It
+  // crosses the sun circle — any radius between 3 and 47 deg does on this fixture, since the sun
+  // sits 25 deg off-axis — and the cases below already read shared pixels out of their counts.
+  GridLineParam view_circle;
+  view_circle.value_ = 35.0f;
+  view_circle.opacity_ = line_opacity;
+  view_circle.color_[0] = 1.0f;
+  view_circle.color_[1] = 0.6f;
+  view_circle.color_[2] = 0.2f;
+  cfg.view_dist_grid_.push_back(view_circle);
   return cfg;
 }
 
@@ -181,6 +198,7 @@ TEST(RenderConsumerLabel, TheSwitchesAreOptInAndOffComputesNoAnchors) {
   EXPECT_FALSE(defaults.horizon_label_);
   EXPECT_FALSE(defaults.grid_label_);
   EXPECT_FALSE(defaults.angular_dist_label_);
+  EXPECT_FALSE(defaults.view_dist_label_);
 
   RenderConsumer off(MakeLabelConfig(LabelSwitches{}), ColorClassTable{}, MakeSun());
   const std::vector<uint8_t> img = SnapshotOnce(&off);
@@ -189,6 +207,7 @@ TEST(RenderConsumerLabel, TheSwitchesAreOptInAndOffComputesNoAnchors) {
   EXPECT_TRUE(off.ElevationLabelsForTest().empty());
   EXPECT_TRUE(off.LongitudeLabelsForTest().empty());
   EXPECT_TRUE(off.AngularDistLabelsForTest().empty());
+  EXPECT_TRUE(off.ViewDistLabelsForTest().empty());
 }
 
 // (b) Each switch, on its own, puts text into the image. Three cases in one loop because the
@@ -206,7 +225,8 @@ TEST(RenderConsumerLabel, EachSwitchDrawsTextOnItsOwn) {
   };
   for (const Row& row :
        { Row{ "horizon", LabelSwitches{ true, false, false } }, Row{ "grid", LabelSwitches{ false, true, false } },
-         Row{ "angular_dist", LabelSwitches{ false, false, true } } }) {
+         Row{ "angular_dist", LabelSwitches{ false, false, true } },
+         Row{ "view_dist", LabelSwitches{ false, false, false, true } } }) {
     RenderConsumer on(MakeLabelConfig(row.on), ColorClassTable{}, MakeSun());
     const std::vector<uint8_t> img_on = SnapshotOnce(&on);
     // Non-fatal: one family that draws nothing must not take the other two's reports with it, and
@@ -233,6 +253,7 @@ TEST(RenderConsumerLabel, TheThreeSwitchesDoNotReachEachOther) {
     EXPECT_TRUE(horizon.ElevationLabelsForTest().empty());
     EXPECT_TRUE(horizon.LongitudeLabelsForTest().empty());
     EXPECT_TRUE(horizon.AngularDistLabelsForTest().empty());
+    EXPECT_TRUE(horizon.ViewDistLabelsForTest().empty());
   }
   {
     // One switch covers BOTH grid families — the GUI has a single grid label control — so this
@@ -243,6 +264,7 @@ TEST(RenderConsumerLabel, TheThreeSwitchesDoNotReachEachOther) {
     EXPECT_FALSE(grid.ElevationLabelsForTest().empty());
     EXPECT_FALSE(grid.LongitudeLabelsForTest().empty());
     EXPECT_TRUE(grid.AngularDistLabelsForTest().empty());
+    EXPECT_TRUE(grid.ViewDistLabelsForTest().empty());
   }
   {
     RenderConsumer circles(MakeLabelConfig(LabelSwitches{ false, false, true }), ColorClassTable{}, MakeSun());
@@ -251,6 +273,18 @@ TEST(RenderConsumerLabel, TheThreeSwitchesDoNotReachEachOther) {
     EXPECT_TRUE(circles.ElevationLabelsForTest().empty());
     EXPECT_TRUE(circles.LongitudeLabelsForTest().empty());
     EXPECT_FALSE(circles.AngularDistLabelsForTest().empty());
+    EXPECT_TRUE(circles.ViewDistLabelsForTest().empty());
+  }
+  {
+    // The axis-referenced twin has its own switch; the sun circles' switch must not reach it, nor
+    // it theirs — the pair most likely to be wired to one flag.
+    RenderConsumer view(MakeLabelConfig(LabelSwitches{ false, false, false, true }), ColorClassTable{}, MakeSun());
+    SnapshotOnce(&view);
+    EXPECT_TRUE(view.HorizonLabelsForTest().empty());
+    EXPECT_TRUE(view.ElevationLabelsForTest().empty());
+    EXPECT_TRUE(view.LongitudeLabelsForTest().empty());
+    EXPECT_TRUE(view.AngularDistLabelsForTest().empty());
+    EXPECT_FALSE(view.ViewDistLabelsForTest().empty());
   }
 }
 
@@ -356,6 +390,9 @@ TEST(RenderConsumerLabel, TheGridAndCircleLabelsAreDrawnWithTheirLinesSwitchedOf
     { "angular_dist", LabelSwitches{ false, false, true }, LineSwitches{ false, true, true, false },
       LineSwitches{ false, true, true, true }, &RenderConsumer::AngularDistMasksForTest,
       &RenderConsumer::AngularDistLabelsForTest },
+    { "view_dist", LabelSwitches{ false, false, false, true }, LineSwitches{ false, true, true, true, false },
+      LineSwitches{ false, true, true, true, true }, &RenderConsumer::ViewDistMasksForTest,
+      &RenderConsumer::ViewDistLabelsForTest },
   };
 
   for (const Row& row : rows) {
@@ -425,7 +462,11 @@ TEST(RenderConsumerLabel, EachFamilyLineSwitchGatesOnlyItsOwnFamily) {
                           Row{ "longitude", LineSwitches{ false, true, false, true },
                                &RenderConsumer::LongitudeMasksForTest, &RenderConsumer::ElevationMasksForTest },
                           Row{ "angular_dist", LineSwitches{ false, true, true, false },
-                               &RenderConsumer::AngularDistMasksForTest, &RenderConsumer::ElevationMasksForTest } }) {
+                               &RenderConsumer::AngularDistMasksForTest, &RenderConsumer::ElevationMasksForTest },
+                          // Read against the SUN circles' mask, not the parallels': the twin most
+                          // likely to share a flag is the one whose pixels must not move.
+                          Row{ "view_dist", LineSwitches{ false, true, true, true, false },
+                               &RenderConsumer::ViewDistMasksForTest, &RenderConsumer::AngularDistMasksForTest } }) {
     RenderConsumer one_off(MakeLabelConfig(LabelSwitches{}, row.lines), ColorClassTable{}, MakeSun());
     const std::vector<uint8_t> img_one_off = SnapshotOnce(&one_off);
     if (img_one_off.size() != static_cast<size_t>(kTotalPix) * 3) {

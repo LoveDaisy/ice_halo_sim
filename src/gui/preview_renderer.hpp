@@ -18,7 +18,7 @@ inline constexpr float kOverlaySentinel = -9999.f;
 // 720 meridians at its narrowest field of view (ComputeGridLongitudeAngles at a 0.5 deg step) —
 // is what that ceiling was widened for, so the two are one number for one reason. A list longer
 // than this is TRUNCATED at upload (Render()), which the GUI cannot produce and core would reject.
-// The circles' capacity is kMaxSunCircles (gui_constants.hpp), the list's own ceiling.
+// The circles' capacity is kMaxAnnotationCircles (gui_constants.hpp), the list's own ceiling.
 inline constexpr int kMaxOverlayLevels = LUMICE_MAX_ANNOTATION_LINES;
 
 // The "no marker anywhere" position array. A function for the same reason GuiState's
@@ -67,37 +67,47 @@ struct Exposure {
   float intensity_scale = 0.0f;  // = intensity_factor / per_pixel_intensity (0 = not in XYZ mode)
 };
 
-// Auxiliary line overlay (horizon, altitude grid, sun circles) drawn on top
+// Auxiliary line overlay (horizon, altitude grid, sun circles, view circles) drawn on top
 // of the preview.
 //
 // The show_* fields here control **line** rendering only (shader uniforms
-// u_show_horizon / u_show_grid / u_show_sun_circles). They are sourced from
+// u_show_horizon / u_show_grid / u_show_sun_circles / u_show_view_dist). They are sourced from
 // GuiState::show_<x>_line. The companion fields GuiState::show_<x>_label are read where the
 // label anchors are consumed (app_panels.cpp / app.cpp, through AnnotationAnchors), not here.
 struct OverlayDecoration {
   bool show_horizon = false;
   bool show_grid = false;
   bool show_sun_circles = false;
+  bool show_view_dist = false;
   // WHERE the curves are, stated as the definition the shader evaluates per fragment rather than as
   // pixels: the parallels and meridians of the grid and the circles' radii, in degrees, and the
   // direction the circles are centred on. The same three lists and the same direction go into the
   // core anchor request (AnnotationViewInputFor, app_panels.cpp), which is what makes the drawn
   // curve and the label placed on it two readings of one input rather than two inputs.
   //
-  // Parallels/meridians past kMaxOverlayLevels and circles past kMaxSunCircles are not uploaded
-  // (Render() clamps the counts); the GUI's own lists never reach either bound.
+  // Parallels/meridians past kMaxOverlayLevels and either ring family's circles past
+  // kMaxAnnotationCircles are not uploaded (Render() clamps the counts); the GUI's own lists never
+  // reach either bound.
   std::vector<float> elevation_deg;
   std::vector<float> longitude_deg;
   std::vector<float> angular_dist_deg;
+  // Circles about the camera's OPTICAL AXIS. No centre field beside this list, unlike
+  // reference_dir for the sun circles below: the axis is -u_view_matrix[2] in the shader's world
+  // frame, and that matrix is uploaded from view_proj every frame already — a second statement of
+  // the same direction here could only disagree with it (core derives its axis from the same
+  // view angles, so the two sides agree by construction rather than by a value being copied).
+  std::vector<float> view_dist_deg;
   // Unit vector, world frame, the direction light TRAVELS (altitude = asin(-z)) — GuiSunWorldDir's
   // output, the same value the anchor request's reference_dir carries.
   float reference_dir[3] = { 0.0f, 0.0f, -1.0f };
   float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
   float grid_color[3] = { 1.0f, 1.0f, 1.0f };
   float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
+  float view_dist_color[3] = { 0.4f, 0.9f, 1.0f };
   float horizon_alpha = 0.6f;
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
+  float view_dist_alpha = 0.5f;
 
   // The sky reference points: pixel-space ring markers, one slot per core marker id.
   //

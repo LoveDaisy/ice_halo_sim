@@ -325,6 +325,17 @@ struct ParityScene {
   // not two implementations of the same curve — they are two readings of one. See the exclusion
   // note above for why that makes turning them on raise the PSNR rather than lower it.
   bool show_sun_circles;
+  // The view-center angular-distance circles (grid.view_dist / GuiState::show_view_dist_line) —
+  // the same "two readings of one curve" family as show_sun_circles above (same core geometric
+  // definition, AngularDistDegOfDir, evaluated from a different reference direction), so turning
+  // it on should raise the PSNR the same way the other three do rather than lower it. OFF on
+  // every kScenes[] row below on purpose: this family did not exist when those rows' thresholds
+  // were calibrated (the block-mean means/sigmas documented above kScenes[] were all measured
+  // without it), and turning it on here would silently invalidate every one of those measured
+  // numbers rather than add coverage. Coverage for this family instead comes from a dedicated
+  // membership-mask row in kLinesOnlyScenes (LinesOnlyScene::force_view_dist), which is measured
+  // fresh rather than folded into an existing calibration.
+  bool show_view_dist;
   // The coordinate grid, on in both scenes for the same reason the circles are: both arms
   // evaluate the same level-set definition, so it is one curve twice rather than two
   // implementations. See the exclusion note above.
@@ -634,6 +645,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
+   /*show_view_dist=*/false,
    /*show_grid=*/true, /*show_markers=*/true, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*bm4_threshold=*/35.4, /*expect_w=*/512, /*expect_h=*/683},
   // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
@@ -717,6 +729,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
+   /*show_view_dist=*/false,
    /*show_grid=*/true, /*show_markers=*/true, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*bm4_threshold=*/38.3, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
@@ -841,6 +854,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    /*tone=*/0, /*paper_srgb=*/{ 1.0f, 1.0f, 1.0f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
+   /*show_view_dist=*/false,
    /*show_grid=*/true, /*show_markers=*/true, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*bm4_threshold=*/39.3, /*expect_w=*/512, /*expect_h=*/683},
   // The TONE scene. Every field except `tone`, `paper_srgb` and the four annotation switches is
@@ -926,6 +940,7 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    /*tone=*/1, /*paper_srgb=*/{ 0.96f, 0.92f, 0.84f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false, /*show_sun_circles=*/false,
+   /*show_view_dist=*/false,
    /*show_grid=*/false, /*show_markers=*/false, /*exposure_offset=*/0.0f, /*grid_srgb=*/{ 1.0f, 1.0f, 1.0f },
    /*ray_num_millions=*/16.0f, /*bm4_threshold=*/42.1, /*expect_w=*/1024, /*expect_h=*/512},
 };
@@ -1016,6 +1031,11 @@ struct LinesOnlyScene {
   const char* base_scene;
   // The XOR's largest 8-connected blob may not exceed this.
   int max_cc_threshold;
+  // Forces show_view_dist on for this row on top of whatever the base scene says (every kScenes[]
+  // row leaves it off — see the field's comment on ParityScene). Only the dedicated
+  // "view_dist_lines" row below sets this; the original three stay byte-for-byte the scenes their
+  // thresholds were calibrated against.
+  bool force_view_dist = false;
 };
 
 //
@@ -1055,10 +1075,41 @@ struct LinesOnlyScene {
 // note), so the reading is the honest one. The smallest break each row is placed against is the
 // column's minimum above the honest line: 73, 8 and 11 px.
 // clang-format off
+// view_dist_lines calibration, N=6 runs of this one row (--filter "view_dist_lines") on an
+// otherwise idle machine, the same ruler and the same honest/break protocol as the three rows
+// above. The view circle is drawn from the same AngularDistDegOfDir definition the sun circles
+// already are, evaluated from a different reference direction, so it is "one curve twice" exactly
+// like its sibling; the honest reading is n_diff=0 / maxcc=0 in all six runs, identical to the
+// pixel, same as full_sky_dual_fisheye_lines' own honest reading above (both arms mark 161053
+// pixels). K = 4 is this row's own reading, not the siblings' by analogy: it sits under the
+// smallest break below by 72x.
+//
+// Two breaks, one per arm, because the reference direction is not a field of the export
+// document: the CLI derives the optical axis from the view's own az/el/roll, so no edit to the
+// document can move the centre of the view circles while leaving the rest of the scene alone.
+// The only way to make the two arms disagree about the reference direction in isolation is on
+// the GUI arm, in the shader (view_axis = u_reference_dir in place of -u_view_matrix[2], i.e. the
+// view family drawn around the sun). Dropping a level, by contrast, is a document edit like the
+// sibling rows' dropped parallel, and it is the smaller of the two — the XOR is one missing ring,
+// cut at every crossing with the grid that is still there.
+//
+//   break                                              | view_dist_lines
+//   ---------------------------------------------------|----------------
+//   honest (N=6, identical)                            |     0 /   0
+//   the CLI drops the last view_dist level (60 deg)    |  2286 / 291
+//   the GUI centres the view circles on the sun        |  8479 / 359
+//     (shader: view_axis = u_reference_dir)            |
+//
+// Read as n_xor / maxcc. Both breaks red on 6/6 runs, and both readings were the same in all
+// six. The sun-centred break is the one that would come from wiring the wrong uniform into the
+// second family's distance, which is the defect this row exists to catch. The dropped level is
+// the twin of the sibling row's "draws only the first of two angular_dist lines" break (360 px
+// on the same base scene, 291 here), and it is the smallest break this row is placed against.
 const LinesOnlyScene kLinesOnlyScenes[] = {
   {"single_lens_angled_lines", "single_lens_angled", /*max_cc_threshold=*/4},
   {"full_sky_dual_fisheye_lines", "full_sky_dual_fisheye", /*max_cc_threshold=*/4},
   {"single_lens_rectilinear_lines", "single_lens_rectilinear", /*max_cc_threshold=*/4},
+  {"view_dist_lines", "full_sky_dual_fisheye", /*max_cc_threshold=*/4, /*force_view_dist=*/true},
 };
 // clang-format on
 constexpr int kLinesOnlySceneCount = sizeof(kLinesOnlyScenes) / sizeof(kLinesOnlyScenes[0]);
@@ -1085,6 +1136,9 @@ ParityScene MakeLinesOnlyScene(const LinesOnlyScene& lines, const ParityScene& b
   ParityScene s = base;
   s.name = lines.name;
   s.show_markers = false;
+  if (lines.force_view_dist) {
+    s.show_view_dist = true;
+  }
   s.exposure_offset = kLinesOnlyExposureOffset;
   std::copy(std::begin(kLinesOnlyCanvasSrgb), std::end(kLinesOnlyCanvasSrgb), std::begin(s.background_srgb));
   std::copy(std::begin(kLinesOnlyGridSrgb), std::end(kLinesOnlyGridSrgb), std::begin(s.grid_srgb));
@@ -1315,6 +1369,7 @@ void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServe
   gui::g_state.aspect_portrait = scene.aspect_portrait;
   gui::g_state.show_horizon_line = scene.show_horizon;
   gui::g_state.show_sun_circles_line = scene.show_sun_circles;
+  gui::g_state.show_view_dist_line = scene.show_view_dist;
   gui::g_state.show_grid_line = scene.show_grid;
   std::copy(std::begin(scene.grid_srgb), std::end(scene.grid_srgb), std::begin(gui::g_state.grid_color));
   for (gui::MarkerAppearance& m : gui::g_state.markers) {
@@ -1346,6 +1401,12 @@ void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServe
   // The default list, {22, 46}, is what a user gets; keeping it means this scene compares the
   // circles anyone would actually draw.
   gui::g_state.sun_circle_angles = { 22.0f, 46.0f };
+  // Same full-opacity override and the same reasoning as grid_alpha/markers_alpha above — the
+  // colour-space residual between the two composite orders only vanishes at alpha 1. A distinct
+  // level list from sun_circle_angles (30/60 rather than 22/46) so a scene with both families on
+  // reads two visually separate rings rather than one family's angles doubling as the other's.
+  gui::g_state.view_dist_alpha = 1.0f;
+  gui::g_state.view_dist_angles = { 30.0f, 60.0f };
   gui::g_state.sim.infinite = false;
   gui::g_state.sim.ray_num_millions = scene.ray_num_millions;
 
@@ -1443,6 +1504,7 @@ void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServe
   // lower under the full-suite invocation than under --filter, and it was these values that
   // said which of the two arms had drifted.
   IM_CHECK_EQ(vp.params.overlay.show_sun_circles, scene.show_sun_circles);
+  IM_CHECK_EQ(vp.params.overlay.show_view_dist, scene.show_view_dist);
   IM_CHECK_EQ(vp.params.overlay.show_grid, scene.show_grid);
   // The preview arm's own reading of the same switch. There is no enable flag in this struct —
   // a marker that is off is written as the sentinel position — so the check is that every slot
@@ -1466,12 +1528,16 @@ void RenderBothArms(ImGuiTestContext* ctx, const ParityScene& scene, ScopedServe
   IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
   IM_CHECK_EQ(vp.params.overlay.markers_alpha, 1.0f);
   IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
+  IM_CHECK_EQ(vp.params.overlay.view_dist_alpha, gui::g_state.view_dist_alpha);
   // The curve DEFINITIONS the shader evaluates reached PreviewParams: the circle radii and the
   // grid's level lists. What this pins is the half the fixture can see from here; whether the
   // shader draws the same curve the CLI does from the same definition is what the PSNR below
   // is for.
   if (scene.show_sun_circles) {
     IM_CHECK(!vp.params.overlay.angular_dist_deg.empty());
+  }
+  if (scene.show_view_dist) {
+    IM_CHECK(!vp.params.overlay.view_dist_deg.empty());
   }
   if (scene.show_grid) {
     IM_CHECK(!vp.params.overlay.elevation_deg.empty());

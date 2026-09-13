@@ -29,7 +29,7 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 ### 常量
 
 ```c
-#define LUMICE_API_VERSION 438        // ABI 版本，编码为 major*100 + minor（v4.38）
+#define LUMICE_API_VERSION 439        // ABI 版本，编码为 major*100 + minor（v4.39）
 #define LUMICE_MAX_RENDER_RESULTS 16  // 渲染结果数组最大容量
 #define LUMICE_MAX_STATS_RESULTS 1    // 统计结果数组最大容量
 ```
@@ -37,10 +37,12 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 `LUMICE_API_VERSION` 让调用方把编译时依赖的 ABI 钉死，在不匹配时编译期报错，而不是撞上结构体布局漂移导致的静默 UB：
 
 ```c
-static_assert(LUMICE_API_VERSION >= 438, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 439, "Lumice header too old for this integration");
 ```
 
 公开符号集或结构体布局每发生一次 BREAKING 变更就 bump 一次。
+
+**v4.39 就是一次这样的 break。** 第五个注解 family——视场距离圆，即与相机**光轴**成等角距的圆，是 `angular_dist`（以太阳为参考）的以光轴为参考的孪生——让两个结构体在尾部增长，调用方需重新编译。`LUMICE_RenderParam` 在 `paper` 之后新增 `view_dist[]` / `view_dist_count` / `view_dist_line` / `view_dist_label`（sizeof 4904 → 6452），与 `angular_dist` 四字段逐项同形；`LUMICE_AnnotationRequest` 在 `marker_count` 之后新增 `view_dist_deg` / `view_dist_count`（128 → 144），其标签以 kind `LUMICE_ANNOTATION_VIEW_DIST`（4）返回。JSON 键为 `grid.view_dist`、`grid.view_dist_line`（默认 true）、`grid.view_dist_label`（默认 false），形态与 `angular_dist` 三键完全一致；缺键即 family 关闭，所以 v4.39 之前写下的文档渲染结果不变。没有任何移除或重排。有两点是**刻意不做**的：没有 `reference_dir_view`——圆心就是视图自己的前向（elevation / azimuth / roll），core 已经为前半球裁剪推导了它，请求本身已决定了圆心，再加一个方向字段只是它的第二份拷贝；且它结构上与 `lens_shift` 无关——移轴移动的是光轴的**像素**而非光轴，圆跟着光轴走。另一点与其他三个线开关相同：零初始化的 `LUMICE_RenderParam` 里 `view_dist_line` 读作 0，而 JSON 默认为 true，请显式设置或走 JSON。两个结构体现在都在头文件里带精确 sizeof 的 `static_assert`，下一次尾部追加若不同时递增版本号即为编译错误。
 
 **v4.13 就是一次这样的 break。** `LUMICE_CrystalParam` 在结构体末尾新增了一个字段：`int sync_group[LUMICE_SHAPE_SCALAR_COUNT]`，同时新增了十个 `LUMICE_SHAPE_SCALAR_*` 索引常量。核心仿真器自 v4.12 起就已经能表达形状标量 sync group（同组的若干形状标量在一个晶体实例上共享一次随机抽样——完整语义见[`configuration.md` 的形状标量 Sync Group 一节](configuration.md#shape-scalar-sync-groups)），但 `LUMICE_CrystalParam` 当时没有对应槽位，导致配置文件、GUI、以及任何调用方——三者都只能走这唯一一条通路——的声明会被静默丢在地上：核心侧永远收到"全部独立"，且没有任何警告。结构体布局发生了变化，调用方需要重新编译；但行为不变——零初始化的 `sync_group`（与此前一个被清零/`{}` 初始化的 `LUMICE_CrystalParam` 的状态相同）意味着每个标量都独立，与此前完全一致。`LUMICE_SHAPE_SCALAR_*` 按 **RNG 抽取顺序**索引 `sync_group[]`（prism：`HEIGHT` 之后是 `FACE_0..FACE_5`；pyramid：`UPPER_H` 之后是 `PRISM_H`、`LOWER_H`，再之后是 `FACE_0..FACE_5`），这个顺序刻意**不同于** `LUMICE_CrystalParam` 本身的字段声明顺序（`height` / `prism_h` / `upper_h` / `lower_h`——注意 `upper_h` 与 `prism_h` 相对抽取顺序是互换的）。一个组的 leader——即整个组的分布会被规范化到的那个成员——被定义为组内最小的 `LUMICE_SHAPE_SCALAR_*` 索引，所以这个顺序是有约束力的：若把它对齐到结构体字段顺序，会静默改变一个混合组里到底是哪个成员拥有分布。
 

@@ -62,7 +62,11 @@ namespace {
 // intent, none of it document state), `analysis_result` and `analysis_run_in_progress` (both
 // derived, poller-fed). A personal default for "which ROI mode the panel opens in" is the kind of
 // thing a user might one day ask for; it would be a tier change on that one row, not a new channel.
-constexpr std::size_t kExpectedGovernedFieldCount = 79;
+// 85 with the view circles (v4.39): the axis-referenced ring family's five fields plus its
+// section's fold state, every one a serialized kView row like the sun circles' and
+// markers_section_open before them — eligible for the same reason, so no new channel and no
+// new verdict, just six more rows in the same tier.
+constexpr std::size_t kExpectedGovernedFieldCount = 85;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -150,6 +154,11 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "markers", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "markers_alpha", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "markers_section_open", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    // The view circles' list and fold state: pinned for the same reason `markers` is — a vector
+    // field and a panel-fold bool that are nonetheless eligible, because the tier decides, and
+    // neither key path carries a document-local index.
+    { "view_dist_angles", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "view_dist_section_open", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_lens_border_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 4 — collections. A key path into these carries a document-local index.
     { "crystals", DefaultEligibility::kIneligible, IneligibleReason::kCollection },

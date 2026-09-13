@@ -206,6 +206,14 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "angular_dist_grid";
   }
 
+  // view_dist_grid: the axis-referenced twin, same classification. Its reference direction is
+  // derived from view_, which IS layout — but that is view_'s classification, not this list's.
+  {
+    auto mod = base;
+    mod.view_dist_grid_.push_back(lumice::GridLineParam{ 10.0f, 2.0f, 0.5f, { 1, 0, 0 } });
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "view_dist_grid";
+  }
+
   // elevation_grid
   {
     auto mod = base;
@@ -244,6 +252,16 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     auto mod = base;
     mod.angular_dist_grid_line_ = false;
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "angular_dist_grid_line";
+  }
+  {
+    auto mod = base;
+    mod.view_dist_grid_line_ = false;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "view_dist_grid_line";
+  }
+  {
+    auto mod = base;
+    mod.view_dist_label_ = true;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "view_dist_label";
   }
 
   // ev_mode: it selects WHICH exposure formula PostSnapshot uses, not the accumulation layout,
@@ -778,6 +796,7 @@ TEST(RenderConfigFamilyLineSwitchTest, DefaultIsOnUnlikeEveryOtherAnnotationSwit
   EXPECT_TRUE(defaults.elevation_grid_line_);
   EXPECT_TRUE(defaults.longitude_grid_line_);
   EXPECT_TRUE(defaults.angular_dist_grid_line_);
+  EXPECT_TRUE(defaults.view_dist_grid_line_);
   // Read together with the opt-in neighbours, because "true" is only meaningful here as the
   // deliberate opposite of what sits beside it — a copy-paste that gave these the same default as
   // `horizon_` would look perfectly consistent in isolation.
@@ -785,6 +804,8 @@ TEST(RenderConfigFamilyLineSwitchTest, DefaultIsOnUnlikeEveryOtherAnnotationSwit
   EXPECT_FALSE(defaults.horizon_label_);
   EXPECT_FALSE(defaults.grid_label_);
   EXPECT_FALSE(defaults.angular_dist_label_);
+  EXPECT_FALSE(defaults.view_dist_label_);
+  EXPECT_TRUE(defaults.view_dist_grid_.empty());
 }
 
 TEST(RenderConfigFamilyLineSwitchTest, ToJson_EmitsOneKeyPerFamilyUnderGrid) {
@@ -792,6 +813,7 @@ TEST(RenderConfigFamilyLineSwitchTest, ToJson_EmitsOneKeyPerFamilyUnderGrid) {
   cfg.elevation_grid_line_ = false;
   cfg.longitude_grid_line_ = true;
   cfg.angular_dist_grid_line_ = false;
+  cfg.view_dist_grid_line_ = true;
 
   const nlohmann::json j = cfg;
 
@@ -799,11 +821,42 @@ TEST(RenderConfigFamilyLineSwitchTest, ToJson_EmitsOneKeyPerFamilyUnderGrid) {
   ASSERT_TRUE(j["grid"].contains("elevation_line"));
   ASSERT_TRUE(j["grid"].contains("longitude_line"));
   ASSERT_TRUE(j["grid"].contains("angular_dist_line"));
-  // Three distinct values in one document: a writer that emitted the same member three times
-  // passes any test that sets them all alike.
+  ASSERT_TRUE(j["grid"].contains("view_dist_line"));
+  // Distinct values in one document: a writer that emitted the same member every time passes any
+  // test that sets them all alike. view_dist_line is set to the OPPOSITE of the angular_dist_line
+  // beside it for the same reason — the twin most likely to be pasted from.
   EXPECT_FALSE(j["grid"]["elevation_line"].get<bool>());
   EXPECT_TRUE(j["grid"]["longitude_line"].get<bool>());
   EXPECT_FALSE(j["grid"]["angular_dist_line"].get<bool>());
+  EXPECT_TRUE(j["grid"]["view_dist_line"].get<bool>());
+}
+
+// The axis-referenced family's three keys, written under "grid" with the same spelling rule as
+// the angular_dist three (list key bare, switches suffixed). The list carries a value the
+// angular_dist list does not, so a writer that crossed the two twins is caught, not just one that
+// dropped a key. The decode side (config_manager.cpp) is pinned through the whole parse path in
+// test_json.cpp, which owns the ConfigManager fixture.
+TEST(RenderConfigFamilyLineSwitchTest, ViewDistThreeKeysAreWrittenUnderGrid) {
+  auto cfg = MakeBaseline();
+  cfg.angular_dist_grid_.push_back(lumice::GridLineParam{ 22.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+  cfg.view_dist_grid_.push_back(lumice::GridLineParam{ 35.0f, 2.0f, 0.5f, { 0, 1, 0 } });
+  cfg.view_dist_grid_line_ = false;
+  cfg.view_dist_label_ = true;
+
+  const nlohmann::json j = cfg;
+  ASSERT_TRUE(j["grid"].contains("view_dist"));
+  ASSERT_TRUE(j["grid"].contains("view_dist_line"));
+  ASSERT_TRUE(j["grid"].contains("view_dist_label"));
+  EXPECT_FALSE(j["grid"].contains("view_dist_grid"));
+  EXPECT_FALSE(j["grid"].contains("view_dist_grid_line"));
+  ASSERT_EQ(j["grid"]["view_dist"].size(), 1u);
+  EXPECT_NEAR(j["grid"]["view_dist"][0]["value"].get<float>(), 35.0f, 1e-5f);
+  EXPECT_FALSE(j["grid"]["view_dist_line"].get<bool>());
+  EXPECT_TRUE(j["grid"]["view_dist_label"].get<bool>());
+  // The twin is untouched by the new keys.
+  ASSERT_EQ(j["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(j["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+  EXPECT_TRUE(j["grid"]["angular_dist_line"].get<bool>());
 }
 
 // The key names carry no "grid" of their own — they already sit under "grid", exactly as
@@ -855,6 +908,24 @@ TEST(RenderConfigFamilyLineSwitchTest, OperatorEq_ComparesEachOfTheThree) {
     auto b = MakeBaseline();
     b.angular_dist_grid_line_ = false;
     EXPECT_FALSE(a == b) << "angular_dist_grid_line";
+  }
+  {
+    auto a = MakeBaseline();
+    auto b = MakeBaseline();
+    b.view_dist_grid_line_ = false;
+    EXPECT_FALSE(a == b) << "view_dist_grid_line";
+  }
+  {
+    auto a = MakeBaseline();
+    auto b = MakeBaseline();
+    b.view_dist_label_ = true;
+    EXPECT_FALSE(a == b) << "view_dist_label";
+  }
+  {
+    auto a = MakeBaseline();
+    auto b = MakeBaseline();
+    b.view_dist_grid_.push_back(lumice::GridLineParam{ 35.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+    EXPECT_FALSE(a == b) << "view_dist_grid";
   }
 }
 
