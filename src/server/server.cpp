@@ -1,6 +1,7 @@
 #include "server/server.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -180,10 +181,11 @@ class ServerImpl {
   Error ParseConfigManager(const nlohmann::json& config_json, const char* caller,
                            const std::function<void(const ConfigManager&)>& validate, ConfigManager* out);
 
-  // task-268.7: single-engine orchestration — server now runs exactly one
+  // Single-engine orchestration — the GPU route's render group is exactly one
   // Simulator. The legacy kDefaultSimulatorCnt = PhysicalCoreCount() was removed
-  // along with the 12-worker queue-per-Simulator pattern; num_workers is reserved
-  // and ignored. See doc/gpu-single-engine-implementation.md §6.
+  // along with the 12-worker queue-per-Simulator pattern. num_workers sizes the CPU
+  // group on both routes: the render workers on the CPU route, the standing analysis
+  // pool on the GPU route (see the ctor). See doc/gpu-single-engine-implementation.md §6.
   static constexpr int kMaxSceneCnt = 128;
   static constexpr size_t kDefaultRayNum = 128;
   // scrum-268.6: Metal single-engine needs a large GPU dispatch to saturate the
@@ -250,8 +252,15 @@ class ServerImpl {
   void PublishEmptyFrame();
 
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
+  // `required_mode` is the group-selection half of Start(): a thread that carries one
+  // only leaves the wait when the session being started is of that kind (mode_), and
+  // otherwise stays parked — it consumes no batch and is not counted in active_workers_,
+  // exactly as if the notify had been spurious. nullopt = wake for every session (the
+  // two control threads, and every worker of a CPU-route server, whose one group serves
+  // both kinds). Start() itself stays a plain notify_all(): the selection lives in the
+  // wait predicate, so there is no second wake-up path to keep in step with the first.
   template <typename F>
-  void RunPersistentLoop(F work_fn);
+  void RunPersistentLoop(F work_fn, std::optional<SessionKind> required_mode = std::nullopt);
 
   ConfigManager config_manager_;
 
@@ -310,7 +319,22 @@ class ServerImpl {
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
 
+  // The server's principal worker group: the single GPU engine on the GPU route, the
+  // legacy multi-worker set on the CPU route. Every "is this the single-engine route"
+  // question in this file (ReadBackendActive's size()==1, GetActiveBackend's [0]) is
+  // asked of THIS vector, which is why the analysis pool below is a second vector and
+  // not more members of this one — merged in, `size() != 1` would read true on every
+  // GPU-route server and silently switch the whole fallback detection off.
   std::vector<Simulator> simulators_;
+  // The standing analysis pool: CPU-preferred Simulators that only an analysis session
+  // wakes (RunPersistentLoop's required_mode = kAnalysis). Non-empty only when
+  // gpu_route_ is true — on the CPU route the analysis runs on simulators_ itself, which
+  // is already the multi-worker set. Built once in the ctor next to simulators_, its
+  // threads live in the same simulator_threads_ and stop at the same start_cv_ wait;
+  // there is no second lifecycle for it. The two groups never run in the same session:
+  // the render wakes simulators_ (required_mode = kRender on the GPU route), the
+  // analysis wakes this pool, and the other group sleeps through Start()/Stop().
+  std::vector<Simulator> analysis_pool_simulators_;
   std::vector<ConsumerPtrS> consumers_;
   mutable TicketMutex consumer_mutex_;  // FIFO lock: prevents Poller starvation on Windows
   bool snapshot_dirty_{ false };        // Set by ConsumeData, cleared by DoSnapshot
@@ -507,6 +531,34 @@ class ServerImpl {
     return simulators_[0].BackendActive();
   }
 
+  // The one owner of "which group an analysis session runs on, and so which group its
+  // three per-Simulator session properties (chain ids, forced CPU) are set on and
+  // withdrawn from". StartRaypathAnalysis and CommitConfig's was_analysis reset both
+  // iterate this and nothing else, so the two cannot drift apart. The two routes are not
+  // symmetric in what this names: on the GPU route it is the standing pool, physically
+  // apart from the render engine; on the CPU route it is simulators_ — the render group
+  // ITSELF, which serves both session kinds. A new CPU-route consumer of this helper is
+  // therefore touching the render workers, not a separate object.
+  std::vector<Simulator>& AnalysisWorkers() { return gpu_route_ ? analysis_pool_simulators_ : simulators_; }
+  const std::vector<Simulator>& AnalysisWorkers() const { return gpu_route_ ? analysis_pool_simulators_ : simulators_; }
+
+  // The group the CURRENT session wakes — the one whose Simulators are running or can
+  // run, and so the only one whose IsIdle() says anything about this session. The
+  // dormant group is not merely uninteresting but misleading to poll: Simulator::Stop()
+  // (which Stop() and the dtor send to every Simulator, both groups) leaves stop_ set,
+  // and only the next Run() clears it, so a group that sat out the session after a
+  // Stop() reads !IsIdle() until it is next woken. Scanning it would hold GetStatus() at
+  // kRunning for the whole of every later session of the other kind.
+  const std::vector<Simulator>& ActiveWorkers() const {
+    return mode_.load(std::memory_order_acquire) == SessionKind::kAnalysis ? AnalysisWorkers() : simulators_;
+  }
+
+  // Both groups, for the broadcasts that address every Simulator this server owns
+  // whatever the session (Stop(), the dtor, SetLogLevel). On the CPU route the pool is
+  // empty and its loop is a no-op; the shape is the same on both routes so a new
+  // broadcast site has one thing to call instead of a second vector to remember.
+  std::array<std::vector<Simulator>*, 2> AllWorkerGroups() { return { &simulators_, &analysis_pool_simulators_ }; }
+
   std::atomic_int sim_scene_cnt_;
   std::mutex scene_mutex_;
   std::condition_variable scene_cv_;
@@ -525,14 +577,22 @@ class ServerImpl {
 };
 
 template <typename F>
-void ServerImpl::RunPersistentLoop(F work_fn) {
+void ServerImpl::RunPersistentLoop(F work_fn, std::optional<SessionKind> required_mode) {
   uint64_t my_gen = 0;
   while (true) {
     {
       std::unique_lock<std::mutex> lk(start_mutex_);
-      start_cv_.wait(lk, [this, &my_gen] {
-        return state_.load() == ServerState::kTerminating ||
-               (state_.load() == ServerState::kRunning && start_generation_.load() != my_gen);
+      // Termination FIRST and on its own: a thread whose group is not the session's must
+      // still leave on kTerminating, or the dtor's join would wait on it forever. The
+      // mode filter only qualifies the running-state clause — "is this Start() for my
+      // group" — never the exit. A thread turned away here keeps its my_gen, so the next
+      // Start() of its own kind still reads as a new generation to it.
+      start_cv_.wait(lk, [this, &my_gen, &required_mode] {
+        if (state_.load() == ServerState::kTerminating) {
+          return true;
+        }
+        return state_.load() == ServerState::kRunning && start_generation_.load() != my_gen &&
+               (!required_mode.has_value() || mode_.load(std::memory_order_acquire) == *required_mode);
       });
       if (state_.load() == ServerState::kTerminating) {
         return;
@@ -642,26 +702,51 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
   StorePublished(std::make_shared<const ResultFrame>());
   preferred_backend_.store(preferred_backend, std::memory_order_release);
   gpu_route_ = ResolveGpuRoute(preferred_backend, logger_);
+  // The CPU worker count, by the one rule both routes size their CPU group with: the
+  // caller's explicit number verbatim, else the capped physical core count; and a fixed
+  // seed collapses it to a single worker — the deterministic CPU contract, which is also
+  // what keeps SimData::producer_effective_seed_ distinct per worker (a fixed seed is
+  // returned verbatim as the effective seed): relaxing this needs every worker's seed
+  // made distinct, or ChainIdMerger fuses chains across workers silently. The per-index
+  // seed offset below is that guard, dead today.
+  const int cpu_worker_count =
+      sim_seed != 0 ? 1 : (num_workers > 0 ? num_workers : std::min(PhysicalCoreCount(), kMaxDefaultWorkerCount));
   int worker_count = 1;
+  int analysis_pool_worker_count = 0;
   if (gpu_route_) {
     worker_count = 1;  // GPU route: single engine (task-268.7; CUDA joined 296.6)
+    // The analysis always traces on the CPU path (it is the only one that carries chain
+    // ids), and a single CPU worker is not what "analysis" should cost on a machine that
+    // was given a GPU precisely because it has cores to spare. So the GPU route ALSO
+    // stands up the CPU group the CPU route would have built, as a second vector that
+    // only an analysis session wakes. num_workers, which the single engine has no use
+    // for, sizes it — the one place the field has an effect on this route.
+    analysis_pool_worker_count = cpu_worker_count;
   } else {
-    worker_count = num_workers > 0 ? num_workers : std::min(PhysicalCoreCount(), kMaxDefaultWorkerCount);
-    if (sim_seed != 0) {
-      worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
-      // Also what keeps SimData::producer_effective_seed_ distinct per worker
-      // (a fixed seed is returned verbatim as the effective seed): relaxing
-      // this needs every worker's seed made distinct, or ChainIdMerger fuses
-      // chains across workers silently. The per-index offset below is that
-      // guard, dead today.
-    }
+    worker_count = cpu_worker_count;  // the CPU route's one group serves both session kinds
   }
-  // AC1 observability (296.6): the GPU single-engine route must run worker_count==1.
-  ILOG_INFO(logger_, "ServerImpl: gpu_route={} worker_count={} (preferred_backend={})", gpu_route_, worker_count,
-            static_cast<int>(preferred_backend));
+  // AC1 observability (296.6): the GPU single-engine route must run worker_count==1;
+  // analysis_pool_worker_count is the standing analysis pool's size (0 = no second group).
+  ILOG_INFO(logger_, "ServerImpl: gpu_route={} worker_count={} analysis_pool_worker_count={} (preferred_backend={})",
+            gpu_route_, worker_count, analysis_pool_worker_count, static_cast<int>(preferred_backend));
   for (int i = 0; i < worker_count; i++) {
     uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
     simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
+  }
+  // The pool is seeded by the SAME per-index rule as the principal group, from the same
+  // base, on purpose: the two groups never run in the same session, so overlapping seeds
+  // cannot pair two concurrent producers, and a fixed-seed analysis then traces the same
+  // stream whether the server was built CPU- or GPU-preferred (the single pool worker and
+  // the single CPU-route worker both hold sim_seed) — reproducibility across the backend
+  // toggle, not only across sessions of one server.
+  for (int i = 0; i < analysis_pool_worker_count; i++) {
+    uint32_t worker_seed = sim_seed != 0 ? sim_seed + static_cast<uint32_t>(i) : 0u;
+    analysis_pool_simulators_.emplace_back(scene_queue_, data_queue_, worker_seed);
+    // Pinned to CPU for life: not by SetPreferredBackend below or later (which
+    // deliberately addresses simulators_ only), nor by the env override — the analysis
+    // session's SetAnalysisForceCpu makes even that moot, but the pool's own preference
+    // says what it is for without depending on the session flag.
+    analysis_pool_simulators_.back().SetPreferredBackend(BackendKind::kCpu);
   }
 
   // Propagate the construction-time backend into every simulator. The server-level
@@ -677,10 +762,17 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
   }
 
   // Spawn persistent threads — they start in cv.wait(), not working. All
-  // simulators_ are emplaced above first, so the &s references stay valid (no
-  // further vector reallocation).
+  // simulators_ / analysis_pool_simulators_ are emplaced above first, so the &s
+  // references stay valid (no further vector reallocation). Group selection: on the GPU
+  // route the engine wakes for renders only and the pool for analyses only; on the CPU
+  // route the one group wakes for both (nullopt), and the pool loop is empty.
+  const std::optional<SessionKind> engine_mode =
+      gpu_route_ ? std::optional<SessionKind>(SessionKind::kRender) : std::nullopt;
   for (auto& s : simulators_) {
-    simulator_threads_.emplace_back([this, &s]() { RunPersistentLoop([&s] { s.Run(); }); });
+    simulator_threads_.emplace_back([this, &s, engine_mode]() { RunPersistentLoop([&s] { s.Run(); }, engine_mode); });
+  }
+  for (auto& s : analysis_pool_simulators_) {
+    simulator_threads_.emplace_back([this, &s]() { RunPersistentLoop([&s] { s.Run(); }, SessionKind::kAnalysis); });
   }
   consume_data_thread_ = std::thread([this]() { RunPersistentLoop([this]() { ConsumeData(); }); });
   generate_scene_thread_ = std::thread([this]() { RunPersistentLoop([this]() { GenerateScene(); }); });
@@ -703,9 +795,13 @@ ServerImpl::~ServerImpl() {
   start_cv_.notify_all();
   scene_cv_.notify_one();
 
-  // Stop simulators to break their inner Run() loops
-  for (auto& s : simulators_) {
-    s.Stop();
+  // Stop simulators to break their inner Run() loops — both groups: the dormant one has
+  // nothing to break, and is told anyway, so that the broadcast and the join below
+  // address the same set of threads.
+  for (auto* group : AllWorkerGroups()) {
+    for (auto& s : *group) {
+      s.Stop();
+    }
   }
 
   // Join all persistent threads
@@ -978,7 +1074,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
   if (was_analysis) {
     {
       std::lock_guard<std::mutex> lock(prod_mutex_);
-      for (auto& s : simulators_) {
+      for (auto& s : AnalysisWorkers()) {
         s.SetAnalysisChainId(false, 0);
         s.SetAnalysisForceCpu(false);
       }
@@ -1208,7 +1304,12 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
   }
   {
     std::lock_guard<std::mutex> lock(prod_mutex_);
-    for (auto& s : simulators_) {
+    // The group this session wakes (CPU route: the workers themselves; GPU route: the
+    // standing pool). SetAnalysisForceCpu is redundant on the pool, whose preference is
+    // already CPU, and is set all the same: the session property is what ResolveGpuRoute /
+    // CreateBackend read and log, and the declaration of "this run is CPU by request"
+    // must not depend on which group happens to carry it.
+    for (auto& s : AnalysisWorkers()) {
       // Finest, always: the reader reduces (RaypathAnalysisRequest says why).
       s.SetAnalysisChainId(true, FilterConfig::kSymNone);
       s.SetAnalysisForceCpu(true);
@@ -1219,9 +1320,10 @@ Error ServerImpl::StartRaypathAnalysis(const nlohmann::json& scene_json, const R
   // and the preference itself is untouched (GetActiveBackend is the readable form).
   ILOG_INFO(logger_,
             "StartRaypathAnalysis: forcing CPU route (analysis run session property; overrides "
-            "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified); roi_mode={} (chains recorded "
-            "unreduced; symmetry is applied when the result is read)",
-            static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), static_cast<int>(request.roi_.mode_));
+            "preferred_backend={} and LUMICE_TRACE_BACKEND, neither is modified) on {} worker(s){}; roi_mode={} "
+            "(chains recorded unreduced; symmetry is applied when the result is read)",
+            static_cast<int>(preferred_backend_.load(std::memory_order_acquire)), AnalysisWorkers().size(),
+            gpu_route_ ? " (standing analysis pool)" : "", static_cast<int>(request.roi_.mode_));
   // Bind the scene this session traces — the same three writes, under the same lock, on
   // the same reset action as CommitConfig's bind (see the fields' declarations for why an
   // analysis advances the epoch: it is a submission of its own scene, and a reader's "is
@@ -1569,13 +1671,18 @@ void ServerImpl::Stop() {
   data_queue_->Shutdown();
   scene_cv_.notify_one();
 
-  // Stop simulators to break their inner Run() loops
-  for (auto& s : simulators_) {
-    s.Stop();
+  // Stop simulators to break their inner Run() loops. Both groups, though only the
+  // session's group is running: Stop() on a dormant Simulator is a flag it will clear at
+  // its next Run() entry, and the queue shutdowns are idempotent.
+  for (auto* group : AllWorkerGroups()) {
+    for (auto& s : *group) {
+      s.Stop();
+    }
   }
 
   // Wait for all workers to finish their current work cycle.
-  // Workers notify start_cv_ when active_workers_ reaches 0.
+  // Workers notify start_cv_ when active_workers_ reaches 0. Only the woken group ever
+  // counted itself in, so this waits on exactly the session's workers.
   {
     std::unique_lock<std::mutex> lk(start_mutex_);
     start_cv_.wait(lk, [this] { return active_workers_.load() == 0; });
@@ -1661,7 +1768,9 @@ ServerStatus ServerImpl::GetStatus() const {
   bool any_busy = false;
   {
     std::lock_guard<std::mutex> lock(prod_mutex_);
-    for (const auto& s : simulators_) {
+    // The session's own group only — see ActiveWorkers() for why the dormant group must
+    // not be polled (its stop_ flag outlives the Stop() that set it).
+    for (const auto& s : ActiveWorkers()) {
       if (!s.IsIdle()) {
         any_busy = true;
         break;
@@ -2199,8 +2308,8 @@ void ServerImpl::GenerateScene() {
   // cannot disagree today; say so out loud if they ever do, rather than letting one
   // silently size the batches while the other decides whether a fallback happened.
   if (kGpuRoute != gpu_route_ && !kAnalysis) {
-    // (An analysis session on a GPU-built server differs by design, not by drift: it is
-    // still sized single-worker, and the forced CPU route is exactly the point.)
+    // (An analysis session on a GPU-built server differs by design, not by drift: it
+    // runs on the standing CPU pool, and the forced CPU route is exactly the point.)
     ILOG_WARN(logger_,
               "GenerateScene: live gpu_route ({}) disagrees with the construction-time route ({}); this server was "
               "sized for the latter, so dispatch grain and the fallback signal are now keyed off different routes",
@@ -2355,6 +2464,8 @@ void ServerImpl::GenerateScene() {
 void ServerImpl::SetPreferredBackend(BackendKind backend) {
   preferred_backend_.store(backend, std::memory_order_release);
   std::lock_guard<std::mutex> lock(prod_mutex_);
+  // simulators_ only, deliberately: the standing analysis pool is CPU for life (its
+  // declaration says why), and a render-backend toggle has no business reaching it.
   for (auto& s : simulators_) {
     s.SetPreferredBackend(backend);
   }
@@ -2493,8 +2604,10 @@ Error ServerImpl::GetColorClassSignals(uint8_t* out_flags, int class_count) {
 void ServerImpl::SetLogLevel(LogLevel level) {
   logger_.SetLevel(level);
   std::lock_guard<std::mutex> lock(prod_mutex_);
-  for (auto& s : simulators_) {
-    s.SetLogLevel(level);
+  for (auto* group : AllWorkerGroups()) {
+    for (auto& s : *group) {
+      s.SetLogLevel(level);
+    }
   }
 }
 

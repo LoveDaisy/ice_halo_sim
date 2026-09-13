@@ -653,11 +653,18 @@ typedef struct LUMICE_StatsResult_ {
 
 // =============== Server Configuration ===============
 typedef struct LUMICE_ServerConfig_ {
-  int num_workers;        // CPU route only: worker count (0 = automatic: the physical core
-                          // count, capped — see kMaxDefaultWorkerCount in server.cpp for the
-                          // value and the measurements behind it). A value > 0 is honoured
-                          // verbatim and is NOT subject to that cap.
-                          // Ignored on the GPU/Metal route (always one engine, task-268.7).
+  int num_workers;        // CPU worker count (0 = automatic: the physical core count, capped —
+                          // see kMaxDefaultWorkerCount in server.cpp for the value and the
+                          // measurements behind it). A value > 0 is honoured verbatim and is
+                          // NOT subject to that cap. On the CPU route these are the render
+                          // workers (which also run an analysis). On the GPU/Metal/CUDA route
+                          // the render engine stays a single Simulator (N engines would contend
+                          // one GPU; see doc/gpu-single-engine-implementation.md) and this
+                          // count sizes the server's standing CPU ANALYSIS POOL — the workers
+                          // LUMICE_StartRaypathAnalysis runs on. BEHAVIOUR CHANGE: before that
+                          // pool existed the field was ignored on the GPU route; a caller that
+                          // passed a non-zero value there now gets an analysis pool of that
+                          // size (the render is unaffected either way).
   unsigned int sim_seed;  // Deterministic seed for the worker RNG. 0 = random (default).
   int preferred_backend;  // LUMICE_BACKEND_CPU (0, multi-worker), LUMICE_BACKEND_METAL
                           // (1, single engine on Apple) or LUMICE_BACKEND_CUDA (2, future).

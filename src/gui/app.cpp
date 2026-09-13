@@ -1098,8 +1098,9 @@ bool MaybeReconstructServerForConstructionProperties() {
   LUMICE_DestroyServer(g_server);
 
   LUMICE_ServerConfig cfg{};
-  // The user's personal default (Settings §app), 0 = PhysicalCoreCount (CPU). Ignored on the GPU
-  // single engine, which is always one worker whatever this says.
+  // The user's personal default (Settings §app), 0 = PhysicalCoreCount (capped). On the GPU route
+  // the render engine is one worker whatever this says; the value sizes that server's standing CPU
+  // analysis pool instead.
   cfg.num_workers = want_workers;
   cfg.sim_seed = 0;  // 0 = random — matches LUMICE_CreateServer() startup default
   cfg.preferred_backend = want_gpu ? ResolveGpuBackend() : LUMICE_BACKEND_CPU;
