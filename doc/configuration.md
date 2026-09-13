@@ -740,12 +740,15 @@ The render configuration defines the renderer parameters.
 ```json
 {
   "angular_dist": [ ... ],
+  "view_dist": [ ... ],
   "elevation": [ ... ],
   "longitude": [ ... ],
   "horizon": <boolean>,
   "horizon_label": <boolean>,
   "label": <boolean>,
   "angular_dist_label": <boolean>,
+  "view_dist_line": <boolean>,
+  "view_dist_label": <boolean>,
   "zenith_nadir": { ... }
 }
 ```
@@ -755,12 +758,15 @@ The render configuration defines the renderer parameters.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `angular_dist` | object array | no | [] | Circles of constant angular distance from the sun — 22 and 46 being the halos most configs draw. **Rendered.** `value`, `opacity` and `color` take effect; `width` does not (see below). Read from the legacy key `central` when this one is absent. |
+| `view_dist` | object array | no | [] | Circles of constant angular distance from the camera's **optical axis** — the axis-referenced twin of `angular_dist`, which is referenced to the sun. **Rendered.** Same rules: `value`, `opacity` and `color` take effect, `width` does not. The centre is not a field: it is the `view`'s own forward direction (`azimuth` / `elevation` / `roll`), which is why it does not move under `lens_shift` — a shifted lens moves where the axis lands on the canvas, not the axis itself, and the circles follow the axis. Added in v4.39; a file without the key draws no such circles. |
 | `elevation` | object array | no | [] | Parallels — lines of constant elevation, in degrees. **Rendered** (as of v4.18; earlier versions parsed the list and drew nothing). Same rules as `angular_dist`: `value`, `opacity` and `color` take effect, `width` does not. |
 | `longitude` | object array | no | [] | Meridians — lines of constant azimuth, in degrees. **Rendered.** Same rules as `elevation`. Added in v4.18; a file without the key gets an empty list, which draws nothing. |
 | `horizon` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
 | `horizon_label` | boolean | no | false | Draw the horizon's TEXT label (`0°`). Added in v4.21. Independent of `horizon`: the label appears with the line switched off. |
 | `label` | boolean | no | false | Draw the TEXT labels for `elevation` and `longitude` — the angle each line stands for. One switch for both families, matching the GUI's single grid label control. Added in v4.21. |
 | `angular_dist_label` | boolean | no | false | Draw the TEXT labels for `angular_dist` (`22°`, `46°`). Added in v4.21. |
+| `view_dist_line` | boolean | no | true | Draw the `view_dist` LINES. Same shape as the other three families' independent line switches (`elevation_line` / `longitude_line` / `angular_dist_line`, v4.26): the list says where the circles are, this says whether the lines are drawn, so `view_dist_label: true` with `view_dist_line: false` gives the numbers and no ring. Defaults to `true` because a list that is present was written to be drawn. Added in v4.39. |
+| `view_dist_label` | boolean | no | false | Draw the TEXT labels for `view_dist` (`30°`, `60°`, …). Added in v4.39. |
 | `zenith_nadir` | object | no | see below | Pixel-space ring markers drawn at the zenith and the nadir. One object for both, not a line list: the two directions are fixed (there is nothing per-line to name), and the GUI exposes a single switch, colour and radius for the pair. Added in v4.19. |
 
 **`zenith_nadir` object**:
@@ -784,7 +790,7 @@ The render configuration defines the renderer parameters.
 struct defaults above for whatever it leaves out. `enabled` defaults to false, so a config that
 omits `zenith_nadir` entirely draws nothing.
 
-**The three `*_label` switches, and the one thing they do NOT control**
+**The four `*_label` switches, and the one thing they do NOT control**
 
 They decide whether the label GEOMETRY is computed, which is independent of whether the family's
 own line is drawn. For the horizon that independence is directly usable — `horizon_label: true`
@@ -794,7 +800,7 @@ non-empty", so there is no way to ask for `elevation` labels without also asking
 themselves.
 
 What they do NOT control is the label's OPACITY. A label is painted in its family's own colour and
-opacity — each `angular_dist` / `elevation` / `longitude` entry's own `opacity` and `color`, and a
+opacity — each `angular_dist` / `view_dist` / `elevation` / `longitude` entry's own `opacity` and `color`, and a
 fixed constant for the horizon — so a line at `"opacity": 0` is invisible together with its labels.
 This mirrors the GUI, where a label has always taken its family's appearance; a renderer that let a
 label outlive its line would show something the preview cannot.
@@ -818,7 +824,7 @@ The C API field was renamed to match (`LUMICE_RenderParam.angular_dist` / `angul
 was `central_grid` / `central_grid_count`). That is a source-compatibility break with no layout
 change; see the BREAKING note at `LUMICE_API_VERSION` in `src/include/lumice.h`.
 
-**What the three line families draw, and what they ignore**
+**What the four line families draw, and what they ignore**
 
 `value`, `opacity` and `color` all take effect on every one of them: each line is drawn as its own
 curve, in its own colour, blended at its own opacity. `width` is read, validated and round-tripped
