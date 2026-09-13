@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789273865524,
+  "lastUpdate": 1789275326495,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "e9c3c21619ce17f2552afeae2398ef33fbce4ee4",
-          "message": "Merge pull request #260 from LoveDaisy/fix/closedform-tolerance-residuals\n\nfix(core): remove the closed-form pyramid's unit-of-measure assumption from its tolerances",
-          "timestamp": "2026-08-08T12:02:24+08:00",
-          "tree_id": "9f892f4c5b6e1fef411a3819fa50d9ab8f4ccfe7",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e9c3c21619ce17f2552afeae2398ef33fbce4ee4"
-        },
-        "date": 1786162362102,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 449355.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 583483,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 396663.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 392736.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4758,6 +4710,54 @@ window.BENCHMARK_DATA = {
             "value": 576401,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V45 96-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "682bf9aadbd77a61c2d7697ccd4b353bb70a06be",
+          "message": "Merge pull request #358 from LoveDaisy/fix/equidistant-focal-length-factor-two\n\nfix(config): equidistant lens f→fov conversion was half the documented value",
+          "timestamp": "2026-09-13T12:42:20+08:00",
+          "tree_id": "ad66fbc16fa5d96511d2e7667a3348c6c69b86d5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/682bf9aadbd77a61c2d7697ccd4b353bb70a06be"
+        },
+        "date": 1789275324609,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 337608.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 590600.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 424936.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 378988.5,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
