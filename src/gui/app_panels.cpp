@@ -911,7 +911,7 @@ namespace {
 // to check by reading, not by trusting the loop's shape to stay what it is today.
 //
 // `angles` is a parameter because the editor has TWO callers — the From Sun row's fold edits the
-// sun circles' list, the From View Center row's fold edits the view circles' — and the list is the
+// sun circles' list, the From Axis row's fold edits the view circles' — and the list is the
 // only thing about the editor that differs between them. The rules it applies (presets, duplicate
 // test, cap, clamp band) are angular_dist_rules.hpp's, already pure functions of the list they are
 // handed; what was left bound to one family was only WHICH vector to draw. The typed scratch value
@@ -1191,14 +1191,18 @@ void RenderAngularDistSection() {
     return;
   }
 
-  // "From Sun" / "From View Center": the name column says what the row is measured from, which is
-  // the one thing the two rows differ in and the one thing the section title does not say. Display
-  // strings only — no id, no serialization key; the ids and keys keep the families' own names.
+  // "From Sun" / "From Axis": the name column says what the row is measured from, which is the one
+  // thing the two rows differ in and the one thing the section title does not say. "From Axis"
+  // rather than "From View Center", and it is the width budget that decided: on this 300 px panel
+  // the name column has ~96 px, "From View Center" measures 103 (test_overlay_controls.cpp's
+  // the_columns_line_up_and_no_name_is_cut_off is the arbiter), and the shorter name is the one
+  // this row carried before the two families shared a section. Display strings only — no id, no
+  // serialization key; the ids and keys keep the families' own names.
   const OverlayRowSpec rows[] = {
     { "From Sun", "##sun_circles_color", g_state.sun_circles_color, "overlay_sun_circles_color", "##sun_circles_line",
       &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
       "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", &g_state.sun_circle_angles },
-    { "From View Center", "##view_dist_color", g_state.view_dist_color, "overlay_view_dist_color", "##view_dist_line",
+    { "From Axis", "##view_dist_color", g_state.view_dist_color, "overlay_view_dist_color", "##view_dist_line",
       &g_state.show_view_dist_line, "##view_dist_label", &g_state.show_view_dist_label, "##view_dist_alpha",
       "overlay_view_dist_alpha", &g_state.view_dist_alpha, "###view_dist_fold", &g_state.view_dist_angles },
   };
@@ -1376,8 +1380,8 @@ void RenderOverlaysTab() {
   // column's budget stated from the other side. The arbiter is not this comment but
   // test_overlay_controls.cpp's the_columns_line_up_and_no_name_is_cut_off: if a font or style
   // change makes a name overflow, that literal is the one knob to turn. The two sections' tables
-  // reuse these same widths, so their names — "From View Center" the longest of all — are measured
-  // against the same budget.
+  // reuse these same widths, so their names are measured against the same budget — and it is a
+  // real budget: "From View Center" did not fit it (see RenderAngularDistSection).
   RenderOverlayRowsTable("##OverlaysTable", rows, 3, /*with_headers=*/true);
 
   // The two collapsed sections under the three line rows, in this order: the angular-distance

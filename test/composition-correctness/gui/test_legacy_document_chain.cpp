@@ -155,6 +155,23 @@ const LegacyDocCase kGuiNativeCases[] = {
       EXPECT_TRUE(s.show_grid_label);
     } },
 
+  // The Angular Distance section's fold state was written under the View Circles section's key
+  // while that section held only the axis-centred family. The old key is read as an alias — in
+  // both truth values, so a reader that merely defaulted the field could not pass — and the new
+  // key wins when a hand-edited file carries both.
+  { "legacy view-circles section-open key opens the merged Angular Distance section",
+    R"({"layers": [], "renderer": {"lens_type": "linear", "fov": 90.0},
+        "overlay_view_dist_section_open": true})",
+    [](const GuiState& s) { EXPECT_TRUE(s.angular_dist_section_open); } },
+  { "legacy view-circles section-open key also carries a closed section",
+    R"({"layers": [], "renderer": {"lens_type": "linear", "fov": 90.0},
+        "overlay_view_dist_section_open": false})",
+    [](const GuiState& s) { EXPECT_FALSE(s.angular_dist_section_open); } },
+  { "current section-open key wins over the legacy one",
+    R"({"layers": [], "renderer": {"lens_type": "linear", "fov": 90.0},
+        "overlay_view_dist_section_open": true, "overlay_angular_dist_section_open": false})",
+    [](const GuiState& s) { EXPECT_FALSE(s.angular_dist_section_open); } },
+
   // A filter with no `type` predates the type tag entirely; it is a raypath, and its text must
   // survive. Falling back to an empty filter instead turns "only these paths" into "everything".
   { "typeless v1 filter is a raypath and keeps its text",
@@ -380,6 +397,18 @@ TEST(LegacyDocumentChain, TheKeysWrittenToDiskAreSpelledTheWayReadersExpect) {
   EXPECT_FALSE(crystal["shape"].contains("sync_group"));
   cr.face_distance[3].sync_group = 1;
   EXPECT_TRUE(crystal_of(SerializeGuiStateJson(g_state))["shape"].contains("sync_group"));
+}
+
+// The section-open rename's write side: a re-saved document carries the current key and NOT the
+// legacy alias, so the alias is a migration and not a second spelling that two writers could
+// drift between. Spelled as literals for the reason the case above gives.
+TEST(LegacyDocumentChain, TheSectionOpenKeyIsWrittenOnlyUnderItsCurrentName) {
+  DoNew();
+  g_state.angular_dist_section_open = true;
+  const nlohmann::json root = nlohmann::json::parse(SerializeGuiStateJson(g_state));
+  EXPECT_TRUE(root.contains("overlay_angular_dist_section_open"));
+  EXPECT_TRUE(root["overlay_angular_dist_section_open"].get<bool>());
+  EXPECT_FALSE(root.contains("overlay_view_dist_section_open"));
 }
 
 // The overlay split must survive the write, not just the read: a writer that collapsed the two
