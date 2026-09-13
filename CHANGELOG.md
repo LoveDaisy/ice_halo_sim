@@ -133,6 +133,166 @@ it was thinking of and false of the C struct beside it.
 
 </details>
 
+## [4.6.0] - 2026-09-14
+
+### Added
+- **Raypath Analysis: a window that says which raypaths make the light, and how much each
+  contributes** (#347, #349, #359, #360, #361, #366). A new **Analysis** button in the Top Bar, next
+  to **Colors**, opens an independent, non-modal window. Press **Analyze** and a dedicated,
+  non-rendering pass groups every outgoing ray by its complete raypath — root to exit, across
+  scattering layers, `3-5` for one crystal, `C1(3-5)` where a layer holds several, layers joined
+  root-first by an arrow — and lists each group's share of the total energy, sorted descending,
+  with a running **Cumulative %** and a **+/-** noise estimate per row. Three regions: **Whole
+  sky**, **In frame** (rays that land inside the picture as currently framed) and **Point** — a
+  cone around a marker drawn on the preview itself, placed by dragging it or by **Pick on
+  preview**, that follows the view every frame; its **Radius** slider re-sums the result at display
+  time, so one Analyze click serves a whole sweep of radii. **P / B / D** regroup the list on hand
+  without re-running, the same symmetries the filter editor uses. Select a row and press **Exclude
+  this raypath** to turn it into a filter on the crystal, then Run to see the picture without it;
+  **Export CSV** writes the list as displayed. The run has its own **Infinite rays** / **Rays(M)**
+  budget, ends only on that budget or on **Stop** (which keeps what accumulated), and holds a fixed
+  number of distinct raypaths — a greyed **other** row at the bottom carries whatever did not fit,
+  with a reported error bound. Analyze needs the document to have shown a picture once but not to
+  match it: a list describing a document you have since edited, Run or Reverted is marked stale in
+  the window rather than cleared. The pass always runs on the CPU, on every core: a Metal- or
+  CUDA-preferred window keeps a standing CPU worker pool that costs nothing while idle. It follows
+  the **Adaptive ray allocation** setting below, so a rare raypath on a low-proportion crystal gets
+  a far less noisy row (10× on the reference three-crystal scene); for that reason the table shows
+  no ray count. Guide: `doc/user-manual/06-raypath-analysis.md`.
+- **The C API gains the analysis run** (#347, #349, #360; `LUMICE_API_VERSION` 428 → 437).
+  `LUMICE_StartRaypathAnalysis(server, scene, request)` starts a pass on a scene handle directly
+  (no prior `LUMICE_CommitScene`), with `LUMICE_RaypathAnalysisRequest` naming the region
+  (`LUMICE_RAYPATH_ROI_FULL_SKY` / `_IN_FRAME` / `_CONE`) and the run's own `infinite` / `ray_num`
+  budget; `LUMICE_FrameGetRaypathAnalysisInfo` / `LUMICE_FrameGetRaypathAnalysis` read the result
+  back off a `LUMICE_ResultFrame` under a symmetry bit set (`LUMICE_RAYPATH_SYMMETRY_P|B|D`), as
+  `LUMICE_RaypathHistogramEntry` rows (chain, display string, energy, count, per-ring energy for
+  a cone, `error_bound`) plus what the bounded record could not keep as rows (`other_energy`,
+  `other_count`, `truncated_chain_count`, `max_row_error`). Alongside: `LUMICE_UnprojectPixel` /
+  `LUMICE_ProjectDirection` (pixel ↔ direction under a `LUMICE_AnnotationView`) and
+  `LUMICE_GetActiveBackend`. **ABI**: `LUMICE_SimLifecycleResult` gains a trailing `session_kind`
+  (`LUMICE_SESSION_RENDER` / `_ANALYSIS`; sizeof 16 → 24, recompile) — the server's own record of
+  what kind of run the current session is, so a client predicting the commit's consumer-reuse
+  decision no longer keeps a shadow copy. `LUMICE_ServerConfig.num_workers` is no longer ignored on
+  the GPU route: it now sizes the CPU analysis pool (0 = physical cores, capped). A non-zero
+  `sim_seed` collapses the pool to one worker, so a fixed-seed analysis is bit-identical across
+  sessions and across `preferred_backend`.
+- **Adaptive ray allocation across a layer's crystals** (#348, #364, #366). A new
+  `scene.ray_allocation` config field — `"proportional"` (today's behaviour) or `"adaptive"` —
+  decouples how many rays a crystal entry is dealt from how much energy it carries. Under
+  `adaptive` the engine deals a layer's rays by a Neyman allocation measured online from the run's
+  own batches (`q_i ∝ p_i·√E[e²]_i`, recomputed every batch on every backend, CPU, Metal and CUDA
+  alike) and weights each ray by `p_i/q_i`, so the expected picture and `emitted_energy` are
+  unchanged while the per-pixel noise is minimised. The case it was built for: three prisms each
+  behind a single-raypath `filter_in` at proportions 100 / 100 / 0.2, where the rare path's 120°
+  halo skirt used to be built from ~1/2600 the hits of the 98° halo and read as pure grain — its
+  relative pixel noise drops ≈10× at the same ray count, the 144° ring is untouched, total landed
+  energy within +0.15 %. Throughput cost on a single-crystal scene: −0.2 % Metal, −1.7 % CUDA.
+  In the GUI it is a document field that **new documents default to `adaptive`**; the switch
+  lives in **Settings** (not on the Simulation panel — after trying many configurations the
+  algorithm behaves stably enough not to need a panel toggle), and an `.lmc` saved before the
+  field existed, or a core JSON imported without it, lands on the GUI default. The CLI default
+  stays `proportional`, so every existing config renders as before. C API:
+  `LUMICE_SceneSetRayAllocation(scene, LUMICE_RAY_ALLOCATION_*)` (`LUMICE_API_VERSION` 437 → 438, a
+  pure append — no struct or ABI change).
+- **A fifth overlay family: circles of constant angular distance from the lens centre** (#357,
+  #362, #363, #365). The axis-referenced twin of the sun-centred circles: a framing and calibration
+  aid that stays put on the canvas while the view is turned — the fov/2 circle must be inscribed in
+  the short edge, so it also checks a lens setting at a glance. Config, `.lmc` and exported JSON
+  carry it as `grid.view_dist` / `grid.view_dist_line` (default on) / `grid.view_dist_label`
+  (default off), shaped exactly like the `angular_dist` three; absent keys leave the family off,
+  so a document written before this release renders unchanged. The CLI composites it between the
+  sun circles and the horizon outline. In the GUI both ring families share one collapsed
+  **Angular Distance from...** section under the Overlay table, one row each — **Sun** and **Lens
+  Center** — with colour, `Line`, `Label` and an angle-list fold apiece; new documents start the
+  Lens Center list at `{22, 46, 90}` (an empty default made "works" and "broken" look the same),
+  and the fold's presets are split by family (Sun `{9, 22, 28, 46}`, Lens Center `{22, 46, 90}`).
+- **`LUMICE_RenderParam` gains `view_dist[]` / `view_dist_count` / `view_dist_line` /
+  `view_dist_label`; `LUMICE_AnnotationRequest` gains `view_dist_deg` / `view_dist_count`** (#357;
+  `LUMICE_API_VERSION` 438 → 439, both appended at the end of their struct — `LUMICE_RenderParam`
+  sizeof 4904 → 6452, `LUMICE_AnnotationRequest` 128 → 144, recompile against the new header; both
+  structs now carry an exact-size `static_assert`). Labels come back with kind
+  `LUMICE_ANNOTATION_VIEW_DIST` (4). Same zero-initialisation caveat as the other three line
+  switches: the JSON default of `view_dist_line` is *on*, so a zeroed struct asks for no lines even
+  with a full angle list. There is deliberately no reference-direction field — the centre is the
+  view's own forward, independent of `lens_shift` by construction.
+
+### Changed
+- **Release packages use the CPU and GPU they land on, without moving the support floor** (#346).
+  One download, the choice made on your machine. **Linux x64** ships every executable twice —
+  `Lumice.baseline` (x86-64-v1, as before) and `Lumice.x86-64-v4` (AVX-512) — behind a CPUID
+  launcher installed under the unchanged names `Lumice` / `LumiceGUI`, which picks the variant the
+  CPU supports (`--isa=<level>` overrides); measured 1.99× on a Zen 5 desktop. **Windows x64** does
+  the same with `.baseline.exe` (MSVC) and `.x86-64-v3.exe` (clang-cl, AVX2+FMA — MSVC gains nothing
+  from `/arch`, clang-cl gains 2.23×, and v4 adds nothing on top), covering every Haswell+/Zen1+
+  desktop; on a machine without AVX the launcher falls back to baseline. The **CUDA** fatbin now
+  carries native `sm_120` (RTX 50 series), so first launch no longer JIT-compiles from PTX
+  (1.87 s → 0.22 s); the PTX floor stays `compute_61`. macOS and Linux ARM64 packages are unchanged.
+- **The GUI's ray budget reaches 10¹¹ rays** (#354). The `Rays(M)` slider — on the Simulation panel
+  and in the analysis window — now spans `0.1 … 100 000` million on a logarithmic track, so the low
+  end still resolves to 0.1 M while the top reaches 100 000 M; the input box takes any value
+  directly. Display format changes from one decimal to six significant digits. `.lmc` and exported
+  JSON fields are unchanged.
+- **A `lens` with neither `fov` nor `f` now runs with a per-type default instead of exiting** (#355).
+  The docs always promised a default; the CLI exited with code 4. It now uses 90° (30° for `globe`),
+  logs a warning naming the default, and renders. Nothing to do for a config that states either
+  field. While there, `doc/configuration.md` now says what the code always did: `lens.fov` is the
+  angle across the **short edge** of the frame, not the diagonal.
+- **The Overlay panel's `Angular Dist.` row moves into a collapsed section, and Reference Points
+  gets an All row** (#362, #363, #365). The main Overlay table keeps three rows (horizon, elevation,
+  longitude); the sun circles now sit as the **Sun** row of the new **Angular Distance from...**
+  section beside the Lens Center row, collapsed on a new document (its open state is saved with the
+  document). In **Reference Points** the header-bar `All` / `None` / `⋯` buttons are gone; the
+  marker table's first row is an **All** family row in the same six columns — `Line` / `Label` are
+  tri-states derived from the six entries (a square when mixed; click turns all on unless all are
+  already on), `Alpha` binds the shared marker alpha, the fold holds the marker radius. With the
+  section folded there is no longer a one-click all/none. Nothing new is stored: `.lmc` and
+  exported JSON are unchanged.
+
+### ⚠️ Breaking Changes
+- **An equidistant fisheye lens stated by focal length now renders at the documented field of
+  view — twice the old one** (#358). `fov = 2d/f` is what `doc/configuration.md` states, what the
+  forward projection puts at the short edge, and what the other five lens families compute; only
+  the `fisheye_equidistant` row lacked the factor 2, so a config saying `f: 12` rendered 57.30°
+  instead of the documented 114.59°. **Before**: half the documented angle. **Now**: the documented
+  angle, in the CLI and the GUI importer alike (they share the one conversion). **What to do**: a
+  config that states `f` for a `fisheye_equidistant` or `dual_fisheye_equidistant` lens and was
+  tuned to the old picture should double its `f` (or state `fov` instead); configs stating `fov`,
+  and `.lmc` files, are unaffected.
+
+### Fixed
+- **A fixed `sim_seed` now reproduces on the second and later runs of one server** (#349). On the
+  CPU backend, each worker's own generator — wavelength draw, crystal shape and orientation,
+  scattering choices — was seeded once at construction and never again, so the first run of a GUI
+  window (or of a C API server) traced the seed's stream and every later run continued from
+  wherever the previous one had stopped: two analyses of the same scene, same seed, differed in
+  total energy by 4–7 %, and a second Run with a fixed seed was not the picture of the first. The
+  generator is now re-seeded at every run's entry, as the GPU backends already did; `sim_seed = 0`
+  is unchanged.
+- **Deleting a layer no longer silently repoints a colour class at another layer** (#361). A colour
+  class in the Colors panel that names a layer by index kept the old index after a layer above it
+  was deleted, and when the next layer down happened to reuse the same crystal it passed every
+  check and coloured the wrong rays. Refs to later layers now shift down with the deletion; a ref
+  to the deleted layer itself is marked dangling rather than reused.
+- **Importing a config whose lens states `f` no longer ignores it** (#355). The GUI importer read
+  only `fov`, so a focal-length lens came in at the default field of view with no warning; it now
+  converts `f` with the same six-family formulas the CLI uses (a value outside the formula's domain
+  warns and falls back to the type default). A `globe` lens imported without `fov` used to get 90°
+  where the CLI gives 30°; both sides now share one default. Export still writes `fov` only.
+- **`intensity_factor: 0` no longer wipes the grid from a CLI render** (#355). The zero-energy early
+  return had its own copy of the annotation compositing and it had drifted; there is one now, and
+  the annotation layer at intensity 0 is byte-identical to the one at 1.
+- **CUDA's landed-energy total no longer reads 1.74 % low against the CPU's** (#356). One
+  single-precision atomic add per exit, accumulated across a ~2 M-exit window, systematically
+  dropped small weights — a deterministic bias, not noise, and one the cross-backend parity tests
+  were blind to. Each warp now reduces in registers first and the host folds per-layer readbacks
+  in double; the image-to-landed ratio moves from +1.74 % to −0.003 % of the CPU's on every probed
+  scene. (A smaller, scene-dependent cross-backend difference that sits in both ledgers alike
+  remains and is tracked separately.) Also on CUDA, the host root-generation fallback
+  (`LUMICE_DISABLE_DEVICE_GEN=1`) rendered an all-black frame — its first layer never uploaded the
+  per-ray shape table — and renders again.
+- **Em/en dashes and `›` / `»` in GUI text no longer render as `?`** (#349). The body font's glyph
+  ranges now cover General Punctuation.
+
 ## [4.5.1] - 2026-09-10
 
 ### Added
