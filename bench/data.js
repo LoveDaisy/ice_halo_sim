@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789316829037,
+  "lastUpdate": 1789316831386,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,45 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "660cb36f3211d40db009ebe4cb974d819900051d",
-          "message": "Merge pull request #268 from LoveDaisy/task/msvc-portability-test-env-helper\n\nfix(test): 把 setenv/unsetenv 的 #ifdef 收敛成一个有名字的 helper",
-          "timestamp": "2026-08-12T20:45:55+08:00",
-          "tree_id": "a60dffae6ac4ce8bfff90f14b0a1c3d1815c8fe7",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/660cb36f3211d40db009ebe4cb974d819900051d"
-        },
-        "date": 1786539480463,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "8684aa9e5d304592bc3fe6a782307b7a9da8c704",
           "message": "Merge pull request #269 from LoveDaisy/task/win-static-crt-cmp0091\n\nfix(build): 让 CMP0091 真正生效，Windows 发布产物链接静态 CRT",
           "timestamp": "2026-08-13T17:00:34+08:00",
@@ -13896,6 +13857,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "19741f43a26b205cd9953af019cae4b44fd12984",
+          "message": "Merge pull request #365 from LoveDaisy/feat/overlay-panel-ux\n\nfeat(gui): Overlay panel UX — Lens Center circle defaults and a Reference Points All row",
+          "timestamp": "2026-09-14T00:15:21+08:00",
+          "tree_id": "d43c7c2948629dec68903aa2f4de6ded9dcafbae",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/19741f43a26b205cd9953af019cae4b44fd12984"
+        },
+        "date": 1789316830599,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 76,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.8,
             "unit": "%"
           }
         ]
