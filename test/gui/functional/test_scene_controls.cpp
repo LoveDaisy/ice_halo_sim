@@ -75,6 +75,12 @@ struct ScopedSettingsPanel {
       gui::OpenDefaultsPanel(gui::g_state, gui::DefaultsPanelSection::kSettings);
       ctx_->Yield(4);
     }
+    // Cleared unconditionally rather than relying on the case body to have reached its own
+    // clearing step: a failing IM_CHECK (which expands to `return`) skips straight here, and the
+    // Close button is not itself filtered — but leaving stray search text behind would still
+    // contaminate whatever the next case's own FilterTo-equivalent expects to find.
+    ctx_->ItemInputValue("**/###defaults_search", "");
+    ctx_->Yield(2);
     ctx_->ItemClick("**/###defaults_close");
     ctx_->Yield(2);
     gui::g_state.defaults_panel_open = false;
@@ -341,11 +347,9 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         ctx->ItemClick("**/##value_sim.ray_allocation");
         ctx->Yield();
         IM_CHECK(gui::g_state.sim.ray_allocation_adaptive);
-
-        ctx->ItemInputValue("**/###defaults_search", "");
       }
-      // Teardown is the guards'; see ScopedServer and ScopedSettingsPanel for why it cannot be
-      // written here.
+      // Teardown, including clearing the search filter, is the guards'; see ScopedServer and
+      // ScopedSettingsPanel for why it cannot be written here.
     };
   }
 
