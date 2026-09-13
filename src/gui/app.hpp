@@ -212,6 +212,9 @@ AnnotationViewInput AnnotationAnchorRequestFor(const GuiState& state, const Rend
 // into it, so a caller rendering at a size the cache was not built for still gets them in the right
 // place (see the function's own note on the HiDPI case).
 CurveLabelSet BuildSunCirclesLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h);
+// The view circles' (about the optical axis): the sun circles' twin, reading the view-distance half
+// of the same result and carrying this family's own colour, alpha and collision group.
+CurveLabelSet BuildViewDistLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h);
 // The coordinate grid's twin of the above: same anchors-to-draw-list conversion, reading the grid
 // half of the same cache result and carrying the grid's own colour, alpha and collision group.
 CurveLabelSet BuildGridLabelSet(const AnnotationAnchors& cache, const GuiState& state, float vp_w, float vp_h);

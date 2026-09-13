@@ -37,8 +37,12 @@ AnnotationAnchors::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, 
   key.elevation = needs_view ? in.elevation : 0.0f;
   key.roll = needs_view ? in.roll : 0.0f;
   GuiSunWorldDir(in.sun_altitude_deg, key.sun_dir);
-  const size_t n = std::min(in.angular_dist_deg.size(), static_cast<size_t>(kMaxSunCircles));
+  const size_t n = std::min(in.angular_dist_deg.size(), static_cast<size_t>(kMaxAnnotationCircles));
   key.angular_dist_deg.assign(in.angular_dist_deg.begin(), in.angular_dist_deg.begin() + n);
+  // The same per-family ceiling for the axis-referenced list: the bound is the shader's canvas for
+  // one family's levels, and each family has its own (gui_constants.hpp).
+  const size_t nv = std::min(in.view_dist_deg.size(), static_cast<size_t>(kMaxAnnotationCircles));
+  key.view_dist_deg.assign(in.view_dist_deg.begin(), in.view_dist_deg.begin() + nv);
   // Clamped to the API's own ceiling rather than passed through: a request past it is REJECTED,
   // not truncated (lumice.h), which would drop the circles and the grid together over a limit only
   // one family exceeded. The narrowest FOV the GUI allows expands to 720 meridians, so this is a
@@ -94,6 +98,7 @@ void AnnotationAnchors::Compute(const ViewKey& key) {
   width_ = 0;
   height_ = 0;
   angular_dist_labels_.clear();
+  view_dist_labels_.clear();
   grid_labels_.clear();
   horizon_labels_.clear();
   marker_points_.fill(Point{});
@@ -102,8 +107,8 @@ void AnnotationAnchors::Compute(const ViewKey& key) {
   // caller can ask for, and a user who turns the markers on while every angle list is empty is the
   // ordinary case, not a corner one. Left out, the function would return before calling core at
   // all and the markers would silently never appear.
-  if ((key.angular_dist_deg.empty() && key.elevation_deg.empty() && key.longitude_deg.empty() &&
-       key.marker_ids.empty() && !key.horizon) ||
+  if ((key.angular_dist_deg.empty() && key.view_dist_deg.empty() && key.elevation_deg.empty() &&
+       key.longitude_deg.empty() && key.marker_ids.empty() && !key.horizon) ||
       key.width <= 0 || key.height <= 0) {
     return;
   }
@@ -112,6 +117,8 @@ void AnnotationAnchors::Compute(const ViewKey& key) {
   req.view = BuildAnnotationView(key);
   req.angular_dist_deg = key.angular_dist_deg.data();
   req.angular_dist_count = static_cast<int>(key.angular_dist_deg.size());
+  req.view_dist_deg = key.view_dist_deg.data();
+  req.view_dist_count = static_cast<int>(key.view_dist_deg.size());
   req.elevation_deg = key.elevation_deg.data();
   req.elevation_count = static_cast<int>(key.elevation_deg.size());
   req.longitude_deg = key.longitude_deg.data();
@@ -153,6 +160,8 @@ void AnnotationAnchors::Compute(const ViewKey& key) {
     // vocabulary, which is exactly why core does not ship it.
     if (l.kind == LUMICE_ANNOTATION_ANGULAR_DIST) {
       angular_dist_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
+    } else if (l.kind == LUMICE_ANNOTATION_VIEW_DIST) {
+      view_dist_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
     } else if (l.kind == LUMICE_ANNOTATION_ELEVATION || l.kind == LUMICE_ANNOTATION_LONGITUDE) {
       grid_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
     } else if (l.kind == LUMICE_ANNOTATION_HORIZON) {

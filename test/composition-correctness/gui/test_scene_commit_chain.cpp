@@ -145,6 +145,15 @@ void SeedNonDefaultView() {
   g_state.sun_circles_color[1] = 0.50f;
   g_state.sun_circles_color[2] = 0.75f;
   g_state.sun_circles_alpha = 0.4f;
+  // The view circles, on for the same reason the sun circles are: a second family whose export
+  // carries DATA, and a list that is EMPTY by default — so left alone, both arms would agree on an
+  // empty list and the divergence its three keys introduce would be vacuous.
+  g_state.show_view_dist_line = true;
+  g_state.view_dist_angles = { 15.0f, 30.0f };
+  g_state.view_dist_color[0] = 0.10f;
+  g_state.view_dist_color[1] = 0.80f;
+  g_state.view_dist_color[2] = 0.30f;
+  g_state.view_dist_alpha = 0.35f;
   // The coordinate grid, on for the same reason the circles are: it is the other annotation whose
   // export carries DATA, and leaving it at its default would make every assertion about it vacuous.
   // fov 55 picks a 10 deg step (ComputeGridStep), which expands to 16 parallels and 36 meridians —
@@ -163,6 +172,7 @@ void SeedNonDefaultView() {
   g_state.show_horizon_label = true;
   g_state.show_grid_label = true;
   g_state.show_sun_circles_label = true;
+  g_state.show_view_dist_label = true;
   // The front-hemisphere clip, ON. It is a view setting like the five above and diverges the same
   // way (constant on the commit arm, the user's switch on the export arm), so leaving it at its
   // off default would make both halves of the divergence vacuous for this field.
@@ -648,6 +658,9 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     //   horizon       — always on for the commit arm (that arm produces a TEXTURE the preview
     //                   re-projects and annotates itself) vs. the user's switch on the export arm.
     //   angular_dist  — empty on the commit arm vs. the user's angle list on the export arm.
+    //   view_dist     — the same split for the circles about the optical axis (v4.39), and its
+    //   view_dist_label two switches below follow the sun circles' two exactly: the sun-referenced
+    //   view_dist_line  and the axis-referenced ring are one family shape with two centres.
     //   elevation     — the same split, for the parallels. The commit arm writes nothing because
     //   longitude       an annotation baked into the texture would be drawn a second time by the
     //                   preview's own overlay; the export arm writes the FOV-adaptive step
@@ -671,9 +684,9 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     //                   agree only when the user has the lines on — which this fixture happens to
     //                   do, and which is exactly why the exemption has to be declared rather than
     //                   left to a comparison that passes today.
-    // All eleven are the same divergence with eleven spellings, which is why they share this note
-    // rather than each earning a bullet: an annotation belongs to the picture, and only one of the
-    // two arms describes a picture.
+    // All fourteen are the same divergence with fourteen spellings, which is why they share this
+    // note rather than each earning a bullet: an annotation belongs to the picture, and only one of
+    // the two arms describes a picture.
   };
 
   for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
@@ -720,12 +733,13 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
-    // "grid" itself stays in the comparison below: only its thirteen diverging sub-fields are
+    // "grid" itself stays in the comparison below: only its sixteen diverging sub-fields are
     // exempted here, by sub-key rather than by erasing the whole object, so any remaining grid
     // sub-field keeps being checked for an accidental intent-dependent drift.
     for (const char* sub :
-         { "horizon", "angular_dist", "elevation", "longitude", "markers", "markers_opacity", "markers_radius_px",
-           "horizon_label", "label", "angular_dist_label", "elevation_line", "longitude_line", "angular_dist_line" }) {
+         { "horizon", "angular_dist", "view_dist", "elevation", "longitude", "markers", "markers_opacity",
+           "markers_radius_px", "horizon_label", "label", "angular_dist_label", "view_dist_label", "elevation_line",
+           "longitude_line", "angular_dist_line", "view_dist_line" }) {
       EXPECT_TRUE(commit_doc["render"][0]["grid"].contains(sub))
           << "offset " << offset << ": \"grid." << sub << "\" is no longer emitted";
       commit_doc["render"][0]["grid"].erase(sub);

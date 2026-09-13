@@ -200,6 +200,12 @@ TEST_F(UserDefaults, ac2_kview_difference_set_recomputed) {
     { "horizon_alpha", "overlay_horizon_alpha" },
     { "grid_alpha", "overlay_grid_alpha" },
     { "sun_circles_alpha", "overlay_sun_circles_alpha" },
+    { "show_view_dist_line", "overlay_view_dist_line" },
+    { "show_view_dist_label", "overlay_view_dist_label" },
+    { "view_dist_angles", "overlay_view_dist_angles" },
+    { "view_dist_color", "overlay_view_dist_color" },
+    { "view_dist_alpha", "overlay_view_dist_alpha" },
+    { "view_dist_section_open", "overlay_view_dist_section_open" },
     // `markers` is the one field whose mapping is not one-to-one: the array serializes as THREE
     // root keys PER MARKER (eighteen in all), and this table has a column for one. The named key is
     // a representative — enough for the question this table asks, which is "is this field

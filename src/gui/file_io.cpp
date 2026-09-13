@@ -2140,7 +2140,7 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // default: nothing reads it (the mask generator derives its own half-width), so writing the
       // GUI's line width there would export a number that changes no pixel.
       // No overflow check here, unlike the grid below: `state.sun_circle_angles` is not an expanded
-      // list, it is the user's own typed list, and it is capped at `kMaxSunCircles` (16) the moment
+      // list, it is the user's own typed list, and it is capped at `kMaxAnnotationCircles` (16) the moment
       // an angle is added (gui_constants.hpp / sun_circle_rules.hpp) — well under
       // `LUMICE_MAX_CONFIG_GRID_LINES` (64). Widening this gate to `|| label` therefore does not
       // open a reachable overflow path the way it does for the grid, whose list is FOV-derived and
@@ -2151,6 +2151,17 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
                       &dst.angular_dist_count);
       }
       dst.angular_dist_line = state.show_sun_circles_line ? 1 : 0;
+      // The view circles — the same family shape about the optical axis, filled by the same rule
+      // and with the same "no overflow check" argument: `state.view_dist_angles` is a typed list
+      // capped at kMaxAnnotationCircles the moment an angle is added. Nothing here names the axis:
+      // the CLI derives it from render.view, which this arm already writes.
+      dst.view_dist_label = state.show_view_dist_label ? 1 : 0;
+      dst.view_dist_count = 0;
+      if (state.show_view_dist_line || state.show_view_dist_label) {
+        FillGridLines(state.view_dist_angles, state.view_dist_color, state.view_dist_alpha, dst.view_dist,
+                      &dst.view_dist_count);
+      }
+      dst.view_dist_line = state.show_view_dist_line ? 1 : 0;
       // The coordinate grid — parallels and meridians. Same gating and same shared-appearance
       // story as the circles above, with one difference that matters: the angles are NOT a list
       // the user typed. The GUI derives them from ONE FOV-adaptive step (ComputeGridStep), and
@@ -2249,6 +2260,7 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       dst.elevation_line = 1;
       dst.longitude_line = 1;
       dst.angular_dist_line = 1;
+      dst.view_dist_line = 1;
       // view / background keep their zero-initialized values, matching both the pre-v4.11
       // hardcoded encoding and core's defaults.
     }
@@ -3343,6 +3355,14 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["overlay_horizon_alpha"] = state.horizon_alpha;
   root["overlay_grid_alpha"] = state.grid_alpha;
   root["overlay_sun_circles_alpha"] = state.sun_circles_alpha;
+  // The view circles: the sun circles' keys with the family's own prefix, plus the fold state of
+  // the section that holds them (a view preference like markers_section_open below).
+  root["overlay_view_dist_line"] = state.show_view_dist_line;
+  root["overlay_view_dist_label"] = state.show_view_dist_label;
+  root["overlay_view_dist_angles"] = state.view_dist_angles;
+  root["overlay_view_dist_color"] = { state.view_dist_color[0], state.view_dist_color[1], state.view_dist_color[2] };
+  root["overlay_view_dist_alpha"] = state.view_dist_alpha;
+  root[kViewDistSectionOpenKey] = state.view_dist_section_open;
   // The reference-point markers: THREE FLAT KEYS PER MARKER, not one array key holding six
   // objects. The shape is forced by what reads this document downstream — defaults_diff.cpp walks
   // it into the personal-defaults panel and treats an ARRAY AS ONE LEAF (see its header), so an
@@ -3600,7 +3620,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   if (root.contains("overlay_sun_circle_angles") && root["overlay_sun_circle_angles"].is_array()) {
     state.sun_circle_angles.clear();
     for (const auto& v : root["overlay_sun_circle_angles"]) {
-      if (v.is_number() && static_cast<int>(state.sun_circle_angles.size()) < kMaxSunCircles) {
+      if (v.is_number() && static_cast<int>(state.sun_circle_angles.size()) < kMaxAnnotationCircles) {
         float angle = std::clamp(v.get<float>(), 0.1f, 180.0f);
         state.sun_circle_angles.push_back(angle);
       }
@@ -3620,6 +3640,24 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.horizon_alpha = root.value("overlay_horizon_alpha", GuiState{}.horizon_alpha);
   state.grid_alpha = root.value("overlay_grid_alpha", GuiState{}.grid_alpha);
   state.sun_circles_alpha = root.value("overlay_sun_circles_alpha", GuiState{}.sun_circles_alpha);
+  // The view circles. No legacy single-visibility key to fall back to — the family postdates the
+  // line/label split — so each key reads straight to its own struct default. The angle list is
+  // read through the same cap-and-sort the sun circles' list is: a hand-edited document past the
+  // cap is truncated rather than refused, exactly as for its twin.
+  state.show_view_dist_line = root.value("overlay_view_dist_line", GuiState{}.show_view_dist_line);
+  state.show_view_dist_label = root.value("overlay_view_dist_label", GuiState{}.show_view_dist_label);
+  if (root.contains("overlay_view_dist_angles") && root["overlay_view_dist_angles"].is_array()) {
+    state.view_dist_angles.clear();
+    for (const auto& v : root["overlay_view_dist_angles"]) {
+      if (v.is_number() && static_cast<int>(state.view_dist_angles.size()) < kMaxAnnotationCircles) {
+        state.view_dist_angles.push_back(std::clamp(v.get<float>(), 0.1f, 180.0f));
+      }
+    }
+    std::sort(state.view_dist_angles.begin(), state.view_dist_angles.end());
+  }
+  read_color3("overlay_view_dist_color", state.view_dist_color);
+  state.view_dist_alpha = root.value("overlay_view_dist_alpha", GuiState{}.view_dist_alpha);
+  state.view_dist_section_open = root.value(kViewDistSectionOpenKey, GuiState{}.view_dist_section_open);
   // The reference-point markers, with the legacy zenith/nadir pair as the fallback source.
   //
   // WHICH SOURCE WINS is decided PER MARKER by whether this document carries that marker's own new

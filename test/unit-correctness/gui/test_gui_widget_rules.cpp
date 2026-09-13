@@ -264,9 +264,9 @@ TEST(SunCircleRules, DuplicateTestUsesTheHundredthDegreeBand) {
 
 TEST(SunCircleRules, LimitBitesExactlyAtTheBufferSize) {
   EXPECT_FALSE(SunCirclesAtLimit(0));
-  EXPECT_FALSE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxSunCircles) - 1));
-  EXPECT_TRUE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxSunCircles)));
-  EXPECT_TRUE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxSunCircles) + 1));
+  EXPECT_FALSE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles) - 1));
+  EXPECT_TRUE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles)));
+  EXPECT_TRUE(SunCirclesAtLimit(static_cast<std::size_t>(kMaxAnnotationCircles) + 1));
 }
 
 TEST(SunCircleRules, CustomAngleIsClampedToADrawableBand) {

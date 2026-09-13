@@ -104,6 +104,13 @@ const MissingKeyCase kGuiNativeCases[] = {
   LUMICE_MISSING_KEY_ROW(kRoot, s.horizon_alpha, GuiState{}.horizon_alpha),
   LUMICE_MISSING_KEY_ROW(kRoot, s.grid_alpha, GuiState{}.grid_alpha),
   LUMICE_MISSING_KEY_ROW(kRoot, s.sun_circles_alpha, GuiState{}.sun_circles_alpha),
+  // The view circles: no legacy fallback key exists for this family at all, so each of these
+  // lands directly on its struct default — the case the sun circles' rows above reach only after
+  // a second lookup.
+  LUMICE_MISSING_KEY_ROW(kRoot, s.show_view_dist_line, GuiState{}.show_view_dist_line),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.show_view_dist_label, GuiState{}.show_view_dist_label),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.view_dist_alpha, GuiState{}.view_dist_alpha),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.view_dist_section_open, GuiState{}.view_dist_section_open),
   // The reference-point markers. Zenith is probed rather than all six because the loader's
   // per-marker fallback chain is where the interesting failure is, and it is longest here: the new
   // key is absent, so the legacy overlay_zenith_nadir_line is tried, and with THAT absent too the

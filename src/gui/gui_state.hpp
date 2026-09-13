@@ -1277,6 +1277,8 @@ inline std::string MarkerFieldKey(int marker_id, MarkerKeyPart part) {
 inline constexpr const char* kMarkersAlphaKey = "overlay_markers_alpha";
 inline constexpr const char* kMarkersRadiusKey = "overlay_markers_radius_px";
 inline constexpr const char* kMarkersSectionOpenKey = "overlay_markers_section_open";
+// The View Circles section's fold state, the same kind of key for the same kind of field.
+inline constexpr const char* kViewDistSectionOpenKey = "overlay_view_dist_section_open";
 
 struct GuiState {
   // ID-pool model (restored from pre-card-redesign): EntryCard holds indices
@@ -1366,12 +1368,17 @@ struct GuiState {
   // label anchors core computes (AnnotationViewInputFor -> AnnotationAnchors -> the
   // Build*LabelSet family) and, on the export side, the three grid.*_label keys the CLI reads.
   //
-  // Tech-debt note: the flat fields below are 16 (4×color + 4×alpha + 7×bool +
-  // sun_circle_angles). The original note said "when a fourth overlay class is added, evaluate
-  // collapsing to a substruct (per-overlay { color, alpha, line, label })". That trigger has been
-  // crossed twice without the evaluation being done, and the debt is tracked in the backlog rather
-  // than resting on this counter alone.
-  // What the count no longer includes is the marker family: it WAS four more flat fields
+  // Tech-debt note: the flat fields below are 21 (5×color + 5×alpha + 9×bool + two angle
+  // lists), across five overlay classes: horizon / grid / sun_circles / view_dist / lens_border.
+  // The original note said "when a fourth overlay class is added, evaluate collapsing to a
+  // substruct (per-overlay { color, alpha, line, label })". The evaluation was done when the
+  // fifth class (view_dist) landed, and the verdict was NOT to collapse: the two ring families
+  // are the cheapest pair to fold, and even that pair's rename touches 8 source consumers plus 16
+  // test files that read these fields by name, for no functional gain to the family being added.
+  // The verdict, its numbers, and the condition under which it should be re-asked are recorded in
+  // the backlog entry that tracks this debt — this comment only states the outcome, so the two do
+  // not drift into two versions of the argument.
+  // What the count does not include is the marker family: it WAS four more flat fields
   // (show_zenith_nadir_line + colour + alpha + radius) and is now the substruct the note asks for
   // — MarkerAppearance{show,label,color} in an array indexed by the core marker id. Six reference
   // points forced the question the fourth and fifth overlay classes only raised, because six sets
@@ -1389,6 +1396,23 @@ struct GuiState {
   float horizon_alpha = 0.6f;
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
+
+  // Circles of constant angular distance from the camera's OPTICAL AXIS — the axis-referenced twin
+  // of the sun circles above (core: grid.view_dist, LUMICE_ANNOTATION_VIEW_DIST). Same shape field
+  // for field, deliberately: one geometry, two centres. There is NO reference-direction field on
+  // either side of the seam — the preview shader reads the axis off the view matrix it already
+  // uploads, and core derives it from the view's own azimuth/elevation/roll — so the angle list is
+  // the whole of what this family adds to the document. The list defaults EMPTY, unlike the sun
+  // circles' {22, 46}: those two radii are halo astronomy's standing pair, whereas a circle about
+  // the optical axis is a framing / calibration tool whose useful radius depends on the lens.
+  bool show_view_dist_line = false;
+  bool show_view_dist_label = false;
+  std::vector<float> view_dist_angles;
+  float view_dist_color[3] = { 0.4f, 0.9f, 1.0f };
+  float view_dist_alpha = 0.5f;
+  // Whether the panel's "View Circles" section is unfolded. Serialized for the same reason
+  // markers_section_open below is.
+  bool view_dist_section_open = false;
 
   // The sky reference points: pixel-space ring markers at N named directions. Indexed BY THE CORE
   // ID — markers[LUMICE_ANNOTATION_MARKER_SUN] is the sun's entry — which is what lets the request,

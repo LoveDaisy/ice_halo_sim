@@ -1691,13 +1691,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // is asserted rather than inferred from what got drawn.
       IM_CHECK(gui::FindFieldEditor("bg_path") == nullptr);
       IM_CHECK(gui::FindFieldEditor("overlay_sun_circle_angles") == nullptr);
+      IM_CHECK(gui::FindFieldEditor("overlay_view_dist_angles") == nullptr);
       IM_CHECK(gui::FindFieldEditor("overlay_grid_alpha") != nullptr);
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
 
-      // Per key, non-fatally: the two are different unregistered SHAPES (a path string, an array),
-      // and which of them grew an editor is the diagnosis.
-      for (const char* unregistered : { "bg_path", "overlay_sun_circle_angles" }) {
+      // Per key, non-fatally: they are different unregistered SHAPES (a path string, two arrays
+      // owned by two families), and which of them grew an editor is the diagnosis.
+      for (const char* unregistered : { "bg_path", "overlay_sun_circle_angles", "overlay_view_dist_angles" }) {
         FilterTo(ctx, unregistered);
         if (!ctx->ItemExists(AdoptCheckboxRef(unregistered).c_str())) {
           IM_ERRORF("row '%s' was not rendered at all, so its cell says nothing", unregistered);

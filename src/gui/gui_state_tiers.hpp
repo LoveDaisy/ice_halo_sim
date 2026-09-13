@@ -128,7 +128,7 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "bg_offset_x",                FieldTier::kView,       false },
     { "bg_offset_y",                FieldTier::kView,       false },
     { "bg_scale",                   FieldTier::kView,       false },
-    // Auxiliary-line overlays (horizon / grid / sun-circles)
+    // Auxiliary-line overlays (horizon / grid / sun-circles / view-circles)
     { "show_horizon_line",          FieldTier::kView,       false },
     { "show_horizon_label",         FieldTier::kView,       false },
     { "show_grid_line",             FieldTier::kView,       false },
@@ -142,6 +142,14 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "horizon_alpha",              FieldTier::kView,       false },
     { "grid_alpha",                 FieldTier::kView,       false },
     { "sun_circles_alpha",          FieldTier::kView,       false },
+    // The axis-referenced ring family (view_dist), field for field the sun circles' twin; its
+    // section fold state sits with it, at the same tier markers_section_open has below.
+    { "show_view_dist_line",        FieldTier::kView,       false },
+    { "show_view_dist_label",       FieldTier::kView,       false },
+    { "view_dist_angles",           FieldTier::kView,       false },
+    { "view_dist_color",            FieldTier::kView,       false },
+    { "view_dist_alpha",            FieldTier::kView,       false },
+    { "view_dist_section_open",     FieldTier::kView,       false },
     // Sky reference-point markers. One row for the whole array, which is this table's grain (the
     // same grain `renderer` is registered at) — the array's members are per-marker appearance, not
     // top-level GuiState fields, so there is nothing finer for the gate to require here.

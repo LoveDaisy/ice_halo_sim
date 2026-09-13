@@ -321,6 +321,32 @@ const std::vector<FieldProbe>& FieldProbes() {
         }
         return out;
       } },
+    // The view circles, every field of the family in one probe: the list, both switches, the
+    // colour, the alpha and the section's fold state, each pushed off its default (the list's
+    // default is EMPTY, so any non-empty list is a real probe here — the trap the sun circles'
+    // probe above walked into does not exist for this one, but the reason it is stated is the
+    // same). The three-key JSON EXPORT of the same fields is asserted in test_scene_commit_chain.cpp,
+    // which owns the commit/export split; this file owns the .lmc round trip.
+    { "overlay.view_dist",
+      [](GuiState& s) {
+        s.show_view_dist_line = true;
+        s.show_view_dist_label = true;
+        s.view_dist_angles = { 15.0f, 30.0f, 45.0f };
+        s.view_dist_color[0] = 0.1f;
+        s.view_dist_color[1] = 0.2f;
+        s.view_dist_color[2] = 0.3f;
+        s.view_dist_alpha = 0.7f;
+        s.view_dist_section_open = true;
+      },
+      [](const GuiState& s) {
+        std::string out = std::to_string(s.show_view_dist_line) + " " + std::to_string(s.show_view_dist_label) + " ";
+        for (float a : s.view_dist_angles) {
+          out += std::to_string(a) + ";";
+        }
+        out += " " + JoinFloats(s.view_dist_color, 3) + " " + std::to_string(s.view_dist_alpha) + " " +
+               std::to_string(s.view_dist_section_open);
+        return out;
+      } },
     // The GUI had no control for this field until the crystal edit modal grew a Name box, so
     // although both halves of its serialization have existed since the format did, nothing had
     // ever put a name into a document and read one back. The name is also what the Colours window

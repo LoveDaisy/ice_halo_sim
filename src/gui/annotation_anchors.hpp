@@ -26,7 +26,7 @@ namespace lumice::gui {
 // still for three frames, which is what froze every annotation for the duration of a drag. The
 // sweep is gone from the C API with v4.28, and the reason to wait went with it.)
 //
-// ONE CALL SERVES EVERY FAMILY. The label anchors of all four curve families and the six marker
+// ONE CALL SERVES EVERY FAMILY. The label anchors of all five curve families and the six marker
 // points come out of one request, so a marker's name and its ring, or a circle and its number,
 // cannot be answered for two different views.
 class AnnotationAnchors {
@@ -49,6 +49,10 @@ class AnnotationAnchors {
     bool front = false;
     float sun_dir[3] = { 0.0f, 0.0f, 0.0f };
     std::vector<float> angular_dist_deg;
+    // Circles about the camera's optical axis. No direction field beside it, unlike sun_dir for
+    // the list above: core derives the axis from the view's own azimuth / elevation / roll, which
+    // this key already carries, so a second statement of it here could only disagree.
+    std::vector<float> view_dist_deg;
     // The coordinate grid: parallels and meridians, expanded from the FOV-adaptive step by
     // ComputeGridElevationAngles / ComputeGridLongitudeAngles (app.hpp).
     std::vector<float> elevation_deg;
@@ -93,6 +97,8 @@ class AnnotationAnchors {
   int Height() const { return height_; }
   // Anchors for the angular-distance circles only.
   const std::vector<Label>& AngularDistLabels() const { return angular_dist_labels_; }
+  // Anchors for the view-distance circles (about the optical axis) only.
+  const std::vector<Label>& ViewDistLabels() const { return view_dist_labels_; }
   // Anchors for both grid families, merged: core has already formatted each label's text, and the
   // consumer draws them in one style.
   const std::vector<Label>& GridLabels() const { return grid_labels_; }
@@ -117,6 +123,7 @@ class AnnotationAnchors {
   int width_ = 0;
   int height_ = 0;
   std::vector<Label> angular_dist_labels_;
+  std::vector<Label> view_dist_labels_;
   std::vector<Label> grid_labels_;
   std::vector<Label> horizon_labels_;
   // Indexed by core marker id, not by request order — see MarkerPoint().
@@ -139,6 +146,7 @@ struct AnnotationViewInput {
   bool front = false;
   float sun_altitude_deg = 0.0f;
   std::vector<float> angular_dist_deg;
+  std::vector<float> view_dist_deg;
   std::vector<float> elevation_deg;
   std::vector<float> longitude_deg;
   std::vector<int> marker_ids;

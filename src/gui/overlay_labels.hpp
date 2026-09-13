@@ -30,6 +30,11 @@ constexpr int kGroupSunCircles = 1;
 // close together must both stay named — suppressing one would say the sky has fewer named
 // directions than it does, which is the opposite of what this family is for.
 constexpr int kGroupMarkers = 2;
+// The view circles (about the optical axis) are their own group, not the sun circles': the two
+// families are told apart by colour, and a 22 deg ring about the sun crossing a 30 deg ring about
+// the axis is two different facts that may crowd — while two rings of ONE family may not, since
+// nothing but the number distinguishes them. Same reasoning as the grid/circle split above.
+constexpr int kGroupViewCircles = 3;
 
 // Turn core's label anchors into OverlayLabels the two draw paths already understand. Kept here
 // rather than in either caller because both of them need it and the conversion — canvas pixels to
