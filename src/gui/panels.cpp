@@ -1692,7 +1692,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
   }
   if (layer_delete_clicked && can_delete_layer) {
     state.layers.erase(state.layers.begin() + layer_idx);
-    NotifyLayerDeleted(layer_idx);
+    NotifyLayerDeleted(state, layer_idx);
     g_thumbnail_cache.OnLayerStructureChanged();
     ImGui::PopID();
     return;  // Skip rendering the rest; layer has been erased.

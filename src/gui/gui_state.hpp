@@ -1668,6 +1668,36 @@ struct GuiState {
   };
   RaypathAnalysisSession analysis;
 
+  // The scene an analysis result DESCRIBES, as DoAnalyze saw it — the identity the panel's
+  // freshness line compares the live document against each frame (ComputeAnalysisListFreshness,
+  // sim_state_rules.hpp; the one consumer is analysis_panel.cpp's banner). Exactly the fields that
+  // change which raypaths exist and how much energy each carries: crystals / layers / filters /
+  // sun / sim, plus the resim projection of the renderer (sim_resolution_index, the one render
+  // field that reaches the simulation). Every T-view field is absent — the analysis is over the
+  // sphere and a camera move does not re-run it — and so is `raypath_color`: colour classes only
+  // classify raypaths that were already traced (the commit's own overflow warning says as much:
+  // "the underlying filtering/geometry is unaffected — only color assignment degrades"), so a
+  // colour edit leaves the list as true as it was.
+  //
+  // Not ConfigSnapshot, deliberately: that one is the Revert baseline and so carries
+  // `raypath_color`, `background` and `paper` — display fields whose edit must be revertible but
+  // must not read as "the list is stale". Not the reconciler's commit-baseline diff either: its
+  // hard-reset special cases (a filter's presence flipping, a colour struct edit) serve epoch
+  // accounting, not this question. A narrower struct with one question is cheaper than either
+  // coupling.
+  struct AnalysisSceneIdentity {
+    std::vector<CrystalConfig> crystals;
+    std::vector<Layer> layers;
+    std::vector<FilterConfig> filters;
+    SunConfig sun;
+    SimConfig sim;
+    RenderConfigResimFields renderer_resim;
+
+    static AnalysisSceneIdentity From(const GuiState& state);
+    // Does the live document still describe the scene this was captured from?
+    bool Matches(const GuiState& state) const;
+  };
+
   // DERIVED: the analysis result on show and the display-time projection of it. Written by
   // SyncFromPoller (adoption of a new payload) and by the panel (re-sort on the radius slider),
   // never by a widget writing a document field. Kept apart from PreviewSnapshot / the texture
@@ -1676,6 +1706,15 @@ struct GuiState {
   // warns against.
   struct AnalysisResultView {
     std::shared_ptr<const AnalysisPayload> payload;
+    // The scene the result describes, captured by DoAnalyze from the same GuiState it built the
+    // request's scene from (nothing writes the state between the two reads). Compared against the
+    // live state each frame, so a Run that commits an edit or a Revert that restores the previous
+    // commit both read as stale by the same comparison, with neither needing to say so itself —
+    // and an edit that is later undone by hand reads as fresh again. Nullopt only before the
+    // first Analyze of a document: ResetFrontendState clears the whole view on a document switch,
+    // and keeps it across Revert (the result is kept there on purpose — a stale list the user can
+    // still exclude from is the panel's main path — and the comparison above is what flags it).
+    std::optional<AnalysisSceneIdentity> analyzed_scene;
     // The symmetry bits payload->entries are reduced under — what the list actually shows, as
     // opposed to analysis.symmetry_* (what the user asks for). Equal whenever the last
     // RefreshAnalysisEntries could read the frame; they part when the server has left the
@@ -2030,6 +2069,22 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   std::copy(std::begin(renderer_background), std::end(renderer_background), state.renderer.background);
   std::copy(std::begin(renderer_paper), std::end(renderer_paper), state.renderer.paper);
   state.raypath_color = raypath_color;
+}
+
+inline GuiState::AnalysisSceneIdentity GuiState::AnalysisSceneIdentity::From(const GuiState& state) {
+  AnalysisSceneIdentity id;
+  id.crystals = state.crystals;
+  id.layers = state.layers;
+  id.filters = state.filters;
+  id.sun = state.sun;
+  id.sim = state.sim;
+  id.renderer_resim = RenderConfigResimFields::From(state.renderer);
+  return id;
+}
+
+inline bool GuiState::AnalysisSceneIdentity::Matches(const GuiState& state) const {
+  return crystals == state.crystals && layers == state.layers && filters == state.filters && sun == state.sun &&
+         sim == state.sim && renderer_resim.Matches(state.renderer);
 }
 
 // Convenience helpers (intended for tests + ad-hoc call sites). Production

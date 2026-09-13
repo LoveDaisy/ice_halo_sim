@@ -1021,6 +1021,25 @@ void RenderPickBanner(const GuiState& state) {
   ImGui::PopStyleColor(2);
 }
 
+// The top line of the window when the list on show no longer describes the document on the
+// panels: the freshness predicate's kStale, and nothing for its other two values. Same voice as
+// the main window's "Modified" chip (warning colour, the same icon the centre-moved hint uses),
+// and a hint only — the list stays, because "pick a row, exclude it, re-run" is the panel's main
+// path and a cleared list would cut it off. The comparison is against the live document, so the
+// banner appears on the edit itself and not only after the Run or Revert that commits it, and
+// goes away again if the edit is undone by hand.
+void RenderListFreshnessBanner(const GuiState& state) {
+  const bool has_result = state.analysis_result.payload != nullptr;
+  const bool scene_still_matches =
+      has_result && state.analysis_result.analyzed_scene && state.analysis_result.analyzed_scene->Matches(state);
+  if (ComputeAnalysisListFreshness(has_result, scene_still_matches) != AnalysisListFreshness::kStale) {
+    return;
+  }
+  ImGui::TextColored(
+      WarningTextColor(), ICON_FA_TRIANGLE_EXCLAMATION
+      " This list is from a configuration that has since changed \xe2\x80\x94 press Analyze to refresh it.");
+}
+
 void RenderRunControls(GuiState& state, LUMICE_Server* server) {
   const bool in_progress = state.analysis_run_in_progress;
   const bool needs_centre = state.analysis.roi_mode == LUMICE_RAYPATH_ROI_CONE && !state.analysis.cone_center_valid;
@@ -1091,10 +1110,12 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
                          " Centre has moved \xe2\x80\x94 press Analyze to update the list.");
     }
   }
-  // What the list describes is the configured document, always; when the picture on screen is
-  // not of that document, say so here — a line of its own that needs no hover, not a tooltip,
-  // and not a reason to refuse (AnalysisPictureNotice says which two cases there are). Shown in
-  // progress too: the list filling in is still not the picture's.
+  // When the picture on screen is not of the document on the panels, say so here — a line of
+  // its own that needs no hover, not a tooltip, and not a reason to refuse
+  // (AnalysisPictureNotice says which two cases there are). Shown in progress too. This line is
+  // about the picture only; whether the LIST still describes the document is the freshness
+  // banner's question (RenderListFreshnessBanner), and the two may show together — they answer
+  // different questions.
   if (const char* notice = AnalysisPictureNotice(state.run_intent, state.sim_state)) {
     ImGui::TextDisabled("%s", notice);
   }
@@ -1335,6 +1356,7 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
     ImGui::End();
     return;
   }
+  RenderListFreshnessBanner(state);
   RenderPickBanner(state);
   RenderRoiControls(state);
   RenderRequestParamsControls(state);

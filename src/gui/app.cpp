@@ -1522,6 +1522,9 @@ bool DoAnalyze() {
   // it is the value the server received and not a re-read of the session field.
   std::copy(req.cone_center, req.cone_center + 3, g_state.analysis.analyzed_cone_center_dir);
   g_state.analysis_result = GuiState::AnalysisResultView{};
+  // The scene this run describes: the same g_state BuildCommitSceneOrWarn just read, nothing
+  // having written it in between. The panel compares the live document against it each frame.
+  g_state.analysis_result.analyzed_scene = GuiState::AnalysisSceneIdentity::From(g_state);
   // The poller's snapshot still carries the previous result forward, and with the view just
   // cleared (held generation 0) the next SyncFromPoller would adopt it as new. Drop it there too.
   g_server_poller.InvalidateAnalysisResult();

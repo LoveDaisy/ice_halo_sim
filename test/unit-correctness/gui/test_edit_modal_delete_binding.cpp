@@ -147,7 +147,7 @@ TEST_F(EditModalDeleteBinding, DeletingTheBoundLayerClosesTheModal) {
   ASSERT_TRUE(gui::IsEditModalOpen());
 
   s.layers.erase(s.layers.begin() + 1);
-  gui::NotifyLayerDeleted(1);
+  gui::NotifyLayerDeleted(s, 1);
 
   EXPECT_FALSE(gui::IsEditModalOpen());
 }
@@ -158,7 +158,7 @@ TEST_F(EditModalDeleteBinding, DeletingALayerBeforeTheBoundOneFollowsItDown) {
   const int edited = BoundCrystalId(s);
 
   s.layers.erase(s.layers.begin() + 0);
-  gui::NotifyLayerDeleted(0);
+  gui::NotifyLayerDeleted(s, 0);
 
   EXPECT_TRUE(gui::IsEditModalOpen());
   EXPECT_EQ(gui::GetEditModalTarget().layer_idx, 1);
@@ -172,7 +172,7 @@ TEST_F(EditModalDeleteBinding, DeletingALayerAfterTheBoundOneLeavesItAlone) {
   const int edited = BoundCrystalId(s);
 
   s.layers.erase(s.layers.begin() + 2);
-  gui::NotifyLayerDeleted(2);
+  gui::NotifyLayerDeleted(s, 2);
 
   EXPECT_TRUE(gui::IsEditModalOpen());
   EXPECT_EQ(gui::GetEditModalTarget().layer_idx, 0);
@@ -189,7 +189,7 @@ TEST_F(EditModalDeleteBinding, NotificationsAreInertWhileNoModalIsOpen) {
   ASSERT_FALSE(gui::IsEditModalOpen());
 
   gui::NotifyEntryDeleted(0, 0);
-  gui::NotifyLayerDeleted(0);
+  gui::NotifyLayerDeleted(s, 0);
 
   EXPECT_FALSE(gui::IsEditModalOpen());
   EXPECT_EQ(gui::GetEditModalTarget().layer_idx, -1);
