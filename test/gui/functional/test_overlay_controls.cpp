@@ -283,17 +283,17 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
   // The other half of "empty cell is the information": the fold column. None of the three line
   // rows of the main table has a field the others lack, so none offers the button; the two rows of
   // the Angular Distance section each own an angle list, so each offers one — a fold button on
-  // every row would say the opposite of what this layout is for. The six reference-point rows
-  // extend the claim rather than qualify it: NONE of them offers one, because the two fields their
-  // family owns (alpha, radius) are family-wide and hang off the section header instead. That
-  // header fold is asserted here too, and the two are different statements — "this ROW owns a
-  // field the other rows do not" against "this FAMILY owns a field no row can express".
+  // every row would say the opposite of what this layout is for. The six NAMED reference-point
+  // rows extend the claim rather than qualify it: NONE of them offers one, because the field their
+  // family owns behind a fold (the radius) is family-wide. The family's fold is asserted here too,
+  // on the row that IS the family — the All row — and the two are different statements: "this ROW
+  // owns a field the other rows do not" against "this FAMILY owns a field no single row can express".
   //
-  // The angular-distance folds live IN THE ROWS, and the rows exist only while their section is
-  // open — so with the section closed neither fold exists, and with it open both do. That is the
-  // merged section's shape stated as a claim (the view circles' fold used to sit on their own
-  // section's header, reachable while it was closed; it no longer does, by design: nothing
-  // family-wide is left for a header button to act on).
+  // Every fold lives IN A ROW, and rows exist only while their section is open — so with a section
+  // closed none of its folds exists, and with it open they do. The family fold shares that shape
+  // now: it used to sit on the Reference Points header, reachable while the section was closed,
+  // and moved into the All row's own cell when the header lost its buttons — so no header carries
+  // a button any more, and reaching any fold starts with unfolding its section.
   //
   // Read in the DEFAULT document state, both sun-circle switches off, and that is the point: which
   // rows offer a fold is a property of the ROWS — of which of them owns a field the others lack —
@@ -322,11 +322,11 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // nothing to edit.
         IM_CHECK(!ctx->ItemExists("**/###lens_border_fold"));
 
-        // The family's fold, on the section header. Offered while the section is still CLOSED, and
-        // that is part of the claim: alpha and radius belong to the family, not to its rows, so
-        // reaching them must not require unfolding the six.
+        // The family's fold, in the All row: absent while the section is closed (the row is not
+        // submitted, and the header no longer carries a button of its own), present once it is
+        // open — asserted below, next to the "no NAMED row offers one" pass.
         IM_CHECK(!gui::g_state.markers_section_open);
-        IM_CHECK(ctx->ItemExists("**/###markers_family_fold"));
+        IM_CHECK(!ctx->ItemExists("**/###markers_family_fold"));
 
         // The two angular-distance folds: absent with their section closed (the rows are not
         // submitted, and the header carries no button of its own), present — both of them — once
@@ -339,14 +339,16 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
         IM_CHECK(ctx->ItemExists("**/###view_dist_fold"));
 
-        // ...and no marker ROW offers one, with the section open. A per-row fold here would be six
-        // buttons leading to the same two family-wide values.
+        // ...and with the section open the family's fold is there, on the All row, while no NAMED
+        // marker row offers one. A per-row fold here would be six buttons leading to the same
+        // family-wide value.
         gui::g_state.markers_section_open = true;
         ctx->Yield(3);
+        IM_CHECK(ctx->ItemExists("**/###markers_family_fold"));
         for (const char* row : kMarkerRows) {
           const std::string fold = "**/###marker_" + std::string(row) + "_fold";
           if (ctx->ItemExists(fold.c_str())) {
-            IM_ERRORF("marker row %s offers a fold; the family's two fields live on the section header", row);
+            IM_ERRORF("marker row %s offers a fold; the family's radius lives behind the All row's fold", row);
             break;
           }
         }
@@ -517,13 +519,13 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The marker family's two fields behind the section header's fold. Same proposition as the angle
-  // list above — that folding a minority field away did not put it out of reach — and it needs
-  // stating separately because the two folds hold entirely different editors.
+  // The marker family's radius behind the All row's fold. Same proposition as the angle list above
+  // — that folding a minority field away did not put it out of reach — and it needs stating
+  // separately because the two folds hold entirely different editors.
   //
-  // BOTH fields, not just the radius: the family's alpha moved into this popup when the marker row
-  // left the main table, so it is no longer covered by the alpha-cell case at the end of this file
-  // and would otherwise have no reader at all.
+  // The radius only: the family's alpha, which shared this popup while the fold hung off the
+  // section header, now has a cell of its own in the All row and is read by the alpha-cell case at
+  // the end of this file along with the other five. Nothing but the radius is left behind a fold.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "overlay_controls", "the_marker_family_fields_are_editable_behind_the_fold");
@@ -531,36 +533,34 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(3);
+      // The fold is a cell of the All row, so it exists only once the section is open.
+      gui::g_state.markers_section_open = true;
+      ctx->Yield(3);
 
       {
         // Named ref so the negative check reads "not submitted inline" and not "scrolled past" —
         // see the case above. Released before the popup, which is a different window.
         const ScopedRef panel_ref(ctx, "//##RightPanel");
-        // The selector lost SliderWithInput's "_input" half along with the control: both fields are
+        // The selector lost SliderWithInput's "_input" half along with the control: the field is
         // the same DragFloatField the alpha cells use, and that submits ONE item whose id is
         // "##" + the label it was handed.
         IM_CHECK(!ctx->ItemExists("**/##Radius##markers_family"));  // folded away, not shown inline
-        IM_CHECK(!ctx->ItemExists("**/##Alpha##markers_family"));
         ctx->ItemClick("**/###markers_family_fold");
       }
       ctx->Yield(3);
 
-      // Both ends of both declared domains (2..20 px, 0..1), so the popup's controls are the
-      // registry's controls and not a second opinion about the ranges.
+      // Both ends of the declared domain (2..20 px), so the popup's control is the registry's
+      // control and not a second opinion about the range.
       ctx->ItemInputValue("**/##Radius##markers_family", 100.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.markers_radius_px, 20.0f);
       ctx->ItemInputValue("**/##Radius##markers_family", -5.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.markers_radius_px, 2.0f);
-      ctx->ItemInputValue("**/##Alpha##markers_family", 100.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.markers_alpha, 1.0f);
-      ctx->ItemInputValue("**/##Alpha##markers_family", -5.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.markers_alpha, 0.0f);
 
       ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+      gui::g_state.markers_section_open = false;
       ctx->Yield(2);
     };
   }
@@ -676,8 +676,9 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The five alpha cells — three in the main table, two in the Angular Distance section — at both
-  // ends of each declared domain. Literals throughout, for the reason
+  // The six alpha cells — three in the main table, two in the Angular Distance section, and the
+  // Reference Points family's own in its All row — at both ends of each declared domain. Literals
+  // throughout, for the reason
   // spelled out at the head of functional/test_scene_controls.cpp: the call site reads the registry,
   // so asking the registry what to expect would compare one line of code against itself.
   //
@@ -692,9 +693,10 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       const ScopedRef panel_ref(ctx, "//##RightPanel");
 
-      // One flat list over both tables: the section is opened up front so every row is submitted,
-      // and the cells are the same DragFloatField whichever table drew them.
+      // One flat list over all three tables: both sections are opened up front so every row is
+      // submitted, and the cells are the same DragFloatField whichever table drew them.
       gui::g_state.angular_dist_section_open = true;
+      gui::g_state.markers_section_open = true;
       ctx->Yield(3);
       struct AlphaCell {
         const char* row;
@@ -703,7 +705,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const AlphaCell kCells[] = {
         { "horizon", &gui::g_state.horizon_alpha },         { "grid", &gui::g_state.grid_alpha },
         { "lens_border", &gui::g_state.lens_border_alpha }, { "sun_circles", &gui::g_state.sun_circles_alpha },
-        { "view_dist", &gui::g_state.view_dist_alpha },
+        { "view_dist", &gui::g_state.view_dist_alpha },     { "markers_all", &gui::g_state.markers_alpha },
       };
       for (const AlphaCell& cell : kCells) {
         const std::string ref = "**/##" + std::string(cell.row) + "_alpha";
@@ -726,6 +728,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         }
       }
       gui::g_state.angular_dist_section_open = false;
+      gui::g_state.markers_section_open = false;
       ctx->Yield(2);
     };
   }
