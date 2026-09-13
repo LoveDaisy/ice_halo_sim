@@ -55,6 +55,11 @@
 > 门槛随之删除；面板新增状态行 `AnalysisPictureNotice`（`sim_state_rules.hpp`：kNone →「无图」、
 > kModified →「图来自旧配置」，只提示不拒绝）。打开带 baked 纹理的 `.lmc`（`RunIntent::kLoaded`）
 > 直接可分析，是本次的主场景（gui_test `a_loaded_lmc_analyses_without_a_run`）。
+> **后续裁定（2026-09-13，owner 上手反馈）**：上面「只剩后端不忙」已被收窄一档——`CanStartAnalysis`
+> 增加第四参 `RunIntent`，经 `HasEverShownPicture(intent)`（= `intent != kNone`）要求**文档有过一张图**；
+> 新建 / JSON 导入 / 无贴图 `.lmc` 下 Analyze 与 In frame / Point 两个 radio 一起禁用（三处读同一个谓词，
+> 不再读 `g_preview_vp.active`——那个标志只加载背景照片也会亮）。kLoaded 与 kModified 的可分析性不变，
+> `AnalysisPictureNotice` 的 kNone 分支从「只提示」变成与禁用按钮并列出现。
 
 ## 1. 问题与形态
 

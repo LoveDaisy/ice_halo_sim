@@ -281,6 +281,18 @@ std::string JoinerForDisplay(std::string_view display);
 // writing nothing, when the selection is not eligible.
 bool ApplyExcludeSelectedRaypath(GuiState& state);
 
+// The result list as CSV text — the Export CSV button's payload, and pure so a test can hold it to
+// a byte-exact expectation. It is the list AS SHOWN: the rows of `analysis_result.display_order`
+// with their `display_energy` (the rings inside the radius slider in Point mode) and the
+// percentages of `display_total`, under the symmetry `entries_symmetry` says the entries were read
+// with — not a re-read of the server. A metadata head of `#` lines makes the file self-describing
+// (region, cone centre / radius / rings, symmetry, ray total, record-full count, export time), then
+// one column-header row, the rows, and the fixed "other" line when the record had one. Rows the
+// list hides (display energy 0 inside the radius) are hidden here too. `exported_at` is a parameter
+// rather than a clock read inside, so the expectation does not need to mock time. No result: the
+// head and the column header, no rows (the button is disabled then; the function still answers).
+std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view exported_at);
+
 // ---- Rendering -----------------------------------------------------------------------------------
 
 // The window. No-op while state.analysis.window_open is false.

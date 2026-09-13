@@ -97,31 +97,52 @@ TEST(SimStateRules, BackendBusyIsBusyOrAnalysisInProgress) {
   }
 }
 
-// Analyze: a server + nothing in flight, and nothing else — the analysis submits the document
-// itself, so neither a prior run nor an unedited picture is a condition. Each of the two denials
-// is shown to deny on its own, and the row that satisfies both is enabled per SimState exactly
-// when the backend is not busy, kModified included — the row the old rule refused.
-TEST(SimStateRules, AnalyzeNeedsAServerAndAnIdleBackendOnly) {
-  for (GuiState::SimState s : kAllSimStates) {
-    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/false, s, false));
-    EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, s, true));
-    EXPECT_EQ(CanStartAnalysis(/*has_server=*/true, s, false), !IsBusy(s)) << "SimState=" << static_cast<int>(s);
+constexpr RunIntent kAllRunIntents[] = { RunIntent::kNone,     RunIntent::kLoaded,  RunIntent::kRunning,
+                                         RunIntent::kStopping, RunIntent::kStopped, RunIntent::kRunCompleted };
+
+// The picture predicate the button and the two region radios share: false for kNone alone. Pinned
+// on its own so the three call sites' agreement is a property of one function, not of three
+// comparisons kept in step by hand.
+TEST(SimStateRules, HasEverShownPictureIsFalseForNoneAlone) {
+  for (RunIntent intent : kAllRunIntents) {
+    EXPECT_EQ(HasEverShownPicture(intent), intent != RunIntent::kNone) << "intent=" << static_cast<int>(intent);
   }
-  // Spelled out for the rows that matter: a fresh document (kIdle) and an edited one (kModified)
-  // both analyse; a run in flight does not.
-  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kIdle, false));
-  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kDone, false));
-  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kModified, false));
-  EXPECT_FALSE(CanStartAnalysis(true, GuiState::SimState::kSimulating, false));
+}
+
+// Analyze: a server + nothing in flight + a document that has shown a picture at least once. The
+// analysis submits the document itself, so the picture need not MATCH (kModified analyses), but
+// there has to have been one (kNone does not, whatever sim_state it reconciles to). Each of the
+// three denials is shown to deny on its own, and the row that satisfies all three is enabled per
+// SimState exactly when the backend is not busy.
+TEST(SimStateRules, AnalyzeNeedsAServerAnIdleBackendAndAPriorPicture) {
+  for (RunIntent intent : kAllRunIntents) {
+    for (GuiState::SimState s : kAllSimStates) {
+      EXPECT_FALSE(CanStartAnalysis(/*has_server=*/false, s, false, intent));
+      EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, s, true, intent));
+      if (intent == RunIntent::kNone) {
+        EXPECT_FALSE(CanStartAnalysis(/*has_server=*/true, s, false, intent)) << "SimState=" << static_cast<int>(s);
+      } else {
+        EXPECT_EQ(CanStartAnalysis(/*has_server=*/true, s, false, intent), !IsBusy(s))
+            << "intent=" << static_cast<int>(intent) << " SimState=" << static_cast<int>(s);
+      }
+    }
+  }
+  // Spelled out for the rows that matter: a fresh document (kNone / kIdle) waits for its first
+  // Run; a loaded .lmc that was never run (kLoaded / kDone) and an edited one (kRunCompleted /
+  // kModified) both analyse; a run in flight does not.
+  EXPECT_FALSE(CanStartAnalysis(true, GuiState::SimState::kIdle, false, RunIntent::kNone));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kDone, false, RunIntent::kLoaded));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kDone, false, RunIntent::kRunCompleted));
+  EXPECT_TRUE(CanStartAnalysis(true, GuiState::SimState::kModified, false, RunIntent::kRunCompleted));
+  EXPECT_FALSE(CanStartAnalysis(true, GuiState::SimState::kSimulating, false, RunIntent::kRunning));
 }
 
 // The picture notice beside it: said for a document that never had a picture (kNone, whatever
 // sim_state reconciles to) and for a picture of an earlier configuration (kModified under any
-// other intent); silent otherwise — and it never enters the button's verdict.
+// other intent); silent otherwise. The kNone case is also the one the button refuses; the
+// kModified case is a notice only, and the button's verdict there is the backend's alone.
 TEST(SimStateRules, AnalysisPictureNoticeNamesTheTwoCasesAndNoOther) {
-  constexpr RunIntent kAll[] = { RunIntent::kNone,     RunIntent::kLoaded,  RunIntent::kRunning,
-                                 RunIntent::kStopping, RunIntent::kStopped, RunIntent::kRunCompleted };
-  for (RunIntent intent : kAll) {
+  for (RunIntent intent : kAllRunIntents) {
     for (GuiState::SimState s : kAllSimStates) {
       const char* notice = AnalysisPictureNotice(intent, s);
       if (intent == RunIntent::kNone) {
@@ -130,17 +151,18 @@ TEST(SimStateRules, AnalysisPictureNoticeNamesTheTwoCasesAndNoOther) {
           continue;
         }
         EXPECT_NE(std::string(notice).find("No rendered image"), std::string::npos);
+        EXPECT_FALSE(CanStartAnalysis(true, s, false, intent));
       } else if (IsModified(s)) {
         if (notice == nullptr) {
           ADD_FAILURE() << "no notice for kModified, intent=" << static_cast<int>(intent);
           continue;
         }
         EXPECT_NE(std::string(notice).find("previous configuration"), std::string::npos);
+        EXPECT_TRUE(CanStartAnalysis(true, s, false, intent));
       } else {
         EXPECT_EQ(notice, nullptr) << "intent=" << static_cast<int>(intent) << " SimState=" << static_cast<int>(s);
+        EXPECT_EQ(CanStartAnalysis(true, s, false, intent), !IsBusy(s));
       }
-      // Whatever the notice says, the button's verdict is the backend's alone.
-      EXPECT_EQ(CanStartAnalysis(true, s, false), !IsBusy(s));
     }
   }
 }

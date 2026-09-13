@@ -262,8 +262,17 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 [[nodiscard]] bool WriteRgbaBufferToPng(const std::filesystem::path& path, int w, int h,
                                         const std::vector<unsigned char>& rgba);
 
+// Write `text` to `path` as-is (no BOM, no newline translation beyond the platform's). The one
+// text-writing primitive both exports below share; false on an empty path or a write that did not
+// complete.
+[[nodiscard]] bool WriteTextFile(const std::filesystem::path& path, const std::string& text);
+
 // Export configuration as JSON (CLI-compatible format)
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
+
+// Export the analysis panel's result list as CSV. The text is built by BuildAnalysisResultsCsv
+// (analysis_panel.hpp) — this only puts it on disk, the same two-step shape as ExportConfigJson.
+[[nodiscard]] bool ExportAnalysisResultsCsv(const std::filesystem::path& path, const std::string& csv);
 
 // Must exporting the config JSON to `path` be confirmed by the user first? True iff something is
 // already there to lose — the export is a full overwrite, and what it writes is the GUI's own
@@ -283,6 +292,7 @@ std::filesystem::path ShowExportPngDialog();
 std::filesystem::path ShowExportDualFisheyeEqualAreaDialog();
 std::filesystem::path ShowExportEquirectangularDialog();
 std::filesystem::path ShowExportJsonDialog();
+std::filesystem::path ShowExportCsvDialog();
 std::filesystem::path ShowOpenImageDialog();
 
 

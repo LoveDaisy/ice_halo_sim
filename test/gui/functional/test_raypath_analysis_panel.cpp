@@ -21,11 +21,14 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/analysis_panel.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/panels.hpp"
 #include "gui/raypath_segments.hpp"
 #include "gui/sim_state_rules.hpp"
+#include "gui/theme.hpp"
 #include "imgui_internal.h"
 #include "include/lumice.h"
 #include "test_gui_shared.hpp"
@@ -257,6 +260,52 @@ std::optional<ImVec2> MarkerScreenPos(ImGuiTestContext* ctx) {
   gui::CanvasPixelToPreviewPoint(px->px, px->py, gui::g_preview_vp.dpi_scale_x, gui::g_preview_vp.dpi_scale_y, &x_pt,
                                  &y_pt);
   return ImVec2(w->Pos.x + x_pt, w->Pos.y + y_pt);
+}
+
+// The colour on screen at one ImGui-space point, read back off the default framebuffer through the
+// harness's sub-region capture (the same read SaveWindowPng makes for a whole window). A 3x3 patch
+// is captured and its middle pixel returned, so a half-pixel of rounding on a Retina scale cannot
+// put the sample on a neighbour.
+bool ReadScreenPixel(ImGuiTestContext* ctx, ImVec2 pos, unsigned char out_rgb[3]) {
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const float fb_h = io.DisplaySize.y * sy;
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const int cx = static_cast<int>(std::lround((pos.x - vp_pos.x) * sx));
+  const int cy = static_cast<int>(std::lround((pos.y - vp_pos.y) * sy));  // top-down
+  g_fullframe_capture.Reset();
+  g_fullframe_capture.rect_x = cx - 1;
+  g_fullframe_capture.rect_y = static_cast<int>(std::lround(fb_h)) - cy - 2;  // GL origin: bottom-left
+  g_fullframe_capture.rect_w = 3;
+  g_fullframe_capture.rect_h = 3;
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield(1);
+  }
+  IM_CHECK_RETV(g_fullframe_capture.done.load(), false);
+  IM_CHECK_RETV(g_fullframe_capture.width == 3 && g_fullframe_capture.height == 3, false);
+  const unsigned char* px = g_fullframe_capture.pixels.data() + (1 * 3 + 1) * 4;
+  out_rgb[0] = px[0];
+  out_rgb[1] = px[1];
+  out_rgb[2] = px[2];
+  return true;
+}
+
+// Whether an 8-bit colour is the accent colour the marker is drawn in, within a tolerance that
+// covers the framebuffer's quantisation but not a dimmed or covered pixel (the modal's dim alone
+// takes every channel down by 55%).
+bool IsAccentColour(const unsigned char rgb[3]) {
+  const ImVec4 accent = gui::AccentColor();
+  const int want[3] = { static_cast<int>(std::lround(accent.x * 255.0f)),
+                        static_cast<int>(std::lround(accent.y * 255.0f)),
+                        static_cast<int>(std::lround(accent.z * 255.0f)) };
+  for (int c = 0; c < 3; ++c) {
+    if (std::abs(static_cast<int>(rgb[c]) - want[c]) > 12) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // The direction LUMICE_UnprojectPixel gives for the mouse's CURRENT position on the preview — the
@@ -661,7 +710,8 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       OpenWindow(ctx);
       ctx->SetRef(kWindowRef);
       IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
-      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, gui::g_state.analysis_run_in_progress));
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, gui::g_state.analysis_run_in_progress,
+                                      gui::g_state.run_intent));
       // A click on it does nothing: no intent, no run.
       ctx->ItemClick(kAnalyzeButton);
       ctx->Yield(2);
@@ -1126,6 +1176,54 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The marker is drawn on the preview window's own draw list, not the foreground one: a window
+  // drawn after the preview covers it. Read off the screen, since which list a primitive went to
+  // is not something the item registry sees: the pixel under the marker IS the accent colour with
+  // nothing over it (the positive control — without it a wrong sample point would pass the case
+  // for free), and is NOT once the Edit Entry modal is up, whose dim layer and body are drawn
+  // over every window beneath the popup stack. On the foreground list the marker painted over
+  // both, and this second read came back accent.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "marker_sits_under_a_modal_not_over_it");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      IM_CHECK(BringUpHaloScene(ctx, /*infinite=*/false));
+      const ScopedPopups popup_guard(ctx);
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      ctx->ItemClick("Point");
+      ctx->SetRef("");
+      ctx->Yield(2);
+      std::optional<ImVec2> marker = MarkerScreenPos(ctx);
+      IM_CHECK(marker.has_value());
+      // The analysis window out of the way of the marker (its top-left past the marker), and the
+      // mouse too, so that neither is what the sample lands on.
+      ctx->WindowMove(kWindowRef, ImVec2(marker->x + 40.0f, marker->y + 40.0f));
+      ctx->MouseMoveToPos(ImVec2(marker->x - 120.0f, marker->y - 90.0f));
+      ctx->Yield(2);
+      marker = MarkerScreenPos(ctx);
+      IM_CHECK(marker.has_value());
+      unsigned char rgb[3] = { 0, 0, 0 };
+      IM_CHECK(ReadScreenPixel(ctx, *marker, rgb));
+      ctx->LogInfo("marker pixel, nothing over it: %d %d %d", rgb[0], rgb[1], rgb[2]);
+      IM_CHECK(IsAccentColour(rgb));
+
+      // Opened through OpenEditModal rather than by a card click, the way test_entry_management
+      // does: the click's own path is not what this case is about, the window's presence is.
+      gui::g_state.modal_immediate_mode = false;  // staged: a real modal, on the popup stack
+      const gui::EditRequest req{ gui::EditTarget::kCrystal, 0, 0 };
+      gui::OpenEditModal(req, gui::g_state);
+      ctx->Yield(4);
+      ImGuiWindow* modal = ImGui::GetTopMostPopupModal();
+      IM_CHECK(modal != nullptr);
+      IM_CHECK_STR_EQ(modal->Name, "Edit Entry");
+      IM_CHECK(gui::g_state.analysis.roi_mode == LUMICE_RAYPATH_ROI_CONE);  // the marker is still asked for
+      IM_CHECK(ReadScreenPixel(ctx, *marker, rgb));
+      ctx->LogInfo("marker pixel, modal up: %d %d %d", rgb[0], rgb[1], rgb[2]);
+      IM_CHECK(!IsAccentColour(rgb));
+    };
+  }
+
   // An In filter on the chain's crystal keeps Exclude shut: the button is disabled with the
   // selection made, the eligibility names the reason, and nothing is written by a click. The
   // tooltip TEXT is not read off the screen — ImGui::SetTooltip draws through TextUnformatted
@@ -1422,11 +1520,13 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // A document that never had a picture (kNone / kIdle, no preview): Analyze is enabled, the
-  // panel says there is no picture, the list fills from the configured scene, and nothing was
-  // rendered by it — then a Run from the top bar renders as it always did, and the notice goes.
+  // A document that never had a picture (kNone / kIdle, no preview): Analyze and the In frame /
+  // Point radios are all disabled, the panel says there is no picture, and a click on Analyze
+  // starts nothing. Then a Run from the top bar renders as it always did, the notice goes, the
+  // three come alive, and an edit afterwards (kModified) leaves them alive — the picture need
+  // only have existed, not match.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_never_run_document_analyses_then_runs");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_never_run_document_waits_for_its_first_run");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedServerGuard guard;
       ResetTestState();
@@ -1445,27 +1545,97 @@ void RegisterRaypathAnalysisPanelTests(ImGuiTestEngine* engine) {
       const char* notice = gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state);
       IM_CHECK(notice != nullptr);
       IM_CHECK(std::strstr(notice, "No rendered image") != nullptr);
+      // A server and an idle backend: the picture is the only denial left.
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, false, gui::g_state.run_intent));
 
       OpenWindow(ctx);
-      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
-      bool saw_simulating = false;
-      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, &saw_simulating));
-      IM_CHECK(!saw_simulating);
-      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kIdle);
-      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
-      IM_CHECK_STR_EQ(TopChainDisplay().c_str(), "3-5");
-      IM_CHECK_EQ(gui::g_state.texture_upload_count, uploads_before);
-      IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) != nullptr);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("Point")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Whole sky")));
+      // A click on the disabled button does nothing: no intent, no run.
+      ctx->ItemClick(kAnalyzeButton);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.analysis.started);
+      IM_CHECK(!gui::g_state.analysis_run_in_progress);
+      ctx->SetRef("");
 
-      // The Run after it, from the top bar: it renders, and the notice is gone.
+      // The first Run, from the top bar: it renders, and the notice is gone.
+      const unsigned long long uploads_before = gui::g_state.texture_upload_count;
       IM_CHECK(!IsDisabled(ctx->ItemInfo("##TopBar/" ICON_FA_PLAY " Run")));
       ctx->ItemClick("##TopBar/" ICON_FA_PLAY " Run");
       IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kSimulating; }, 10));
       IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kDone; }, 60));
       IM_CHECK(DriveUntil(ctx, [uploads_before] { return gui::g_state.texture_upload_count > uploads_before; }, 10));
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunCompleted);
       IM_CHECK(gui::AnalysisPictureNotice(gui::g_state.run_intent, gui::g_state.sim_state) == nullptr);
-      // The analysis list is still on show: a render does not take it away.
-      IM_CHECK(gui::g_state.analysis_result.payload != nullptr);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Point")));
+      ctx->SetRef("");
+
+      // An edit after the run: the picture is of the previous configuration, and that is a
+      // notice, not a refusal — all three stay alive and the analysis completes.
+      gui::g_state.crystals[0].height = 0.1f;
+      gui::g_state.dirty = true;
+      IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.sim_state == SimState::kModified; }, 5));
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("Point")));
+      ctx->SetRef("");
+      bool saw_simulating = false;
+      IM_CHECK(RunWholeSkyAnalysisToCompletion(ctx, &saw_simulating));
+      IM_CHECK(!saw_simulating);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)SimState::kModified);
+      IM_CHECK_EQ(gui::g_state.analysis_result.payload->roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
+    };
+  }
+
+  // The regression the gate was changed for: a background photograph on a document that has never
+  // been rendered. The preview publishes its viewport for a photograph alone (g_preview_vp.active
+  // reads true — the positive control that the OLD gate, which read that flag, would have lit In
+  // frame and Pick), but a photograph is not a picture of the document: run_intent is still
+  // kNone, and In frame, Point and Analyze all stay disabled.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "raypath_analysis", "a_background_photograph_alone_is_not_a_picture");
+    static bool s_bg_requested = false;
+    static bool s_bg_done = false;
+    // The upload is a GL call, so it runs on the render thread: GuiFunc, once the TestFunc asks.
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (s_bg_requested && !s_bg_done) {
+        const std::vector<unsigned char> grey(static_cast<size_t>(16 * 16 * 3), 128);
+        gui::g_preview.UploadBgTexture(grey.data(), 16, 16);
+        s_bg_done = true;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedServerGuard guard;
+      s_bg_requested = false;
+      s_bg_done = false;
+      ResetTestState();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      gui::ResetServerConstructionTrackers();
+      IM_CHECK(gui::DeserializeFromJson(kHalo22Json, gui::g_state));
+      s_bg_requested = true;
+      IM_CHECK(DriveUntil(ctx, [] { return s_bg_done; }, 5));
+      gui::g_state.bg_show = true;
+      ctx->Yield(2);
+      IM_CHECK(gui::g_preview.HasBackground());
+      IM_CHECK(!gui::g_preview.HasTexture());
+      IM_CHECK(gui::g_preview_vp.active);  // the flag the old gate read: it IS up
+      IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kNone);
+
+      OpenWindow(ctx);
+      ctx->SetRef(kWindowRef);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("In frame")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("Point")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo(kAnalyzeButton)));
+      ctx->SetRef("");
+      IM_CHECK(!gui::CanStartAnalysis(true, gui::g_state.sim_state, false, gui::g_state.run_intent));
     };
   }
 

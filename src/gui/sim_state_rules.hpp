@@ -63,15 +63,28 @@ inline bool CanRunFromModal(bool has_server, GuiState::SimState state, bool anal
   return has_server && !IsBackendBusy(state, analysis_in_progress);
 }
 
+// The document has had a picture made of it at least once — a run started, completed or stopped,
+// or an .lmc opened with its baked texture. kNone is the one intent that says it has not: a fresh
+// document, New, a JSON import, an .lmc with no baked picture. Read off the intent rather than
+// off the preview's own "is a texture bound" flag on purpose: that flag is also raised by a
+// background photograph alone, which is not a picture of the document.
+inline bool HasEverShownPicture(RunIntent intent) {
+  return intent != RunIntent::kNone;
+}
+
 // The panel's Analyze button. An analysis submits the document on the panels itself
 // (DoAnalyze builds the scene the way DoRun does and hands it to LUMICE_StartRaypathAnalysis), so
-// it needs no run before it and no picture that matches: a fresh document, a loaded .lmc that was
-// never run, and an edited (kModified) document all analyse — what the list describes is always
-// the configured scene, and the panel says so in a status line when the picture on screen is
-// not of it. The one thing it does need is a backend with nothing in flight (the C API's mutual
-// exclusion, surfaced as a disabled button rather than as an error line after the click).
-inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool analysis_in_progress) {
-  return has_server && !IsBackendBusy(state, analysis_in_progress);
+// it needs no picture that MATCHES: a loaded .lmc that was never run and an edited (kModified)
+// document both analyse — what the list describes is always the configured scene, and the panel
+// says so in a status line when the picture on screen is not of it. What it does need, besides a
+// backend with nothing in flight (the C API's mutual exclusion, surfaced as a disabled button
+// rather than as an error line after the click), is a document that has shown a picture at least
+// once: analysing a scene the user has never seen rendered reads as a request out of nowhere, so
+// a fresh / New / JSON-imported / blank-.lmc document waits for its first Run. The In frame and
+// Point region radios read the same predicate, so the three cannot disagree on what "no picture
+// yet" means.
+inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool analysis_in_progress, RunIntent intent) {
+  return has_server && !IsBackendBusy(state, analysis_in_progress) && HasEverShownPicture(intent);
 }
 
 // The panel's notice that the picture on screen is not of the document the list describes —
@@ -79,10 +92,11 @@ inline bool CanStartAnalysis(bool has_server, GuiState::SimState state, bool ana
 // hold: an intent of kNone (fresh / New / a JSON import / an .lmc with no baked picture) means no
 // picture of this document was ever made, and it reconciles to kIdle, which dirty never lifts
 // to kModified; kModified means there is a picture, of the configuration before the edit. A
-// notice, not a refusal: CanStartAnalysis does not read either.
+// notice, not a refusal — though the kNone case is now also the one CanStartAnalysis refuses
+// (HasEverShownPicture), so that line is read beside a disabled button.
 inline const char* AnalysisPictureNotice(RunIntent intent, GuiState::SimState state) {
   if (intent == RunIntent::kNone) {
-    return "No rendered image for this document yet \xe2\x80\x94 the list describes the configured scene.";
+    return "No rendered image for this document yet \xe2\x80\x94 press Run once before analysing.";
   }
   if (IsModified(state)) {
     return "Image is from a previous configuration \xe2\x80\x94 the list describes the current one.";

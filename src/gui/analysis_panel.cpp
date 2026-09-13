@@ -1,8 +1,12 @@
 #include "gui/analysis_panel.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <map>
 #include <numeric>
 #include <string>
@@ -28,7 +32,9 @@
 #include "gui/theme.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
+#include "util/path_utils.hpp"
 #include "util/result_frame.hpp"
+#include "util/thousands_format.hpp"
 
 namespace lumice::gui {
 
@@ -773,6 +779,114 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
   return true;
 }
 
+// ---- CSV export ----------------------------------------------------------------------------------
+
+namespace {
+
+// RFC 4180 quoting, applied only when the field needs it. Today no field does — a chain's display
+// text is digits, '-', parentheses, "C<id>" and " -> " — but the rule is cheap and the text's
+// grammar is core's to grow.
+std::string EscapeCsvField(std::string_view field) {
+  if (field.find_first_of(",\"\n\r") == std::string_view::npos) {
+    return std::string(field);
+  }
+  std::string out = "\"";
+  for (const char c : field) {
+    if (c == '"') {
+      out += '"';
+    }
+    out += c;
+  }
+  out += '"';
+  return out;
+}
+
+// printf into a std::string; every number in the file goes through one of these three so the
+// precision rules are stated once. Percentages carry two more decimals than the table (the file
+// is for a tool, the table for an eye); energies are %g at six digits, the raw double's shape.
+std::string Fmt(const char* fmt, double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), fmt, v);
+  return buf;
+}
+std::string Pct(double v) {
+  return Fmt("%.4f", v);
+}
+std::string Energy(double v) {
+  return Fmt("%.6g", v);
+}
+
+}  // namespace
+
+std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view exported_at) {
+  const auto& view = state.analysis_result;
+  const AnalysisPayload* payload = view.payload.get();
+  std::string out;
+  out += "# Lumice raypath analysis\n";
+  out += "# exported_at: " + std::string(exported_at) + "\n";
+  if (payload != nullptr) {
+    out += std::string("# region: ") + RoiModeLabel(payload->roi_mode) + "\n";
+    if (payload->roi_mode == LUMICE_RAYPATH_ROI_CONE) {
+      // The centre the result was ASKED for (analyzed_cone_center_dir), not the live marker, which
+      // may have moved since; the radius and ring count are the display-time reduction on show.
+      float alt = 0.0f;
+      float az = 0.0f;
+      DirToAltAz(state.analysis.analyzed_cone_center_dir, &alt, &az);
+      out += "# cone_centre_altitude_deg: " + Fmt("%.2f", alt) + "\n";
+      out += "# cone_centre_azimuth_deg: " + Fmt("%.2f", az) + "\n";
+      out += "# cone_request_radius_deg: " + Fmt("%.1f", payload->cone_radius_rad * kRad2Deg) + "\n";
+      out += "# cone_display_radius_deg: " + Fmt("%.1f", state.analysis.cone_radius_deg) + "\n";
+      out += "# cone_rings_summed: " + std::to_string(view.display_ring_count) + " / " +
+             std::to_string(payload->cone_ring_count) + "\n";
+    }
+    out += "# symmetry: " + SymmetryBitsLabel(view.entries_symmetry) + "\n";
+    std::uint64_t total_rays = static_cast<std::uint64_t>(payload->other_count);
+    for (const auto& e : payload->entries) {
+      total_rays += static_cast<std::uint64_t>(e.count);
+    }
+    out += "# total_rays: " + std::to_string(total_rays) + "\n";
+    out += "# total_energy: " + Energy(view.display_total) + "\n";
+    out += "# record_full_hits: " + std::to_string(payload->truncated_chain_count) + "\n";
+  } else {
+    out += "# region: none (no result)\n";
+  }
+  // Five columns, matching RenderResultList's header one for one: the file's schema is a single
+  // authoritative definition, not a superset the table happens to be a projection of. "Energy" and
+  // "+/-" are the same percentages the table cell shows, not the underlying raw doubles; "+/-"
+  // embeds the takeover figure in parentheses exactly as the table cell does, so a row that took
+  // over an evicted slot still carries that information in its one cell.
+  out += "Raypath,Energy,Cumulative %,Rays,+/-\n";
+  if (payload == nullptr) {
+    return out;
+  }
+  const double total = view.display_total;
+  for (size_t row = 0; row < view.display_order.size(); ++row) {
+    const int idx = view.display_order[row];
+    const auto& e = payload->entries[static_cast<size_t>(idx)];
+    const double energy = view.display_energy[static_cast<size_t>(idx)];
+    if (!(energy > 0.0)) {
+      continue;  // the table hides these rows too
+    }
+    const double rel = e.count > 0 ? 1.0 / std::sqrt(static_cast<double>(e.count)) : 1.0;
+    out += EscapeCsvField(e.display);
+    out += ',' + Pct(total > 0.0 ? energy / total * 100.0 : 0.0);
+    out += ',' + Pct(view.display_cumulative_pct[row]);
+    out += ',' + std::to_string(static_cast<std::uint64_t>(e.count));
+    out += ',' + Fmt("%.2f", rel * 100.0);
+    if (e.error_bound > 0.0 && e.energy > 0.0) {
+      out += " (-" + Fmt("%.2f", e.error_bound / e.energy * 100.0) + ")";
+    }
+    out += '\n';
+  }
+  if (payload->other_count > 0) {
+    const double other_pct = AnalysisOtherPct(state);
+    const double cum = (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct;
+    out += std::string(kAnalysisOtherRowLabel) + ',' + Pct(other_pct) + ',' + Pct(cum) + ',' +
+           std::to_string(static_cast<std::uint64_t>(payload->other_count)) + ",-\n";
+  }
+  return out;
+}
+
 // ---- Rendering -----------------------------------------------------------------------------------
 
 namespace {
@@ -784,17 +898,27 @@ void RenderRoiControls(GuiState& state) {
   const int prev_mode = a.roi_mode;
   ImGui::RadioButton("Whole sky", &a.roi_mode, LUMICE_RAYPATH_ROI_FULL_SKY);
   ImGui::SameLine();
-  // "In frame" is the frame on screen; the radio waits for a preview so the choice is made
-  // against a picture. A mode already selected still analyses without one — DoAnalyze sizes the
-  // frame at the document's own resolution then — so this gates the radio, not the button.
-  ImGui::BeginDisabled(!g_preview_vp.active);
+  // "In frame" and "Point" are choices made against a picture of the document, so both radios
+  // wait for the document to have shown one — the same predicate the Analyze button reads
+  // (CanStartAnalysis), so the three cannot disagree on what "no picture yet" means. Not the
+  // preview's own "texture bound" flag: a background photograph alone raises that too, and a
+  // photograph is not a picture of the document. A mode already selected still analyses without
+  // a live preview — DoAnalyze sizes the frame at the document's own resolution then — so this
+  // gates the radio, not the button.
+  const bool has_picture = HasEverShownPicture(state.run_intent);
+  ImGui::BeginDisabled(!has_picture);
   ImGui::RadioButton("In frame", &a.roi_mode, LUMICE_RAYPATH_ROI_IN_FRAME);
   ImGui::EndDisabled();
-  if (!g_preview_vp.active && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("Needs a preview on screen: 'in frame' means inside the picture as it is shown.");
+  if (!has_picture && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Needs a picture of this document: press Run once first.");
   }
   ImGui::SameLine();
+  ImGui::BeginDisabled(!has_picture);
   ImGui::RadioButton("Point", &a.roi_mode, LUMICE_RAYPATH_ROI_CONE);
+  ImGui::EndDisabled();
+  if (!has_picture && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Needs a picture of this document to pick a point on: press Run once first.");
+  }
   if (a.roi_mode != LUMICE_RAYPATH_ROI_CONE && prev_mode == LUMICE_RAYPATH_ROI_CONE) {
     a.pick_armed = false;  // never leave a click armed for a mode that does not read it
     a.cone_marker_dragging = false;
@@ -810,7 +934,9 @@ void RenderRoiControls(GuiState& state) {
       EnsureDefaultConeCenter(state, PreviewAnnotationView(state, g_preview_vp.vp_w, g_preview_vp.vp_h),
                               g_preview_vp.vp_w, g_preview_vp.vp_h);
     }
-    const bool can_pick = g_preview_vp.active;
+    // Same predicate as the radio above, not the viewport flag: a background photograph must not
+    // arm a pick on a document that has never been rendered.
+    const bool can_pick = has_picture;
     ImGui::BeginDisabled(!can_pick);
     // Read once: the button below flips pick_armed, and the pop must match the push made
     // for the value the frame STARTED with, not the one the click just wrote.
@@ -830,7 +956,7 @@ void RenderRoiControls(GuiState& state) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip(can_pick ? "Then click a point on the preview. Esc cancels.\n"
                                    "Or drag the marker on the preview directly." :
-                                   "Needs a preview on screen to click on.");
+                                   "Needs a picture of this document to click on: press Run once first.");
     }
     ImGui::SameLine();
     if (a.cone_center_valid) {
@@ -901,7 +1027,9 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
   // No frame gate for IN_FRAME: the frame is the document's own view at the preview's canvas
   // when there is one and at the document's own resolution otherwise (DoAnalyze), so the mode
   // always names a frame — a mode left selected before the preview went away still analyses.
-  const bool can_start = CanStartAnalysis(server != nullptr, state.sim_state, in_progress) && !needs_centre;
+  // The one picture condition is CanStartAnalysis's own: the document has shown one at least once.
+  const bool can_start =
+      CanStartAnalysis(server != nullptr, state.sim_state, in_progress, state.run_intent) && !needs_centre;
 
   if (in_progress) {
     PushDestructiveStyle();
@@ -914,8 +1042,8 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
     if (server != nullptr) {
       LUMICE_GetSimRayCount(server, &rays);
     }
-    ImGui::TextColored(AccentColor(), "Analyzing (%s)... %llu rays", RoiModeLabel(state.analysis.roi_mode),
-                       static_cast<unsigned long long>(rays));
+    ImGui::TextColored(AccentColor(), "Analyzing (%s)... %s rays", RoiModeLabel(state.analysis.roi_mode),
+                       FormatThousands(static_cast<std::uint64_t>(rays)).c_str());
   } else {
     ImGui::BeginDisabled(!can_start);
     PushGoodButtonStyle();
@@ -930,6 +1058,8 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
         why = "No simulation server.";
       } else if (IsBusy(state.sim_state)) {
         why = "A render is in progress. Wait for it, or stop it.";
+      } else if (!HasEverShownPicture(state.run_intent)) {
+        why = "No rendered image for this document yet. Press Run once first.";
       } else if (needs_centre) {
         why = "Pick the point on the preview first.";
       }
@@ -943,7 +1073,9 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
       // count above is not read as "every raypath there was".
       if (state.analysis_result.payload->truncated_chain_count > 0) {
         ImGui::SameLine();
-        ImGui::TextDisabled("; record full (%d hits)", state.analysis_result.payload->truncated_chain_count);
+        ImGui::TextDisabled(
+            "; record full (%s hits)",
+            FormatThousands(static_cast<std::uint64_t>(state.analysis_result.payload->truncated_chain_count)).c_str());
         if (ImGui::IsItemHovered()) {
           ImGui::SetTooltip(
               "The record keeps a fixed number of distinct raypaths per worker. This many times a ray reached a\n"
@@ -1038,7 +1170,9 @@ void RenderResultList(GuiState& state) {
   }
   const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY |
                                 ImGuiTableFlags_SizingStretchProp;
-  const float avail_h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.0f;
+  // One row kept back below the table, for the button row that follows it (Exclude and Export CSV
+  // share the line); GetFrameHeightWithSpacing already carries the item spacing between the two.
+  const float avail_h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing();
   if (!ImGui::BeginTable("##analysis_rows", 5, flags, ImVec2(0.0f, std::max(avail_h, 120.0f)))) {
     return;
   }
@@ -1076,7 +1210,7 @@ void RenderResultList(GuiState& state) {
     ImGui::TableSetColumnIndex(2);
     ImGui::Text("%.1f%%", view.display_cumulative_pct[row]);
     ImGui::TableSetColumnIndex(3);
-    ImGui::Text("%llu", static_cast<unsigned long long>(e.count));
+    ImGui::TextUnformatted(FormatThousands(static_cast<std::uint64_t>(e.count)).c_str());
     ImGui::TableSetColumnIndex(4);
     // 1/sqrt(N): the relative statistical error of the count, so the noise in the tail reads as
     // noise rather than as signal. A row that took over an evicted slot (error_bound > 0) may
@@ -1115,14 +1249,33 @@ void RenderResultList(GuiState& state) {
     ImGui::TextDisabled("%.1f%%",
                         (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct);
     ImGui::TableSetColumnIndex(3);
-    ImGui::TextDisabled("%llu", static_cast<unsigned long long>(view.payload->other_count));
+    ImGui::TextDisabled("%s", FormatThousands(static_cast<std::uint64_t>(view.payload->other_count)).c_str());
     ImGui::TableSetColumnIndex(4);
     ImGui::TextDisabled("-");
   }
   ImGui::EndTable();
 }
 
-void RenderExcludeButton(GuiState& state) {
+// The local wall-clock time as "YYYY-MM-DD HH:MM:SS", for the CSV's exported_at line. Inline here:
+// this is its only consumer, and the CSV builder takes the string so a test never needs a clock.
+std::string LocalTimeNow() {
+  const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm tm{};
+#if defined(_WIN32)
+  const bool ok = localtime_s(&tm, &now) == 0;
+#else
+  const bool ok = localtime_r(&now, &tm) != nullptr;
+#endif
+  char buf[32] = { 0 };
+  if (ok) {
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+  }
+  return buf;
+}
+
+// The one row of buttons under the list: Exclude, and Export CSV beside it. One row, not two —
+// RenderResultList keeps exactly one row's height back for them.
+void RenderActionButtons(GuiState& state) {
   std::string why;
   const ExcludeEligibility elig = EvaluateExcludeEligibility(state, &why);
   ImGui::BeginDisabled(elig != ExcludeEligibility::kOk);
@@ -1144,6 +1297,27 @@ void RenderExcludeButton(GuiState& state) {
       ImGui::SetTooltip("%s", why.c_str());
     }
   }
+  ImGui::SameLine();
+  const auto& payload = state.analysis_result.payload;
+  const bool has_rows = payload && !payload->entries.empty();
+  ImGui::BeginDisabled(!has_rows);
+  if (ImGui::Button(ICON_FA_FILE_CSV " Export CSV")) {
+    const std::filesystem::path path = ShowExportCsvDialog();
+    if (!path.empty()) {
+      if (ExportAnalysisResultsCsv(path, BuildAnalysisResultsCsv(state, LocalTimeNow()))) {
+        GUI_LOG_INFO("[Analysis] exported result list to {}", PathToU8(path));
+      } else {
+        GUI_LOG_ERROR("[Analysis] failed to write {}", PathToU8(path));
+      }
+    }
+  }
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip(has_rows ?
+                          "Save the list as shown \xe2\x80\x94 this radius, this symmetry \xe2\x80\x94 as a CSV file\n"
+                          "with a header that records the region, the symmetry and the ray total." :
+                          "Nothing to export yet.");
+  }
 }
 
 }  // namespace
@@ -1152,7 +1326,9 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
   if (!state.analysis.window_open) {
     return;
   }
-  ImGui::SetNextWindowSize(ImVec2(640, 420), ImGuiCond_FirstUseEver);
+  // Tall and narrow on purpose: the window is a list of raypaths, and rows are what it runs out
+  // of first — a wide default only stretches the table's five columns across empty space.
+  ImGui::SetNextWindowSize(ImVec2(520, 640), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
   if (!ImGui::Begin(ICON_FA_ROUTE " Raypath Analysis", &state.analysis.window_open,
                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
@@ -1167,7 +1343,7 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
   RenderSymmetryControls(state, server);
   ImGui::Separator();
   RenderResultList(state);
-  RenderExcludeButton(state);
+  RenderActionButtons(state);
   ImGui::End();
 }
 
@@ -1191,13 +1367,18 @@ void DrawAnalysisRoiRing(const GuiState& state, const LUMICE_AnnotationView& vie
   float cy = 0.0f;
   CanvasPixelToPreviewPoint(marker->px, marker->py, dpi_scale_x, dpi_scale_y, &cx, &cy);
   const ImVec2 centre(origin.x + cx, origin.y + cy);
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
+  // The preview window's own list, not the foreground one: the marker belongs to the picture, so
+  // it is clipped to the preview's rectangle and sits UNDER whatever is drawn after the preview
+  // panel — the analysis window itself, an edit modal — rather than over every window on screen.
+  // The caller draws inside the preview panel's Begin/End (app_panels.cpp), which is what makes
+  // "the current window" that one.
+  ImDrawList* dl = ImGui::GetWindowDrawList();
   const ImU32 colour = ImGui::ColorConvertFloat4ToU32(AccentColor());
   // The centre mark is always drawn; the ring only when the local scale could be measured. A drag
   // in flight draws the dot larger, so the grab reads as taken.
-  fg->AddCircleFilled(centre, a.cone_marker_dragging ? kRoiMarkerDotRadiusPt * 1.6f : kRoiMarkerDotRadiusPt, colour);
+  dl->AddCircleFilled(centre, a.cone_marker_dragging ? kRoiMarkerDotRadiusPt * 1.6f : kRoiMarkerDotRadiusPt, colour);
   if (radius_px.has_value()) {
-    fg->AddCircle(centre, *radius_px / dpi_scale_x, colour, kRoiRingSegments, kRoiRingThicknessPt);
+    dl->AddCircle(centre, *radius_px / dpi_scale_x, colour, kRoiRingSegments, kRoiRingThicknessPt);
   }
 }
 
