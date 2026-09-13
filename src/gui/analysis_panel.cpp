@@ -1207,13 +1207,18 @@ void DrawAnalysisRoiRing(const GuiState& state, const LUMICE_AnnotationView& vie
   float cy = 0.0f;
   CanvasPixelToPreviewPoint(marker->px, marker->py, dpi_scale_x, dpi_scale_y, &cx, &cy);
   const ImVec2 centre(origin.x + cx, origin.y + cy);
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
+  // The preview window's own list, not the foreground one: the marker belongs to the picture, so
+  // it is clipped to the preview's rectangle and sits UNDER whatever is drawn after the preview
+  // panel — the analysis window itself, an edit modal — rather than over every window on screen.
+  // The caller draws inside the preview panel's Begin/End (app_panels.cpp), which is what makes
+  // "the current window" that one.
+  ImDrawList* dl = ImGui::GetWindowDrawList();
   const ImU32 colour = ImGui::ColorConvertFloat4ToU32(AccentColor());
   // The centre mark is always drawn; the ring only when the local scale could be measured. A drag
   // in flight draws the dot larger, so the grab reads as taken.
-  fg->AddCircleFilled(centre, a.cone_marker_dragging ? kRoiMarkerDotRadiusPt * 1.6f : kRoiMarkerDotRadiusPt, colour);
+  dl->AddCircleFilled(centre, a.cone_marker_dragging ? kRoiMarkerDotRadiusPt * 1.6f : kRoiMarkerDotRadiusPt, colour);
   if (radius_px.has_value()) {
-    fg->AddCircle(centre, *radius_px / dpi_scale_x, colour, kRoiRingSegments, kRoiRingThicknessPt);
+    dl->AddCircle(centre, *radius_px / dpi_scale_x, colour, kRoiRingSegments, kRoiRingThicknessPt);
   }
 }
 

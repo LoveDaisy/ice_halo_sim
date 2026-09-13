@@ -2536,16 +2536,18 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         }
       }
       // Pick: the armed click sets the centre. While armed and over the preview a crosshair is
-      // drawn at the cursor (ImGui has no crosshair among its system cursors, so it is drawn the
-      // way the eyedropper draws its swatch: on the foreground list, the OS cursor untouched) —
-      // the mode's on-preview half of the indication, the window's banner being the other.
+      // drawn at the cursor (ImGui has no crosshair among its system cursors, so it is drawn by
+      // hand, the OS cursor untouched) — the mode's on-preview half of the indication, the
+      // window's banner being the other. On this window's own draw list, like the ROI marker
+      // and ring below and unlike the eyedropper's swatch: the crosshair marks a point OF the
+      // picture, so it is clipped to the preview and sits under any window drawn over it.
       if (cone_owner == ConeInputOwner::kPickClick && !g_bg_pick.active && is_hovered) {
-        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImU32 colour = ImGui::ColorConvertFloat4ToU32(AccentColor());
         const ImVec2 m = io.MousePos;
-        fg->AddLine(ImVec2(m.x - kAnalysisPickCrosshairArmPt, m.y), ImVec2(m.x + kAnalysisPickCrosshairArmPt, m.y),
+        dl->AddLine(ImVec2(m.x - kAnalysisPickCrosshairArmPt, m.y), ImVec2(m.x + kAnalysisPickCrosshairArmPt, m.y),
                     colour, 1.5f);
-        fg->AddLine(ImVec2(m.x, m.y - kAnalysisPickCrosshairArmPt), ImVec2(m.x, m.y + kAnalysisPickCrosshairArmPt),
+        dl->AddLine(ImVec2(m.x, m.y - kAnalysisPickCrosshairArmPt), ImVec2(m.x, m.y + kAnalysisPickCrosshairArmPt),
                     colour, 1.5f);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
           const std::optional<CanvasPixel> px =
