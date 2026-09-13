@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <numeric>
@@ -29,6 +30,7 @@
 #include "imgui.h"
 #include "include/lumice.h"
 #include "util/result_frame.hpp"
+#include "util/thousands_format.hpp"
 
 namespace lumice::gui {
 
@@ -928,8 +930,8 @@ void RenderRunControls(GuiState& state, LUMICE_Server* server) {
     if (server != nullptr) {
       LUMICE_GetSimRayCount(server, &rays);
     }
-    ImGui::TextColored(AccentColor(), "Analyzing (%s)... %llu rays", RoiModeLabel(state.analysis.roi_mode),
-                       static_cast<unsigned long long>(rays));
+    ImGui::TextColored(AccentColor(), "Analyzing (%s)... %s rays", RoiModeLabel(state.analysis.roi_mode),
+                       FormatThousands(static_cast<std::uint64_t>(rays)).c_str());
   } else {
     ImGui::BeginDisabled(!can_start);
     PushGoodButtonStyle();
@@ -1054,7 +1056,9 @@ void RenderResultList(GuiState& state) {
   }
   const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY |
                                 ImGuiTableFlags_SizingStretchProp;
-  const float avail_h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.0f;
+  // One row kept back below the table, for the button row that follows it (Exclude and Export CSV
+  // share the line); GetFrameHeightWithSpacing already carries the item spacing between the two.
+  const float avail_h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing();
   if (!ImGui::BeginTable("##analysis_rows", 5, flags, ImVec2(0.0f, std::max(avail_h, 120.0f)))) {
     return;
   }
@@ -1092,7 +1096,7 @@ void RenderResultList(GuiState& state) {
     ImGui::TableSetColumnIndex(2);
     ImGui::Text("%.1f%%", view.display_cumulative_pct[row]);
     ImGui::TableSetColumnIndex(3);
-    ImGui::Text("%llu", static_cast<unsigned long long>(e.count));
+    ImGui::TextUnformatted(FormatThousands(static_cast<std::uint64_t>(e.count)).c_str());
     ImGui::TableSetColumnIndex(4);
     // 1/sqrt(N): the relative statistical error of the count, so the noise in the tail reads as
     // noise rather than as signal. A row that took over an evicted slot (error_bound > 0) may
@@ -1131,7 +1135,7 @@ void RenderResultList(GuiState& state) {
     ImGui::TextDisabled("%.1f%%",
                         (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct);
     ImGui::TableSetColumnIndex(3);
-    ImGui::TextDisabled("%llu", static_cast<unsigned long long>(view.payload->other_count));
+    ImGui::TextDisabled("%s", FormatThousands(static_cast<std::uint64_t>(view.payload->other_count)).c_str());
     ImGui::TableSetColumnIndex(4);
     ImGui::TextDisabled("-");
   }
@@ -1168,7 +1172,9 @@ void RenderAnalysisPanel(GuiState& state, LUMICE_Server* server) {
   if (!state.analysis.window_open) {
     return;
   }
-  ImGui::SetNextWindowSize(ImVec2(640, 420), ImGuiCond_FirstUseEver);
+  // Tall and narrow on purpose: the window is a list of raypaths, and rows are what it runs out
+  // of first — a wide default only stretches the table's five columns across empty space.
+  ImGui::SetNextWindowSize(ImVec2(520, 640), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
   if (!ImGui::Begin(ICON_FA_ROUTE " Raypath Analysis", &state.analysis.window_open,
                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
