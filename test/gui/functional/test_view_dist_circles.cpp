@@ -59,8 +59,6 @@ struct RenderRequest {
   float camera_elevation = 0.0f;
   float sun_altitude = 90.0f;
   std::vector<unsigned char> rgba;
-
-  void Reset() { *this = RenderRequest{}; }
 };
 
 RenderRequest g_req;
