@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789258764438,
+  "lastUpdate": 1789258766406,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9526,50 +9526,6 @@ window.BENCHMARK_DATA = {
       {
         "commit": {
           "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "35c7cd3f1734523f8812d509152a6b3ff8ab2ea7",
-          "message": "Merge pull request #258 from LoveDaisy/fix/preview-drag-gain-fov\n\nfix(gui): scale preview drag by the lens's angular resolution",
-          "timestamp": "2026-08-07T16:10:31+08:00",
-          "tree_id": "91628e3757321fdf8723aac188f3c9c5be6aa3e5",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/35c7cd3f1734523f8812d509152a6b3ff8ab2ea7"
-        },
-        "date": 1786090781827,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 83.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 96.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
             "email": "49699333+dependabot[bot]@users.noreply.github.com",
             "name": "dependabot[bot]",
             "username": "dependabot[bot]"
@@ -13884,6 +13840,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 87.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51fa59e29850545fd09b7f6041faaed4a4bea4cd",
+          "message": "Merge pull request #356 from LoveDaisy/feat/cuda-hostgen-black-and-energy-accounting\n\nfix(cuda): host root-gen fallback renders again; landed weight reduced per warp so the energy ledger matches legacy",
+          "timestamp": "2026-09-13T08:09:28+08:00",
+          "tree_id": "5310d81311d369114cdde3eb97a22ec84b3b27c2",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/51fa59e29850545fd09b7f6041faaed4a4bea4cd"
+        },
+        "date": 1789258765905,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 91.5,
             "unit": "%"
           }
         ]
