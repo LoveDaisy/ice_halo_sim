@@ -40,7 +40,7 @@
 
 控制台还会打印一段 `Stats:` 总结（光线数、耗时、按波长累积等）。想要复现某次跑出的图，把这段保存下来即可。
 
-两条流是有意分开的：产品输出——这里的 `Saved:` / `Stats:`、`benchmark` 的 `[BENCHMARK]` JSON、`analyze` 的 CSV——走 **stdout**；所有诊断日志（`-v` 打开的和引擎自己的消息）走 **stderr**。所以 `Lumice -f config.json -o out 2>/dev/null` 只打印产品行；想把凭据和日志放进同一个文件，用 `> run.log 2>&1`。
+两条流是有意分开的：产品输出——这里的 `Saved:` / `Stats:`、`benchmark` 的 `[BENCHMARK]` JSON、`analyze` 的 CSV——走 **stdout**；所有诊断日志（`-v` 打开的和引擎自己的消息）走 **stderr**。所以 `Lumice -f config.json -o out 2>/dev/null` 只打印产品行；想把凭据和日志放进同一个文件，用 `> run.log 2>&1`。这条分流是对 `Lumice` 命令行的承诺：GUI 程序自己的日志行（`GUI_LOG_*`）仍打到 stdout，只有引擎的日志走 stderr，不要把它读成 GUI 终端输出的规则。
 
 ## 3. Verbose 与 Debug 模式
 
