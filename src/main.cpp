@@ -31,9 +31,7 @@
 #endif
 // clang-format on
 
-#include "config/render_config.hpp"  // the `render[]` entry a `--roi frame` request reads (see src/CMakeLists.txt)
 #include "lumice.h"
-#include "server/c_api_enum_map.hpp"  // core lens / visible enums -> LUMICE_* for that frame view
 #include "util/cpu_info.hpp"
 #include "util/logger.hpp"
 #include "util/raypath_analysis_display.hpp"
@@ -1582,87 +1580,51 @@ class StdoutHandoff {
   int saved_ = -1;
 };
 
-// The LUMICE_AnnotationView of a `--roi frame` request, from the config's `render[]` entry
-// `render_id` names (the first entry when nullopt). Read through the engine's own codecs —
-// config/render_config.hpp's from_json for the lens (its enum spelling and its fov default)
-// and for the view / visible range — and mapped to LUMICE_* through server/c_api_enum_map.hpp,
-// so this CLI keeps no string table of its own; the scalars are read the way
-// config_manager.cpp's ParseRenderConfig reads them, with RenderConfig's own member defaults
-// standing in for an absent key. `resolution` is required, as it is there. On failure `error`
-// says what, and the caller exits 1 before any server exists.
-bool BuildFrameViewFromConfig(const nlohmann::json& j_cfg, std::optional<int> render_id, LUMICE_AnnotationView* out,
-                              std::string* error) {
-  const auto it = j_cfg.find("render");
-  if (it == j_cfg.end() || !it->is_array() || it->empty()) {
-    *error = "--roi frame needs a render[] entry in the config to define the frame, and this config has none";
-    return false;
-  }
-  const nlohmann::json* entry = nullptr;
+// The LUMICE_AnnotationView of a `--roi frame` request, from the SCENE's own renderer: the
+// entry whose id is `render_id`, or the first one (index 0) when nullopt. Read back through
+// LUMICE_SceneGetRenderer, so what arrives is the LUMICE_RenderParam the engine will use — core's
+// defaults already applied, the lens and visible-range enums already LUMICE_* constants — and
+// the copy below is field for field, with no parsing, no default and no enum table of this
+// CLI's own. `render_id` is matched against LUMICE_RenderParam::id, which is NOT the array
+// index it is read at (lumice.h, at the getter): a document's render[] keeps the ids it
+// declared, so the entries are enumerated and compared. On failure `error` says what, and the
+// caller exits 1 before the analysis starts.
+bool BuildFrameViewFromScene(const LUMICE_Scene* scene, std::optional<int> render_id, LUMICE_AnnotationView* out,
+                             std::string* error) {
+  LUMICE_RenderParam r{};
   if (render_id.has_value()) {
     std::string seen;
-    for (const auto& e : *it) {
-      if (e.is_object() && e.contains("id")) {
-        if (e.at("id") == *render_id) {
-          entry = &e;
-          break;
-        }
-        seen += (seen.empty() ? "" : ", ") + e.at("id").dump();
+    bool found = false;
+    for (int index = 0; LUMICE_SceneGetRenderer(scene, index, &r) == LUMICE_OK; index++) {
+      if (r.id == *render_id) {
+        found = true;
+        break;
       }
+      seen += (seen.empty() ? "" : ", ") + std::to_string(r.id);
     }
-    if (entry == nullptr) {
+    if (!found) {
       *error = "--render-id " + std::to_string(*render_id) +
                " names no render[] entry in the config (ids present: " + (seen.empty() ? std::string("none") : seen) +
                ")";
       return false;
     }
-  } else {
-    entry = &it->front();
-  }
-  try {
-    const lumice::RenderConfig defaults{};
-    lumice::LensParam lens = defaults.lens_;
-    if (entry->contains("lens")) {
-      lens = entry->at("lens").get<lumice::LensParam>();
-    }
-    int lens_shift[2] = { defaults.lens_shift_[0], defaults.lens_shift_[1] };
-    if (entry->contains("lens_shift")) {
-      entry->at("lens_shift").get_to(lens_shift);
-    }
-    int resolution[2] = { 0, 0 };
-    entry->at("resolution").get_to(resolution);
-    lumice::ViewParam view = defaults.view_;
-    if (entry->contains("view")) {
-      view = entry->at("view").get<lumice::ViewParam>();
-    }
-    lumice::RenderConfig::VisibleRange visible = defaults.visible_;
-    if (entry->contains("visible")) {
-      visible = entry->at("visible").get<lumice::RenderConfig::VisibleRange>();
-    }
-    bool front = defaults.front_;
-    if (entry->contains("front")) {
-      entry->at("front").get_to(front);
-    }
-    float overlap = defaults.overlap_;
-    if (entry->contains("overlap")) {
-      overlap = std::max(0.0f, entry->at("overlap").get<float>());
-    }
-    *out = LUMICE_AnnotationView{};
-    out->width = resolution[0];
-    out->height = resolution[1];
-    out->lens_type = lumice::c_api_enum_map::MapLensTypeToCApi(lens.type_);
-    out->lens_fov = lens.fov_;
-    out->lens_shift[0] = lens_shift[0];
-    out->lens_shift[1] = lens_shift[1];
-    out->overlap = overlap;
-    out->view_azimuth = view.az_;
-    out->view_elevation = view.el_;
-    out->view_roll = view.ro_;
-    out->visible = lumice::c_api_enum_map::MapVisibleToCApi(visible);
-    out->front = front ? 1 : 0;
-  } catch (const std::exception& e) {
-    *error = std::string("the render[] entry for --roi frame could not be read: ") + e.what();
+  } else if (LUMICE_SceneGetRenderer(scene, 0, &r) != LUMICE_OK) {
+    *error = "--roi frame needs a render[] entry in the config to define the frame, and this config has none";
     return false;
   }
+  *out = LUMICE_AnnotationView{};
+  out->width = r.resolution_w;
+  out->height = r.resolution_h;
+  out->lens_type = r.lens_type;
+  out->lens_fov = r.lens_fov;
+  out->lens_shift[0] = r.lens_shift[0];
+  out->lens_shift[1] = r.lens_shift[1];
+  out->overlap = r.overlap;
+  out->view_azimuth = r.view_azimuth;
+  out->view_elevation = r.view_elevation;
+  out->view_roll = r.view_roll;
+  out->visible = r.visible;
+  out->front = r.front;
   if (out->width <= 0 || out->height <= 0) {
     *error = "the render[] entry for --roi frame has a non-positive resolution";
     return false;
@@ -1777,9 +1739,9 @@ int RunAnalyze(const AnalyzeOptions& opts) {
   // First thing, before any engine call or LOG_* line: from here on stdout is the CSV's alone.
   const StdoutHandoff product_stdout;
   // The config is read here as JSON only for what the CLI itself needs from it — the last-layer
-  // warning and, under --roi frame, the render[] entry — and every diagnostic that can be given
-  // before a server exists is given now. The engine parses the file again through
-  // LUMICE_SceneFromJsonFile, the same path `render` takes.
+  // warning — so that diagnostic is given before a server exists. Everything else about the
+  // document, the `--roi frame` renderer included, is the engine's reading of it: the file is
+  // parsed through LUMICE_SceneFromJsonFile, the same path `render` takes.
   nlohmann::json config_json;
   {
     std::ifstream config_file(shared.config_filename);
@@ -1796,6 +1758,24 @@ int RunAnalyze(const AnalyzeOptions& opts) {
   }
   WarnIfLastScatteringLayerProbNonzero(config_json);
 
+  LUMICE_ServerConfig server_config{};
+  server_config.preferred_backend = shared.preferred_backend;
+  server_config.num_workers = opts.cli_workers;  // 0 = automatic (server.cpp); a seed forces 1
+  server_config.sim_seed = opts.sim_seed;
+  auto* server = LUMICE_CreateServerEx(&server_config);
+  LUMICE_SetLogLevel(server, shared.log_level);
+
+  // The scene is loaded before the request is assembled: a `--roi frame` request frames its
+  // ROI on the scene's own renderer, read back through the handle (BuildFrameViewFromScene).
+  LUMICE_Scene* raw_scene = nullptr;
+  if (auto err = LUMICE_SceneFromJsonFile(shared.config_filename.u8string().c_str(), &raw_scene); err != LUMICE_OK) {
+    std::cerr << "Error: failed to load configuration from file '" << shared.config_filename.u8string()
+              << "' (error code " << static_cast<int>(err) << ")\n";
+    LUMICE_DestroyServer(server);
+    return 1;
+  }
+  ScenePtr scene(raw_scene);
+
   LUMICE_RaypathAnalysisRequest request{};
   request.roi_mode = opts.roi_mode;
   if (opts.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
@@ -1804,8 +1784,11 @@ int RunAnalyze(const AnalyzeOptions& opts) {
     request.cone_ring_count = lumice::kRaypathAnalysisConeRingCount;
   } else if (opts.roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME) {
     std::string error;
-    if (!BuildFrameViewFromConfig(config_json, opts.render_id, &request.frame_view, &error)) {
+    if (scene == nullptr || !BuildFrameViewFromScene(scene.get(), opts.render_id, &request.frame_view, &error)) {
+      // `scene` cannot be null here — the load above returned on failure — and the test stays as
+      // a statement of what this branch relies on, for whoever next reorders this function.
       std::cerr << "Error: " << error << "\n";
+      LUMICE_DestroyServer(server);
       return 1;
     }
   }
@@ -1822,25 +1805,11 @@ int RunAnalyze(const AnalyzeOptions& opts) {
     const auto parent = opts.csv_path.parent_path();
     if (!parent.empty() && !std::filesystem::is_directory(parent)) {
       std::cerr << "Error: --csv directory does not exist: " << parent.u8string() << "\n";
+      LUMICE_DestroyServer(server);
       return 1;
     }
   }
 
-  LUMICE_ServerConfig server_config{};
-  server_config.preferred_backend = shared.preferred_backend;
-  server_config.num_workers = opts.cli_workers;  // 0 = automatic (server.cpp); a seed forces 1
-  server_config.sim_seed = opts.sim_seed;
-  auto* server = LUMICE_CreateServerEx(&server_config);
-  LUMICE_SetLogLevel(server, shared.log_level);
-
-  LUMICE_Scene* raw_scene = nullptr;
-  if (auto err = LUMICE_SceneFromJsonFile(shared.config_filename.u8string().c_str(), &raw_scene); err != LUMICE_OK) {
-    std::cerr << "Error: failed to load configuration from file '" << shared.config_filename.u8string()
-              << "' (error code " << static_cast<int>(err) << ")\n";
-    LUMICE_DestroyServer(server);
-    return 1;
-  }
-  ScenePtr scene(raw_scene);
   if (auto err = LUMICE_StartRaypathAnalysis(server, scene.get(), &request); err != LUMICE_OK) {
     std::cerr << "Error: the analysis could not start (error code " << static_cast<int>(err) << ")\n";
     LUMICE_DestroyServer(server);

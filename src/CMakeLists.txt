@@ -7,17 +7,9 @@ message(STATUS "[src] CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 # cpu_info.cpp is compiled directly into the executable: main.cpp calls the
 # internal lumice::PhysicalCoreCount(), which carries hidden visibility and is
 # therefore not exported from the shared `lumice` library (BUILD_SHARED_LIBS).
-# render_config.cpp is compiled in for the same reason: the `analyze` subcommand's
-# `--roi frame` reads a `render[]` entry through config/render_config.hpp's from_json
-# (the one spelling of the lens / visible enums and the one lens-fov default) and
-# maps the core enums to LUMICE_* through server/c_api_enum_map.hpp. That TU's only
-# external references are libc / nlohmann / the header-only util helpers, so it
-# adds no further link dependency; the static build links the same object it
-# would have pulled out of liblumice.a.
 add_executable(Lumice
     "${PROJ_SRC_DIR}/main.cpp"
-    "${PROJ_SRC_DIR}/util/cpu_info.cpp"
-    "${PROJ_SRC_DIR}/config/render_config.cpp")
+    "${PROJ_SRC_DIR}/util/cpu_info.cpp")
 target_include_directories(Lumice PRIVATE
     ${stb_SOURCE_DIR})
 target_link_libraries(Lumice PRIVATE

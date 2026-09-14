@@ -291,8 +291,10 @@ GUI 把 ROI 放 session tier 不进文档是同一个判断。展示层派生（
 运行写出的 CSV 逐字节相同，由 `test/unit-correctness/util/test_raypath_analysis_display.cpp` 与
 `test/unit-correctness/gui/test_analysis_panel_logic.cpp` 持同一组期望字符串钉住。CLI 没有半径滑杆，显示半径恒等于
 请求半径（所有环累加）；环数与 GUI 同取 `lumice::kRaypathAnalysisConeRingCount`（=30）。`--roi frame` 的
-`LUMICE_AnnotationView` 由 `render[]` 条目经 `config/render_config.hpp` 的 `from_json` 与
-`src/server/c_api_enum_map.hpp`（自 `c_api.cpp` 原样提升的 lens/visible 双向映射）装配，CLI 侧不持有第二份枚举拼写表。
+`LUMICE_AnnotationView` 由 `LUMICE_SceneGetRenderer`（v4.40，`LUMICE_SceneAddRenderer` 的对称读回；按数组下标寻址，
+`--render-id` 与读回的 `LUMICE_RenderParam::id` 逐条比较）读回的 `LUMICE_RenderParam` 逐字段拷入：core 的默认值在
+引擎解码时已经应用、lens/visible 已是 `LUMICE_*` 常量，CLI 侧不解析配置文件、不持有第二份枚举拼写表或默认值规则——
+`src/main.cpp` 只含 `lumice.h` 与 `src/util/` 头，这是「CLI 是 C API 的第二个消费者」这一前提成立的机械证据。
 
 ### 3.4 ROI 三档的实现落点
 

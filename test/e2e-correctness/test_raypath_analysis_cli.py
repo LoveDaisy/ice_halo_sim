@@ -8,7 +8,8 @@ the fast (static-build) half of that coverage: everything below runs under bare 
 What is pinned:
   * the option surface — the three ROIs run and print a CSV; the four option conflicts the
     subcommand refuses (a cone without its geometry, geometry under another ROI, a frame id
-    under another ROI, an unknown symmetry) exit non-zero with a message naming the option;
+    under another ROI, an unknown symmetry) exit non-zero with a message naming the option,
+    and a document the engine cannot load fails on the load, before `--roi frame` reads it;
   * the physics, through the CSV — the top chain of the whole sky is ``3-5``; a 2° cone on
     the ring (sun altitude + 23°) leads with ``3-5``; the same cone on halo-free sky (85°)
     leads with far less energy (the same 10x floor as the ctypes test);
@@ -185,6 +186,30 @@ class TestAnalyzeCli(LumiceTestCase):
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("--render-id 9 names no render[] entry", missing.stderr)
         self.assertIn("ids present: 3, 4", missing.stderr)
+
+    def test_config_the_engine_cannot_load_is_refused_before_the_frame_is_read(self):
+        """A `--roi frame` run whose document the engine refuses (a render[].id spelled as a
+        string, which core's decoder rejects on type) exits 1 on the load error alone: the
+        scene is loaded before the frame view is read off it, so a failed load never reaches
+        the read. Beside it, the two refusals given before any engine call — a config that is
+        not there, and one that is not JSON."""
+        doc = json.loads(_CONFIG.read_text(encoding="utf-8"))
+        doc["render"][0]["id"] = "1"
+        cfg = Path(self.output_dir) / "string_id.json"
+        cfg.write_text(json.dumps(doc), encoding="utf-8")
+        result = self.run_lumice(["analyze", "-f", str(cfg), "--roi", "frame", "--render-id", "1"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed to load configuration", result.stderr)
+        self.assertNotIn("names no render[] entry", result.stderr, "the load must fail before the frame is read")
+        self.assertEqual(result.stdout, "")
+        missing = self.run_lumice(["analyze", "-f", str(Path(self.output_dir) / "absent.json")])
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("cannot open config file", missing.stderr)
+        broken = Path(self.output_dir) / "broken.json"
+        broken.write_text("{", encoding="utf-8")
+        garbled = self.run_lumice(["analyze", "-f", str(broken)])
+        self.assertNotEqual(garbled.returncode, 0)
+        self.assertIn("invalid JSON", garbled.stderr)
 
     def test_option_conflicts_are_refused_with_the_option_named(self):
         cases = [
