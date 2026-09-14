@@ -128,6 +128,19 @@ filter 的同一套机制，不是新发明的规则。
 接管上界（没有时留空），最后是 **other** 行（如果有）。数字
 按原样写出——不带 `%`、不带千分位——方便表格软件或脚本直接读。没有结果时按钮禁用。
 
+## 6. 从命令行使用
+
+同一个分析也是一个 CLI 子命令 `Lumice analyze`，写出的 CSV 与 **Export CSV** 对同一次运行保存的文件逐字节相同——两边走的是同一个格式化器，不是两份实现。config 只是场景；要问的问题全由选项给出、从不读 config，这正是它可脚本化、可复现的原因：
+
+```text
+Lumice analyze -f config.json                                          # 全天，输出到 stdout
+Lumice analyze -f config.json --roi cone --center 43,0 --radius 2      # 以高度角 43°、方位角 0 为中心的 2° 锥
+Lumice analyze -f config.json --roi frame --render-id 1 --csv out.csv  # 落进 render[] 条目 1 画幅内的光线
+Lumice analyze -f config.json --symmetry none --rays 5M --seed 7       # 最细分组、自带预算、可复现
+```
+
+`--roi sky | frame | cone` 对应面板的 Whole sky / In frame / Point；`--center <alt>,<az>` 用天空点的高度角与方位角给出锥心（方位角与太阳同一量法，所以 `--center <太阳高度角>,0` 就是太阳）；`--symmetry` 对应 P / B / D 复选框（默认 `PBD`，`none` 取最细分组）；`--rays` 对应窗口的 Rays 栏（默认用场景自己的 `ray_num`，包括 `"infinite"`）。两件窗口里没有对应物的事：`--seed <N>` 固定随机种子，让同一个问题的两次运行是同一次运行（按契约，带种子的运行是单线程的）；一直跑的场景用 Ctrl-C 结束，结束时仍会写出到那一刻为止累积的结果。带 `--csv` 时文件每秒原子重写，脚本任何时刻读到的都是完整文件；不带时 CSV 独占 stdout，进度行走 stderr。CLI 没有半径滑杆：锥内所有环都被累加，文件头的 `cone_rings_summed` 行会如实写出。`Lumice analyze -h` 列出全部选项；另见 [`03-cli-quickstart_zh.md`](03-cli-quickstart_zh.md) §4。
+
 ## 延伸阅读
 
 - 完整面板参考 → [`../gui-guide.md`](../gui-guide.md)

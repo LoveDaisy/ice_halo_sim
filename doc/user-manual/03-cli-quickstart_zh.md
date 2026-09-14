@@ -51,13 +51,14 @@
 
 ## 4. 完整 flag 一览
 
-CLI 有两个子命令：`render` 与 `benchmark`。`render` 是默认值：`Lumice -f config.json` 与 `Lumice render -f config.json` 是同一条命令，所以上面所有示例跑的都是 render。每个子命令只接受自己的选项；`Lumice <子命令> -h` 打印该子命令的帮助页。
+CLI 有三个子命令：`render`、`benchmark` 与 `analyze`。`render` 是默认值：`Lumice -f config.json` 与 `Lumice render -f config.json` 是同一条命令，所以上面所有示例跑的都是 render。每个子命令只接受自己的选项；`Lumice <子命令> -h` 打印该子命令的帮助页。
 
 `Lumice -h` 打印的完整列表（事实锚：`./build/cmake_install/static/Lumice -h`）：
 
 ```text
 Usage: ./build/cmake_install/static/Lumice [render] -f <config_file> [options]
        ./build/cmake_install/static/Lumice benchmark -f <config_file> [options]
+       ./build/cmake_install/static/Lumice analyze -f <config_file> [options]
        ./build/cmake_install/static/Lumice <subcommand> -h
 
 Lumice — simulate ice halos by tracing rays through ice crystals.
@@ -67,19 +68,18 @@ Subcommands:
                      no subcommand is given: `./build/cmake_install/static/Lumice -f ...` is a render.
   benchmark          Run a throughput benchmark and print [BENCHMARK] JSON
                      (`./build/cmake_install/static/Lumice benchmark -h` for its options)
+  analyze            List the raypath chains that light a region of the sky, as CSV
+                     (`./build/cmake_install/static/Lumice analyze -h` for its options)
 
 Options for render (the default subcommand):
   -f <file>          Specify the configuration file (required)
+  -o <dir>           Output directory for rendered images (default: current directory)
+  --format <fmt>     Output image format: jpg or png (default: jpg)
+  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
   --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
                      'auto' and 'cpu' both select the CPU route today; 'metal'
                      falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
                      env var, if set, still overrides this (debug/CI only).
-  -v                 Verbose output (trace level logging)
-  -d                 Debug output (debug level logging)
-  -h, --help         Show this help message and exit
-  -o <dir>           Output directory for rendered images (default: current directory)
-  --format <fmt>     Output image format: jpg or png (default: jpg)
-  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
   --workers <N>      Number of CPU simulation worker threads (default: automatic —
                      one per physical core, capped at a ceiling above which no
                      machine measured ran faster; an explicit N is never capped).
@@ -87,6 +87,9 @@ Options for render (the default subcommand):
                      a config-file field: a config travels between machines and a
                      worker count should not travel with it. Ignored on a GPU route
                      (single engine).
+  -v                 Verbose output (trace level logging)
+  -d                 Debug output (debug level logging)
+  -h, --help         Show this help message and exit
 
 Examples:
   ./build/cmake_install/static/Lumice -f config.json
@@ -97,6 +100,7 @@ Examples:
   ./build/cmake_install/static/Lumice -f config.json --workers 4
   ./build/cmake_install/static/Lumice -f config.json -v
   ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json
+  ./build/cmake_install/static/Lumice analyze -f config.json --roi cone --center 43,0 --radius 2
 ```
 
 `Lumice benchmark -h`：
@@ -126,11 +130,77 @@ Examples:
   ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json --backend metal
 ```
 
+`Lumice analyze -h`——把 GUI「Raypath Analysis」窗口做的光路分析（结果怎么读见 [`06-raypath-analysis_zh.md`](06-raypath-analysis_zh.md)）搬到命令行，输出与该窗口「Export CSV」相同的 CSV：
+
+```text
+Usage: ./build/cmake_install/static/Lumice analyze -f <config_file> [options]
+
+Trace the scene and list the raypath chains that delivered energy into a region
+of the sky, most energetic first, as CSV — the same file the GUI's Raypath
+Analysis window exports. The config is the scene; the question asked of it is
+given by the options below and never read from the config. The analysis always
+traces on the CPU (the chain record exists on that route only).
+
+Output: the CSV goes to stdout, or to --csv <path> instead (never both). A `#`
+head names the region, the symmetry, the ray total and the export time; then
+one row per chain: Raypath, Energy (% of the total), Cumulative %, +/- (the
+row's 1/sqrt(count) relative noise, in %). Progress goes to stderr, one line per
+second. Ctrl-C ends the run early and still writes the result accumulated so far
+(exit 0) — which is how a scene whose ray_num is "infinite" is meant to be run.
+With --csv the file is rewritten atomically every second, so it is complete at
+any moment it is read.
+
+Options:
+  -f <file>          Specify the configuration file (required)
+  --roi <region>     Which rays count: sky (every outgoing ray; default), frame (the
+                     rays that land inside one of the config's render[] frames), or
+                     cone (the rays within --radius of --center).
+  --render-id <id>   frame only: the render[] entry whose lens / view / visible /
+                     front / resolution define the frame (default: the first entry).
+  --center <alt>,<az>
+                     cone only (required): the cone's centre as the altitude and
+                     azimuth, in degrees, of the sky point — azimuth measured as the
+                     sun's is, so the sun sits at --center <sun_altitude>,0.
+  --radius <deg>     cone only (required): the cone's angular radius in degrees.
+  --symmetry <spec>  Merge chains that are the same path up to crystal symmetry when
+                     listing: any combination of P, B, D (case-insensitive) or
+                     `none` (default: PBD). Changes the grouping, never the totals.
+  --rays <N>         This run's ray budget, total across wavelengths; N may carry a
+                     K, M or G suffix (e.g. 20M). Default: the scene's own ray_num,
+                     including "infinite".
+  --seed <N>         Fix the simulation's random seed (a positive integer) so two
+                     runs of one question are the same run; this also sizes the pool
+                     to one worker (a seeded run is single-threaded by contract).
+                     Default: random.
+  --csv <path>       Write the CSV to this file instead of stdout.
+  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
+                     'auto' and 'cpu' both select the CPU route today; 'metal'
+                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
+                     env var, if set, still overrides this (debug/CI only).
+  --workers <N>      Number of CPU simulation worker threads (default: automatic —
+                     one per physical core, capped at a ceiling above which no
+                     machine measured ran faster; an explicit N is never capped).
+                     Machine-dependent, so it is a command-line switch rather than
+                     a config-file field: a config travels between machines and a
+                     worker count should not travel with it. Ignored on a GPU route
+                     (single engine).
+  -v                 Verbose output (trace level logging)
+  -d                 Debug output (debug level logging)
+  -h, --help         Show this help message and exit
+
+Examples:
+  ./build/cmake_install/static/Lumice analyze -f config.json
+  ./build/cmake_install/static/Lumice analyze -f config.json --roi cone --center 43,0 --radius 2
+  ./build/cmake_install/static/Lumice analyze -f config.json --roi frame --render-id 1 --csv frame.csv
+  ./build/cmake_install/static/Lumice analyze -f config.json --symmetry none --rays 5M --seed 7
+```
+
 要点：
 
 - `-f` 是唯一必需 flag。不带它会以非零退出并打印 usage 提示。
 - `--format png` 切到无损 PNG，此时 `--quality` 被忽略。
 - `--workers <N>` 覆盖自动 worker 数（每个物理核一个，但有一个实测上限；该上限只作用于自动值，你显式给出的 `N` 永远不受它约束）。它是命令行开关而不是 config 字段，是有意的：worker 数描述的是**机器**，而 config 文件会在机器之间流转。非法值（`0` / 负数 / 非数字）以非零退出，不静默回退到默认值。
+- `Lumice analyze -f <config>` 不渲染，而是向场景提一个问题：哪些光路链把能量送进了天空的某个区域，结果是 stdout 上的 CSV（或 `--csv <path>` 写文件）。config 只是场景；区域、行合并所用的对称性、光线预算与随机种子全是选项，从不读 config——所以脚本可以拿同一份 config 问多个问题，加 `--seed` 即可复现任何一次。`ray_num` 为 `"infinite"` 的场景会一直跑到 Ctrl-C，仍然写出结果；带 `--csv` 时文件每秒原子重写，任何时刻读到的都是完整文件。进度行走 stderr，stdout 只有 CSV。
 - `Lumice benchmark -f <config>` 用于性能回归测试 — 详见 [`../performance-testing_zh.md`](../performance-testing_zh.md)，**不是**普通模拟用法；它只接受 `-f`、`--backend`、`-v`、`-d`、`-h`（没有 `-o`：它不写文件；没有 `--workers`：worker 数就是测量口径本身）。原来的 `--benchmark` 旗现在会报错并给出指向这里的迁移提示。
 
 ## 5. 性能预期

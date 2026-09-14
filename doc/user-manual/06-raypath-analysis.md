@@ -68,6 +68,19 @@ If the crystal already has an **Out** filter instead, the button does not disabl
 
 **Export CSV**, beside it, saves the list **as shown** — under the radius and the P / B / D symmetry currently on display, in the display order — to a `.csv` file through a save dialog. The file opens with `#`-prefixed lines that record the export time, the region, the cone centre / radius / rings summed for a Point result, the symmetry, the total ray count, the total energy the percentages are shares of, and the record-full hit count, so it describes itself without the window. Then one column-header row (`Raypath,Energy,Cumulative %,+/-`, matching the table above one for one) and the rows: the raypath name, its share of the total energy, the cumulative share, and the 1/√N noise together with the takeover bound the **+/-** column shows in parentheses (empty when none), and finally the **other** row when there is one. Numbers are written plain — no `%` sign, no thousands grouping — so a spreadsheet or script reads them directly. The button is disabled while there is no result.
 
+## 6. From the command line
+
+The same analysis is a CLI subcommand, `Lumice analyze`, and it writes the same CSV — byte for byte the file **Export CSV** saves for the same run, produced by one shared formatter rather than two. The config is the scene; the question is asked with options, never read from the config, which is what makes it scriptable and reproducible:
+
+```text
+Lumice analyze -f config.json                                          # whole sky, to stdout
+Lumice analyze -f config.json --roi cone --center 43,0 --radius 2      # a 2° cone around alt 43°, az 0
+Lumice analyze -f config.json --roi frame --render-id 1 --csv out.csv  # the rays inside render[] entry 1
+Lumice analyze -f config.json --symmetry none --rays 5M --seed 7       # finest rows, own budget, reproducible
+```
+
+`--roi sky | frame | cone` is the panel's Whole sky / In frame / Point; `--center <alt>,<az>` names the cone's centre as the altitude and azimuth of the sky point (azimuth measured as the sun's, so `--center <sun_altitude>,0` is the sun); `--symmetry` is the P / B / D checkboxes (`PBD` by default, `none` for the finest rows); `--rays` is the window's Rays field (the scene's own `ray_num` by default, `"infinite"` included). Two things the window has no equivalent of: `--seed <N>` fixes the random seed so two runs of one question are the same run (a seeded run is single-threaded by contract), and a scene that runs forever is ended with Ctrl-C, which still writes the result accumulated so far. With `--csv` the file is rewritten atomically every second, so it is complete whenever a script reads it; without it the CSV is stdout's alone and progress goes to stderr. The CLI has no radius slider: every ring of the cone is summed, and the head's `cone_rings_summed` line says so. `Lumice analyze -h` is the full option list; see [`03-cli-quickstart.md`](03-cli-quickstart.md) §4.
+
 ## Further reading
 
 - Full panel reference → [`../gui-guide.md`](../gui-guide.md)
