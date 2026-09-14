@@ -172,10 +172,15 @@ class TestAnalyzeCli(LumiceTestCase):
             head, rows = _parse_csv(result.stdout)
             self.assertEqual(head["region"], "in frame")
             self.assertGreater(int(head["total_rays"]), 0, render_id)
-        # Without --render-id the first entry is taken: the same run as id 3.
+        # Without --render-id the first entry is taken: the same run as id 3 (the export time
+        # is the one head line two runs may disagree on).
         first = self.run_lumice(base)
         self.assertEqual(first.returncode, 0, first.stderr)
-        self.assertEqual(_parse_csv(first.stdout), _parse_csv(self.run_lumice(base + ["--render-id", "3"]).stdout))
+        head_first, rows_first = _parse_csv(first.stdout)
+        head_three, rows_three = _parse_csv(self.run_lumice(base + ["--render-id", "3"]).stdout)
+        head_first.pop("exported_at")
+        head_three.pop("exported_at")
+        self.assertEqual((head_first, rows_first), (head_three, rows_three))
         missing = self.run_lumice(base + ["--render-id", "9"])
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("--render-id 9 names no render[] entry", missing.stderr)
