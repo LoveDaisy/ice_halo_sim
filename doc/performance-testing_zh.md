@@ -665,7 +665,7 @@ legacy 的统计等价性由 slow-e2e parity harness 验证（`ds_corr ≥ 0.99`
 # 构建（需要 -gt 生成 GUI 测试目标）
 ./scripts/build.sh -gtj release
 
-# 仅运行性能测试（PERF 输出在 stderr，服务器日志在 stdout）
+# 仅运行性能测试（PERF 输出与服务器日志都在 stderr）
 ./build/Release/static/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
@@ -673,10 +673,11 @@ grep "\[PERF\]" /tmp/perf_stderr.txt
 # debug 级别（增加 ConsumeData 每批次 + Consume 剖析）
 ./build/Release/static/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
-grep "Consume profile" /tmp/perf_stdout_debug.txt
+grep "Consume profile" /tmp/perf_stderr_debug.txt
 ```
 
-**注意**：PERF 结果在 **stderr**，服务器日志在 **stdout**——需要分别重定向。
+**注意**：PERF 结果与引擎的服务器日志都在 **stderr**（引擎的 console sink 写到 stderr；stdout 只有测试
+框架自己的汇总），一份 `2>` 捕获两者都有，`[PERF]` / `Consume profile` 两个 grep 读同一个文件。
 
 ### Windows
 

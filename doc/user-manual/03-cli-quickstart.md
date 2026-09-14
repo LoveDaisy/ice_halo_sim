@@ -40,6 +40,8 @@ After the run, the output directory contains one image per render entry in your 
 
 The console also prints a `Stats:` block summarising the simulation (ray counts, elapsed time, per-wavelength accumulation). Capture this if you want a reproducibility receipt.
 
+Two streams, on purpose: the product lines — `Saved:` / `Stats:` here, the `[BENCHMARK]` JSON of `benchmark`, the CSV of `analyze` — go to **stdout**, and every diagnostic log line (`-v` and the engine's own messages alike) goes to **stderr**. So `Lumice -f config.json -o out 2>/dev/null` prints exactly the product lines, and `> run.log 2>&1` keeps both together when you want the receipt and the log in one file.
+
 ## 3. Verbose and debug modes
 
 ```bash

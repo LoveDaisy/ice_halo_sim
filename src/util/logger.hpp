@@ -33,12 +33,18 @@ enum class LogLevel {
 // Shared dist_sink singleton. All Logger instances use this as their sole sink,
 // so adding a sink here (e.g., callback sink, file sink) is immediately visible
 // to all loggers. No initialization order dependency.
+//
+// The console sink writes to STDERR. Every binary that links the engine inherits this sink with
+// no API to point it elsewhere, and the CLI's stdout is its product output — a config's `Saved:`
+// / `Stats:` lines, the `[BENCHMARK]` JSON, `analyze`'s CSV — which a consumer pipes or
+// redirects; a diagnostic line on the same stream corrupts that output for whoever parses it.
+// stderr is the stream a diagnostic belongs on, and `2>/dev/null` then leaves the product alone.
 inline std::shared_ptr<spdlog::sinks::dist_sink_mt>& GetSharedSink() {
   static auto sink = []() {
     auto s = std::make_shared<spdlog::sinks::dist_sink_mt>();
-    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    stdout_sink->set_formatter(CreateLumiceFormatter(kLogPattern));
-    s->add_sink(stdout_sink);
+    auto console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+    console_sink->set_formatter(CreateLumiceFormatter(kLogPattern));
+    s->add_sink(console_sink);
     return s;
   }();
   return sink;

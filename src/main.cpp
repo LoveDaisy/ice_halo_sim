@@ -25,9 +25,6 @@
 #ifdef _WIN32
 #include <windows.h>   // Must come before shellapi.h (defines EXTERN_C etc.)
 #include <shellapi.h>  // CommandLineToArgvW
-#include <io.h>        // _dup / _dup2 / _write / _close (StdoutHandoff)
-#else
-#include <unistd.h>    // dup / dup2 / write / close (StdoutHandoff)
 #endif
 // clang-format on
 
@@ -1516,70 +1513,6 @@ void HandleAnalyzeSigint(int /*signal*/) {
   g_analyze_stop_requested.store(true, std::memory_order_relaxed);
 }
 
-// `analyze` promises that stdout carries the CSV and nothing else, and the engine's log sink
-// writes to stdout (util/logger.hpp, GetSharedSink) with no C API to point it elsewhere. So for
-// the duration of the run, file descriptor 1 is made a duplicate of descriptor 2 — every line the
-// engine (or this file's own LOG_*) writes to stdout lands on stderr, formatted as it always was —
-// and the CSV is written through a duplicate of the ORIGINAL descriptor 1 taken before the swap.
-// Descriptor-level rather than stream-level on purpose: the sink holds the C `stdout` FILE*, and
-// a FILE* follows its descriptor, so this is the one place that catches every writer. Restored
-// in the destructor, so a process that goes on to write to std::cout after the run (none does
-// today) would find stdout as it was. A C API log-sink switch would make this unnecessary; that
-// is an API-surface change and not this subcommand's to make.
-class StdoutHandoff {
- public:
-  StdoutHandoff() {
-    std::fflush(stdout);
-#ifdef _WIN32
-    saved_ = _dup(1);
-    _dup2(2, 1);
-#else
-    saved_ = dup(1);
-    dup2(2, 1);
-#endif
-  }
-  ~StdoutHandoff() {
-    std::fflush(stdout);
-    if (saved_ >= 0) {
-#ifdef _WIN32
-      _dup2(saved_, 1);
-      _close(saved_);
-#else
-      dup2(saved_, 1);
-      close(saved_);
-#endif
-    }
-  }
-  StdoutHandoff(const StdoutHandoff&) = delete;
-  StdoutHandoff& operator=(const StdoutHandoff&) = delete;
-
-  // Write `text` to the original stdout, whole. False if the descriptor could not be taken or
-  // a write failed (a closed pipe, say).
-  bool Write(const std::string& text) const {
-    if (saved_ < 0) {
-      return false;
-    }
-    const char* p = text.data();
-    std::size_t left = text.size();
-    while (left > 0) {
-#ifdef _WIN32
-      const int n = _write(saved_, p, static_cast<unsigned int>(std::min<std::size_t>(left, 1u << 30)));
-#else
-      const ssize_t n = write(saved_, p, left);
-#endif
-      if (n <= 0) {
-        return false;
-      }
-      p += n;
-      left -= static_cast<std::size_t>(n);
-    }
-    return true;
-  }
-
- private:
-  int saved_ = -1;
-};
-
 // The LUMICE_AnnotationView of a `--roi frame` request, from the SCENE's own renderer: the
 // entry whose id is `render_id`, or the first one (index 0) when nullopt. Read back through
 // LUMICE_SceneGetRenderer, so what arrives is the LUMICE_RenderParam the engine will use — core's
@@ -1736,8 +1669,6 @@ bool WriteFileAtomically(const std::filesystem::path& path, const std::string& t
 
 int RunAnalyze(const AnalyzeOptions& opts) {
   const SharedOptions& shared = opts.shared;
-  // First thing, before any engine call or LOG_* line: from here on stdout is the CSV's alone.
-  const StdoutHandoff product_stdout;
   // The config is read here as JSON only for what the CLI itself needs from it — the last-layer
   // warning — so that diagnostic is given before a server exists. Everything else about the
   // document, the `--roi frame` renderer included, is the engine's reading of it: the file is
@@ -1883,7 +1814,10 @@ int RunAnalyze(const AnalyzeOptions& opts) {
   const std::string csv = AnalysisCsvText(read, request, opts.symmetry_bits, LocalTimeNow());
   int rc = 0;
   if (opts.csv_path.empty()) {
-    if (!product_stdout.Write(csv)) {
+    // stdout is the CSV's alone: the engine's diagnostics go to stderr (util/logger.hpp), as
+    // does every line this subcommand prints about its own progress.
+    std::cout << csv << std::flush;
+    if (!std::cout.good()) {
       std::cerr << "Error: writing the CSV to stdout failed\n";
       rc = 1;
     }

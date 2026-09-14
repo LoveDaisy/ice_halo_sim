@@ -48,6 +48,32 @@ class TestCli(LumiceTestCase):
         result = self.run_lumice([])
         self.assertNotEqual(result.returncode, 0)
 
+    def test_render_stdout_is_the_product_output_and_the_log_is_stderr(self):
+        """stdout carries the product lines alone -- `Saved:` / `Stats:` (and, when a
+        raypath_color scene asks for it, `ColorClassSignal:`) -- and every engine log line
+        goes to stderr. Pinned as a test rather than checked once by hand because the
+        console sink is one line in util/logger.hpp that any later change could turn back
+        to stdout without a compile error anywhere; `-v` so the run logs plenty, and the
+        second half asserts the log is *there*, on stderr -- moved, not silenced."""
+        if not (CONFIGS_DIR / "halo_22.json").exists():
+            self.skipTest("halo_22.json not found")
+        cfg = _cheap_halo_22_config(self.output_dir)
+        result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir, "-v"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        stdout_lines = [line for line in result.stdout.splitlines() if line.strip()]
+        self.assertTrue(stdout_lines, "a render prints at least its Saved: line")
+        log_line = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[[A-Z]\] ")
+        for line in stdout_lines:
+            self.assertTrue(
+                line.startswith(("Saved: ", "Stats: ", "ColorClassSignal:")),
+                f"a non-product line on stdout: {line!r}",
+            )
+            self.assertIsNone(log_line.match(line), f"an engine log line on stdout: {line!r}")
+        self.assertTrue(
+            any(log_line.match(line) for line in result.stderr.splitlines()),
+            f"no engine log line on stderr -- the log was silenced, not moved:\n{result.stderr[:500]}",
+        )
+
     def test_output_directory(self):
         """Lumice -o should write images to the specified directory."""
         if not (CONFIGS_DIR / "halo_22.json").exists():
@@ -290,10 +316,12 @@ class TestWorkerCount(LumiceTestCase):
             ["-f", str(cfg), "-o", self.output_dir] + list(extra_args)
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        match = self.WORKER_LINE.search(result.stdout)
+        # An engine log line (ILOG_INFO in server.cpp), so stderr's: the engine's console sink
+        # writes there, and stdout carries the product output alone.
+        match = self.WORKER_LINE.search(result.stderr)
         self.assertIsNotNone(
             match,
-            f"no worker_count= line in stdout:\n{result.stdout}",
+            f"no worker_count= line in stderr:\n{result.stderr}",
         )
         return int(match.group(1))
 
