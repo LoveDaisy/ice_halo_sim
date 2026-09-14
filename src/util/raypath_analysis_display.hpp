@@ -130,8 +130,7 @@ inline RaypathDisplayOrder ComputeRaypathDisplayOrder(const std::vector<LUMICE_R
   RaypathDisplayOrder view;
   const bool cone = roi_mode == LUMICE_RAYPATH_ROI_CONE && cone_ring_count > 0;
   if (cone) {
-    view.display_ring_count =
-        RingsWithinRadius(display_radius_deg, cone_radius_rad * sky_direction_detail::kRad2Deg, cone_ring_count);
+    view.display_ring_count = RingsWithinRadius(display_radius_deg, cone_radius_rad * kRad2Deg, cone_ring_count);
   }
   view.display_energy.reserve(entries.size());
   for (const auto& e : entries) {
@@ -250,8 +249,7 @@ inline std::string BuildRaypathAnalysisCsv(const std::vector<LUMICE_RaypathHisto
     DirToAltAz(in.cone_center_dir, &alt, &az);
     out += "# cone_centre_altitude_deg: " + Fmt("%.2f", alt) + "\n";
     out += "# cone_centre_azimuth_deg: " + Fmt("%.2f", az) + "\n";
-    out +=
-        "# cone_request_radius_deg: " + Fmt("%.1f", in.cone_request_radius_rad * sky_direction_detail::kRad2Deg) + "\n";
+    out += "# cone_request_radius_deg: " + Fmt("%.1f", in.cone_request_radius_rad * kRad2Deg) + "\n";
     out += "# cone_display_radius_deg: " + Fmt("%.1f", in.cone_display_radius_deg) + "\n";
     out += "# cone_rings_summed: " + std::to_string(view.display_ring_count) + " / " +
            std::to_string(in.cone_ring_count) + "\n";

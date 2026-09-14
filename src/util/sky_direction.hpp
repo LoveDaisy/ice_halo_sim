@@ -16,17 +16,18 @@ namespace lumice {
 // the shape AGENTS.md admits under src/util/ — so both sides read it without a second copy,
 // and `inline` so the shared build's hidden visibility has no symbol to hide.
 
-namespace sky_direction_detail {
+// Public on purpose, not tucked in a detail namespace: the CLI (`--radius <deg>` -> radians for
+// the request), the CSV formatter (radians -> degrees for the header echo) and the GUI all need
+// the same two factors, and a `_detail` name that three other files reach into is a promise the
+// name no longer keeps.
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDeg2Rad = kPi / 180.0f;
 constexpr float kRad2Deg = 180.0f / kPi;
-}  // namespace sky_direction_detail
 
 // Direction light travels -> (altitude, azimuth) in degrees of the sky point it comes from.
 // Altitude in [-90, 90]; azimuth wrapped into (-180, 180]. `dir` need not be normalized beyond
 // |z| <= 1 (z is clamped for the asin).
 inline void DirToAltAz(const float dir[3], float* alt_deg, float* az_deg) {
-  using sky_direction_detail::kRad2Deg;
   const float z = std::max(-1.0f, std::min(1.0f, dir[2]));
   *alt_deg = std::asin(-z) * kRad2Deg;
   float az = std::atan2(dir[1], dir[0]) * kRad2Deg - 180.0f;
@@ -45,7 +46,6 @@ inline void DirToAltAz(const float dir[3], float* alt_deg, float* az_deg) {
 //   azimuth  = atan2(y, x) - 180 -> x = -cos(alt)cos(az), y = -cos(alt)sin(az)
 // The same formula the annotation overlay's altitude curves use (core/annotation_overlay.cpp).
 inline void AltAzToDir(float alt_deg, float az_deg, float dir[3]) {
-  using sky_direction_detail::kDeg2Rad;
   const float alt = alt_deg * kDeg2Rad;
   const float az = az_deg * kDeg2Rad;
   const float cos_alt = std::cos(alt);

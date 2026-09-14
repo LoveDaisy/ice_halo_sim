@@ -40,7 +40,7 @@ std::vector<LUMICE_RaypathHistogramEntry> MakeEntries(const std::vector<double>&
   return out;
 }
 
-constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+using lumice::kDeg2Rad;
 
 }  // namespace
 

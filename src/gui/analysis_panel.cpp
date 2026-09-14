@@ -46,14 +46,12 @@ namespace lumice::gui {
 // namespace: a same-named overload added to lumice::gui later collides at these declarations
 // instead of silently rebinding every call site below.
 using lumice::DirToAltAz;
+using lumice::kDeg2Rad;
+using lumice::kRad2Deg;
 using lumice::RoiModeLabel;
 using lumice::SymmetryBitsLabel;
 
 namespace {
-
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kDeg2Rad = kPi / 180.0f;
-constexpr float kRad2Deg = 180.0f / kPi;
 
 // The neighbour offset the ring's local scale is measured over. Small enough to be local on
 // every lens the GUI draws, large enough that the angle between the two directions is well above

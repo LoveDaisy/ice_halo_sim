@@ -1729,7 +1729,7 @@ std::string AnalysisCsvText(const AnalysisRead& read, const LUMICE_RaypathAnalys
   std::copy(std::begin(request.cone_center), std::end(request.cone_center), std::begin(in.cone_center_dir));
   in.cone_request_radius_rad = read.info.present ? read.info.cone_radius_rad : request.cone_radius_rad;
   in.cone_ring_count = read.info.present ? read.info.cone_ring_count : request.cone_ring_count;
-  in.cone_display_radius_deg = in.cone_request_radius_rad * lumice::sky_direction_detail::kRad2Deg;
+  in.cone_display_radius_deg = in.cone_request_radius_rad * lumice::kRad2Deg;
   in.symmetry_bits = symmetry;
   in.other_energy = read.info.other_energy;
   in.other_count = read.info.other_count;
@@ -1756,6 +1756,9 @@ bool WriteFileAtomically(const std::filesystem::path& path, const std::string& t
     out << text;
     if (!out.good()) {
       *error = "write to '" + tmp.u8string() + "' failed";
+      out.close();
+      std::error_code ec;
+      std::filesystem::remove(tmp, ec);  // same cleanup discipline as the rename branch below
       return false;
     }
   }
@@ -1797,7 +1800,7 @@ int RunAnalyze(const AnalyzeOptions& opts) {
   request.roi_mode = opts.roi_mode;
   if (opts.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
     lumice::AltAzToDir(*opts.center_alt_deg, *opts.center_az_deg, request.cone_center);
-    request.cone_radius_rad = *opts.radius_deg * lumice::sky_direction_detail::kDeg2Rad;
+    request.cone_radius_rad = *opts.radius_deg * lumice::kDeg2Rad;
     request.cone_ring_count = lumice::kRaypathAnalysisConeRingCount;
   } else if (opts.roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME) {
     std::string error;
