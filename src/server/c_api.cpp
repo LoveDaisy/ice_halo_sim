@@ -33,7 +33,6 @@
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for LUMICE_IsBackendAvailable
 #endif
 #include "include/lumice.h"
-#include "server/c_api_enum_map.hpp"  // lens type / visible range <-> LUMICE_* (shared with the CLI)
 #include "server/c_api_internal.hpp"
 #include "server/raypath_histogram_consumer.hpp"  // ReduceRaypathHistogram (the analysis reads)
 #include "server/server.hpp"
@@ -470,12 +469,81 @@ static nlohmann::json CompositionArrayToJson(const LUMICE_ComplexComposition& co
   return composition;
 }
 
-// The lens-type and visible-range mappers (both directions) live in server/c_api_enum_map.hpp:
-// the CLI's `analyze` subcommand needs the ToCApi half too, and the four are one table.
-using ns::c_api_enum_map::MapLensTypeFromCApi;
-using ns::c_api_enum_map::MapLensTypeToCApi;
-using ns::c_api_enum_map::MapVisibleFromCApi;
-using ns::c_api_enum_map::MapVisibleToCApi;
+// Map LUMICE_LENS_TYPE_* to its core enumerator. Explicit switch (not a numeric cast) so a future
+// reorder of either enumeration surfaces as a compile/throw rather than a silently aliased
+// projection. Throws std::invalid_argument on an unknown value.
+static ns::LensParam::LensType MapLensTypeFromCApi(int lens_type) {
+  switch (lens_type) {
+    case LUMICE_LENS_TYPE_LINEAR:
+      return ns::LensParam::kLinear;
+    case LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA:
+      return ns::LensParam::kFisheyeEqualArea;
+    case LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT:
+      return ns::LensParam::kFisheyeEquidistant;
+    case LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC:
+      return ns::LensParam::kFisheyeStereographic;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA:
+      return ns::LensParam::kDualFisheyeEqualArea;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT:
+      return ns::LensParam::kDualFisheyeEquidistant;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC:
+      return ns::LensParam::kDualFisheyeStereographic;
+    case LUMICE_LENS_TYPE_RECTANGULAR:
+      return ns::LensParam::kRectangular;
+    case LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC:
+      return ns::LensParam::kFisheyeOrthographic;
+    case LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC:
+      return ns::LensParam::kDualFisheyeOrthographic;
+    case LUMICE_LENS_TYPE_GLOBE:
+      return ns::LensParam::kGlobe;
+    default:
+      throw std::invalid_argument("LUMICE_RenderParam.lens_type is invalid: " + std::to_string(lens_type));
+  }
+}
+
+// Inverse of MapLensTypeFromCApi. Total over the core enumeration (no default arm) so adding a
+// projection to core breaks the build here instead of decoding to a wrong C API constant.
+static int MapLensTypeToCApi(ns::LensParam::LensType type) {
+  switch (type) {
+    case ns::LensParam::kLinear:
+      return LUMICE_LENS_TYPE_LINEAR;
+    case ns::LensParam::kFisheyeEqualArea:
+      return LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+    case ns::LensParam::kFisheyeEquidistant:
+      return LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT;
+    case ns::LensParam::kFisheyeStereographic:
+      return LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC;
+    case ns::LensParam::kDualFisheyeEqualArea:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+    case ns::LensParam::kDualFisheyeEquidistant:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT;
+    case ns::LensParam::kDualFisheyeStereographic:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC;
+    case ns::LensParam::kRectangular:
+      return LUMICE_LENS_TYPE_RECTANGULAR;
+    case ns::LensParam::kFisheyeOrthographic:
+      return LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC;
+    case ns::LensParam::kDualFisheyeOrthographic:
+      return LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC;
+    case ns::LensParam::kGlobe:
+      return LUMICE_LENS_TYPE_GLOBE;
+  }
+  throw std::invalid_argument("unmapped core LensType: " + std::to_string(static_cast<int>(type)));
+}
+
+// Map LUMICE_VISIBLE_* to its core enumerator. Throws std::invalid_argument on an unknown value.
+static ns::RenderConfig::VisibleRange MapVisibleFromCApi(int visible) {
+  switch (visible) {
+    case LUMICE_VISIBLE_UPPER:
+      return ns::RenderConfig::kUpper;
+    case LUMICE_VISIBLE_LOWER:
+      return ns::RenderConfig::kLower;
+    case LUMICE_VISIBLE_FULL:
+      return ns::RenderConfig::kFull;
+    default:
+      throw std::invalid_argument("LUMICE_RenderParam.visible is invalid: " + std::to_string(visible));
+  }
+}
 
 static ns::RenderConfig::EvMode MapEvModeFromCApi(int ev_mode) {
   switch (ev_mode) {
@@ -1038,6 +1106,33 @@ LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_Rende
   arr.push_back(std::move(jr));
   *out_id = id;
   return LUMICE_OK;
+}
+
+
+// Defined with the config-scratch decoders further down; the getter below is its second caller.
+static LUMICE_ErrorCode JsonToRenderer(const nlohmann::json& rj, LUMICE_RenderParam* out);
+
+LUMICE_ErrorCode LUMICE_SceneGetRenderer(const LUMICE_Scene* scene, int index, LUMICE_RenderParam* out) {
+  if (!scene || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  // Both construction paths leave root["render"][i] in the one shape RendererToJson writes —
+  // SceneAddRenderer writes it directly, SceneFromJson/File re-encodes the parsed config through
+  // ConfigToJson — so one decoder (JsonToRenderer, the body of the FromJson path's own loop) reads
+  // either back with core's defaults already applied. The skeleton always seeds the "render" key;
+  // the .at() sits inside the try all the same, so a handle that somehow lost it reports an error
+  // code instead of throwing across the C boundary.
+  try {
+    const auto& arr = scene->root.at("render");
+    if (index < 0 || static_cast<size_t>(index) >= arr.size()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    *out = LUMICE_RenderParam{};
+    return JsonToRenderer(arr[index], out);
+  } catch (const std::exception& e) {
+    LOG_ERROR("LUMICE_SceneGetRenderer: could not decode renderer[{}]: {}", index, e.what());
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
 }
 
 
@@ -2272,6 +2367,21 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScr
   return LUMICE_OK;
 }
 
+// Inverse of MapVisibleFromCApi. Total over the core enumeration (no default arm) so adding a
+// visibility range to core breaks the build here instead of decoding to a wrong C API constant —
+// same fail-loud contract as MapLensTypeToCApi.
+static int MapVisibleToCApi(ns::RenderConfig::VisibleRange visible) {
+  switch (visible) {
+    case ns::RenderConfig::kUpper:
+      return LUMICE_VISIBLE_UPPER;
+    case ns::RenderConfig::kLower:
+      return LUMICE_VISIBLE_LOWER;
+    case ns::RenderConfig::kFull:
+      return LUMICE_VISIBLE_FULL;
+  }
+  throw std::invalid_argument("unmapped core VisibleRange: " + std::to_string(static_cast<int>(visible)));
+}
+
 // Inverse of MapEvModeFromCApi. Total over the core enumeration (no default arm), same fail-loud
 // contract as MapLensTypeToCApi / MapVisibleToCApi.
 static int MapEvModeToCApi(ns::RenderConfig::EvMode ev_mode) {
@@ -2413,6 +2523,354 @@ static LUMICE_ErrorCode JsonToMarkerStyles(const nlohmann::json& arr_j, LUMICE_M
   return LUMICE_OK;
 }
 
+// Decode ONE renderer object — the shape RendererToJson writes — into a LUMICE_RenderParam.
+// This is the loop body of JsonToRenderers, lifted out so LUMICE_SceneGetRenderer can read a
+// single scene entry back through the same decoder LUMICE_SceneFromJson/File runs over the whole
+// array: one JSON -> C struct routine, so a field gained on one path cannot be missed on the
+// other. `out` is written in place from whatever it holds (JsonToRenderers hands it a zeroed
+// ConfigScratch slot; the getter zeroes it first).
+static LUMICE_ErrorCode JsonToRenderer(const nlohmann::json& rj, LUMICE_RenderParam* out) {
+  auto& r = *out;
+  // id and resolution are both required (core ParseRenderConfig: j.at("id") / j.at("resolution")).
+  if (!rj.contains("id") || !rj.contains("resolution")) {
+    return LUMICE_ERR_MISSING_FIELD;
+  }
+  r.id = rj.at("id").get<int>();
+  if (!rj.at("resolution").is_array() || rj.at("resolution").size() != 2) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  r.resolution_w = rj.at("resolution")[0].get<int>();
+  r.resolution_h = rj.at("resolution")[1].get<int>();
+  // intensity_factor defaults to 1.0 in core RenderConfig; the zeroed struct would mean a
+  // zero-brightness renderer.
+  r.intensity_factor = 1.0f;
+  if (rj.contains("intensity_factor")) {
+    r.intensity_factor = rj.at("intensity_factor").get<float>();
+  }
+  if (rj.contains("overlap")) {
+    r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
+  }
+  // Mirrors core RenderConfig::ev_mode_'s member initializer (kRelative); the zeroed struct
+  // already holds it, but stating it keeps this decoder's defaults readable in one place.
+  r.ev_mode = LUMICE_EV_MODE_RELATIVE;
+  if (rj.contains("ev_mode")) {
+    if (!rj.at("ev_mode").is_string() || !IsKnownEvModeString(rj.at("ev_mode").get<std::string>())) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    auto ev_mode = ns::RenderConfig::kRelative;
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("ev_mode"), ev_mode);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    r.ev_mode = MapEvModeToCApi(ev_mode);
+  }
+  // Mirrors core RenderConfig::tone_'s member initializer (kScreen); like ev_mode above the
+  // zeroed struct already holds it, and stating it keeps this decoder's defaults readable in one
+  // place.
+  r.tone = LUMICE_TONE_SCREEN;
+  if (rj.contains("tone")) {
+    if (!rj.at("tone").is_string() || !IsKnownToneString(rj.at("tone").get<std::string>())) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    auto tone = ns::RenderConfig::kScreen;
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("tone"), tone);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    r.tone = MapToneToCApi(tone);
+  }
+
+  // ---- Fields the struct gained in v4.11 (previously parsed and thrown away) ----
+  // Every default below mirrors the corresponding core RenderConfig member initializer
+  // (config/render_config.hpp), and every present-key decode runs through core's own from_json.
+  ns::LensParam lens{ ns::LensParam::kLinear, 90.0f };
+  if (rj.contains("lens")) {
+    const auto& lens_j = rj.at("lens");
+    if (!lens_j.is_object()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    // Core's LensParam::from_json does j.at("type") — the key is required, not optional.
+    if (!lens_j.contains("type")) {
+      return LUMICE_ERR_MISSING_FIELD;
+    }
+    if (!lens_j.at("type").is_string() || !IsKnownLensTypeString(lens_j.at("type").get<std::string>())) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    const LUMICE_ErrorCode err = DecodeCoreField(lens_j, lens);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+  r.lens_type = MapLensTypeToCApi(lens.type_);
+  r.lens_fov = lens.fov_;
+
+  r.lens_shift[0] = 0;
+  r.lens_shift[1] = 0;
+  if (rj.contains("lens_shift")) {
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("lens_shift"), r.lens_shift);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+
+  ns::ViewParam view{};
+  if (rj.contains("view")) {
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("view"), view);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+  r.view_azimuth = view.az_;
+  r.view_elevation = view.el_;
+  r.view_roll = view.ro_;
+
+  r.visible = LUMICE_VISIBLE_UPPER;
+  if (rj.contains("visible")) {
+    if (!rj.at("visible").is_string() || !IsKnownVisibleString(rj.at("visible").get<std::string>())) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    auto visible = ns::RenderConfig::kUpper;
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("visible"), visible);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    r.visible = MapVisibleToCApi(visible);
+  }
+
+  // Absent key = no clip, which is what a config predating the field means. Twin of core's
+  // ParseRenderConfig.
+  r.front = 0;
+  if (rj.contains("front")) {
+    bool front = false;
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("front"), front);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    r.front = front ? 1 : 0;
+  }
+
+  // Twin of core's warning in config_manager.cpp::ParseRenderConfig; see the rationale there.
+  if (rj.contains("background_color")) {
+    ILOG_WARN(ns::GetGlobalLogger(),
+              "render[id={}]: unknown key \"background_color\" is ignored; the background color key is "
+              "\"background\" (sRGB triple)",
+              r.id);
+  }
+  // The JSON key is sRGB (what a color picker shows); LUMICE_RenderParam::background is linear
+  // (what PostSnapshot's additive blend needs) — see the field's comment in lumice.h. The default
+  // needs no conversion: 0 is a fixed point of both directions. Twin of the encode side in
+  // RendererToJson, and of core's own conversion in config_manager.cpp::ParseRenderConfig.
+  r.background[0] = r.background[1] = r.background[2] = 0.0f;
+  if (rj.contains("background")) {
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("background"), r.background);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    for (float& c : r.background) {
+      c = ns::SrgbToLinear(c);
+    }
+  }
+
+  // WHITE, not zero, and the only default in this block that the zeroed struct does not already
+  // hold: core's RenderConfig::paper_ initializes to {1,1,1}. Zeroing it here would make this
+  // decoder hand back black paper for every document that omits the key — a divergence from
+  // ParseRenderConfig, which the parity gate compares whole RenderConfigs to catch, and under the
+  // subtractive operator an all-black page. Same linear-struct / sRGB-key split as `background`.
+  r.paper[0] = r.paper[1] = r.paper[2] = 1.0f;
+  if (rj.contains("paper")) {
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("paper"), r.paper);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    for (float& c : r.paper) {
+      c = ns::SrgbToLinear(c);
+    }
+  }
+
+  // Core's default is the {-1,-1,-1} "use the natural spectral color" sentinel, NOT black.
+  r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+  if (rj.contains("ray_color")) {
+    const LUMICE_ErrorCode err = DecodeCoreField(rj.at("ray_color"), r.ray_color);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+  }
+
+  r.angular_dist_count = 0;
+  r.view_dist_count = 0;
+  r.elevation_grid_count = 0;
+  r.longitude_grid_count = 0;
+  r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
+  // 1, NOT 0, and the only default in this block that is not zero-shaped: core's three
+  // *_grid_line_ members default to TRUE, because a document written before those keys existed
+  // already drew the lines its angle lists name. Zeroing them here instead would make the C API
+  // decoder render every legacy config without its grid — a divergence from ParseRenderConfig,
+  // which the parity gate compares whole RenderConfigs to catch.
+  r.elevation_line = 1;
+  r.longitude_line = 1;
+  r.angular_dist_line = 1;
+  r.view_dist_line = 1;
+  // Same default and same reason as `horizon` above: core's *_label_ fields are opt-in.
+  r.horizon_label = 0;
+  r.grid_label = 0;
+  r.angular_dist_label = 0;
+  r.view_dist_label = 0;
+  // The marker block's defaults come from core's struct rather than being spelled again here,
+  // and they are written BEFORE the "grid" branch so a document with no key at all lands on the
+  // same four values ParseRenderConfig leaves. Zeroing them instead would be a real divergence
+  // between the two decoders, not a harmless one: three of the four defaults are non-zero, and
+  // the parity gate compares whole RenderConfigs.
+  {
+    const ns::ZenithNadirParam kZenithNadirDefaults;
+    r.zenith_nadir = kZenithNadirDefaults.enabled_ ? 1 : 0;
+    r.zenith_nadir_radius_px = kZenithNadirDefaults.radius_px_;
+    r.zenith_nadir_opacity = kZenithNadirDefaults.opacity_;
+    std::copy(std::begin(kZenithNadirDefaults.color_), std::end(kZenithNadirDefaults.color_),
+              std::begin(r.zenith_nadir_color));
+  }
+  // The marker family's defaults, same rule and same reason as the block above: taken from core's
+  // struct rather than spelled again here, and written BEFORE the "grid" branch so a document
+  // with no key at all lands where ParseRenderConfig leaves it. Two of the three are non-zero, so
+  // zeroing them instead would be a real divergence between the two decoders.
+  {
+    const ns::RenderConfig kRenderDefaults;
+    r.markers_count = 0;
+    r.markers_opacity = kRenderDefaults.markers_opacity_;
+    r.markers_radius_px = kRenderDefaults.markers_radius_px_;
+  }
+  if (rj.contains("grid")) {
+    const auto& gj = rj.at("grid");
+    if (!gj.is_object()) {
+      return LUMICE_ERR_INVALID_VALUE;
+    }
+    // "central" is the pre-rename spelling of "angular_dist"; read it as an alias with the new
+    // key winning, exactly as ParseRenderConfig does. The two decoders have to agree — that is
+    // what test_json_parser_parity.cpp checks — so this branch and that one stay identical in
+    // shape. Only the new key is ever written (RendererToJson above).
+    if (gj.contains("angular_dist")) {
+      const LUMICE_ErrorCode err = JsonToGridLines(gj.at("angular_dist"), r.angular_dist, &r.angular_dist_count);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    } else if (gj.contains("central")) {
+      const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.angular_dist, &r.angular_dist_count);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    // The axis-referenced twin. No legacy spelling: the key was born with this name.
+    if (gj.contains("view_dist")) {
+      const LUMICE_ErrorCode err = JsonToGridLines(gj.at("view_dist"), r.view_dist, &r.view_dist_count);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    if (gj.contains("elevation")) {
+      const LUMICE_ErrorCode err = JsonToGridLines(gj.at("elevation"), r.elevation_grid, &r.elevation_grid_count);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    if (gj.contains("longitude")) {
+      const LUMICE_ErrorCode err = JsonToGridLines(gj.at("longitude"), r.longitude_grid, &r.longitude_grid_count);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    if (gj.contains("horizon")) {
+      bool outline = true;
+      const LUMICE_ErrorCode err = DecodeCoreField(gj.at("horizon"), outline);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.horizon = outline ? 1 : 0;
+    }
+    // The other three families' line switches, read the same way the label block below is and
+    // kept a SEPARATE array from it: the loop bodies are identical, but a line switch and a label
+    // switch are two different questions about a family, and one table holding both would have to
+    // be split again the first time either group grows or loses a member.
+    {
+      const std::pair<const char*, int*> kLineKeys[] = {
+        { "elevation_line", &r.elevation_line },
+        { "longitude_line", &r.longitude_line },
+        { "angular_dist_line", &r.angular_dist_line },
+        { "view_dist_line", &r.view_dist_line },
+      };
+      for (const auto& [key, field] : kLineKeys) {
+        if (!gj.contains(key)) {
+          continue;
+        }
+        bool on = false;
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+        *field = on ? 1 : 0;
+      }
+    }
+    // The three text-label switches. One loop over (key, field) rather than three copies of the
+    // same six lines: they differ only in which key names which int, and a fourth family would
+    // otherwise be a fourth chance to paste the wrong field name in.
+    {
+      const std::pair<const char*, int*> kLabelKeys[] = {
+        { "horizon_label", &r.horizon_label },
+        { "label", &r.grid_label },
+        { "angular_dist_label", &r.angular_dist_label },
+        { "view_dist_label", &r.view_dist_label },
+      };
+      for (const auto& [key, field] : kLabelKeys) {
+        if (!gj.contains(key)) {
+          continue;
+        }
+        bool on = false;
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+        *field = on ? 1 : 0;
+      }
+    }
+    if (gj.contains("zenith_nadir")) {
+      // Seeded with the defaults above so a PARTIAL object keeps them for the keys it omits,
+      // which is what core's from_json does with the same input.
+      ns::ZenithNadirParam zn;
+      zn.enabled_ = r.zenith_nadir != 0;
+      zn.radius_px_ = r.zenith_nadir_radius_px;
+      zn.opacity_ = r.zenith_nadir_opacity;
+      std::copy(std::begin(r.zenith_nadir_color), std::end(r.zenith_nadir_color), std::begin(zn.color_));
+      const LUMICE_ErrorCode err = DecodeCoreField(gj.at("zenith_nadir"), zn);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.zenith_nadir = zn.enabled_ ? 1 : 0;
+      r.zenith_nadir_radius_px = zn.radius_px_;
+      r.zenith_nadir_opacity = zn.opacity_;
+      std::copy(std::begin(zn.color_), std::end(zn.color_), std::begin(r.zenith_nadir_color));
+    }
+    if (gj.contains("markers")) {
+      const LUMICE_ErrorCode err = JsonToMarkerStyles(gj.at("markers"), r.markers, &r.markers_count);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    // The two family-wide appearance keys, siblings of the array rather than members of it —
+    // the shape core's to_json writes, which is what test_json_parser_parity.cpp compares.
+    if (gj.contains("markers_opacity")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(gj.at("markers_opacity"), r.markers_opacity);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+    if (gj.contains("markers_radius_px")) {
+      const LUMICE_ErrorCode err = DecodeCoreField(gj.at("markers_radius_px"), r.markers_radius_px);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+    }
+  }
+  return LUMICE_OK;
+}
+
 static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, ConfigScratch* out) {
   const int render_count = static_cast<int>(render_arr.size());
   if (render_count > LUMICE_MAX_CONFIG_RENDERERS) {
@@ -2422,344 +2880,8 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
   }
   out->renderer_count = render_count;
   for (int i = 0; i < out->renderer_count; i++) {
-    const auto& rj = render_arr[i];
-    auto& r = out->renderers[i];
-    // id and resolution are both required (core ParseRenderConfig: j.at("id") / j.at("resolution")).
-    if (!rj.contains("id") || !rj.contains("resolution")) {
-      return LUMICE_ERR_MISSING_FIELD;
-    }
-    r.id = rj.at("id").get<int>();
-    if (!rj.at("resolution").is_array() || rj.at("resolution").size() != 2) {
-      return LUMICE_ERR_INVALID_VALUE;
-    }
-    r.resolution_w = rj.at("resolution")[0].get<int>();
-    r.resolution_h = rj.at("resolution")[1].get<int>();
-    // intensity_factor defaults to 1.0 in core RenderConfig; the zeroed struct would mean a
-    // zero-brightness renderer.
-    r.intensity_factor = 1.0f;
-    if (rj.contains("intensity_factor")) {
-      r.intensity_factor = rj.at("intensity_factor").get<float>();
-    }
-    if (rj.contains("overlap")) {
-      r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
-    }
-    // Mirrors core RenderConfig::ev_mode_'s member initializer (kRelative); the zeroed struct
-    // already holds it, but stating it keeps this decoder's defaults readable in one place.
-    r.ev_mode = LUMICE_EV_MODE_RELATIVE;
-    if (rj.contains("ev_mode")) {
-      if (!rj.at("ev_mode").is_string() || !IsKnownEvModeString(rj.at("ev_mode").get<std::string>())) {
-        return LUMICE_ERR_INVALID_VALUE;
-      }
-      auto ev_mode = ns::RenderConfig::kRelative;
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("ev_mode"), ev_mode);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-      r.ev_mode = MapEvModeToCApi(ev_mode);
-    }
-    // Mirrors core RenderConfig::tone_'s member initializer (kScreen); like ev_mode above the
-    // zeroed struct already holds it, and stating it keeps this decoder's defaults readable in one
-    // place.
-    r.tone = LUMICE_TONE_SCREEN;
-    if (rj.contains("tone")) {
-      if (!rj.at("tone").is_string() || !IsKnownToneString(rj.at("tone").get<std::string>())) {
-        return LUMICE_ERR_INVALID_VALUE;
-      }
-      auto tone = ns::RenderConfig::kScreen;
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("tone"), tone);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-      r.tone = MapToneToCApi(tone);
-    }
-
-    // ---- Fields the struct gained in v4.11 (previously parsed and thrown away) ----
-    // Every default below mirrors the corresponding core RenderConfig member initializer
-    // (config/render_config.hpp), and every present-key decode runs through core's own from_json.
-    ns::LensParam lens{ ns::LensParam::kLinear, 90.0f };
-    if (rj.contains("lens")) {
-      const auto& lens_j = rj.at("lens");
-      if (!lens_j.is_object()) {
-        return LUMICE_ERR_INVALID_VALUE;
-      }
-      // Core's LensParam::from_json does j.at("type") — the key is required, not optional.
-      if (!lens_j.contains("type")) {
-        return LUMICE_ERR_MISSING_FIELD;
-      }
-      if (!lens_j.at("type").is_string() || !IsKnownLensTypeString(lens_j.at("type").get<std::string>())) {
-        return LUMICE_ERR_INVALID_VALUE;
-      }
-      const LUMICE_ErrorCode err = DecodeCoreField(lens_j, lens);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-    }
-    r.lens_type = MapLensTypeToCApi(lens.type_);
-    r.lens_fov = lens.fov_;
-
-    r.lens_shift[0] = 0;
-    r.lens_shift[1] = 0;
-    if (rj.contains("lens_shift")) {
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("lens_shift"), r.lens_shift);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-    }
-
-    ns::ViewParam view{};
-    if (rj.contains("view")) {
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("view"), view);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-    }
-    r.view_azimuth = view.az_;
-    r.view_elevation = view.el_;
-    r.view_roll = view.ro_;
-
-    r.visible = LUMICE_VISIBLE_UPPER;
-    if (rj.contains("visible")) {
-      if (!rj.at("visible").is_string() || !IsKnownVisibleString(rj.at("visible").get<std::string>())) {
-        return LUMICE_ERR_INVALID_VALUE;
-      }
-      auto visible = ns::RenderConfig::kUpper;
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("visible"), visible);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-      r.visible = MapVisibleToCApi(visible);
-    }
-
-    // Absent key = no clip, which is what a config predating the field means. Twin of core's
-    // ParseRenderConfig.
-    r.front = 0;
-    if (rj.contains("front")) {
-      bool front = false;
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("front"), front);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-      r.front = front ? 1 : 0;
-    }
-
-    // Twin of core's warning in config_manager.cpp::ParseRenderConfig; see the rationale there.
-    if (rj.contains("background_color")) {
-      ILOG_WARN(ns::GetGlobalLogger(),
-                "render[id={}]: unknown key \"background_color\" is ignored; the background color key is "
-                "\"background\" (sRGB triple)",
-                r.id);
-    }
-    // The JSON key is sRGB (what a color picker shows); LUMICE_RenderParam::background is linear
-    // (what PostSnapshot's additive blend needs) — see the field's comment in lumice.h. The default
-    // needs no conversion: 0 is a fixed point of both directions. Twin of the encode side in
-    // RendererToJson, and of core's own conversion in config_manager.cpp::ParseRenderConfig.
-    r.background[0] = r.background[1] = r.background[2] = 0.0f;
-    if (rj.contains("background")) {
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("background"), r.background);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-      for (float& c : r.background) {
-        c = ns::SrgbToLinear(c);
-      }
-    }
-
-    // WHITE, not zero, and the only default in this block that the zeroed struct does not already
-    // hold: core's RenderConfig::paper_ initializes to {1,1,1}. Zeroing it here would make this
-    // decoder hand back black paper for every document that omits the key — a divergence from
-    // ParseRenderConfig, which the parity gate compares whole RenderConfigs to catch, and under the
-    // subtractive operator an all-black page. Same linear-struct / sRGB-key split as `background`.
-    r.paper[0] = r.paper[1] = r.paper[2] = 1.0f;
-    if (rj.contains("paper")) {
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("paper"), r.paper);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-      for (float& c : r.paper) {
-        c = ns::SrgbToLinear(c);
-      }
-    }
-
-    // Core's default is the {-1,-1,-1} "use the natural spectral color" sentinel, NOT black.
-    r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
-    if (rj.contains("ray_color")) {
-      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("ray_color"), r.ray_color);
-      if (err != LUMICE_OK) {
-        return err;
-      }
-    }
-
-    r.angular_dist_count = 0;
-    r.view_dist_count = 0;
-    r.elevation_grid_count = 0;
-    r.longitude_grid_count = 0;
-    r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
-    // 1, NOT 0, and the only default in this block that is not zero-shaped: core's three
-    // *_grid_line_ members default to TRUE, because a document written before those keys existed
-    // already drew the lines its angle lists name. Zeroing them here instead would make the C API
-    // decoder render every legacy config without its grid — a divergence from ParseRenderConfig,
-    // which the parity gate compares whole RenderConfigs to catch.
-    r.elevation_line = 1;
-    r.longitude_line = 1;
-    r.angular_dist_line = 1;
-    r.view_dist_line = 1;
-    // Same default and same reason as `horizon` above: core's *_label_ fields are opt-in.
-    r.horizon_label = 0;
-    r.grid_label = 0;
-    r.angular_dist_label = 0;
-    r.view_dist_label = 0;
-    // The marker block's defaults come from core's struct rather than being spelled again here,
-    // and they are written BEFORE the "grid" branch so a document with no key at all lands on the
-    // same four values ParseRenderConfig leaves. Zeroing them instead would be a real divergence
-    // between the two decoders, not a harmless one: three of the four defaults are non-zero, and
-    // the parity gate compares whole RenderConfigs.
-    {
-      const ns::ZenithNadirParam kZenithNadirDefaults;
-      r.zenith_nadir = kZenithNadirDefaults.enabled_ ? 1 : 0;
-      r.zenith_nadir_radius_px = kZenithNadirDefaults.radius_px_;
-      r.zenith_nadir_opacity = kZenithNadirDefaults.opacity_;
-      std::copy(std::begin(kZenithNadirDefaults.color_), std::end(kZenithNadirDefaults.color_),
-                std::begin(r.zenith_nadir_color));
-    }
-    // The marker family's defaults, same rule and same reason as the block above: taken from core's
-    // struct rather than spelled again here, and written BEFORE the "grid" branch so a document
-    // with no key at all lands where ParseRenderConfig leaves it. Two of the three are non-zero, so
-    // zeroing them instead would be a real divergence between the two decoders.
-    {
-      const ns::RenderConfig kRenderDefaults;
-      r.markers_count = 0;
-      r.markers_opacity = kRenderDefaults.markers_opacity_;
-      r.markers_radius_px = kRenderDefaults.markers_radius_px_;
-    }
-    if (rj.contains("grid")) {
-      const auto& gj = rj.at("grid");
-      if (!gj.is_object()) {
-        return LUMICE_ERR_INVALID_VALUE;
-      }
-      // "central" is the pre-rename spelling of "angular_dist"; read it as an alias with the new
-      // key winning, exactly as ParseRenderConfig does. The two decoders have to agree — that is
-      // what test_json_parser_parity.cpp checks — so this branch and that one stay identical in
-      // shape. Only the new key is ever written (RendererToJson above).
-      if (gj.contains("angular_dist")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("angular_dist"), r.angular_dist, &r.angular_dist_count);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      } else if (gj.contains("central")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.angular_dist, &r.angular_dist_count);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
-      // The axis-referenced twin. No legacy spelling: the key was born with this name.
-      if (gj.contains("view_dist")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("view_dist"), r.view_dist, &r.view_dist_count);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
-      if (gj.contains("elevation")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("elevation"), r.elevation_grid, &r.elevation_grid_count);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
-      if (gj.contains("longitude")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("longitude"), r.longitude_grid, &r.longitude_grid_count);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
-      if (gj.contains("horizon")) {
-        bool outline = true;
-        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("horizon"), outline);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-        r.horizon = outline ? 1 : 0;
-      }
-      // The other three families' line switches, read the same way the label block below is and
-      // kept a SEPARATE array from it: the loop bodies are identical, but a line switch and a label
-      // switch are two different questions about a family, and one table holding both would have to
-      // be split again the first time either group grows or loses a member.
-      {
-        const std::pair<const char*, int*> kLineKeys[] = {
-          { "elevation_line", &r.elevation_line },
-          { "longitude_line", &r.longitude_line },
-          { "angular_dist_line", &r.angular_dist_line },
-          { "view_dist_line", &r.view_dist_line },
-        };
-        for (const auto& [key, field] : kLineKeys) {
-          if (!gj.contains(key)) {
-            continue;
-          }
-          bool on = false;
-          const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
-          if (err != LUMICE_OK) {
-            return err;
-          }
-          *field = on ? 1 : 0;
-        }
-      }
-      // The three text-label switches. One loop over (key, field) rather than three copies of the
-      // same six lines: they differ only in which key names which int, and a fourth family would
-      // otherwise be a fourth chance to paste the wrong field name in.
-      {
-        const std::pair<const char*, int*> kLabelKeys[] = {
-          { "horizon_label", &r.horizon_label },
-          { "label", &r.grid_label },
-          { "angular_dist_label", &r.angular_dist_label },
-          { "view_dist_label", &r.view_dist_label },
-        };
-        for (const auto& [key, field] : kLabelKeys) {
-          if (!gj.contains(key)) {
-            continue;
-          }
-          bool on = false;
-          const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
-          if (err != LUMICE_OK) {
-            return err;
-          }
-          *field = on ? 1 : 0;
-        }
-      }
-      if (gj.contains("zenith_nadir")) {
-        // Seeded with the defaults above so a PARTIAL object keeps them for the keys it omits,
-        // which is what core's from_json does with the same input.
-        ns::ZenithNadirParam zn;
-        zn.enabled_ = r.zenith_nadir != 0;
-        zn.radius_px_ = r.zenith_nadir_radius_px;
-        zn.opacity_ = r.zenith_nadir_opacity;
-        std::copy(std::begin(r.zenith_nadir_color), std::end(r.zenith_nadir_color), std::begin(zn.color_));
-        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("zenith_nadir"), zn);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-        r.zenith_nadir = zn.enabled_ ? 1 : 0;
-        r.zenith_nadir_radius_px = zn.radius_px_;
-        r.zenith_nadir_opacity = zn.opacity_;
-        std::copy(std::begin(zn.color_), std::end(zn.color_), std::begin(r.zenith_nadir_color));
-      }
-      if (gj.contains("markers")) {
-        const LUMICE_ErrorCode err = JsonToMarkerStyles(gj.at("markers"), r.markers, &r.markers_count);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
-      // The two family-wide appearance keys, siblings of the array rather than members of it —
-      // the shape core's to_json writes, which is what test_json_parser_parity.cpp compares.
-      if (gj.contains("markers_opacity")) {
-        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("markers_opacity"), r.markers_opacity);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
-      if (gj.contains("markers_radius_px")) {
-        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("markers_radius_px"), r.markers_radius_px);
-        if (err != LUMICE_OK) {
-          return err;
-        }
-      }
+    if (const LUMICE_ErrorCode err = JsonToRenderer(render_arr[i], &out->renderers[i]); err != LUMICE_OK) {
+      return err;
     }
   }
   return LUMICE_OK;

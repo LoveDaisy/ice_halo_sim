@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 439        // ABI version, encoded major*100 + minor (v4.39)
+#define LUMICE_API_VERSION 440        // ABI version, encoded major*100 + minor (v4.40)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -38,7 +38,7 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 439, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 440, "Lumice header too old for this integration");
 ```
 
 It is bumped on every BREAKING change to the public symbol set or struct layout.
@@ -423,6 +423,35 @@ same kind, in insertion order — to `*out_id`.
 - `LUMICE_ERR_NULL_ARG`: `scene`, the input pointer, or `out_id` is `NULL`.
 - `LUMICE_ERR_INVALID_CONFIG`: invalid item — bad enum, out-of-range count, or the scene already
   holds the matching `LUMICE_MAX_CONFIG_*` capacity of that kind.
+
+#### Reading a renderer back: `LUMICE_SceneGetRenderer`
+
+```c
+LUMICE_ErrorCode LUMICE_SceneGetRenderer(const LUMICE_Scene*, int index, LUMICE_RenderParam* out);
+```
+
+The read-back inverse of `SceneAddRenderer` (v4.40). `*out` is the `LUMICE_RenderParam` the
+engine will actually use for that entry: core's defaults are applied for every key the source
+omitted, and the enum-valued fields come back as `LUMICE_LENS_TYPE_*` / `LUMICE_VISIBLE_*` /
+`LUMICE_EV_MODE_*` / `LUMICE_TONE_*` constants. It behaves the same on a handle built
+incrementally and on one loaded through `SceneFromJson` / `SceneFromJsonFile`.
+
+- **`index` is the entry's 0-based array position in insertion order — the value space of
+  `SceneAddRenderer`'s `*out_id` — not the entry's `.id` field.** The two coincide for a handle
+  built with `SceneAddRenderer` (it assigns ids sequentially) but need not for one loaded from
+  JSON, where `render[].id` keeps whatever the document declared: a document whose first entry
+  says `"id": 7` reads back at index 0 with `out->id == 7`. To find an entry by declared id,
+  enumerate from index 0 and compare `out->id`.
+- **There is no count getter.** Enumerate until the call fails — the same "read to the sentinel"
+  idiom `LUMICE_FrameGetRaypathAnalysis` uses.
+
+**Return value**:
+- `LUMICE_OK`: success, `*out` written.
+- `LUMICE_ERR_NULL_ARG`: `scene` or `out` is `NULL`.
+- `LUMICE_ERR_INVALID_VALUE`: `index` is negative or `>=` the number of renderers — the natural
+  loop terminator.
+- `LUMICE_ERR_INVALID_CONFIG`: the stored entry could not be decoded (not reachable through this
+  API's own writers).
 
 #### Scene settings: `LUMICE_SceneSet*`
 

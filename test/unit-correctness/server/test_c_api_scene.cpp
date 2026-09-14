@@ -1318,6 +1318,246 @@ TEST(SceneRenderTone, PaperSurvivesTheDecodeEncodeRoundTrip) {
 }
 
 
+// =============== LUMICE_SceneGetRenderer: the read-back inverse of SceneAddRenderer (v4.40) ===============
+//
+// Two propositions. (1) Add then Get is the identity on every field of LUMICE_RenderParam except
+// `id`, which the Scene assigns — the struct-level proof that RendererToJson and JsonToRenderer
+// are inverses, one pass over the whole struct rather than one test per family. (2) `index` is the
+// array position, not the declared `id`: the two only coincide on a handle built through Add*, and
+// a caller that assumed they always do would read the wrong entry from a document whose render[]
+// ids are not 0..N-1 in order.
+
+namespace {
+// A renderer with a NON-default value in every field, so a field the decoder misses cannot pass on
+// a coincidence with the zeroed struct or with core's default. `k` varies the scalars per entry so
+// two entries of one scene cannot be confused with each other either.
+LUMICE_RenderParam MakeDistinctRenderer(int k) {
+  LUMICE_RenderParam r{};
+  r.resolution_w = 320 + k;
+  r.resolution_h = 240 + k;
+  r.intensity_factor = 1.5f + k;
+  r.overlap = 0.1f * (k + 1);
+  r.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 150.0f + k;
+  r.lens_shift[0] = 12 + k;
+  r.lens_shift[1] = -6 - k;
+  r.view_azimuth = 30.0f + k;
+  r.view_elevation = -12.5f + k;
+  r.view_roll = 5.0f + k;
+  r.visible = LUMICE_VISIBLE_FULL;
+  r.background[0] = 0.1f;
+  r.background[1] = 0.2f;
+  r.background[2] = 0.3f;
+  r.ray_color[0] = 0.9f;
+  r.ray_color[1] = 0.8f;
+  r.ray_color[2] = 0.7f;
+  r.horizon = 0;
+  r.angular_dist_count = 2;
+  r.angular_dist[0] = LUMICE_GridLine{ 22.0f + k, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
+  r.angular_dist[1] = LUMICE_GridLine{ 46.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
+  r.elevation_grid_count = 1;
+  r.elevation_grid[0] = LUMICE_GridLine{ 45.0f, 1.0f, 1.0f, { 0.0f, 0.0f, 1.0f } };
+  r.longitude_grid_count = 2;
+  r.longitude_grid[0] = LUMICE_GridLine{ -90.0f, 1.0f, 0.6f, { 0.5f, 0.5f, 0.0f } };
+  r.longitude_grid[1] = LUMICE_GridLine{ 180.0f, 3.0f, 0.1f, { 0.0f, 0.5f, 0.5f } };
+  r.ev_mode = LUMICE_EV_MODE_ABSOLUTE;
+  r.zenith_nadir = 1;
+  r.zenith_nadir_radius_px = 14.0f + k;
+  r.zenith_nadir_opacity = 0.25f;
+  r.zenith_nadir_color[0] = 0.1f;
+  r.zenith_nadir_color[1] = 0.7f;
+  r.zenith_nadir_color[2] = 0.9f;
+  r.front = 1;
+  r.horizon_label = 1;
+  r.grid_label = 1;
+  r.angular_dist_label = 1;
+  r.markers_count = 2;
+  r.markers[0] = LUMICE_MarkerStyle{ LUMICE_ANNOTATION_MARKER_ANTHELION, 1, { 0.2f, 0.7f, 0.4f } };
+  r.markers[1] = LUMICE_MarkerStyle{ LUMICE_ANNOTATION_MARKER_NADIR, 0, { 0.6f, 0.1f, 0.8f } };
+  r.markers_opacity = 0.35f;
+  r.markers_radius_px = 9.0f + k;
+  r.elevation_line = 1;
+  r.longitude_line = 1;
+  r.angular_dist_line = 1;
+  r.tone = LUMICE_TONE_PRINT;
+  r.paper[0] = 0.9f;
+  r.paper[1] = 0.85f;
+  r.paper[2] = 0.8f;
+  r.view_dist_count = 1;
+  r.view_dist[0] = LUMICE_GridLine{ 10.0f + k, 1.2f, 0.7f, { 0.3f, 0.3f, 0.9f } };
+  r.view_dist_line = 1;
+  r.view_dist_label = 1;
+  return r;
+}
+
+void ExpectGridLineEq(const LUMICE_GridLine& a, const LUMICE_GridLine& b, const char* what) {
+  EXPECT_FLOAT_EQ(a.value, b.value) << what;
+  EXPECT_FLOAT_EQ(a.width, b.width) << what;
+  EXPECT_FLOAT_EQ(a.opacity, b.opacity) << what;
+  for (int c = 0; c < 3; c++) {
+    EXPECT_NEAR(a.color[c], b.color[c], 1e-5f) << what << " color[" << c << "]";
+  }
+}
+
+// Field-by-field rather than memcmp: the linear-struct / sRGB-key colours (background, ray_color,
+// paper) go through two float conversions and come back within rounding, not bit-identical, and
+// `id` is the Scene's to assign — the caller's value is documented as ignored.
+void ExpectRendererEq(const LUMICE_RenderParam& want, const LUMICE_RenderParam& got, int expect_id) {
+  EXPECT_EQ(got.id, expect_id);
+  EXPECT_EQ(got.resolution_w, want.resolution_w);
+  EXPECT_EQ(got.resolution_h, want.resolution_h);
+  EXPECT_FLOAT_EQ(got.intensity_factor, want.intensity_factor);
+  EXPECT_FLOAT_EQ(got.overlap, want.overlap);
+  EXPECT_EQ(got.lens_type, want.lens_type);
+  EXPECT_FLOAT_EQ(got.lens_fov, want.lens_fov);
+  EXPECT_EQ(got.lens_shift[0], want.lens_shift[0]);
+  EXPECT_EQ(got.lens_shift[1], want.lens_shift[1]);
+  EXPECT_FLOAT_EQ(got.view_azimuth, want.view_azimuth);
+  EXPECT_FLOAT_EQ(got.view_elevation, want.view_elevation);
+  EXPECT_FLOAT_EQ(got.view_roll, want.view_roll);
+  EXPECT_EQ(got.visible, want.visible);
+  for (int c = 0; c < 3; c++) {
+    EXPECT_NEAR(got.background[c], want.background[c], 1e-5f) << "background[" << c << "]";
+    EXPECT_NEAR(got.ray_color[c], want.ray_color[c], 1e-5f) << "ray_color[" << c << "]";
+    EXPECT_NEAR(got.zenith_nadir_color[c], want.zenith_nadir_color[c], 1e-5f) << "zenith_nadir_color[" << c << "]";
+    EXPECT_NEAR(got.paper[c], want.paper[c], 1e-5f) << "paper[" << c << "]";
+  }
+  EXPECT_EQ(got.horizon, want.horizon);
+  ASSERT_EQ(got.angular_dist_count, want.angular_dist_count);
+  for (int k = 0; k < want.angular_dist_count; k++) {
+    ExpectGridLineEq(want.angular_dist[k], got.angular_dist[k], "angular_dist");
+  }
+  ASSERT_EQ(got.elevation_grid_count, want.elevation_grid_count);
+  for (int k = 0; k < want.elevation_grid_count; k++) {
+    ExpectGridLineEq(want.elevation_grid[k], got.elevation_grid[k], "elevation_grid");
+  }
+  ASSERT_EQ(got.longitude_grid_count, want.longitude_grid_count);
+  for (int k = 0; k < want.longitude_grid_count; k++) {
+    ExpectGridLineEq(want.longitude_grid[k], got.longitude_grid[k], "longitude_grid");
+  }
+  ASSERT_EQ(got.view_dist_count, want.view_dist_count);
+  for (int k = 0; k < want.view_dist_count; k++) {
+    ExpectGridLineEq(want.view_dist[k], got.view_dist[k], "view_dist");
+  }
+  EXPECT_EQ(got.ev_mode, want.ev_mode);
+  EXPECT_EQ(got.zenith_nadir, want.zenith_nadir);
+  EXPECT_FLOAT_EQ(got.zenith_nadir_radius_px, want.zenith_nadir_radius_px);
+  EXPECT_FLOAT_EQ(got.zenith_nadir_opacity, want.zenith_nadir_opacity);
+  EXPECT_EQ(got.front, want.front);
+  EXPECT_EQ(got.horizon_label, want.horizon_label);
+  EXPECT_EQ(got.grid_label, want.grid_label);
+  EXPECT_EQ(got.angular_dist_label, want.angular_dist_label);
+  ASSERT_EQ(got.markers_count, want.markers_count);
+  for (int k = 0; k < want.markers_count; k++) {
+    EXPECT_EQ(got.markers[k].id, want.markers[k].id) << "markers[" << k << "]";
+    EXPECT_EQ(got.markers[k].enabled, want.markers[k].enabled) << "markers[" << k << "]";
+    for (int c = 0; c < 3; c++) {
+      EXPECT_NEAR(got.markers[k].color[c], want.markers[k].color[c], 1e-5f)
+          << "markers[" << k << "] color[" << c << "]";
+    }
+  }
+  EXPECT_FLOAT_EQ(got.markers_opacity, want.markers_opacity);
+  EXPECT_FLOAT_EQ(got.markers_radius_px, want.markers_radius_px);
+  EXPECT_EQ(got.elevation_line, want.elevation_line);
+  EXPECT_EQ(got.longitude_line, want.longitude_line);
+  EXPECT_EQ(got.angular_dist_line, want.angular_dist_line);
+  EXPECT_EQ(got.tone, want.tone);
+  EXPECT_EQ(got.view_dist_line, want.view_dist_line);
+  EXPECT_EQ(got.view_dist_label, want.view_dist_label);
+}
+}  // namespace
+
+TEST(SceneGetRenderer, ReadsBackEveryFieldOfEveryEntryAdded) {
+  SceneGuard g;
+  LUMICE_RenderParam want[LUMICE_MAX_CONFIG_RENDERERS];
+  for (int k = 0; k < LUMICE_MAX_CONFIG_RENDERERS; k++) {
+    want[k] = MakeDistinctRenderer(k);
+    want[k].id = 99;  // documented as ignored by Add: the read-back must say k, not 99
+    int id = -1;
+    // Non-fatal so every entry is still added and read below: a fatal assert here would report
+    // one entry and silently skip the rest.
+    if (LUMICE_SceneAddRenderer(g.get(), &want[k], &id) != LUMICE_OK || id != k) {
+      ADD_FAILURE() << "entry " << k << ": Add failed or assigned id " << id;
+      continue;
+    }
+  }
+  for (int k = 0; k < LUMICE_MAX_CONFIG_RENDERERS; k++) {
+    SCOPED_TRACE(std::string("index ") + std::to_string(k));
+    LUMICE_RenderParam got{};
+    got.resolution_w = -1;  // a stale value the getter must overwrite, not merge into
+    if (LUMICE_SceneGetRenderer(g.get(), k, &got) != LUMICE_OK) {
+      ADD_FAILURE() << "Get failed";
+      continue;
+    }
+    ExpectRendererEq(want[k], got, k);
+  }
+}
+
+TEST(SceneGetRenderer, NullArgsReturnNullArg) {
+  SceneGuard g;
+  LUMICE_RenderParam r{};
+  EXPECT_EQ(LUMICE_SceneGetRenderer(nullptr, 0, &r), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_SceneGetRenderer(g.get(), 0, nullptr), LUMICE_ERR_NULL_ARG);
+}
+
+// The out-of-range code is the loop terminator the header documents in place of a count getter,
+// so it has to hold on the empty scene (index 0 is already past the end), one past the last entry,
+// and a negative index — and must not touch *out on the way out.
+TEST(SceneGetRenderer, OutOfRangeIndexIsInvalidValueAndLeavesOutUntouched) {
+  SceneGuard g;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 4321;
+  EXPECT_EQ(LUMICE_SceneGetRenderer(g.get(), 0, &r), LUMICE_ERR_INVALID_VALUE) << "empty scene";
+  EXPECT_EQ(LUMICE_SceneGetRenderer(g.get(), -1, &r), LUMICE_ERR_INVALID_VALUE);
+
+  int id = -1;
+  const LUMICE_RenderParam one = MakeDistinctRenderer(0);
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &one, &id), LUMICE_OK);
+  EXPECT_EQ(LUMICE_SceneGetRenderer(g.get(), 1, &r), LUMICE_ERR_INVALID_VALUE) << "one past the end";
+  EXPECT_EQ(LUMICE_SceneGetRenderer(g.get(), -1, &r), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(r.resolution_w, 4321) << "a failed read must not write *out";
+}
+
+// On a handle loaded from JSON, render[].id is whatever the document declared — SceneFromJson does
+// not renumber — so index and id part ways. Pinning this with a document whose ids are neither
+// 0-based nor in order is what makes the header's "index is the array position" more than prose.
+TEST(SceneGetRenderer, IndexIsArrayPositionNotDeclaredIdOnALoadedDocument) {
+  // Two renderers, declared ids 7 and 2, in that order; the second one omits the keys core
+  // defaults, so the read-back also shows the defaults applied rather than the zeroed struct.
+  nlohmann::json doc = nlohmann::json::parse(SceneJsonWithRendererEdit([](nlohmann::json& jr) { jr["id"] = 7; }));
+  nlohmann::json second = doc.at("render").at(0);
+  second["id"] = 2;
+  second["resolution"] = nlohmann::json::array({ 96, 48 });
+  second.erase("intensity_factor");
+  second.erase("paper");
+  doc["render"].push_back(second);
+  const std::string text = doc.dump();
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(text.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  LUMICE_RenderParam r{};
+  ASSERT_EQ(LUMICE_SceneGetRenderer(scene, 0, &r), LUMICE_OK);
+  EXPECT_EQ(r.id, 7);
+  EXPECT_EQ(r.resolution_w, 64);
+  EXPECT_EQ(r.lens_type, LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA);
+  EXPECT_FLOAT_EQ(r.lens_fov, 180.0f);
+
+  ASSERT_EQ(LUMICE_SceneGetRenderer(scene, 1, &r), LUMICE_OK);
+  EXPECT_EQ(r.id, 2);
+  EXPECT_EQ(r.resolution_w, 96);
+  EXPECT_EQ(r.resolution_h, 48);
+  EXPECT_FLOAT_EQ(r.intensity_factor, 1.0f) << "core's default, not the zeroed struct";
+  for (int c = 0; c < 3; c++) {
+    EXPECT_NEAR(r.paper[c], 1.0f, 1e-5f) << "paper[" << c << "] defaults to white";
+  }
+
+  EXPECT_EQ(LUMICE_SceneGetRenderer(scene, 2, &r), LUMICE_ERR_INVALID_VALUE) << "two entries, so index 2 terminates";
+  EXPECT_EQ(LUMICE_SceneGetRenderer(scene, 7, &r), LUMICE_ERR_INVALID_VALUE) << "a declared id is not an index";
+  LUMICE_SceneDestroy(scene);
+}
+
 TEST(SceneSerializeNegative, ToJsonNullScene) {
   size_t len = 12345;
   EXPECT_EQ(LUMICE_SceneToJson(nullptr, nullptr, 0, &len), LUMICE_ERR_NULL_ARG);
