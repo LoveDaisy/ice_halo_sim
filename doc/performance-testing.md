@@ -975,7 +975,7 @@ Two scenarios:
 # Build (needs -gt for GUI test target)
 ./scripts/build.sh -gtj release
 
-# Run perf tests only (PERF output on stderr, server logs on stdout)
+# Run perf tests only (PERF output and server logs both on stderr)
 ./build/Release/static/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
@@ -983,10 +983,12 @@ grep "\[PERF\]" /tmp/perf_stderr.txt
 # With debug level (adds ConsumeData per-batch + Consume profile)
 ./build/Release/static/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
-grep "Consume profile" /tmp/perf_stdout_debug.txt
+grep "Consume profile" /tmp/perf_stderr_debug.txt
 ```
 
-**Note**: PERF results are on **stderr**, server logs on **stdout** — redirect separately.
+**Note**: PERF results and the engine's server logs are both on **stderr** (the engine's console
+sink writes there; stdout carries only the test harness's own summary), so one `2>` capture holds
+both and the `[PERF]` / `Consume profile` greps read the same file.
 
 ### Windows
 

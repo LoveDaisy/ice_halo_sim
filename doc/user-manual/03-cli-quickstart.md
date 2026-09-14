@@ -40,6 +40,8 @@ After the run, the output directory contains one image per render entry in your 
 
 The console also prints a `Stats:` block summarising the simulation (ray counts, elapsed time, per-wavelength accumulation). Capture this if you want a reproducibility receipt.
 
+Two streams, on purpose: the product lines — `Saved:` / `Stats:` here, the `[BENCHMARK]` JSON of `benchmark`, the CSV of `analyze` — go to **stdout**, and every diagnostic log line (`-v` and the engine's own messages alike) goes to **stderr**. So `Lumice -f config.json -o out 2>/dev/null` prints exactly the product lines, and `> run.log 2>&1` keeps both together when you want the receipt and the log in one file. This split is a promise about the `Lumice` command line: the GUI app's own log lines (`GUI_LOG_*`) still print to stdout, only the engine's go to stderr, so do not read it as a rule about the GUI's terminal output.
+
 ## 3. Verbose and debug modes
 
 ```bash
@@ -51,13 +53,14 @@ The console also prints a `Stats:` block summarising the simulation (ray counts,
 
 ## 4. All flags at a glance
 
-The CLI has two subcommands, `render` and `benchmark`. `render` is the default: `Lumice -f config.json` and `Lumice render -f config.json` are the same command, so every example above is a render. Each subcommand accepts only its own options; `Lumice <subcommand> -h` prints that subcommand's page.
+The CLI has three subcommands, `render`, `benchmark` and `analyze`. `render` is the default: `Lumice -f config.json` and `Lumice render -f config.json` are the same command, so every example above is a render. Each subcommand accepts only its own options; `Lumice <subcommand> -h` prints that subcommand's page.
 
 The complete set as printed by `Lumice -h` (anchor source: `./build/cmake_install/static/Lumice -h`):
 
 ```text
 Usage: ./build/cmake_install/static/Lumice [render] -f <config_file> [options]
        ./build/cmake_install/static/Lumice benchmark -f <config_file> [options]
+       ./build/cmake_install/static/Lumice analyze -f <config_file> [options]
        ./build/cmake_install/static/Lumice <subcommand> -h
 
 Lumice — simulate ice halos by tracing rays through ice crystals.
@@ -67,19 +70,18 @@ Subcommands:
                      no subcommand is given: `./build/cmake_install/static/Lumice -f ...` is a render.
   benchmark          Run a throughput benchmark and print [BENCHMARK] JSON
                      (`./build/cmake_install/static/Lumice benchmark -h` for its options)
+  analyze            List the raypath chains that light a region of the sky, as CSV
+                     (`./build/cmake_install/static/Lumice analyze -h` for its options)
 
 Options for render (the default subcommand):
   -f <file>          Specify the configuration file (required)
+  -o <dir>           Output directory for rendered images (default: current directory)
+  --format <fmt>     Output image format: jpg or png (default: jpg)
+  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
   --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
                      'auto' and 'cpu' both select the CPU route today; 'metal'
                      falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
                      env var, if set, still overrides this (debug/CI only).
-  -v                 Verbose output (trace level logging)
-  -d                 Debug output (debug level logging)
-  -h, --help         Show this help message and exit
-  -o <dir>           Output directory for rendered images (default: current directory)
-  --format <fmt>     Output image format: jpg or png (default: jpg)
-  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
   --workers <N>      Number of CPU simulation worker threads (default: automatic —
                      one per physical core, capped at a ceiling above which no
                      machine measured ran faster; an explicit N is never capped).
@@ -87,6 +89,9 @@ Options for render (the default subcommand):
                      a config-file field: a config travels between machines and a
                      worker count should not travel with it. Ignored on a GPU route
                      (single engine).
+  -v                 Verbose output (trace level logging)
+  -d                 Debug output (debug level logging)
+  -h, --help         Show this help message and exit
 
 Examples:
   ./build/cmake_install/static/Lumice -f config.json
@@ -97,6 +102,7 @@ Examples:
   ./build/cmake_install/static/Lumice -f config.json --workers 4
   ./build/cmake_install/static/Lumice -f config.json -v
   ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json
+  ./build/cmake_install/static/Lumice analyze -f config.json --roi cone --center 43,0 --radius 2
 ```
 
 `Lumice benchmark -h`:
@@ -126,11 +132,77 @@ Examples:
   ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json --backend metal
 ```
 
+`Lumice analyze -h` — the raypath analysis the GUI's Raypath Analysis window runs (see [`06-raypath-analysis.md`](06-raypath-analysis.md) for what the result means), from the command line, as the same CSV that window exports:
+
+```text
+Usage: ./build/cmake_install/static/Lumice analyze -f <config_file> [options]
+
+Trace the scene and list the raypath chains that delivered energy into a region
+of the sky, most energetic first, as CSV — the same file the GUI's Raypath
+Analysis window exports. The config is the scene; the question asked of it is
+given by the options below and never read from the config. The analysis always
+traces on the CPU (the chain record exists on that route only).
+
+Output: the CSV goes to stdout, or to --csv <path> instead (never both). A `#`
+head names the region, the symmetry, the ray total and the export time; then
+one row per chain: Raypath, Energy (% of the total), Cumulative %, +/- (the
+row's 1/sqrt(count) relative noise, in %). Progress goes to stderr, one line per
+second. Ctrl-C ends the run early and still writes the result accumulated so far
+(exit 0) — which is how a scene whose ray_num is "infinite" is meant to be run.
+With --csv the file is rewritten atomically every second, so it is complete at
+any moment it is read.
+
+Options:
+  -f <file>          Specify the configuration file (required)
+  --roi <region>     Which rays count: sky (every outgoing ray; default), frame (the
+                     rays that land inside one of the config's render[] frames), or
+                     cone (the rays within --radius of --center).
+  --render-id <id>   frame only: the render[] entry whose lens / view / visible /
+                     front / resolution define the frame (default: the first entry).
+  --center <alt>,<az>
+                     cone only (required): the cone's centre as the altitude and
+                     azimuth, in degrees, of the sky point — azimuth measured as the
+                     sun's is, so the sun sits at --center <sun_altitude>,0.
+  --radius <deg>     cone only (required): the cone's angular radius in degrees.
+  --symmetry <spec>  Merge chains that are the same path up to crystal symmetry when
+                     listing: any combination of P, B, D (case-insensitive) or
+                     `none` (default: PBD). Changes the grouping, never the totals.
+  --rays <N>         This run's ray budget, total across wavelengths; N may carry a
+                     K, M or G suffix (e.g. 20M). Default: the scene's own ray_num,
+                     including "infinite".
+  --seed <N>         Fix the simulation's random seed (a positive integer) so two
+                     runs of one question are the same run; this also sizes the pool
+                     to one worker (a seeded run is single-threaded by contract).
+                     Default: random.
+  --csv <path>       Write the CSV to this file instead of stdout.
+  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
+                     'auto' and 'cpu' both select the CPU route today; 'metal'
+                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
+                     env var, if set, still overrides this (debug/CI only).
+  --workers <N>      Number of CPU simulation worker threads (default: automatic —
+                     one per physical core, capped at a ceiling above which no
+                     machine measured ran faster; an explicit N is never capped).
+                     Machine-dependent, so it is a command-line switch rather than
+                     a config-file field: a config travels between machines and a
+                     worker count should not travel with it. Ignored on a GPU route
+                     (single engine).
+  -v                 Verbose output (trace level logging)
+  -d                 Debug output (debug level logging)
+  -h, --help         Show this help message and exit
+
+Examples:
+  ./build/cmake_install/static/Lumice analyze -f config.json
+  ./build/cmake_install/static/Lumice analyze -f config.json --roi cone --center 43,0 --radius 2
+  ./build/cmake_install/static/Lumice analyze -f config.json --roi frame --render-id 1 --csv frame.csv
+  ./build/cmake_install/static/Lumice analyze -f config.json --symmetry none --rays 5M --seed 7
+```
+
 Notes:
 
 - `-f` is the only required flag. Without it, Lumice exits non-zero with a usage hint.
 - `--format png` switches to lossless PNG; `--quality` is ignored in that case.
 - `--workers <N>` overrides the automatic worker count (one per physical core, capped at a measured ceiling; the cap applies to the automatic value only, never to an `N` you name). It is a switch rather than a config field on purpose: a worker count describes the machine, and a config file travels between machines. An illegal value (`0`, negative, non-numeric) exits non-zero rather than falling back to the default.
+- `Lumice analyze -f <config>` asks a question of the scene rather than rendering it: which raypath chains delivered energy into a region of the sky, as CSV on stdout (or `--csv <path>`). The config is the scene; the region, the symmetry the rows are merged under, the ray budget and the seed are all options, never config fields — so one config can be asked several questions from a script, and a `--seed` makes any of them reproducible. A scene whose `ray_num` is `"infinite"` runs until Ctrl-C and still writes its result; with `--csv` the file is rewritten atomically every second, so it is complete whenever it is read. Progress goes to stderr; stdout is the CSV alone.
 - `Lumice benchmark -f <config>` is for performance regression testing — see [`../performance-testing.md`](../performance-testing.md). It is **not** how you run a normal simulation, and it takes only `-f`, `--backend`, `-v`, `-d`, `-h` (no `-o`: it writes nothing; no `--workers`: the worker counts are the measurement itself). The former `--benchmark` flag exits with a hint pointing here.
 
 ## 5. Performance expectations

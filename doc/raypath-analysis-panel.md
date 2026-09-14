@@ -281,6 +281,21 @@ segment)` 建表，`Format(uint32_t id)`（`chain_id_table.hpp:86`，实现 `cha
 `kUnresolved`，一次性 `ILOG_ERROR`，能量数字偏小）；`logged_delta_contract_` 被两类语义不同的
 失效路径共用，先触发的一类会掩盖后触发的另一类的诊断输出。
 
+**消费者（as-built，第二个）**：`Lumice analyze` 子命令（`src/main.cpp`，`RunAnalyze`）与 GUI 面板并列消费
+同一组 C API（`LUMICE_StartRaypathAnalysis` → `LUMICE_FrameGetRaypathAnalysisInfo` / `LUMICE_FrameGetRaypathAnalysis`）。
+config = scene、flags = request：ROI / 锥心 / 半径 / 对称位 / 预算 / 种子全在命令行上，config 一个字段不加，与
+GUI 把 ROI 放 session tier 不进文档是同一个判断。展示层派生（环累加 `RingsWithinRadius` / `SumRingEnergy`、
+排序与累计百分比 `ComputeRaypathDisplayOrder`）和 CSV 拼装（`BuildRaypathAnalysisCsv`）的**单一实现**在
+`src/util/raypath_analysis_display.hpp`，alt/az ↔ 行进方向的换算在 `src/util/sky_direction.hpp`；两者都是只碰
+`lumice.h` 类型的 `inline` 头，GUI（`src/gui/analysis_panel.cpp`，薄封装）与 CLI 各调同一份，因此两边对同一次
+运行写出的 CSV 逐字节相同，由 `test/unit-correctness/util/test_raypath_analysis_display.cpp` 与
+`test/unit-correctness/gui/test_analysis_panel_logic.cpp` 持同一组期望字符串钉住。CLI 没有半径滑杆，显示半径恒等于
+请求半径（所有环累加）；环数与 GUI 同取 `lumice::kRaypathAnalysisConeRingCount`（=30）。`--roi frame` 的
+`LUMICE_AnnotationView` 由 `LUMICE_SceneGetRenderer`（v4.40，`LUMICE_SceneAddRenderer` 的对称读回；按数组下标寻址，
+`--render-id` 与读回的 `LUMICE_RenderParam::id` 逐条比较）读回的 `LUMICE_RenderParam` 逐字段拷入：core 的默认值在
+引擎解码时已经应用、lens/visible 已是 `LUMICE_*` 常量，CLI 侧不解析配置文件、不持有第二份枚举拼写表或默认值规则——
+`src/main.cpp` 只含 `lumice.h` 与 `src/util/` 头，这是「CLI 是 C API 的第二个消费者」这一前提成立的机械证据。
+
 ### 3.4 ROI 三档的实现落点
 
 - **锥形**：记录阶段按「出射方向与锥中心方向的角距离」分环累加，环数在记录时固定、

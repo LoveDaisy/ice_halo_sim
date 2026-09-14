@@ -3,7 +3,8 @@
 
 #include <cstddef>
 
-#include "include/lumice.h"  // LUMICE_MAX_ANNOTATION_CIRCLES (kMaxAnnotationCircles invariant below)
+#include "include/lumice.h"                   // LUMICE_MAX_ANNOTATION_CIRCLES (kMaxAnnotationCircles invariant below)
+#include "util/raypath_analysis_display.hpp"  // kRaypathAnalysisConeRingCount (kAnalysisConeRingCount below)
 
 namespace lumice::gui {
 
@@ -169,7 +170,9 @@ constexpr float kCameraTiltDeg = 15.0f;
 // range is [one ring, the whole cone]. Engineering values, not rulings: a wider or finer cone is a
 // change to these three numbers and nothing else.
 constexpr float kAnalysisConeMaxRadiusDeg = 15.0f;
-constexpr int kAnalysisConeRingCount = 30;  // 0.5 degrees per ring
+// The ring count is the CLI's too (util/raypath_analysis_display.hpp): one number, so a CONE
+// request from either consumer is split the same way.
+constexpr int kAnalysisConeRingCount = lumice::kRaypathAnalysisConeRingCount;  // 0.5 degrees per ring
 constexpr float kAnalysisConeDefaultRadiusDeg = 2.0f;
 static_assert(kAnalysisConeRingCount >= 1 && kAnalysisConeRingCount <= LUMICE_MAX_RAYPATH_CONE_RINGS,
               "the cone ring count must be a request the C API accepts (it rejects, not truncates)");

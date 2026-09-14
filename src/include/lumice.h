@@ -390,7 +390,15 @@ extern "C" {
 // caller has nothing to supply — and the axis is independent of `lens_shift` by construction: a
 // shifted lens moves the axis's PIXEL, not the axis, and the circles follow the axis. A second
 // direction field would have been a second copy of a quantity the request already determines.
-#define LUMICE_API_VERSION 439
+//
+// ADDED (v4.40): LUMICE_SceneGetRenderer, a pure append — the read-back inverse of
+// LUMICE_SceneAddRenderer. Until now a scene handle could only be written to and serialized; a
+// consumer that needed one renderer's resolved parameters (the CLI's `analyze --roi frame`, which
+// frames its ROI on the config's render[] entry) had to re-parse the document with core's own
+// parser, a second copy of the defaults. The getter returns the LUMICE_RenderParam the engine
+// will use, defaults applied, and addresses entries by array index, not by `.id` — see its note
+// at the declaration. Nothing else moved; no struct changed.
+#define LUMICE_API_VERSION 440
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1417,6 +1425,22 @@ LUMICE_ErrorCode LUMICE_SceneAddFilter(LUMICE_Scene* scene, const LUMICE_FilterP
 LUMICE_ErrorCode LUMICE_SceneAddComplexFilter(LUMICE_Scene* scene, const LUMICE_FilterParam* filter,
                                               const LUMICE_ComplexComposition* composition, int* out_id);
 LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_RenderParam* renderer, int* out_id);
+// Read one renderer back, the inverse of LUMICE_SceneAddRenderer: *out is the LUMICE_RenderParam
+// the engine will actually use for that entry — core's defaults applied for every key the source
+// omitted, enum-valued fields as LUMICE_LENS_TYPE_* / LUMICE_VISIBLE_* / LUMICE_EV_MODE_* /
+// LUMICE_TONE_* constants. Works the same on a handle built incrementally and on one loaded
+// through LUMICE_SceneFromJson / FromJsonFile (v4.40).
+// `index` is the entry's 0-based ARRAY POSITION in insertion order — the value space of
+// SceneAddRenderer's *out_id — and NOT the entry's `.id` field. The two coincide for a handle
+// built with SceneAddRenderer (it assigns ids sequentially) but need not for one loaded from
+// JSON, where `render[].id` keeps whatever the document declared: a document whose first entry
+// says `"id": 7` reads back at index 0 with out->id == 7. To find an entry by declared id,
+// enumerate from index 0 and compare out->id. There is no count getter: enumerate until the
+// call fails, exactly as LUMICE_FrameGetRaypathAnalysis is read to its sentinel.
+// Returns LUMICE_ERR_NULL_ARG for a NULL scene / out; LUMICE_ERR_INVALID_VALUE when `index` is
+// negative or >= the number of renderers (the natural loop terminator); LUMICE_ERR_INVALID_CONFIG
+// if the stored entry cannot be decoded (not reachable through this API's own writers).
+LUMICE_ErrorCode LUMICE_SceneGetRenderer(const LUMICE_Scene* scene, int index, LUMICE_RenderParam* out);
 LUMICE_ErrorCode LUMICE_SceneAddScatterLayer(LUMICE_Scene* scene, const LUMICE_ScatterLayer* layer, int* out_id);
 LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene* scene, const LUMICE_ColorClass* color_class, int* out_id);
 

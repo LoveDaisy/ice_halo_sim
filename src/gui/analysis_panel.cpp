@@ -7,8 +7,8 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <iterator>
 #include <map>
-#include <numeric>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -33,16 +33,25 @@
 #include "imgui.h"
 #include "include/lumice.h"
 #include "util/path_utils.hpp"
+#include "util/raypath_analysis_display.hpp"
 #include "util/result_frame.hpp"
+#include "util/sky_direction.hpp"
 #include "util/thousands_format.hpp"
 
 namespace lumice::gui {
 
-namespace {
+// The direction convention, the ring arithmetic, the labels and the CSV all live in src/util/
+// (sky_direction.hpp, raypath_analysis_display.hpp) so the CLI's `analyze` prints the same
+// bytes this window exports. Named here explicitly rather than found through the enclosing
+// namespace: a same-named overload added to lumice::gui later collides at these declarations
+// instead of silently rebinding every call site below.
+using lumice::DirToAltAz;
+using lumice::kDeg2Rad;
+using lumice::kRad2Deg;
+using lumice::RoiModeLabel;
+using lumice::SymmetryBitsLabel;
 
-constexpr float kPi = 3.14159265358979323846f;
-constexpr float kDeg2Rad = kPi / 180.0f;
-constexpr float kRad2Deg = 180.0f / kPi;
+namespace {
 
 // The neighbour offset the ring's local scale is measured over. Small enough to be local on
 // every lens the GUI draws, large enough that the angle between the two directions is well above
@@ -55,50 +64,6 @@ constexpr float kRoiMarkerDotRadiusPt = 3.0f;
 // since-the-result hint: 1e-6 in the dot is ~0.08 degrees, an order of magnitude past the float
 // noise of one LUMICE_UnprojectPixel round trip and far under anything a drag produces.
 constexpr float kConeCenterSameDirDot = 1.0f - 1e-6f;
-
-// The Point-mode centre as the user reads it: the altitude and azimuth of the direction light
-// comes FROM, i.e. of the sky point clicked, from a direction light TRAVELS (altitude = asin(-z),
-// azimuth measured as the sun's is, so the sun at azimuth 0 sits at lon 180 — the same formula
-// the annotation sun direction uses, inverted).
-void DirToAltAz(const float dir[3], float* alt_deg, float* az_deg) {
-  const float z = std::max(-1.0f, std::min(1.0f, dir[2]));
-  *alt_deg = std::asin(-z) * kRad2Deg;
-  float az = std::atan2(dir[1], dir[0]) * kRad2Deg - 180.0f;
-  while (az > 180.0f) {
-    az -= 360.0f;
-  }
-  while (az < -180.0f) {
-    az += 360.0f;
-  }
-  *az_deg = az;
-}
-
-// "P|B|D", "P|B", ..., or "no symmetry": the bits as the user reads them.
-std::string SymmetryBitsLabel(uint8_t bits) {
-  std::string out;
-  for (const auto& [bit, name] : { std::pair<int, const char*>{ LUMICE_RAYPATH_SYMMETRY_P, "P" },
-                                   std::pair<int, const char*>{ LUMICE_RAYPATH_SYMMETRY_B, "B" },
-                                   std::pair<int, const char*>{ LUMICE_RAYPATH_SYMMETRY_D, "D" } }) {
-    if (bits & bit) {
-      if (!out.empty()) {
-        out += '|';
-      }
-      out += name;
-    }
-  }
-  return out.empty() ? "no symmetry" : out;
-}
-
-const char* RoiModeLabel(int mode) {
-  switch (mode) {
-    case LUMICE_RAYPATH_ROI_IN_FRAME:
-      return "in frame";
-    case LUMICE_RAYPATH_ROI_CONE:
-      return "point";
-    default:
-      return "whole sky";
-  }
-}
 
 }  // namespace
 
@@ -131,29 +96,6 @@ bool AdoptAnalysisPayloadIfNew(GuiState& state, const std::shared_ptr<const Anal
   return true;
 }
 
-int RingsWithinRadius(float radius_deg, float cone_radius_deg, int ring_count) {
-  if (ring_count <= 0) {
-    return 0;
-  }
-  if (!(cone_radius_deg > 0.0f) || !(radius_deg > 0.0f)) {
-    return 1;
-  }
-  // k rings cover k * (cone / ring_count) degrees; the smallest k reaching radius_deg. A tiny
-  // epsilon keeps "exactly on a ring boundary" on the ring it names rather than one past it.
-  const float per_ring = cone_radius_deg / static_cast<float>(ring_count);
-  const int k = static_cast<int>(std::ceil(radius_deg / per_ring - 1e-4f));
-  return std::max(1, std::min(ring_count, k));
-}
-
-double SumRingEnergy(const LUMICE_RaypathHistogramEntry& entry, int rings) {
-  const int n = std::max(0, std::min({ rings, entry.ring_count, LUMICE_MAX_RAYPATH_CONE_RINGS }));
-  double sum = 0.0;
-  for (int i = 0; i < n; ++i) {
-    sum += entry.ring_energy[i];
-  }
-  return sum;
-}
-
 void RecomputeAnalysisDisplayOrder(GuiState& state) {
   auto& view = state.analysis_result;
   view.display_energy.clear();
@@ -164,33 +106,15 @@ void RecomputeAnalysisDisplayOrder(GuiState& state) {
   if (!view.payload) {
     return;
   }
-  const auto& entries = view.payload->entries;
-  const bool cone = view.payload->roi_mode == LUMICE_RAYPATH_ROI_CONE && view.payload->cone_ring_count > 0;
-  if (cone) {
-    view.display_ring_count = RingsWithinRadius(
-        state.analysis.cone_radius_deg, view.payload->cone_radius_rad * kRad2Deg, view.payload->cone_ring_count);
-  }
-  view.display_energy.reserve(entries.size());
-  for (const auto& e : entries) {
-    view.display_energy.push_back(cone ? SumRingEnergy(e, view.display_ring_count) : e.energy);
-    view.display_total += view.display_energy.back();
-  }
-  view.display_order.resize(entries.size());
-  std::iota(view.display_order.begin(), view.display_order.end(), 0);
-  // Descending by the displayed energy; ties keep the C API's order (energy descending, display
-  // ascending), so the list is deterministic for equal sums too.
-  std::stable_sort(view.display_order.begin(), view.display_order.end(),
-                   [&](int a, int b) { return view.display_energy[a] > view.display_energy[b]; });
-  // The other bucket is in the denominator whole — see AnalysisResultView::display_total — and the
-  // cumulative column runs down the sorted rows, so it is monotone by construction and its last
-  // value plus the "other" line's share is 100.
-  view.display_total += view.payload->other_energy;
-  view.display_cumulative_pct.reserve(view.display_order.size());
-  double running = 0.0;
-  for (const int idx : view.display_order) {
-    running += view.display_energy[static_cast<size_t>(idx)];
-    view.display_cumulative_pct.push_back(view.display_total > 0.0 ? running / view.display_total * 100.0 : 0.0);
-  }
+  const auto& payload = *view.payload;
+  RaypathDisplayOrder order =
+      ComputeRaypathDisplayOrder(payload.entries, payload.roi_mode, payload.cone_ring_count, payload.cone_radius_rad,
+                                 state.analysis.cone_radius_deg, payload.other_energy);
+  view.display_energy = std::move(order.display_energy);
+  view.display_order = std::move(order.display_order);
+  view.display_cumulative_pct = std::move(order.display_cumulative_pct);
+  view.display_total = order.display_total;
+  view.display_ring_count = order.display_ring_count;
 }
 
 double AnalysisOtherPct(const GuiState& state) {
@@ -781,110 +705,38 @@ bool ApplyExcludeSelectedRaypath(GuiState& state) {
 
 // ---- CSV export ----------------------------------------------------------------------------------
 
-namespace {
-
-// RFC 4180 quoting, applied only when the field needs it. Today no field does — a chain's display
-// text is digits, '-', parentheses, "C<id>" and " -> " — but the rule is cheap and the text's
-// grammar is core's to grow.
-std::string EscapeCsvField(std::string_view field) {
-  if (field.find_first_of(",\"\n\r") == std::string_view::npos) {
-    return std::string(field);
-  }
-  std::string out = "\"";
-  for (const char c : field) {
-    if (c == '"') {
-      out += '"';
-    }
-    out += c;
-  }
-  out += '"';
-  return out;
-}
-
-// printf into a std::string; every number in the file goes through one of these three so the
-// precision rules are stated once. Percentages carry two more decimals than the table (the file
-// is for a tool, the table for an eye); energies are %g at six digits, the raw double's shape.
-std::string Fmt(const char* fmt, double v) {
-  char buf[64];
-  std::snprintf(buf, sizeof(buf), fmt, v);
-  return buf;
-}
-std::string Pct(double v) {
-  return Fmt("%.4f", v);
-}
-std::string Energy(double v) {
-  return Fmt("%.6g", v);
-}
-
-}  // namespace
-
 std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view exported_at) {
   const auto& view = state.analysis_result;
   const AnalysisPayload* payload = view.payload.get();
-  std::string out;
-  out += "# Lumice raypath analysis\n";
-  out += "# exported_at: " + std::string(exported_at) + "\n";
-  if (payload != nullptr) {
-    out += std::string("# region: ") + RoiModeLabel(payload->roi_mode) + "\n";
-    if (payload->roi_mode == LUMICE_RAYPATH_ROI_CONE) {
-      // The centre the result was ASKED for (analyzed_cone_center_dir), not the live marker, which
-      // may have moved since; the radius and ring count are the display-time reduction on show.
-      float alt = 0.0f;
-      float az = 0.0f;
-      DirToAltAz(state.analysis.analyzed_cone_center_dir, &alt, &az);
-      out += "# cone_centre_altitude_deg: " + Fmt("%.2f", alt) + "\n";
-      out += "# cone_centre_azimuth_deg: " + Fmt("%.2f", az) + "\n";
-      out += "# cone_request_radius_deg: " + Fmt("%.1f", payload->cone_radius_rad * kRad2Deg) + "\n";
-      out += "# cone_display_radius_deg: " + Fmt("%.1f", state.analysis.cone_radius_deg) + "\n";
-      out += "# cone_rings_summed: " + std::to_string(view.display_ring_count) + " / " +
-             std::to_string(payload->cone_ring_count) + "\n";
-    }
-    out += "# symmetry: " + SymmetryBitsLabel(view.entries_symmetry) + "\n";
-    std::uint64_t total_rays = static_cast<std::uint64_t>(payload->other_count);
-    for (const auto& e : payload->entries) {
-      total_rays += static_cast<std::uint64_t>(e.count);
-    }
-    out += "# total_rays: " + std::to_string(total_rays) + "\n";
-    out += "# total_energy: " + Energy(view.display_total) + "\n";
-    out += "# record_full_hits: " + std::to_string(payload->truncated_chain_count) + "\n";
-  } else {
-    out += "# region: none (no result)\n";
-  }
-  // Four columns, matching RenderResultList's header one for one: the file's schema is a single
-  // authoritative definition, not a superset the table happens to be a projection of. "Energy" and
-  // "+/-" are the same percentages the table cell shows, not the underlying raw doubles; "+/-"
-  // embeds the takeover figure in parentheses exactly as the table cell does, so a row that took
-  // over an evicted slot still carries that information in its one cell. The per-row hit count is
-  // not a column, here or in the table (RenderResultList says why); the run-level total_rays line
-  // above is the one ray count the file carries.
-  out += "Raypath,Energy,Cumulative %,+/-\n";
   if (payload == nullptr) {
+    // The GUI's own branch: the button is disabled without a result, the function still answers.
+    std::string out;
+    out += "# Lumice raypath analysis\n";
+    out += "# exported_at: " + std::string(exported_at) + "\n";
+    out += "# region: none (no result)\n";
+    out += "Raypath,Energy,Cumulative %,+/-\n";
     return out;
   }
-  const double total = view.display_total;
-  for (size_t row = 0; row < view.display_order.size(); ++row) {
-    const int idx = view.display_order[row];
-    const auto& e = payload->entries[static_cast<size_t>(idx)];
-    const double energy = view.display_energy[static_cast<size_t>(idx)];
-    if (!(energy > 0.0)) {
-      continue;  // the table hides these rows too
-    }
-    const double rel = e.count > 0 ? 1.0 / std::sqrt(static_cast<double>(e.count)) : 1.0;
-    out += EscapeCsvField(e.display);
-    out += ',' + Pct(total > 0.0 ? energy / total * 100.0 : 0.0);
-    out += ',' + Pct(view.display_cumulative_pct[row]);
-    out += ',' + Fmt("%.2f", rel * 100.0);
-    if (e.error_bound > 0.0 && e.energy > 0.0) {
-      out += " (-" + Fmt("%.2f", e.error_bound / e.energy * 100.0) + ")";
-    }
-    out += '\n';
-  }
-  if (payload->other_count > 0) {
-    const double other_pct = AnalysisOtherPct(state);
-    const double cum = (view.display_cumulative_pct.empty() ? 0.0 : view.display_cumulative_pct.back()) + other_pct;
-    out += std::string(kAnalysisOtherRowLabel) + ',' + Pct(other_pct) + ',' + Pct(cum) + ",-\n";
-  }
-  return out;
+  RaypathAnalysisCsvInputs in;
+  in.roi_mode = payload->roi_mode;
+  // The centre the result was ASKED for (analyzed_cone_center_dir), not the live marker, which
+  // may have moved since; the radius and ring count are the display-time reduction on show.
+  std::copy(std::begin(state.analysis.analyzed_cone_center_dir), std::end(state.analysis.analyzed_cone_center_dir),
+            std::begin(in.cone_center_dir));
+  in.cone_request_radius_rad = payload->cone_radius_rad;
+  in.cone_ring_count = payload->cone_ring_count;
+  in.cone_display_radius_deg = state.analysis.cone_radius_deg;
+  in.symmetry_bits = view.entries_symmetry;
+  in.other_energy = payload->other_energy;
+  in.other_count = payload->other_count;
+  in.truncated_chain_count = payload->truncated_chain_count;
+  RaypathDisplayOrder order;
+  order.display_energy = view.display_energy;
+  order.display_order = view.display_order;
+  order.display_cumulative_pct = view.display_cumulative_pct;
+  order.display_total = view.display_total;
+  order.display_ring_count = view.display_ring_count;
+  return BuildRaypathAnalysisCsv(payload->entries, order, in, exported_at);
 }
 
 // ---- Rendering -----------------------------------------------------------------------------------

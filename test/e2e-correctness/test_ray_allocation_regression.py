@@ -17,8 +17,9 @@ directions and one scene cannot serve both (see the module constants):
    render commit's must not). So a second, deliberately skewed scene -- a
    filtered high-proportion entry whose rays are individually dim next to an
    unfiltered ``proportion: 1`` entry whose rays each carry far more energy --
-   is rendered under ``"adaptive"`` and its stdout (the CLI's logger sink writes
-   there, not to stderr) parsed for the online allocation's final report,
+   is rendered under ``"adaptive"`` and its stderr (the engine's console sink
+   writes there; stdout is the product output's) parsed for the online
+   allocation's final report,
    ``RayAllocationOnline(final): layer L entry E: p=... q=... rays=...`` (one
    line per entry, written by the server's Stop once no worker can move the
    statistic), which must show a sampling share moved well away from the energy
@@ -170,7 +171,7 @@ class TestRayAllocationRegression(LumiceTestCase):
         result = self.renders[PROPORTIONAL]
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(
-            ONLINE_MARKER, result.stdout,
+            ONLINE_MARKER, result.stderr,
             "the proportional arm kept an online ray-allocation tally; the default mode "
             "must stay the pre-allocation path bit for bit",
         )
@@ -187,17 +188,19 @@ class TestRayAllocationRegression(LumiceTestCase):
             result.returncode, 0,
             f"{SKEWED_ADAPTIVE} failed:\nstdout: {result.stdout}\nstderr: {result.stderr}",
         )
+        # The online lines are ILOG_INFO lines (simulator.cpp's LogRayAllocationState), and the
+        # engine's console sink writes to stderr.
         self.assertIn(
-            "RayAllocationOnline(final)", result.stdout,
-            "no RayAllocationOnline(final) line in stdout: the online loop did not run on "
+            "RayAllocationOnline(final)", result.stderr,
+            "no RayAllocationOnline(final) line in stderr: the online loop did not run on "
             "a render commit with scene.ray_allocation = adaptive (or its ILOG_INFO "
             "wording changed -- update FINAL_ENTRY_RE together with the source)",
         )
-        entries = parse_final_entries(result.stdout)
+        entries = parse_final_entries(result.stderr)
         layer0 = {k: v for k, v in entries.items() if k[0] == 0}
         self.assertEqual(
             len(layer0), 2,
-            f"expected 2 final entry lines for layer 0, parsed {entries} from:\n{result.stdout}",
+            f"expected 2 final entry lines for layer 0, parsed {entries} from:\n{result.stderr}",
         )
         total_p = sum(p for p, _ in layer0.values())
         total_q = sum(q for _, q in layer0.values())
