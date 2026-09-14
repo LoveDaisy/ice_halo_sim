@@ -186,13 +186,13 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   coefficient of variation; floors tightened once a committed bench harness provides `CoV`.
 - **Cadence**: `PR` (cheap sentinels — e.g. `test_metal_throughput`) and `nightly` (full bench
   sweep via `scripts/bench_throughput.py`, landed task-270.6). The committed harness is the
-  standard tool for any `--benchmark`-based throughput claim in this repo; ad-hoc
+  standard tool for any `Lumice benchmark`-based throughput claim in this repo; ad-hoc
   one-off scripts in `scratchpad/bench/` are not authoritative.
 - **Naming**: `test_<backend>_throughput.py`; `scripts/bench_throughput.py` is the committed
   harness (matrix = {legacy, cpu_backend, metal} × heavy configs × Metal dispatch sweep,
   median+CoV, ratio denominator locked to legacy CPU).
 - **Physical location**: target-state `test/performance/`; current `test/e2e/` (throughput
-  sentinel) + the CI `Benchmark` step (`--benchmark -f examples/bench_config.json`).
+  sentinel) + the CI `Benchmark` step (`benchmark -f examples/bench_config.json`).
 - **Boundary note**: GUI frame-latency / responsiveness tests (`test_gui_perf`) are **not** in
   this layer — their oracle is an absolute frame budget, not a ratio to legacy CPU. They belong
   to `gui` (responsiveness tag). See §4.4.
@@ -1441,7 +1441,7 @@ health items that must not be moved/deleted casually.
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
-| **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
+| **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `Lumice benchmark`) | `test_metal_throughput` | — | — |
 | **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `functional/`: `test_angular_dist_circles`, `test_annotation_line_seam`, `test_annotation_line_tracking` (the per-frame proposition: twelve frames, a different view on each, every annotation where THAT frame's view puts it — the case that reads red on a debounced overlay), `test_background_overlay`, `test_color_window`, `test_defaults_panel`, `test_edit_modal`, `test_entry_management`, `test_export`, `test_file_ops`, `test_filter_editor`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_preview_animation`, `test_gui_sim_smoke`, `test_log_panel`, `test_overlay_controls`, `test_preview_texture`, `test_preview_viewport`, `test_run_lifecycle`, `test_scene_controls`, `test_shell_chrome`, `test_status_bar`, `test_view_display_controls`; `visual/`: `test_gui_capture_smoke`, `test_gui_defaults_panel`, `test_gui_lens_projection`, `test_gui_modal_layout`, `test_preview_pixels`; `responsiveness/`: **`test_gui_perf`**; harness (flat under `test/gui/`): `test_gui_main`, `test_screenshot`, `test_gui_shared` | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. `functional/` no longer includes an `interaction`-named catch-all — its former contents are now split by driven window/panel across the files above, or moved out to `unit-correctness`/`composition-correctness` when the case needed no live frame (§1.7). |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
@@ -1587,7 +1587,7 @@ post-dates this table. Its first run, with nothing under its own cache key to re
 `windows-isa-v3-compile` (the clang-cl `-march=x86-64-v3` × nvcc/cl.exe leg added for the two-variant
 Windows release) post-dates it as well. Its first run, with nothing under its own cache key, took
 **338s** (run 34587240975): LLVM 20.1.0 from Chocolatey 79s, CUDA toolkit 59s, configure 42s, build
-122s, and 11s for the one thing that makes it more than compile-only — a `--benchmark` run asserting
+122s, and 11s for the one thing that makes it more than compile-only — a `Lumice benchmark` run asserting
 the `isa` key reads `x86-64-v3`. That is the `windows-cuda-compile` shape plus a compiler install,
 which is why it sits at the same scale as that row and not at `isa-v4-compile`'s; it still belongs in
 the "no" column of §7.0's head, since one benchmark invocation is not a test suite.

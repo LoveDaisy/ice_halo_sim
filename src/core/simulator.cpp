@@ -1227,7 +1227,7 @@ namespace {
 //      preference is read. It sits above the env override on purpose — the analysis
 //      run's contract is "CPU regardless of what the environment says", and an
 //      override that outranked it would make that contract false on exactly the
-//      machines (CI, --benchmark) where the variable is set.
+//      machines (CI, `Lumice benchmark`) where the variable is set.
 // Returns nullptr to keep the legacy CPU path (Simulator::SimulateOneWavelength).
 // `*out_kind` (never null) receives the kind of what was returned: kCpu for nullptr AND
 // for CpuTraceBackend — the question it answers is "which route", and both are the CPU

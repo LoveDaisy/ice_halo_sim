@@ -94,7 +94,7 @@ _HEAVY_CONFIGS = [
 # `scripts/bench_throughput.py`.
 _SANITY_FLOOR = 1.5
 _GATE = 1.0           # D1 pre-registered gate: Metal multi >= legacy (xfail until Scrum 2)
-_TIMEOUT = 240        # --benchmark is bounded (poll-until-IDLE); guard against hangs
+_TIMEOUT = 240        # `benchmark` is bounded (poll-until-IDLE); guard against hangs
 
 # Fallback detection tripwire: a Metal run on an incompatible lens/view logs
 # "falling back" via ILOG_WARN (simulator.cpp:550/579/586/595) → spdlog `err`
@@ -106,7 +106,7 @@ _RE_FALLBACK = re.compile(r"falling back", re.IGNORECASE)
 
 
 def _run_benchmark(config_name: str, metal: bool) -> dict:
-    """Run `Lumice --benchmark` on a config; return parsed multi-pass result.
+    """Run `Lumice benchmark` on a config; return parsed multi-pass result.
 
     Returns {"multi_rps": float, "single_rps": float, "fell_back": bool}.
     """
@@ -118,7 +118,7 @@ def _run_benchmark(config_name: str, metal: bool) -> dict:
         env.pop("LUMICE_TRACE_BACKEND", None)  # legacy = unset (NOT cpu_backend)
 
     proc = subprocess.run(
-        [str(find_lumice_binary()), "--benchmark", "-f", cfg, "-o", "/tmp"],
+        [str(find_lumice_binary()), "benchmark", "-f", cfg],
         capture_output=True, text=True, timeout=_TIMEOUT, env=env,
     )
     fell_back = bool(_RE_FALLBACK.search(proc.stderr) or _RE_FALLBACK.search(proc.stdout))

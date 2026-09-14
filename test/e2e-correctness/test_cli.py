@@ -64,6 +64,80 @@ class TestCli(LumiceTestCase):
         )
 
 
+class TestSubcommands(LumiceTestCase):
+    """The CLI's subcommand surface: `render` (implicit by default) and `benchmark`.
+
+    `argv[1]` is a subcommand only when it spells one; every other argv[1] is the
+    implicit `render`, which is what keeps the bare `Lumice -f config.json` form
+    that every quickstart and user script uses working verbatim.
+    """
+
+    def _get_config(self):
+        if not (CONFIGS_DIR / "halo_22.json").exists():
+            self.skipTest("halo_22.json not found")
+        return _cheap_halo_22_config(self.output_dir)
+
+    def test_explicit_and_implicit_render_both_render(self):
+        """`Lumice render -f ...` and `Lumice -f ...` are the same command."""
+        cfg = self._get_config()
+        for args in (["render", "-f", str(cfg), "-o", self.output_dir],
+                     ["-f", str(cfg), "-o", self.output_dir]):
+            for stale in glob.glob(os.path.join(self.output_dir, "img_*.jpg")):
+                os.remove(stale)
+            result = self.run_lumice(args)
+            self.assertEqual(result.returncode, 0, f"{args}: {result.stderr}")
+            self.assertTrue(
+                glob.glob(os.path.join(self.output_dir, "img_*.jpg")),
+                f"{args}: no images found in {self.output_dir}",
+            )
+
+    def test_benchmark_flag_is_rejected_with_migration_hint(self):
+        """The retired `--benchmark` flag exits non-zero and names its replacement.
+
+        A generic "unknown option" would leave a script author reading the help
+        page to find out the mode still exists; the migration hint is the whole
+        point of not silently dropping the flag.
+        """
+        cfg = self._get_config()
+        for args in (["--benchmark", "-f", str(cfg)],
+                     ["-f", str(cfg), "--benchmark"],
+                     ["benchmark", "--benchmark", "-f", str(cfg)]):
+            result = self.run_lumice(args)
+            self.assertNotEqual(result.returncode, 0, f"{args} should be rejected")
+            self.assertIn("--benchmark has been replaced by the 'benchmark' subcommand", result.stderr)
+            self.assertIn("benchmark -f <config>", result.stderr)
+
+    def test_subcommand_help_pages(self):
+        """Top-level `-h` lists the subcommands plus render's options; each subcommand has its own."""
+        top = self.run_lumice(["-h"])
+        self.assertEqual(top.returncode, 0)
+        self.assertIn("Subcommands:", top.stdout)
+        self.assertIn("benchmark", top.stdout)
+        self.assertIn("--workers", top.stdout)
+
+        render = self.run_lumice(["render", "--help"])
+        self.assertEqual(render.returncode, 0)
+        self.assertIn("--workers", render.stdout)
+        self.assertNotIn("Subcommands:", render.stdout)
+
+        bench = self.run_lumice(["benchmark", "-h"])
+        self.assertEqual(bench.returncode, 0)
+        self.assertIn("Usage:", bench.stdout)
+        self.assertIn("benchmark -f", bench.stdout)
+        # The option ROW, not the word: benchmark's page is allowed to say why there is
+        # no --workers, but must not list one.
+        self.assertNotIn("  --workers <N>", bench.stdout)
+        self.assertNotIn("  -o <dir>", bench.stdout)
+
+    def test_benchmark_subcommand_rejects_render_only_options(self):
+        """`benchmark` accepts only its own options; render's are unknown to it."""
+        cfg = self._get_config()
+        for extra in (["-o", self.output_dir], ["--format", "png"], ["--quality", "80"]):
+            result = self.run_lumice(["benchmark", "-f", str(cfg)] + extra)
+            self.assertNotEqual(result.returncode, 0, f"benchmark {extra} should be rejected")
+            self.assertIn(f"unknown option: {extra[0]}", result.stderr)
+
+
 class TestOutputFormat(LumiceTestCase):
     """Tests for --format and --quality CLI options."""
 
@@ -329,25 +403,24 @@ class TestWorkerCount(LumiceTestCase):
         result = self.run_lumice(["-f", "dummy.json", "--workers"])
         self.assertNotEqual(result.returncode, 0)
 
-    def test_benchmark_mode_says_out_loud_that_it_ignores_workers(self):
-        """--workers + --benchmark: ignored, but with a visible notice.
+    def test_benchmark_subcommand_rejects_workers(self):
+        """`benchmark --workers N` is an unknown option, not an ignored one.
 
         The benchmark's 1-worker and PhysicalCoreCount()-worker passes are its
         measurement methodology (per-core vs parallel efficiency), not a default
-        a preference may override. Validation still runs, so an illegal value is
-        still an error in this mode.
+        a preference may override. Under the `--benchmark` flag the option was
+        accepted and announced as ignored; under a subcommand there is no reason
+        to accept an option that can never take effect, so it is rejected up
+        front — and the rejection must not depend on the value being legal,
+        otherwise "4" would silently pass where "0" fails.
         """
         cfg = self._get_config()
-        result = self.run_lumice(
-            ["-f", str(cfg), "-o", self.output_dir, "--benchmark", "--workers", "4"]
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--workers is ignored in --benchmark mode", result.stderr)
-
-        rejected = self.run_lumice(
-            ["-f", str(cfg), "--benchmark", "--workers", "0"]
-        )
-        self.assertNotEqual(rejected.returncode, 0)
+        for val in ["4", "0"]:
+            result = self.run_lumice(["benchmark", "-f", str(cfg), "--workers", val])
+            self.assertNotEqual(
+                result.returncode, 0, f"benchmark --workers {val} should be rejected"
+            )
+            self.assertIn("unknown option: --workers", result.stderr)
 
 
 class TestLastLayerProbWarning(LumiceTestCase):
@@ -625,7 +698,7 @@ class TestAxisSlotTypeRequired(LumiceTestCase):
 
 
 class TestBenchmarkIsaField(LumiceTestCase):
-    """`--benchmark`'s JSON must say which ISA tier the binary was compiled for.
+    """`Lumice benchmark`'s JSON must say which ISA tier the binary was compiled for.
 
     Why the key exists at all: a Release build's ISA tier is `LUMICE_ISA_LEVEL`
     (`baseline` | `x86-64-v3` | `x86-64-v4` | `native`); local `scripts/build.sh` takes
@@ -649,14 +722,14 @@ class TestBenchmarkIsaField(LumiceTestCase):
     _ISA_VALUES = {"native", "baseline", "x86-64-v3", "x86-64-v4"}
 
     def _run_benchmark(self):
-        """Run `--benchmark` on the shared bench config with a ray budget small
+        """Run `Lumice benchmark` on the shared bench config with a ray budget small
         enough for the fast leg, and return the parsed `[BENCHMARK]` lines."""
         cfg = json.loads((CONFIGS_DIR / "bench_light_single_ms.json").read_text())
         cfg["scene"]["ray_num"] = 200000
         tmp_cfg = Path(self.output_dir) / "bench_isa.json"
         tmp_cfg.write_text(json.dumps(cfg))
 
-        result = self.run_lumice(["--benchmark", "-f", str(tmp_cfg), "-o", self.output_dir])
+        result = self.run_lumice(["benchmark", "-f", str(tmp_cfg)])
         context = f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         self.assertEqual(result.returncode, 0, "benchmark run failed" + context)
 

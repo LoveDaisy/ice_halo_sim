@@ -213,44 +213,114 @@ constexpr int kBenchmarkGpuWarmupRays = 100'000;
 // as approximate (phase-1), not canonical. See doc/performance-testing.md.
 constexpr int kBenchmarkDrainWindows = 10;
 
-void PrintUsage(const char* prog_name) {
-  std::cout << "Usage: " << prog_name << " -f <config_file> [options]\n"
-            << "\n"
-            << "Lumice — simulate ice halos by tracing rays through ice crystals.\n"
-            << "\n"
-            << "Options:\n"
-            << "  -f <file>          Specify the configuration file (required)\n"
+// --- Subcommands -------------------------------------------------------------
+//
+// argv[1] names the subcommand: `render` or `benchmark`. Anything else in that
+// slot (an option, or nothing at all) means the implicit `render`, so the
+// `Lumice -f config.json ...` form every README / quickstart / user script uses
+// keeps working verbatim. Each subcommand accepts ONLY its own option set and
+// reports everything else as an unknown option — there is no "accepted but
+// ignored" flag anywhere, which is what keeps the "which flag means what in
+// which mode" matrix from growing a dimension per mode. A third subcommand
+// (`analyze` is the planned one) slots in as one more Parse*/Run* pair below
+// plus one more branch in main(); nothing shared has to learn about it.
+
+constexpr std::string_view kSubcommandRender = "render";
+constexpr std::string_view kSubcommandBenchmark = "benchmark";
+
+// The options every subcommand shares, as help-text fragments defined once so the
+// wording cannot drift between subcommands. Split in three because each subcommand
+// interleaves its own options between them in the order a reader expects (-f first,
+// the log/help switches last).
+constexpr const char* kHelpConfigOption = "  -f <file>          Specify the configuration file (required)\n";
+constexpr const char* kHelpBackendOption =
+    "  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).\n"
+    "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
+    "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
+    "                     env var, if set, still overrides this (debug/CI only).\n";
+constexpr const char* kHelpLogAndHelpOptions =
+    "  -v                 Verbose output (trace level logging)\n"
+    "  -d                 Debug output (debug level logging)\n"
+    "  -h, --help         Show this help message and exit\n";
+
+void PrintRenderOptions() {
+  std::cout << kHelpConfigOption
             << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
             << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
             << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
-            << "  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).\n"
-            << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
-            << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
-            << "                     env var, if set, still overrides this (debug/CI only).\n"
+            << kHelpBackendOption
             << "  --workers <N>      Number of CPU simulation worker threads (default: automatic —\n"
             << "                     one per physical core, capped at a ceiling above which no\n"
             << "                     machine measured ran faster; an explicit N is never capped).\n"
             << "                     Machine-dependent, so it is a command-line switch rather than\n"
             << "                     a config-file field: a config travels between machines and a\n"
             << "                     worker count should not travel with it. Ignored on a GPU route\n"
-            << "                     (single engine) and in --benchmark mode.\n"
-            << "  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy\n"
-            << "                     CPU route runs a dual pass (single-worker + multi-worker → per-core\n"
-            << "                     and parallel-efficiency data); a GPU route is single-engine, so it\n"
-            << "                     runs one steady pass only (single/multi would not be parallel)\n"
-            << "  -v                 Verbose output (trace level logging)\n"
-            << "  -d                 Debug output (debug level logging)\n"
-            << "  -h                 Show this help message and exit\n"
-            << "\n"
-            << "Examples:\n"
-            << "  " << prog_name << " -f config.json\n"
+            << "                     (single engine).\n"
+            << kHelpLogAndHelpOptions;
+}
+
+void PrintRenderExamples(const char* prog_name) {
+  std::cout << "  " << prog_name << " -f config.json\n"
             << "  " << prog_name << " -f config.json -o /tmp/output\n"
             << "  " << prog_name << " -f config.json --format png\n"
             << "  " << prog_name << " -f config.json --quality 80\n"
             << "  " << prog_name << " -f config.json --backend metal\n"
             << "  " << prog_name << " -f config.json --workers 4\n"
-            << "  " << prog_name << " -f config.json --benchmark\n"
             << "  " << prog_name << " -f config.json -v\n";
+}
+
+void PrintRenderUsage(const char* prog_name) {
+  std::cout << "Usage: " << prog_name << " [render] -f <config_file> [options]\n"
+            << "\n"
+            << "Simulate ice halos and write the rendered images. `render` is the default\n"
+            << "subcommand, so `" << prog_name << " -f config.json` is the same command.\n"
+            << "\n"
+            << "Options:\n";
+  PrintRenderOptions();
+  std::cout << "\n"
+            << "Examples:\n";
+  PrintRenderExamples(prog_name);
+}
+
+void PrintBenchmarkUsage(const char* prog_name) {
+  std::cout << "Usage: " << prog_name << " benchmark -f <config_file> [options]\n"
+            << "\n"
+            << "Run a throughput benchmark and print [BENCHMARK] JSON. The legacy CPU route\n"
+            << "runs a dual pass (single-worker + multi-worker → per-core and parallel-\n"
+            << "efficiency data); a GPU route is single-engine, so it runs one steady pass\n"
+            << "only (single/multi would not be parallel). The worker counts are part of the\n"
+            << "measurement methodology, which is why there is no --workers here; nothing is\n"
+            << "written to disk, which is why there is no -o.\n"
+            << "\n"
+            << "Options:\n"
+            << kHelpConfigOption << kHelpBackendOption << kHelpLogAndHelpOptions << "\n"
+            << "Examples:\n"
+            << "  " << prog_name << " benchmark -f examples/bench_config.json\n"
+            << "  " << prog_name << " benchmark -f examples/bench_config.json --backend metal\n";
+}
+
+// Top-level `-h` (no subcommand named): the subcommand overview followed by the
+// implicit subcommand's full option list, so the help a user reaches from the
+// form they already know is complete on its own.
+void PrintTopLevelUsage(const char* prog_name) {
+  std::cout << "Usage: " << prog_name << " [render] -f <config_file> [options]\n"
+            << "       " << prog_name << " benchmark -f <config_file> [options]\n"
+            << "       " << prog_name << " <subcommand> -h\n"
+            << "\n"
+            << "Lumice — simulate ice halos by tracing rays through ice crystals.\n"
+            << "\n"
+            << "Subcommands:\n"
+            << "  render             Simulate and write halo images. This is the default when\n"
+            << "                     no subcommand is given: `" << prog_name << " -f ...` is a render.\n"
+            << "  benchmark          Run a throughput benchmark and print [BENCHMARK] JSON\n"
+            << "                     (`" << prog_name << " benchmark -h` for its options)\n"
+            << "\n"
+            << "Options for render (the default subcommand):\n";
+  PrintRenderOptions();
+  std::cout << "\n"
+            << "Examples:\n";
+  PrintRenderExamples(prog_name);
+  std::cout << "  " << prog_name << " benchmark -f examples/bench_config.json\n";
 }
 
 // Maps a --backend argument to a LUMICE_BACKEND_* id. Returns -1 for an
@@ -363,7 +433,7 @@ void PrintStats(LUMICE_Server* server) {
 
 // `silent`: when true, suppress the final `[BENCHMARK]` JSON line on stdout and
 // the `wall_fallback` warning on stderr. Used by the GPU-route warm-up pass
-// (see main()'s benchmark_mode branch): its purpose is to absorb one-time GPU
+// (see RunBenchmark's GPU-route branch): its purpose is to absorb one-time GPU
 // context/PSO lazy-init before the real steady pass, so its own rate is
 // meaningless and would only mislead if reported. Every other observable side
 // effect (server create/commit/poll-to-IDLE/destroy, and the stderr commit-fail
@@ -616,7 +686,7 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
         // denominator includes one-time setup (server alloc + scene gen + first
         // GPU dispatch triggering CUDA/Metal context/PSO lazy init). Treat such
         // numbers as unusable for perf comparison; the GPU-route warm-up pass
-        // (see main()'s benchmark_mode) exists precisely to move that setup
+        // (see RunBenchmark's GPU-route branch) exists precisely to move that setup
         // cost out of the measured pass. Warning suppressed under `silent`
         // (i.e. the warm-up pass itself) — the warm-up rate is not reported,
         // so warning about its basis would only mislead.
@@ -644,84 +714,188 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   LUMICE_DestroyServer(server);
 }
 
-}  // namespace
+// --- Option parsing ------------------------------------------------------------
 
-
-int main(int argc, char** argv) {
+// What every subcommand needs to know before it can build a server.
+struct SharedOptions {
   std::filesystem::path config_filename;
+  int preferred_backend = LUMICE_BACKEND_CPU;
+  LUMICE_LogLevel log_level = LUMICE_LOG_INFO;
+};
+
+struct RenderOptions {
+  SharedOptions shared;
   std::filesystem::path output_dir = ".";
   std::string image_format = "jpg";
   int jpeg_quality = kDefaultJpegQuality;
-  bool benchmark_mode = false;
-  int preferred_backend = LUMICE_BACKEND_CPU;
   // 0 = "not specified" — the same value LUMICE_ServerConfig::num_workers already uses to mean
   // "let the server pick" (one per physical core, capped), so no separate was-it-set flag is
   // needed.
   int cli_workers = 0;
-  auto log_level = LUMICE_LOG_INFO;
+};
 
-  for (int i = 1; i < argc; i++) {
-    std::string_view arg = argv[i];
-    if (arg == "-f") {
-      if (++i >= argc) {
-        std::cerr << "Error: -f requires an argument\n\n";
-        PrintUsage(argv[0]);
+struct BenchmarkOptions {
+  SharedOptions shared;
+};
+
+// Outcome of offering argv[i] to the option set every subcommand shares.
+enum class SharedStep {
+  kNotShared,  // not one of the shared options — the subcommand's own parser decides
+  kConsumed,   // handled; `i` now indexes the last token consumed
+  kHelp,       // -h / --help — the caller prints its own usage and exits 0
+  kError,      // diagnosed on stderr — the caller prints its own usage and exits 1
+};
+
+// Parses the one option at argv[i] if it is shared (-f, --backend, -v, -d, -h/--help), advancing
+// `i` past any value it takes. The retired `--benchmark` flag is diagnosed here too, so both
+// subcommands point at the migration path instead of calling it an unknown option.
+SharedStep ParseSharedOption(int argc, char** argv, int& i, SharedOptions& out) {
+  std::string_view arg = argv[i];
+  if (arg == "-f") {
+    if (++i >= argc) {
+      std::cerr << "Error: -f requires an argument\n\n";
+      return SharedStep::kError;
+    }
+    out.config_filename = argv[i];
+    return SharedStep::kConsumed;
+  }
+  if (arg == "--backend") {
+    if (++i >= argc) {
+      std::cerr << "Error: --backend requires an argument\n\n";
+      return SharedStep::kError;
+    }
+    out.preferred_backend = ParseBackend(argv[i]);
+    if (out.preferred_backend < 0) {
+      std::cerr << "Error: --backend must be 'auto', 'cpu', 'metal', or 'cuda', got '" << argv[i] << "'\n\n";
+      return SharedStep::kError;
+    }
+    return SharedStep::kConsumed;
+  }
+  if (arg == "-v") {
+    out.log_level = LUMICE_LOG_VERBOSE;
+    return SharedStep::kConsumed;
+  }
+  if (arg == "-d") {
+    out.log_level = LUMICE_LOG_DEBUG;
+    return SharedStep::kConsumed;
+  }
+  if (arg == "-h" || arg == "--help") {
+    return SharedStep::kHelp;
+  }
+  if (arg == "--benchmark") {
+    std::cerr << "Error: --benchmark has been replaced by the 'benchmark' subcommand: " << argv[0]
+              << " benchmark -f <config>\n\n";
+    return SharedStep::kError;
+  }
+  return SharedStep::kNotShared;
+}
+
+#ifdef _WIN32
+// Re-parse file paths from the wide-char command line for full Unicode support.
+// argv[i] on Windows uses the ANSI codepage, which loses non-ASCII characters.
+// Only path arguments (-f, -o) need wide-char re-parsing; ASCII-only args
+// (the subcommand token, --format, --quality, --workers) are safe as-is.
+// `output_dir` is null for a subcommand that has no -o: the option was already
+// rejected by that subcommand's parser, so there is nothing to re-read.
+void ReparseWidePathArgs(std::filesystem::path& config_filename, std::filesystem::path* output_dir) {
+  int wargc = 0;
+  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+  if (!wargv) {
+    return;
+  }
+  for (int i = 1; i < wargc; i++) {
+    std::wstring_view warg = wargv[i];
+    if (warg == L"-f" && i + 1 < wargc) {
+      config_filename = wargv[++i];
+    } else if (output_dir && warg == L"-o" && i + 1 < wargc) {
+      *output_dir = wargv[++i];
+    }
+  }
+  LocalFree(wargv);
+}
+#endif
+
+// The checks that follow parsing for every subcommand: -f is required, and a GPU
+// backend the machine cannot provide falls back to CPU with a visible notice
+// rather than silently. (The core would fall back anyway; this just makes the
+// substitution explicit on the CLI.) Returns false when the caller must print
+// its usage and exit 1.
+bool FinishSharedOptions(SharedOptions& opts) {
+  if (opts.config_filename.empty()) {
+    std::cerr << "Error: configuration file is required (-f <file>)\n\n";
+    return false;
+  }
+  if (opts.preferred_backend == LUMICE_BACKEND_METAL && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
+    std::cerr << "Warning: --backend metal requested but no Metal device is available; using CPU.\n";
+    opts.preferred_backend = LUMICE_BACKEND_CPU;
+  }
+  if (opts.preferred_backend == LUMICE_BACKEND_CUDA && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    std::cerr << "Warning: --backend cuda requested but no eligible CUDA device is available; using CPU.\n";
+    opts.preferred_backend = LUMICE_BACKEND_CPU;
+  }
+  return true;
+}
+
+// Parses argv[first..) as the `render` option set. `print_usage` is the help this
+// invocation form should show — the top-level overview when `render` was implicit,
+// the subcommand's own page when it was named — and is what every diagnostic
+// below follows. Returns the process exit code, or -1 to proceed to RunRender.
+int ParseRenderOptions(int argc, char** argv, int first, void (*print_usage)(const char*), RenderOptions& opts) {
+  for (int i = first; i < argc; i++) {
+    switch (ParseSharedOption(argc, argv, i, opts.shared)) {
+      case SharedStep::kConsumed:
+        continue;
+      case SharedStep::kHelp:
+        print_usage(argv[0]);
+        return 0;
+      case SharedStep::kError:
+        print_usage(argv[0]);
         return 1;
-      }
-      config_filename = argv[i];
-    } else if (arg == "-o") {
+      case SharedStep::kNotShared:
+        break;
+    }
+    std::string_view arg = argv[i];
+    if (arg == "-o") {
       if (++i >= argc) {
         std::cerr << "Error: -o requires an argument\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
-      output_dir = argv[i];
+      opts.output_dir = argv[i];
     } else if (arg == "--format") {
       if (++i >= argc) {
         std::cerr << "Error: --format requires an argument\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
-      image_format = argv[i];
-      if (image_format != "jpg" && image_format != "png") {
-        std::cerr << "Error: --format must be 'jpg' or 'png', got '" << image_format << "'\n\n";
-        PrintUsage(argv[0]);
+      opts.image_format = argv[i];
+      if (opts.image_format != "jpg" && opts.image_format != "png") {
+        std::cerr << "Error: --format must be 'jpg' or 'png', got '" << opts.image_format << "'\n\n";
+        print_usage(argv[0]);
         return 1;
       }
     } else if (arg == "--quality") {
       if (++i >= argc) {
         std::cerr << "Error: --quality requires an argument\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
       try {
-        jpeg_quality = std::stoi(argv[i]);
+        opts.jpeg_quality = std::stoi(argv[i]);
       } catch (const std::exception&) {
         std::cerr << "Error: --quality requires a numeric value, got '" << argv[i] << "'\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
-      if (jpeg_quality < 1 || jpeg_quality > 100) {
-        std::cerr << "Error: --quality must be between 1 and 100, got " << jpeg_quality << "\n\n";
-        PrintUsage(argv[0]);
-        return 1;
-      }
-    } else if (arg == "--backend") {
-      if (++i >= argc) {
-        std::cerr << "Error: --backend requires an argument\n\n";
-        PrintUsage(argv[0]);
-        return 1;
-      }
-      preferred_backend = ParseBackend(argv[i]);
-      if (preferred_backend < 0) {
-        std::cerr << "Error: --backend must be 'auto', 'cpu', 'metal', or 'cuda', got '" << argv[i] << "'\n\n";
-        PrintUsage(argv[0]);
+      if (opts.jpeg_quality < 1 || opts.jpeg_quality > 100) {
+        std::cerr << "Error: --quality must be between 1 and 100, got " << opts.jpeg_quality << "\n\n";
+        print_usage(argv[0]);
         return 1;
       }
     } else if (arg == "--workers") {
       if (++i >= argc) {
         std::cerr << "Error: --workers requires an argument\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
       // std::stoi stops at the first non-digit WITHOUT throwing, so "3abc" would parse as 3 and be
@@ -733,184 +907,179 @@ int main(int argc, char** argv) {
       const std::string workers_arg = argv[i];
       if (workers_arg.empty() || !std::isdigit(static_cast<unsigned char>(workers_arg[0]))) {
         std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
       std::size_t parsed_len = 0;
       try {
-        cli_workers = std::stoi(workers_arg, &parsed_len);
+        opts.cli_workers = std::stoi(workers_arg, &parsed_len);
       } catch (const std::exception&) {
         std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
       if (parsed_len != workers_arg.size()) {
         std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 1;
       }
-      if (cli_workers <= 0) {
-        std::cerr << "Error: --workers must be a positive integer, got " << cli_workers << "\n\n";
-        PrintUsage(argv[0]);
+      if (opts.cli_workers <= 0) {
+        std::cerr << "Error: --workers must be a positive integer, got " << opts.cli_workers << "\n\n";
+        print_usage(argv[0]);
         return 1;
       }
-    } else if (arg == "--benchmark") {
-      benchmark_mode = true;
-    } else if (arg == "-v") {
-      log_level = LUMICE_LOG_VERBOSE;
-    } else if (arg == "-d") {
-      log_level = LUMICE_LOG_DEBUG;
-    } else if (arg == "-h") {
-      PrintUsage(argv[0]);
-      return 0;
     } else {
       std::cerr << "Error: unknown option: " << arg << "\n\n";
-      PrintUsage(argv[0]);
+      print_usage(argv[0]);
       return 1;
     }
   }
 
 #ifdef _WIN32
-  // Re-parse file paths from wide-char command line for full Unicode support.
-  // argv[i] on Windows uses ANSI codepage, which loses non-ASCII characters.
-  // Only path arguments (-f, -o) need wide-char re-parsing; ASCII-only args
-  // (--format, --quality, --workers) are safe as-is.
-  {
-    int wargc = 0;
-    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
-    if (wargv) {
-      for (int i = 1; i < wargc; i++) {
-        std::wstring_view warg = wargv[i];
-        if (warg == L"-f" && i + 1 < wargc) {
-          config_filename = wargv[++i];
-        } else if (warg == L"-o" && i + 1 < wargc) {
-          output_dir = wargv[++i];
-        }
-      }
-      LocalFree(wargv);
-    }
-  }
+  ReparseWidePathArgs(opts.shared.config_filename, &opts.output_dir);
 #endif
 
-  if (config_filename.empty()) {
-    std::cerr << "Error: configuration file is required (-f <file>)\n\n";
-    PrintUsage(argv[0]);
+  if (!FinishSharedOptions(opts.shared)) {
+    print_usage(argv[0]);
+    return 1;
+  }
+  return -1;
+}
+
+// Parses argv[first..) as the `benchmark` option set: the shared options and nothing else.
+// The old `--benchmark` mode accepted `-o` (unused) and `--workers` (announced as ignored);
+// under a subcommand neither has a reason to be accepted, so both are unknown options here.
+// Returns the process exit code, or -1 to proceed to RunBenchmark.
+int ParseBenchmarkOptions(int argc, char** argv, int first, BenchmarkOptions& opts) {
+  for (int i = first; i < argc; i++) {
+    switch (ParseSharedOption(argc, argv, i, opts.shared)) {
+      case SharedStep::kConsumed:
+        continue;
+      case SharedStep::kHelp:
+        PrintBenchmarkUsage(argv[0]);
+        return 0;
+      case SharedStep::kError:
+        PrintBenchmarkUsage(argv[0]);
+        return 1;
+      case SharedStep::kNotShared:
+        break;
+    }
+    std::cerr << "Error: unknown option: " << argv[i] << "\n\n";
+    PrintBenchmarkUsage(argv[0]);
     return 1;
   }
 
-  // Requested Metal but the machine can't provide it → fall back to CPU with a
-  // visible notice rather than silently. (The core would fall back anyway; this
-  // just makes the substitution explicit on the CLI.)
-  if (preferred_backend == LUMICE_BACKEND_METAL && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL)) {
-    std::cerr << "Warning: --backend metal requested but no Metal device is available; using CPU.\n";
-    preferred_backend = LUMICE_BACKEND_CPU;
+#ifdef _WIN32
+  ReparseWidePathArgs(opts.shared.config_filename, /*output_dir=*/nullptr);
+#endif
+
+  if (!FinishSharedOptions(opts.shared)) {
+    PrintBenchmarkUsage(argv[0]);
+    return 1;
   }
-  if (preferred_backend == LUMICE_BACKEND_CUDA && !LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
-    std::cerr << "Warning: --backend cuda requested but no eligible CUDA device is available; using CPU.\n";
-    preferred_backend = LUMICE_BACKEND_CPU;
+  return -1;
+}
+
+// --- Subcommand bodies ---------------------------------------------------------
+
+// Benchmark: dual-pass (single-worker + multi-worker) on the legacy CPU route, one steady pass
+// on a GPU route. The worker counts are part of the measurement methodology, not a default a
+// user preference may override: the "single" pass is 1 worker BECAUSE that is what per-core
+// efficiency means, and "multi" is PhysicalCoreCount() BECAUSE that is what the parallel figure
+// is defined against — which is why this subcommand has no --workers option at all.
+//
+// Note "multi" is an EXPLICIT worker count (num_workers > 0), so it deliberately escapes the cap
+// the automatic default is subject to (kMaxDefaultWorkerCount, server.cpp). On a machine with
+// more physical cores than that cap, "multi" therefore does not report the throughput the
+// shipping default produces: it reports full-core parallel efficiency, which is what this
+// pass is FOR. doc/performance-testing.md says the same thing to whoever reads the number.
+int RunBenchmark(const BenchmarkOptions& opts) {
+  const SharedOptions& shared = opts.shared;
+  std::ifstream config_file(shared.config_filename);
+  if (!config_file.is_open()) {
+    std::cerr << "Error: cannot open config file: " << shared.config_filename.u8string() << "\n";
+    return 1;
   }
-
-  // Benchmark mode: dual-pass (single-worker + multi-worker)
-  if (benchmark_mode) {
-    // The benchmark's worker counts are part of its measurement methodology, not a default a user
-    // preference may override: the "single" pass is 1 worker BECAUSE that is what per-core
-    // efficiency means, and "multi" is PhysicalCoreCount() BECAUSE that is what the parallel figure
-    // is defined against. So --workers is ignored here — said out loud rather than swallowed, the
-    // same way the --backend fallbacks above announce their substitution. The value is still
-    // validated in the parse loop above; being ignored in this mode does not relax AC1.
-    //
-    // Note this is an EXPLICIT worker count (num_workers > 0), so it deliberately escapes the cap
-    // the automatic default is subject to (kMaxDefaultWorkerCount, server.cpp). On a machine with
-    // more physical cores than that cap, "multi" therefore no longer reports the throughput the
-    // shipping default produces: it reports full-core parallel efficiency, which is what this
-    // pass is FOR. doc/performance-testing.md says the same thing to whoever reads the number.
-    if (cli_workers != 0) {
-      std::cerr << "Warning: --workers is ignored in --benchmark mode; the single/multi passes use "
-                   "their own fixed worker counts by design.\n";
-    }
-    std::ifstream config_file(config_filename);
-    if (!config_file.is_open()) {
-      std::cerr << "Error: cannot open config file: " << config_filename.u8string() << "\n";
-      return 1;
-    }
-    nlohmann::json config_json;
-    try {
-      config_file >> config_json;
-    } catch (const nlohmann::json::parse_error& e) {
-      std::cerr << "Error: invalid JSON in config file: " << e.what() << "\n";
-      return 1;
-    }
-
-    WarnIfLastScatteringLayerProbNonzero(config_json);
-
-    auto cores = static_cast<int>(std::thread::hardware_concurrency());
-
-    // The GPU route is single-engine (worker_count=1, server.cpp) regardless of
-    // num_workers. Its "single" (2M-ray, JIT-warmup-dominated) and "multi"
-    // (full-ray, warm) passes are therefore NOT single-vs-parallel — the gap is
-    // warmup + ray-count, not workers. So for the GPU route we run ONE steady pass
-    // (kept labelled "multi" for output continuity) and skip the meaningless warmup
-    // pass. Only the legacy CPU route keeps the genuine dual-pass: "single" = 1
-    // worker (per-core efficiency), "multi" = PhysicalCoreCount() workers (real
-    // parallelism — full-core, which is above the shipping default's cap on a
-    // machine with many cores; see the note at the top of this branch). LUMICE_WillUseGpuRoute is env-aware
-    // (LUMICE_TRACE_BACKEND wins over --backend), so this matches how bench_throughput.py selects a GPU run.
-    bool gpu_route = LUMICE_WillUseGpuRoute(preferred_backend) != 0;
-
-    if (!gpu_route) {
-      // Pass 1: reduced rays, single worker (label="single") — CPU per-core efficiency.
-      auto single_config = config_json;
-      single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
-      RunBenchmarkPass(single_config.dump(), 1, "single", cores, log_level, preferred_backend);
-    } else {
-      // GPU route: run one throwaway warm-up pass BEFORE the timed steady pass.
-      // Purpose: the first GPU call in a process triggers backend-specific lazy
-      // init (CUDA context ~1.3s cold; Metal PSO compile), and when the measured
-      // pass is short enough for `active_sec` to round to ~0 the `rate_basis`
-      // ladder falls back to `wall_fallback` and folds that one-time init into
-      // `rays_per_sec` — this is the mechanism behind the "stoch vs det 15.7×"
-      // cold/warm measurement artifact. Silent=true suppresses both the JSON
-      // stdout line and the wall_fallback stderr warning so downstream parsers
-      // (bench_throughput.py, test_metal_throughput.py) see the same single
-      // `[BENCHMARK]` line they always did. The warm-up config clones the
-      // user's original scene (same crystals / renders / spectrum), only overriding
-      // scene.ray_num to a small finite value — this keeps warm-up wall-time
-      // short (ray count is not what drives init cost) while still exercising
-      // the real GPU dispatch path the steady pass will use.
-      auto warmup_config = config_json;
-      warmup_config["scene"]["ray_num"] = kBenchmarkGpuWarmupRays;
-      RunBenchmarkPass(warmup_config.dump(), 1, "warmup", cores, log_level, preferred_backend,
-                       /*silent=*/true);
-    }
-
-    // Steady pass (label="multi"): original ray count. CPU = PhysicalCoreCount()
-    // workers (parallel — explicit, so uncapped: this is the parallel-efficiency figure,
-    // not the shipping default); GPU = the single engine (the representative steady figure).
-    int multi_workers = gpu_route ? 1 : lumice::PhysicalCoreCount();
-    RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level, preferred_backend);
-
-    return 0;
+  nlohmann::json config_json;
+  try {
+    config_file >> config_json;
+  } catch (const nlohmann::json::parse_error& e) {
+    std::cerr << "Error: invalid JSON in config file: " << e.what() << "\n";
+    return 1;
   }
 
-  if (!std::filesystem::is_directory(output_dir)) {
-    std::cerr << "Error: output directory does not exist: " << output_dir.u8string() << "\n";
+  WarnIfLastScatteringLayerProbNonzero(config_json);
+
+  auto cores = static_cast<int>(std::thread::hardware_concurrency());
+
+  // The GPU route is single-engine (worker_count=1, server.cpp) regardless of
+  // num_workers. Its "single" (2M-ray, JIT-warmup-dominated) and "multi"
+  // (full-ray, warm) passes are therefore NOT single-vs-parallel — the gap is
+  // warmup + ray-count, not workers. So for the GPU route we run ONE steady pass
+  // (kept labelled "multi" for output continuity) and skip the meaningless warmup
+  // pass. Only the legacy CPU route keeps the genuine dual-pass: "single" = 1
+  // worker (per-core efficiency), "multi" = PhysicalCoreCount() workers (real
+  // parallelism — full-core, which is above the shipping default's cap on a
+  // machine with many cores; see the note at the top of this function). LUMICE_WillUseGpuRoute is env-aware
+  // (LUMICE_TRACE_BACKEND wins over --backend), so this matches how bench_throughput.py selects a GPU run.
+  bool gpu_route = LUMICE_WillUseGpuRoute(shared.preferred_backend) != 0;
+
+  if (!gpu_route) {
+    // Pass 1: reduced rays, single worker (label="single") — CPU per-core efficiency.
+    auto single_config = config_json;
+    single_config["scene"]["ray_num"] = kBenchmarkSingleRays;
+    RunBenchmarkPass(single_config.dump(), 1, "single", cores, shared.log_level, shared.preferred_backend);
+  } else {
+    // GPU route: run one throwaway warm-up pass BEFORE the timed steady pass.
+    // Purpose: the first GPU call in a process triggers backend-specific lazy
+    // init (CUDA context ~1.3s cold; Metal PSO compile), and when the measured
+    // pass is short enough for `active_sec` to round to ~0 the `rate_basis`
+    // ladder falls back to `wall_fallback` and folds that one-time init into
+    // `rays_per_sec` — this is the mechanism behind the "stoch vs det 15.7×"
+    // cold/warm measurement artifact. Silent=true suppresses both the JSON
+    // stdout line and the wall_fallback stderr warning so downstream parsers
+    // (bench_throughput.py, test_metal_throughput.py) see the same single
+    // `[BENCHMARK]` line they always did. The warm-up config clones the
+    // user's original scene (same crystals / renders / spectrum), only overriding
+    // scene.ray_num to a small finite value — this keeps warm-up wall-time
+    // short (ray count is not what drives init cost) while still exercising
+    // the real GPU dispatch path the steady pass will use.
+    auto warmup_config = config_json;
+    warmup_config["scene"]["ray_num"] = kBenchmarkGpuWarmupRays;
+    RunBenchmarkPass(warmup_config.dump(), 1, "warmup", cores, shared.log_level, shared.preferred_backend,
+                     /*silent=*/true);
+  }
+
+  // Steady pass (label="multi"): original ray count. CPU = PhysicalCoreCount()
+  // workers (parallel — explicit, so uncapped: this is the parallel-efficiency figure,
+  // not the shipping default); GPU = the single engine (the representative steady figure).
+  int multi_workers = gpu_route ? 1 : lumice::PhysicalCoreCount();
+  RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, shared.log_level, shared.preferred_backend);
+
+  return 0;
+}
+
+int RunRender(const RenderOptions& opts) {
+  const SharedOptions& shared = opts.shared;
+  if (!std::filesystem::is_directory(opts.output_dir)) {
+    std::cerr << "Error: output directory does not exist: " << opts.output_dir.u8string() << "\n";
     return 1;
   }
 
   LUMICE_ServerConfig server_config{};
-  server_config.preferred_backend = preferred_backend;
-  server_config.num_workers = cli_workers;  // 0 = automatic: one per physical core, capped (server.cpp)
+  server_config.preferred_backend = shared.preferred_backend;
+  server_config.num_workers = opts.cli_workers;  // 0 = automatic: one per physical core, capped (server.cpp)
   auto* server = LUMICE_CreateServerEx(&server_config);
-  LUMICE_SetLogLevel(server, log_level);
+  LUMICE_SetLogLevel(server, shared.log_level);
 
-  WarnIfLastScatteringLayerProbNonzero(config_filename);
+  WarnIfLastScatteringLayerProbNonzero(shared.config_filename);
   // File -> handle -> commit. The parse half reports through its return code only (no internal
   // LOG_ERROR, unlike the core commit path), so the CLI says out loud which half failed instead
   // of exiting 1 with nothing on the console.
   LUMICE_Scene* raw_scene = nullptr;
-  if (auto err = LUMICE_SceneFromJsonFile(config_filename.u8string().c_str(), &raw_scene); err != LUMICE_OK) {
-    std::cerr << "Error: failed to load configuration from file '" << config_filename.u8string() << "' (error code "
-              << static_cast<int>(err) << ")\n";
+  if (auto err = LUMICE_SceneFromJsonFile(shared.config_filename.u8string().c_str(), &raw_scene); err != LUMICE_OK) {
+    std::cerr << "Error: failed to load configuration from file '" << shared.config_filename.u8string()
+              << "' (error code " << static_cast<int>(err) << ")\n";
     LUMICE_DestroyServer(server);
     return 1;
   }
@@ -940,8 +1109,8 @@ int main(int argc, char** argv) {
 
     auto now = std::chrono::steady_clock::now();
     if (now >= next_save_time) {
-      SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-      SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
+      SaveRenderResults(server, opts.output_dir, opts.image_format, opts.jpeg_quality);
+      SaveCompositeResults(server, opts.output_dir, opts.image_format, opts.jpeg_quality);
       PrintStats(server);
       next_save_time = std::chrono::steady_clock::now() + kSaveInterval;
     }
@@ -950,11 +1119,38 @@ int main(int argc, char** argv) {
   }
 
   // Final fetch after loop exit
-  SaveRenderResults(server, output_dir, image_format, jpeg_quality);
-  SaveCompositeResults(server, output_dir, image_format, jpeg_quality);
+  SaveRenderResults(server, opts.output_dir, opts.image_format, opts.jpeg_quality);
+  SaveCompositeResults(server, opts.output_dir, opts.image_format, opts.jpeg_quality);
   PrintStats(server);
-  PrintColorClassSignal(server, config_filename);
+  PrintColorClassSignal(server, shared.config_filename);
 
   LUMICE_DestroyServer(server);
   return 0;
+}
+
+}  // namespace
+
+
+int main(int argc, char** argv) {
+  // Subcommand dispatch. `argv[1]` is the subcommand only when it spells one; every
+  // other argv[1] — an option, or nothing — is the implicit `render`, whose options
+  // then start at argv[1] instead of argv[2] and whose help is the top-level page.
+  const std::string_view subcommand = argc > 1 ? std::string_view(argv[1]) : std::string_view();
+
+  if (subcommand == kSubcommandBenchmark) {
+    BenchmarkOptions opts;
+    if (int rc = ParseBenchmarkOptions(argc, argv, /*first=*/2, opts); rc >= 0) {
+      return rc;
+    }
+    return RunBenchmark(opts);
+  }
+
+  const bool explicit_render = subcommand == kSubcommandRender;
+  RenderOptions opts;
+  if (int rc = ParseRenderOptions(argc, argv, /*first=*/explicit_render ? 2 : 1,
+                                  explicit_render ? PrintRenderUsage : PrintTopLevelUsage, opts);
+      rc >= 0) {
+    return rc;
+  }
+  return RunRender(opts);
 }

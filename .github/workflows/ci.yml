@@ -450,7 +450,7 @@ jobs:
 
           # Run dual-mode benchmark (outputs two [BENCHMARK] JSON lines)
           EXIT_CODE=0
-          ${{ matrix.benchmark_bin }} --benchmark -f examples/bench_config.json -o /tmp > benchmark_stdout.txt 2>&1 || EXIT_CODE=$?
+          ${{ matrix.benchmark_bin }} benchmark -f examples/bench_config.json > benchmark_stdout.txt 2>&1 || EXIT_CODE=$?
           if [ $EXIT_CODE -ne 0 ]; then
             echo '{"error": "exit_code='"$EXIT_CODE"'"}' > benchmark-result.txt
           else
@@ -878,7 +878,7 @@ jobs:
   # (.cu, cl.exe host) mixed compile — the one thing the Windows split gambles on that the Linux
   # split did not — is first exercised on the day a tag is cut.
   #
-  # Unlike isa-v4-compile this job also RUNS the binary, once, for --benchmark: v3 is AVX2,
+  # Unlike isa-v4-compile this job also RUNS the binary, once, for `benchmark`: v3 is AVX2,
   # which every hosted x64 runner has, so there is no SIGILL coin toss, and the assertion it
   # buys is the regression this whole path once had — CMake reports MSVC=TRUE for clang-cl,
   # and a macro gated on if(MSVC) alone left every clang-cl build reporting "baseline" while
@@ -953,7 +953,7 @@ jobs:
       - name: Assert the isa key reports x86-64-v3 under clang-cl
         shell: pwsh
         run: |
-          $out = & "build\Release\static\bin\Lumice.exe" --benchmark -f examples\bench_config.json 2>&1 | Out-String
+          $out = & "build\Release\static\bin\Lumice.exe" benchmark -f examples\bench_config.json 2>&1 | Out-String
           if ($out -notmatch '"isa"\s*:\s*"x86-64-v3"') {
             Write-Error "isa key did not report x86-64-v3 under clang-cl; output:`n$out"
             exit 1
