@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Committed throughput bench harness (task-270.6 / performance layer §1.5).
 
-Runs `Lumice --benchmark` across a 4-backend × heavy-config × GPU-dispatch
+Runs `Lumice benchmark` across a 4-backend × heavy-config × GPU-dispatch
 matrix, reports median rays/s + CoV per cell, ratios against the legacy CPU
 baseline. Backends: legacy CPU (baseline), cpu_backend (verify-only), Metal
 (Apple host only), CUDA (CUDA host only). The
@@ -13,7 +13,7 @@ real path). `CpuTraceBackend` is a GPU-validation reference, NOT a perf
 baseline — see feedback_perf_baseline_is_legacy_cpu / doc/testing-architecture.md §4.1.
 
 GPU pass note: the GPU route (Metal/CUDA) is single-engine (worker_count=1), so
---benchmark emits ONE steady "multi" pass for GPU and skips the "single" warmup
+`benchmark` emits ONE steady "multi" pass for GPU and skips the "single" warmup
 pass (single/multi would not be parallel — the gap is warmup+ray-count). The
 legacy CPU route still emits the genuine dual pass: "single" = 1 worker, "multi"
 = N=PhysicalCoreCount workers. So a GPU row has multi_rps but single_rps=None;
@@ -88,7 +88,7 @@ GPU_ROUTE_STRINGS = {"metal": ROUTE_METAL, "cuda": ROUTE_CUDA}
 # in sync. All entries are dual_fisheye_equal_area (Metal-comparable, no CLI
 # fallback) AND completable by legacy within RUN_TIMEOUT_SEC, so every row yields
 # a real ratio. The heaviest scene `ms3_mixed_pyramid_heavy` is in the registry
-# table but NOT auto-run here: legacy --benchmark's single pass is hardwired to
+# table but NOT auto-run here: legacy `benchmark`'s single pass is hardwired to
 # 2M rays (kBenchmarkSingleRays) and times out on that 3-MS pyramid scene, so it
 # has no legacy baseline — it is Metal-only viable (see the registry note).
 CONFIGS = {
@@ -125,7 +125,7 @@ RAY_NUM_OVERRIDE = 5_000_000
 # (each drain = 64 * dispatch_size rays; CUDA default dispatch 262144 → 16.8M
 # rays/drain; a 20M config only observes ~1.19 drains → most tracing lumps into
 # "setup"). Fix: set ray_num="infinite" for GPU passes so main.cpp's
-# --benchmark takes the drain-count-driven measurement path (window from drain
+# `benchmark` takes the drain-count-driven measurement path (window from drain
 # #1 to drain #(N+1), StopServer, report rate_basis=drain_aligned). Legacy CPU
 # stays on RAY_NUM_OVERRIDE (finite) — the legacy denominator must not change
 # (baseline stability policy; see feedback_perf_baseline_is_legacy_cpu). The
@@ -224,7 +224,7 @@ if _nreps_env:
 
 
 def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) -> dict:
-    """Execute one --benchmark invocation. Returns parsed result dict."""
+    """Execute one `Lumice benchmark` invocation. Returns parsed result dict."""
     env = dict(os.environ)
     env[LIB_PATH_VAR] = ":".join(str(d) for d in LIB_DIRS)
     if backend_env is None:
@@ -237,7 +237,7 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
         env["LUMICE_DISPATCH_RAY_NUM"] = str(dispatch_num)
     env.pop("LUMICE_COMMIT_RAY_NUM", None)  # keep commit granularity at default
 
-    cmd = [str(BIN), "--benchmark", "-f", str(config_path), "-v"]
+    cmd = [str(BIN), "benchmark", "-f", str(config_path), "-v"]
     # encoding/errors are explicit (not bare text=True): on a non-UTF-8 locale
     # (e.g. Windows gbk) text=True decodes the binary's log stream with the locale
     # codec and a stray non-locale byte (Win-1252 smart quote 0x92, etc.) raises
@@ -282,7 +282,7 @@ def run(config_path: Path, backend_env: str | None, dispatch_num: int | None) ->
         elif not routed_gpu:
             note = f"NO_{backend_env.upper()}_ROUTE(rc={proc.returncode})"
         elif "multi" not in by_mode:
-            # GPU route is single-engine → --benchmark emits ONE steady ("multi")
+            # GPU route is single-engine → `benchmark` emits ONE steady ("multi")
             # pass and skips the "single" warmup pass (it would not be parallel).
             note = f"INCOMPLETE(n={len(benches)},rc={proc.returncode})"
     else:

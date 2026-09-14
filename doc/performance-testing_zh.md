@@ -76,7 +76,7 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 
 ## ⚠️ 本地构建不是出货的那个二进制：`-march=native` 在这里默认开、在别处一律关
 
-这一条讲的不是 `--benchmark` 报的是*哪个*数字，而是这个数字出自*哪个二进制*。它已经害过一次
+这一条讲的不是 `Lumice benchmark` 报的是*哪个*数字，而是这个数字出自*哪个二进制*。它已经害过一次
 跨平台结论——那条结论被写下来、被当作待办流传了一段时间，才查出成因。
 
 **机制。** `LUMICE_ISA_LEVEL`（`CMakeLists.txt:50`）是唯一一个说明「Release 构建编译到哪一档
@@ -153,9 +153,10 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 
 使用 `examples/bench_config.json`：1 晶体，1 渲染器，D65 光谱，10M 光线，max_hits=8。
 
-### `--benchmark` 标志
+### `benchmark` 子命令
 
-`--benchmark` 标志运行双模式基准测试：先用单 worker 测量单核效率，再用全 worker 测量
+`Lumice benchmark -f <config>` 运行双模式基准测试（原 `--benchmark` 旗已删除，遇到会报错并给出迁移提示；
+子命令只接受 `-f`、`--backend`、`-v`、`-d`、`-h`——不写文件所以没有 `-o`，worker 数是测量口径本身所以没有 `--workers`）：先用单 worker 测量单核效率，再用全 worker 测量
 并行吞吐量。输出两行 JSON：
 
 ```
@@ -172,7 +173,7 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 对整个 run 只 ~0.2s 的快后端很重要——折进 setup 会把它们的 rays_per_sec 压低 >30%。
 
 **两套独立的 `rate_basis` 阶梯**（消费者/gate 按走的哪条路径判定，不按全集字符串相等判）：
-- **finite `ray_num`**（legacy CPU 趟，及任何 finite-config `--benchmark`）：`steady` /
+- **finite `ray_num`**（legacy CPU 趟，及任何 finite-config `benchmark` 运行）：`steady` /
   `active_short` / `wall_fallback`（上面的 honesty-fix 阶梯）。
 - **`ray_num="infinite"`**（GPU 趟，task-gpu-bench-drain-aligned-rate）：`drain_aligned`（恰好
   测了 N 个整 drain 窗口）或 `too_few_drains`（未凑满 N drain 就退出——异常/不可信）。见下方
@@ -186,10 +187,10 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 
 > **⚠️ GPU 后端是单引擎——不存在 "single" vs "multi" 并行。** GPU 路线（Metal / CUDA）无条件
 > `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（默认
-> `worker_count = min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`；`--benchmark` 的 `multi` 趟
+> `worker_count = min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`；`benchmark` 的 `multi` 趟
 > 显式请求满核，因此不受该上限约束——在核数高于上限的机器上，它量的是满核并行效率，不再等于出厂
 > 默认会跑出来的吞吐）。既然 GPU 的 "single" 与 "multi" 趟都跑在同一个单引擎（只差暖机+光线数、
-> 非并行），**`--benchmark` 对 GPU 路线塌成 ONE 稳态趟**（label `mode="multi"`）、跳过暖机趟；
+> 非并行），**`Lumice benchmark` 对 GPU 路线塌成 ONE 稳态趟**（label `mode="multi"`）、跳过暖机趟；
 > legacy CPU 路线保留真双趟。路线检测是 env-aware 的（`LUMICE_WillUseGpuRoute` 认 `LUMICE_TRACE_BACKEND`，
 > 故 env 选的 GPU run 也塌）。读 GPU 结果时：
 > - GPU 的 `[BENCHMARK]` / `bench_throughput.py` 行**只有 `multi`**（`single`/`single_rps` 缺失
@@ -213,7 +214,7 @@ benchmark 模式的行为差异：
 > 曾引用不存在的 `ms3_multi_crystal_complex_filter` 并对标无法复现的数字；见
 > task-fix-throughput-bench-honesty。）`scripts/bench_throughput.py` 跑 Metal-可比子集；两者保持同步。
 
-测量口径：**引擎** = `Lumice --benchmark` multi pass，setup-剔除稳态率；**GUI** =
+测量口径：**引擎** = `Lumice benchmark` multi pass，setup-剔除稳态率；**GUI** =
 `gui_test perf_test` steady_state，无限 budget，reconstruct 路径。基线分母永远是 **legacy CPU**
 （GUI 真实路径）——绝不用 `cpu_backend`。下方 `Metal vs legacy` 比值是 M2 Max、2026-06-19 回归锚
 （`scratchpad/task-fix-throughput-bench-honesty/data/`）；任何吞吐改动前后须同会话重测。
@@ -354,7 +355,7 @@ CUDA 路线还有 **per-batch 同步 readback** 税（`ReadbackXyzAccum` 每 Sim
 
 #### drain-count-driven canonical · default dispatch · config 默认分辨率 · `drain_aligned` `rays_per_sec` · 2026-07-02
 
-**背景**（task-gpu-bench-drain-aligned-rate + **task-317 render-per-poll 修复**）：GPU `--benchmark`
+**背景**（drain 对齐计时 + **render-per-poll 修复**，`ee98065a`）：GPU `benchmark`
 设 `ray_num="infinite"`，恰好测 N=10 个整 drain 窗口（`rate_basis="drain_aligned"`），修复 drain-量化
 假低（explore-315：旧 finite 20M 下 CUDA 只 ~1.19 drain → 5× 假低）。下表是各 config **默认分辨率**下的
 诚实稳态 `rays_per_sec`（**不是** scrum-312 分辨率 sweep——两块是不同 metric/轴，不可逐行比较）。每格 N
@@ -437,7 +438,7 @@ per-resolution `multi_wall`：
 ./scripts/build.sh -j release
 
 # benchmark 模式（推荐——结构化输出，不写图片）
-./build/cmake_install/static/Lumice --benchmark -f examples/bench_config.json -o /tmp
+./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json
 
 # 手动模式（info 级别——带图片输出）
 time ./build/cmake_install/static/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
@@ -449,7 +450,7 @@ time ./build/cmake_install/static/Lumice -f examples/bench_config.json -v -o /tm
 ```
 
 关键输出：
-- `--benchmark`：两行 `[BENCHMARK]` JSON（单 worker + 多 worker），含单核和并行吞吐量数据
+- `benchmark`：两行 `[BENCHMARK]` JSON（单 worker + 多 worker），含单核和并行吞吐量数据
 - 手动模式：`Consume profile` 行 + `time` 墙钟时间 → 吞吐量 = 10M / 墙钟秒数
 
 ### Windows
@@ -465,7 +466,7 @@ scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
 scp examples/bench_config.json <windows-host>:<path>/
 
 # benchmark 模式（SSH / PowerShell）
-.\Lumice.exe --benchmark -f bench_config.json -o .
+.\Lumice.exe benchmark -f bench_config.json
 
 # 手动模式（PowerShell 墙钟时间）
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds

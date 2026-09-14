@@ -1,14 +1,14 @@
 """Metal-in-GUI acceptance gate (scrum-268 / G4 — the §5 GUI-first north-star).
 
 G1 (test_metal_throughput.py) proves the *engine* throughput thesis via
-`--benchmark` (no GUI consumer / no poller readback in the loop). G4 proves the
+`Lumice benchmark` (no GUI consumer / no poller readback in the loop). G4 proves the
 thing the whole §5 arc actually exists for: that the single-engine Metal backend
 **beats legacy CPU in the real GUI regime** (live preview = frequent commit +
 intermediate-result feedback), end-to-end through the same path a user drives —
 server reconstruct-on-toggle → poller readback → consumer projection.
 
 Why this is a *separate* gate from G1 (scrum-268.6 + task-fix-throughput-bench-honesty):
-  - G1 measures the bare engine via `--benchmark` (no GUI consumer / poller in the
+  - G1 measures the bare engine via `Lumice benchmark` (no GUI consumer / poller in the
     loop); G4 drives the real end-to-end GUI path (reconstruct → poller readback →
     consumer projection). They now agree in magnitude — both ~8-10x legacy on the
     heavy scene (the earlier "engine 9.5x but GUI only 2x → 6x poller headroom"

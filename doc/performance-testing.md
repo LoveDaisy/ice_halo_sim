@@ -76,12 +76,12 @@ Supporting metrics:
 | `texture FPS` | GUI perf test steady_state | Steady-state texture refresh rate |
 | `Consume profile` | CLI -v / GUI --log-level debug | Per-batch filter/proj/accum breakdown |
 
-## ⚠️ Two ways `--benchmark` silently reports a number that answers a different question
+## ⚠️ Two ways `Lumice benchmark` silently reports a number that answers a different question
 
 Both were hit in one session while calibrating the geometry clock; each produced a confident,
 self-consistent, wrong conclusion that survived until something else contradicted it.
 
-### A. `--benchmark` emits TWO `[BENCHMARK]` lines on the legacy CPU route — pick the right one
+### A. `Lumice benchmark` emits TWO `[BENCHMARK]` lines on the legacy CPU route — pick the right one
 
 The legacy CPU route runs a dual pass and prints one JSON per pass:
 `"mode":"single","workers":1` and `"mode":"multi","workers":N`. A GPU route is a single engine and
@@ -97,8 +97,8 @@ configuration**, and a `grep '"single"'` that looks right will quietly measure a
 asks for `PhysicalCoreCount()` workers explicitly, which is exactly why it escapes the cap: it is
 the denominator parallel efficiency is defined against. Read it as "how well does this box scale to
 all its cores", not as "what a user gets" — the two coincided before the default was capped, and on
-a high-core-count box they no longer do. When you want the shipping number, run a normal (non
-`--benchmark`) simulation, or pass `--workers` the capped value and read that. When you want to know
+a high-core-count box they no longer do. When you want the shipping number, run a normal `render`
+(the default subcommand), or pass `--workers` the capped value and read that. When you want to know
 whether the cap is costing this particular machine throughput, `mode:multi` is precisely the
 measurement that tells you.
 
@@ -156,8 +156,8 @@ the "stoch vs det 15.7×" cold/warm measurement artifact.
 Five defensive rules — the first is now enforced by the tool, the rest remain usage
 discipline:
 
-1. **`--benchmark` runs one silent warm-up pass on the GPU route before the timed steady pass**
-   (`src/main.cpp` `main()`'s `benchmark_mode` branch, `gpu_route == true`; the warm-up uses
+1. **`Lumice benchmark` runs one silent warm-up pass on the GPU route before the timed steady pass**
+   (`src/main.cpp` `RunBenchmark`, `gpu_route == true`; the warm-up uses
    `kBenchmarkGpuWarmupRays` = 100k rays and the same config as the steady pass, only with
    `scene.ray_num` overridden). It absorbs the one-time init so the reported `[BENCHMARK]` line
    measures steady trace only. The legacy CPU route is unchanged (no lazy GPU init to strip).
@@ -170,7 +170,7 @@ discipline:
    number; legacy CPU numbers on short configs likewise inherit this lower bound.
 4. **Only trust `rate_basis` in `{steady, drain_aligned}`.** `wall_fallback`, `too_few_drains`,
    and `active_short` are all, by definition, not a steady trace rate — discard any of them,
-   do not use them for perf comparison. `--benchmark` emits an explicit stderr warning when
+   do not use them for perf comparison. `Lumice benchmark` emits an explicit stderr warning when
    the reported pass falls through to `wall_fallback` or `active_short` (`src/main.cpp`
    `RunBenchmarkPass`, next to the `[BENCHMARK]` JSON emit) so neither can be missed silently.
    `active_short` fires when the whole run's rays land inside the single poll that first
@@ -204,7 +204,7 @@ discipline:
 
 ## ⚠️ A local build is not the shipped binary: `-march=native` is on by default here and off everywhere else
 
-This one is not about *which* number `--benchmark` reports; it is about *which binary* produced
+This one is not about *which* number `Lumice benchmark` reports; it is about *which binary* produced
 it. It has already cost one cross-platform conclusion, which was written down and acted on
 before the cause was found.
 
@@ -295,9 +295,12 @@ Pure pipeline throughput test without GUI, VSync, or display overhead.
 
 Use `examples/bench_config.json`: 1 crystal, 1 render, D65 spectrum, 10M rays, max_hits=8.
 
-### `--benchmark` flag
+### `benchmark` subcommand
 
-The `--benchmark` flag runs a dual-mode benchmark: a single-worker pass for per-core
+`Lumice benchmark -f <config>` runs a dual-mode benchmark (the former `--benchmark` flag; it now
+exits with a migration hint, and the subcommand accepts only `-f`, `--backend`, `-v`, `-d`, `-h` —
+there is no `-o`, since nothing is written, and no `--workers`, since the worker counts are the
+measurement methodology): a single-worker pass for per-core
 efficiency, followed by a multi-worker pass for parallel throughput. Two JSON lines are
 output:
 
@@ -319,7 +322,7 @@ first-dispatch latency) is excluded from the denominator on `steady`;
 
 **Two independent `rate_basis` ladders** (a reader/gate parses by which path, NOT
 by string-equality across the whole set):
-- **finite `ray_num`** (legacy CPU pass, and any finite-config `--benchmark`):
+- **finite `ray_num`** (legacy CPU pass, and any finite-config `benchmark` run):
   `steady` / `active_short` / `wall_fallback` (the honesty-fix ladder above).
 - **`ray_num="infinite"`** (GPU passes, task-gpu-bench-drain-aligned-rate):
   `drain_aligned` (measured exactly N drain windows) or `too_few_drains`
@@ -340,7 +343,7 @@ scheduling overhead. **Meaningful for the legacy CPU route only** — see the GP
 > kMaxDefaultWorkerCount)` by default; the `multi` benchmark pass asks for full cores explicitly and
 > is therefore uncapped — see §A). Because a GPU
 > "single" and "multi" pass would both run on the same one engine (differing only by warmup +
-> ray-count, not parallelism), **`--benchmark` collapses the GPU route to ONE steady pass**
+> ray-count, not parallelism), **`Lumice benchmark` collapses the GPU route to ONE steady pass**
 > (labelled `mode="multi"`) and skips the warmup pass; the legacy CPU route keeps the genuine
 > dual-pass. Route detection is env-aware (`LUMICE_WillUseGpuRoute` honors `LUMICE_TRACE_BACKEND`,
 > so an env-selected GPU run collapses too). Consequences when reading GPU results:
@@ -379,7 +382,7 @@ Behavior differences in benchmark mode:
 > task-fix-throughput-bench-honesty.) `scripts/bench_throughput.py` runs the
 > Metal-comparable subset; keep the two in sync.
 
-Measurement basis: **engine** = `Lumice --benchmark` multi pass, setup-excluded
+Measurement basis: **engine** = `Lumice benchmark` multi pass, setup-excluded
 steady rate; **GUI** = `gui_test perf_test` steady_state, infinite budget,
 reconstruct path. Baseline denominator is always **legacy CPU** (the GUI's real
 path) — never `cpu_backend`. The `Metal vs legacy` ratios below are the M2 Max,
@@ -387,11 +390,11 @@ path) — never `cpu_backend`. The `Metal vs legacy` ratios below are the M2 Max
 re-measure same-session before/after any throughput change.
 
 > **Why two measurement paths (engine vs GUI) coexist — do not collapse them.**
-> `Lumice --benchmark` (engine ceiling) and `gui_test perf_test` (GUI-fidelity)
+> `Lumice benchmark` (engine ceiling) and `gui_test perf_test` (GUI-fidelity)
 > answer orthogonal questions: the former is the *perf denominator / engine
 > headroom* reference (explore-271 used it to establish the ~10.7M rays/s
 > sustained engine rate as the GUI's headroom anchor); the latter measures the
-> user-experienced reconstruct path. `--benchmark` is **load-bearing** — the G1
+> user-experienced reconstruct path. `Lumice benchmark` is **load-bearing** — the G1
 > gate (`test/performance/test_metal_throughput.py`) and the committed harness
 > (`scripts/bench_throughput.py`) both invoke it — and is **not** redundant with
 > the GUI path, so it is not a retire candidate. (Evaluated & settled 2026-06-24;
@@ -573,7 +576,7 @@ Two consequences that are easy to miss:
 #### drain-count-driven canonical · default dispatch · config-default resolution · `drain_aligned` `rays_per_sec` · 2026-07-02
 
 **Context** (task-gpu-bench-drain-aligned-rate + **task-317 render-per-poll fix**): GPU
-`--benchmark` sets `ray_num="infinite"` and measures exactly N=10 integer drain windows
+`benchmark` sets `ray_num="infinite"` and measures exactly N=10 integer drain windows
 (`rate_basis="drain_aligned"`), fixing the drain-quantization under-report (explore-315: at the
 old finite 20M, CUDA read ~1.19 drains → 5× deflated). Numbers below are the honest steady
 `rays_per_sec` at each config's **default resolution** (NOT the scrum-312 resolution sweep — the
@@ -674,7 +677,7 @@ the drain cadence):
 ./scripts/build.sh -j release
 
 # Benchmark mode (recommended — structured output, no image I/O)
-./build/cmake_install/static/Lumice --benchmark -f examples/bench_config.json -o /tmp
+./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json
 
 # Manual mode (info level — with image output)
 time ./build/cmake_install/static/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
@@ -686,7 +689,7 @@ time ./build/cmake_install/static/Lumice -f examples/bench_config.json -v -o /tm
 ```
 
 Key output:
-- `--benchmark`: Two `[BENCHMARK]` JSON lines (single-worker + multi-worker) with per-core
+- `benchmark`: Two `[BENCHMARK]` JSON lines (single-worker + multi-worker) with per-core
   and parallel throughput data
 - Manual mode: `Consume profile` line + `time` wall time → throughput = 10M / wall_seconds
 
@@ -703,7 +706,7 @@ scp /tmp/ci-win/bin/Lumice.exe <windows-host>:<path>/
 scp examples/bench_config.json <windows-host>:<path>/
 
 # Benchmark mode (via SSH / PowerShell)
-.\Lumice.exe --benchmark -f bench_config.json -o .
+.\Lumice.exe benchmark -f bench_config.json
 
 # Manual mode (PowerShell wall time)
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds

@@ -1,4 +1,4 @@
-"""Regression guard: `--benchmark` must never report a rate the run had no time for.
+"""Regression guard: `Lumice benchmark` must never report a rate the run had no time for.
 
 Fix: `RunBenchmarkPass` (`src/main.cpp`) — the `rate_basis=active_short` branch
 used to compute `rays_per_sec = r_end / active_sec`.
@@ -81,18 +81,16 @@ _MAX_WORK_RATIO = 3.0
 _TIMEOUT = 120
 
 
-def _benchmark_rows(config_name: str, out_dir: str) -> list[dict]:
-    """One `--benchmark` invocation on Metal; return its parsed [BENCHMARK] rows."""
+def _benchmark_rows(config_name: str) -> list[dict]:
+    """One `Lumice benchmark` invocation on Metal; return its parsed [BENCHMARK] rows."""
     env = dict(os.environ)
     env["LUMICE_TRACE_BACKEND"] = "metal"
     proc = subprocess.run(
         [
             str(find_lumice_binary()),
-            "--benchmark",
+            "benchmark",
             "-f",
             str(_CONFIGS_DIR / f"{config_name}.json"),
-            "-o",
-            out_dir,
         ],
         capture_output=True,
         text=True,
@@ -109,12 +107,12 @@ def _benchmark_rows(config_name: str, out_dir: str) -> list[dict]:
 
 @pytest.mark.slow
 @pytest.mark.parametrize("config_name", _CONFIGS)
-def test_reported_rate_is_physically_possible(config_name: str, tmp_path) -> None:
+def test_reported_rate_is_physically_possible(config_name: str) -> None:
     seen_basis: dict[str, int] = {}
     worst = None  # (work_ratio, row) over every sample, reported either way.
 
     for _ in range(_RUNS):
-        for row in _benchmark_rows(config_name, str(tmp_path)):
+        for row in _benchmark_rows(config_name):
             basis = str(row.get("rate_basis", "?"))
             seen_basis[basis] = seen_basis.get(basis, 0) + 1
             wall_sec = float(row["wall_sec"])

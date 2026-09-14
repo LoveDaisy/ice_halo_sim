@@ -140,12 +140,12 @@ purpose 本身不足以完全分开八层中的两层：`unit-correctness`、`co
   harness 提供 `CoV` 后收紧地板。
 - **节奏**：`PR`（廉价哨兵——如 `test_metal_throughput`）与 `nightly`（完整 bench 扫描，跑
   `scripts/bench_throughput.py`，task-270.6 落地）。该 committed harness 是仓内所有
-  `--benchmark` 类吞吐声明的标准工具；`scratchpad/bench/` 下的临时脚本不具权威性。
+  `Lumice benchmark` 类吞吐声明的标准工具；git-ignored 工作区里的临时脚本不具权威性。
 - **命名**：`test_<backend>_throughput.py`；`scripts/bench_throughput.py` 是 committed harness
   （矩阵 = {legacy, cpu_backend, metal} × heavy config × Metal dispatch sweep，median+CoV，
   比值分母锁 legacy CPU）。
 - **物理位置**：目标态 `test/performance/`；现状 `test/e2e/`（吞吐哨兵）+ CI `Benchmark` 步骤
-  （`--benchmark -f examples/bench_config.json`）。
+  （`benchmark -f examples/bench_config.json`）。
 - **边界注**：GUI 帧延迟 / 响应性测试（`test_gui_perf`）**不**在本层——其 oracle 是绝对帧预算，
   而非对 legacy CPU 的比值。它属于 `gui`（响应 tag）。见 §4.4。
 
@@ -926,7 +926,7 @@ PSNR 看不见"的缺陷——每一对因场景改动而变化的读数，都�
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†、`test_optics` 内闭式段†、`MultiMsContinuationNormalIncidence`（在 `test_metal_trace_parity.cpp`，2-MS 解析锚） | — | — | †逐文件确认"解析真值 vs unit-correctness"边界后才拆出 |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`、`test_metal_root_gen`、`test_metal_trace_backend`、`test_metal_filter_match_parity`(.mm)、`test_cpu_trace_backend` | `test_metal_exit_seam_parity`、`test_metal_batch_invariance`、`test_device_gen_default_path`、`test_cpu_backend_route`、**projection 子系统**（315.5）：`test_metal_projection_parity`、`test_cuda_projection_parity`（共用 `_projection_battery.py`） | — | `_parity_metrics.py` 是 parity 指标单一真源——**DO_NOT_MIGRATE_INDEPENDENTLY**（与其依赖者一起移）。能量守恒 + 跨 seed 双门是 267.3 补强——**勿删**。`test_metal_batch_invariance` 的能量守恒 `xfail` 是**合法的**（worst-case drain 未落地）——勿当 bug "修"掉。`_projection_battery.py` 是共享的 per-projection battery（oracle = legacy CPU）——与 `test_{metal,cuda}_projection_parity` 一起移。 |
 | **e2e-correctness** | `test/e2e-correctness/`（平铺） | — | `test_smoke`、`test_cli`、`test_raypath_equivalence` | — | — |
-| **performance** | `test/performance/`（平铺） | （无独立 C++ perf target；CI `Benchmark` 步骤跑 `--benchmark`） | `test_metal_throughput` | — | — |
+| **performance** | `test/performance/`（平铺） | （无独立 C++ perf target；CI `Benchmark` 步骤跑 `Lumice benchmark`） | `test_metal_throughput` | — | — |
 | **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `functional/`：`test_background_overlay`、`test_color_window`、`test_defaults_panel`、`test_edit_modal`、`test_entry_management`、`test_export`、`test_file_ops`、`test_filter_editor`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_preview_animation`、`test_gui_sim_smoke`、`test_log_panel`、`test_overlay_controls`、`test_preview_texture`、`test_preview_viewport`、`test_run_lifecycle`、`test_scene_controls`、`test_shell_chrome`、`test_status_bar`、`test_view_display_controls`；`visual/`：`test_gui_capture_smoke`、`test_gui_defaults_panel`、`test_gui_lens_projection`、`test_gui_modal_layout`、`test_preview_pixels`；`responsiveness/`：**`test_gui_perf`**；harness（平铺于 `test/gui/`）：`test_gui_main`、`test_screenshot`、`test_gui_shared` | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。`functional/` 不再有一个以 `interaction` 命名的杂物间——它原来的内容现已按上表被驱动的窗口/面板拆开，或者在用例不需要真实帧时移出到 `unit-correctness`/`composition-correctness`（§1.7）。 |
 | **regression-sentinel** | `test/regression-sentinel/`（平铺） | — | `test_capi_sentinel_overflow`、`test_ms_filter_leak`、`test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` 用 issue 复现守真 bug——**勿改场景**。`test_ms_filter_leak` 也与 parity 相关；其**主** purpose 是 sentinel（多 purpose → 按主 purpose 归类）。 |
 

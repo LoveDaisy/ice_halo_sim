@@ -445,7 +445,7 @@ struct ResultFrame {
  *          override wins over @p preferred_backend, CUDA gated on device availability),
  *          mirroring CreateBackend. `ServerImpl`'s constructor uses the same function to
  *          decide `worker_count` (GPU route => 1). Callers outside the server (e.g. the CLI
- *          `--benchmark` dual-pass, which must skip the meaningless "single" warmup pass for
+ *          `Lumice benchmark` dual-pass, which must skip the meaningless "single" warmup pass for
  *          the single-engine GPU route) should query this rather than re-deriving the logic.
  */
 // `force_cpu` is the analysis run's session property (Server::StartRaypathAnalysis): when
@@ -640,7 +640,7 @@ class Server {
   /**
    * @brief Cheap O(1) live accumulated sim ray count (no snapshot / no render).
    * @return Running StatsConsumer ray count; 0 if none. For progress polling
-   *         (e.g. the --benchmark drain loop) that needs sim_ray_num every
+   *         (e.g. the `Lumice benchmark` drain loop) that needs sim_ray_num every
    *         iteration but not a rendered image. See task-317.
    */
   size_t GetLiveSimRayCount();

@@ -51,36 +51,79 @@ The console also prints a `Stats:` block summarising the simulation (ray counts,
 
 ## 4. All flags at a glance
 
-The complete set of flags as printed by `Lumice -h` (anchor source: `./build/cmake_install/static/Lumice -h`):
+The CLI has two subcommands, `render` and `benchmark`. `render` is the default: `Lumice -f config.json` and `Lumice render -f config.json` are the same command, so every example above is a render. Each subcommand accepts only its own options; `Lumice <subcommand> -h` prints that subcommand's page.
+
+The complete set as printed by `Lumice -h` (anchor source: `./build/cmake_install/static/Lumice -h`):
 
 ```text
-Usage: ./build/cmake_install/static/Lumice -f <config_file> [options]
+Usage: ./build/cmake_install/static/Lumice [render] -f <config_file> [options]
+       ./build/cmake_install/static/Lumice benchmark -f <config_file> [options]
+       ./build/cmake_install/static/Lumice <subcommand> -h
 
 Lumice — simulate ice halos by tracing rays through ice crystals.
 
-Options:
+Subcommands:
+  render             Simulate and write halo images. This is the default when
+                     no subcommand is given: `./build/cmake_install/static/Lumice -f ...` is a render.
+  benchmark          Run a throughput benchmark and print [BENCHMARK] JSON
+                     (`./build/cmake_install/static/Lumice benchmark -h` for its options)
+
+Options for render (the default subcommand):
   -f <file>          Specify the configuration file (required)
-  -o <dir>           Output directory for rendered images (default: current directory)
-  --format <fmt>     Output image format: jpg or png (default: jpg)
-  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
   --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
                      'auto' and 'cpu' both select the CPU route today; 'metal'
                      falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
                      env var, if set, still overrides this (debug/CI only).
+  -v                 Verbose output (trace level logging)
+  -d                 Debug output (debug level logging)
+  -h, --help         Show this help message and exit
+  -o <dir>           Output directory for rendered images (default: current directory)
+  --format <fmt>     Output image format: jpg or png (default: jpg)
+  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
   --workers <N>      Number of CPU simulation worker threads (default: automatic —
                      one per physical core, capped at a ceiling above which no
                      machine measured ran faster; an explicit N is never capped).
                      Machine-dependent, so it is a command-line switch rather than
                      a config-file field: a config travels between machines and a
                      worker count should not travel with it. Ignored on a GPU route
-                     (single engine) and in --benchmark mode.
-  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy
-                     CPU route runs a dual pass (single-worker + multi-worker → per-core
-                     and parallel-efficiency data); a GPU route is single-engine, so it
-                     runs one steady pass only (single/multi would not be parallel)
+                     (single engine).
+
+Examples:
+  ./build/cmake_install/static/Lumice -f config.json
+  ./build/cmake_install/static/Lumice -f config.json -o /tmp/output
+  ./build/cmake_install/static/Lumice -f config.json --format png
+  ./build/cmake_install/static/Lumice -f config.json --quality 80
+  ./build/cmake_install/static/Lumice -f config.json --backend metal
+  ./build/cmake_install/static/Lumice -f config.json --workers 4
+  ./build/cmake_install/static/Lumice -f config.json -v
+  ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json
+```
+
+`Lumice benchmark -h`:
+
+```text
+Usage: ./build/cmake_install/static/Lumice benchmark -f <config_file> [options]
+
+Run a throughput benchmark and print [BENCHMARK] JSON. The legacy CPU route
+runs a dual pass (single-worker + multi-worker → per-core and parallel-
+efficiency data); a GPU route is single-engine, so it runs one steady pass
+only (single/multi would not be parallel). The worker counts are part of the
+measurement methodology, which is why there is no --workers here; nothing is
+written to disk, which is why there is no -o.
+
+Options:
+  -f <file>          Specify the configuration file (required)
+  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
+                     'auto' and 'cpu' both select the CPU route today; 'metal'
+                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
+                     env var, if set, still overrides this (debug/CI only).
   -v                 Verbose output (trace level logging)
   -d                 Debug output (debug level logging)
-  -h                 Show this help message and exit
+  -h, --help         Show this help message and exit
+
+Examples:
+  ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json
+  ./build/cmake_install/static/Lumice benchmark -f examples/bench_config.json --backend metal
 ```
 
 Notes:
@@ -88,7 +131,7 @@ Notes:
 - `-f` is the only required flag. Without it, Lumice exits non-zero with a usage hint.
 - `--format png` switches to lossless PNG; `--quality` is ignored in that case.
 - `--workers <N>` overrides the automatic worker count (one per physical core, capped at a measured ceiling; the cap applies to the automatic value only, never to an `N` you name). It is a switch rather than a config field on purpose: a worker count describes the machine, and a config file travels between machines. An illegal value (`0`, negative, non-numeric) exits non-zero rather than falling back to the default.
-- `--benchmark` is for performance regression testing — see [`../performance-testing.md`](../performance-testing.md). It is **not** how you run a normal simulation.
+- `Lumice benchmark -f <config>` is for performance regression testing — see [`../performance-testing.md`](../performance-testing.md). It is **not** how you run a normal simulation, and it takes only `-f`, `--backend`, `-v`, `-d`, `-h` (no `-o`: it writes nothing; no `--workers`: the worker counts are the measurement itself). The former `--benchmark` flag exits with a hint pointing here.
 
 ## 5. Performance expectations
 

@@ -224,7 +224,7 @@ class ServerImpl {
   // workers would be left throughput on the table by this default — no such machine
   // was observed, but none was ruled out either. Such a machine's escape hatch is the
   // explicit path above (CLI --workers N, or the GUI's app-level worker preference),
-  // and the CLI's --benchmark mode:multi pass still reports the full-core figure, so
+  // and the CLI's `benchmark` mode:multi pass still reports the full-core figure, so
   // the comparison that would reveal it stays available.
   static constexpr int kMaxDefaultWorkerCount = 10;
 
@@ -631,7 +631,7 @@ void ServerImpl::RunPersistentLoop(F work_fn, std::optional<SessionKind> require
 // IS its performance model — collapsing it to 1 worker is a ~6x regression on
 // the perf baseline + GUI default path). The route is fixed at construction; the
 // GUI reconstructs the server when the Metal checkbox toggles. An env
-// LUMICE_TRACE_BACKEND override (CLI / --benchmark) takes precedence over the
+// LUMICE_TRACE_BACKEND override (CLI render / benchmark) takes precedence over the
 // preferred_backend argument, mirroring CreateBackend (simulator.cpp).
 // ResolveGpuRoute — does this backend run the GPU single-engine route
 // (worker_count=1 + large dispatch)? This MUST agree with CreateBackend's actual
@@ -1620,7 +1620,7 @@ std::shared_ptr<const ResultFrame> ServerImpl::AcquireResultFrame() {
   return restamped;
 }
 
-// task-317: cheap O(1) live sim-ray-count read for the --benchmark drain-count
+// Cheap O(1) live sim-ray-count read for the `Lumice benchmark` drain-count
 // poll loop. Unlike acquiring a result frame (which calls DoSnapshot -> RenderConsumer
 // sRGB every poll — the render-per-poll root cause), this only reads the running
 // StatsConsumer counter under consumer_mutex_. No snapshot, no render, no XYZ
@@ -2306,7 +2306,7 @@ void ServerImpl::GenerateScene() {
   // (32768) once the dead exit buffer is capped — select per backend so each GPU
   // route gets its own measured plateau. ResolveGpuRoute is env-override-aware
   // (LUMICE_TRACE_BACKEND wins over preferred_backend_, so keying on the latter
-  // misses the --benchmark/CLI env path). Metal is Apple-only; CUDA is the only
+  // misses the CLI (render / benchmark) env path). Metal is Apple-only; CUDA is the only
   // GPU route on a non-Apple CUDA build — so there a true GPU route IS CUDA.
   const BackendKind kPref = preferred_backend_.load(std::memory_order_acquire);
   // The analysis session forces the CPU route here AND in the Simulator's CreateBackend

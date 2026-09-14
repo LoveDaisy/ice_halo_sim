@@ -16,7 +16,7 @@ class StatsConsumer : public IConsume {
   void Reset() override;
 
   // Live (un-snapshotted) accumulated sim ray count. Cheap O(1) read of the
-  // running counter for progress polling (e.g. the --benchmark drain loop),
+  // running counter for progress polling (e.g. the `Lumice benchmark` drain loop),
   // which needs sim_ray_num every iteration but NOT a rendered snapshot.
   // The drain-count benchmark poll once read stats off a full result snapshot,
   // which unconditionally triggers DoSnapshot -> RenderConsumer sRGB (powf/pixel),
