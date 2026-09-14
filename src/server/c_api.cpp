@@ -33,6 +33,7 @@
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for LUMICE_IsBackendAvailable
 #endif
 #include "include/lumice.h"
+#include "server/c_api_enum_map.hpp"  // lens type / visible range <-> LUMICE_* (shared with the CLI)
 #include "server/c_api_internal.hpp"
 #include "server/raypath_histogram_consumer.hpp"  // ReduceRaypathHistogram (the analysis reads)
 #include "server/server.hpp"
@@ -469,81 +470,12 @@ static nlohmann::json CompositionArrayToJson(const LUMICE_ComplexComposition& co
   return composition;
 }
 
-// Map LUMICE_LENS_TYPE_* to its core enumerator. Explicit switch (not a numeric cast) so a future
-// reorder of either enumeration surfaces as a compile/throw rather than a silently aliased
-// projection. Throws std::invalid_argument on an unknown value.
-static ns::LensParam::LensType MapLensTypeFromCApi(int lens_type) {
-  switch (lens_type) {
-    case LUMICE_LENS_TYPE_LINEAR:
-      return ns::LensParam::kLinear;
-    case LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA:
-      return ns::LensParam::kFisheyeEqualArea;
-    case LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT:
-      return ns::LensParam::kFisheyeEquidistant;
-    case LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC:
-      return ns::LensParam::kFisheyeStereographic;
-    case LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA:
-      return ns::LensParam::kDualFisheyeEqualArea;
-    case LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT:
-      return ns::LensParam::kDualFisheyeEquidistant;
-    case LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC:
-      return ns::LensParam::kDualFisheyeStereographic;
-    case LUMICE_LENS_TYPE_RECTANGULAR:
-      return ns::LensParam::kRectangular;
-    case LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC:
-      return ns::LensParam::kFisheyeOrthographic;
-    case LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC:
-      return ns::LensParam::kDualFisheyeOrthographic;
-    case LUMICE_LENS_TYPE_GLOBE:
-      return ns::LensParam::kGlobe;
-    default:
-      throw std::invalid_argument("LUMICE_RenderParam.lens_type is invalid: " + std::to_string(lens_type));
-  }
-}
-
-// Inverse of MapLensTypeFromCApi. Total over the core enumeration (no default arm) so adding a
-// projection to core breaks the build here instead of decoding to a wrong C API constant.
-static int MapLensTypeToCApi(ns::LensParam::LensType type) {
-  switch (type) {
-    case ns::LensParam::kLinear:
-      return LUMICE_LENS_TYPE_LINEAR;
-    case ns::LensParam::kFisheyeEqualArea:
-      return LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
-    case ns::LensParam::kFisheyeEquidistant:
-      return LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT;
-    case ns::LensParam::kFisheyeStereographic:
-      return LUMICE_LENS_TYPE_FISHEYE_STEREOGRAPHIC;
-    case ns::LensParam::kDualFisheyeEqualArea:
-      return LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
-    case ns::LensParam::kDualFisheyeEquidistant:
-      return LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUIDISTANT;
-    case ns::LensParam::kDualFisheyeStereographic:
-      return LUMICE_LENS_TYPE_DUAL_FISHEYE_STEREOGRAPHIC;
-    case ns::LensParam::kRectangular:
-      return LUMICE_LENS_TYPE_RECTANGULAR;
-    case ns::LensParam::kFisheyeOrthographic:
-      return LUMICE_LENS_TYPE_FISHEYE_ORTHOGRAPHIC;
-    case ns::LensParam::kDualFisheyeOrthographic:
-      return LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC;
-    case ns::LensParam::kGlobe:
-      return LUMICE_LENS_TYPE_GLOBE;
-  }
-  throw std::invalid_argument("unmapped core LensType: " + std::to_string(static_cast<int>(type)));
-}
-
-// Map LUMICE_VISIBLE_* to its core enumerator. Throws std::invalid_argument on an unknown value.
-static ns::RenderConfig::VisibleRange MapVisibleFromCApi(int visible) {
-  switch (visible) {
-    case LUMICE_VISIBLE_UPPER:
-      return ns::RenderConfig::kUpper;
-    case LUMICE_VISIBLE_LOWER:
-      return ns::RenderConfig::kLower;
-    case LUMICE_VISIBLE_FULL:
-      return ns::RenderConfig::kFull;
-    default:
-      throw std::invalid_argument("LUMICE_RenderParam.visible is invalid: " + std::to_string(visible));
-  }
-}
+// The lens-type and visible-range mappers (both directions) live in server/c_api_enum_map.hpp:
+// the CLI's `analyze` subcommand needs the ToCApi half too, and the four are one table.
+using ns::c_api_enum_map::MapLensTypeFromCApi;
+using ns::c_api_enum_map::MapLensTypeToCApi;
+using ns::c_api_enum_map::MapVisibleFromCApi;
+using ns::c_api_enum_map::MapVisibleToCApi;
 
 static ns::RenderConfig::EvMode MapEvModeFromCApi(int ev_mode) {
   switch (ev_mode) {
@@ -2338,21 +2270,6 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScr
     }
   }
   return LUMICE_OK;
-}
-
-// Inverse of MapVisibleFromCApi. Total over the core enumeration (no default arm) so adding a
-// visibility range to core breaks the build here instead of decoding to a wrong C API constant —
-// same fail-loud contract as MapLensTypeToCApi.
-static int MapVisibleToCApi(ns::RenderConfig::VisibleRange visible) {
-  switch (visible) {
-    case ns::RenderConfig::kUpper:
-      return LUMICE_VISIBLE_UPPER;
-    case ns::RenderConfig::kLower:
-      return LUMICE_VISIBLE_LOWER;
-    case ns::RenderConfig::kFull:
-      return LUMICE_VISIBLE_FULL;
-  }
-  throw std::invalid_argument("unmapped core VisibleRange: " + std::to_string(static_cast<int>(visible)));
 }
 
 // Inverse of MapEvModeFromCApi. Total over the core enumeration (no default arm), same fail-loud

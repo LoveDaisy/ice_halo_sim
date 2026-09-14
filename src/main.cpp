@@ -1,28 +1,44 @@
+#include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <csignal>
+#include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 // clang-format off
 #ifdef _WIN32
 #include <windows.h>   // Must come before shellapi.h (defines EXTERN_C etc.)
 #include <shellapi.h>  // CommandLineToArgvW
+#include <io.h>        // _dup / _dup2 / _write / _close (StdoutHandoff)
+#else
+#include <unistd.h>    // dup / dup2 / write / close (StdoutHandoff)
 #endif
 // clang-format on
 
+#include "config/render_config.hpp"  // the `render[]` entry a `--roi frame` request reads (see src/CMakeLists.txt)
 #include "lumice.h"
+#include "server/c_api_enum_map.hpp"  // core lens / visible enums -> LUMICE_* for that frame view
 #include "util/cpu_info.hpp"
 #include "util/logger.hpp"
+#include "util/raypath_analysis_display.hpp"
 #include "util/result_frame.hpp"
+#include "util/sky_direction.hpp"
 
 #ifdef _WIN32
 #define STBIW_WINDOWS_UTF8
@@ -215,18 +231,19 @@ constexpr int kBenchmarkDrainWindows = 10;
 
 // --- Subcommands -------------------------------------------------------------
 //
-// argv[1] names the subcommand: `render` or `benchmark`. Anything else in that
-// slot (an option, or nothing at all) means the implicit `render`, so the
+// argv[1] names the subcommand: `render`, `benchmark` or `analyze`. Anything else in
+// that slot (an option, or nothing at all) means the implicit `render`, so the
 // `Lumice -f config.json ...` form every README / quickstart / user script uses
 // keeps working verbatim. Each subcommand accepts ONLY its own option set and
 // reports everything else as an unknown option — there is no "accepted but
 // ignored" flag anywhere, which is what keeps the "which flag means what in
-// which mode" matrix from growing a dimension per mode. A third subcommand
-// (`analyze` is the planned one) slots in as one more Parse*/Run* pair below
-// plus one more branch in main(); nothing shared has to learn about it.
+// which mode" matrix from growing a dimension per mode. A subcommand is one
+// Parse*/Run* pair below plus one branch in main(); nothing shared has to learn
+// about it.
 
 constexpr std::string_view kSubcommandRender = "render";
 constexpr std::string_view kSubcommandBenchmark = "benchmark";
+constexpr std::string_view kSubcommandAnalyze = "analyze";
 
 // The options every subcommand shares, as help-text fragments defined once so the
 // wording cannot drift between subcommands. Split in three because each subcommand
@@ -243,20 +260,24 @@ constexpr const char* kHelpLogAndHelpOptions =
     "  -d                 Debug output (debug level logging)\n"
     "  -h, --help         Show this help message and exit\n";
 
+// --workers is shared by `render` and `analyze` (both size a CPU worker pool) and rejected
+// by `benchmark` (its worker counts are the methodology); the text is one fragment so the two
+// pages that show it say the same thing.
+constexpr const char* kHelpWorkersOption =
+    "  --workers <N>      Number of CPU simulation worker threads (default: automatic —\n"
+    "                     one per physical core, capped at a ceiling above which no\n"
+    "                     machine measured ran faster; an explicit N is never capped).\n"
+    "                     Machine-dependent, so it is a command-line switch rather than\n"
+    "                     a config-file field: a config travels between machines and a\n"
+    "                     worker count should not travel with it. Ignored on a GPU route\n"
+    "                     (single engine).\n";
+
 void PrintRenderOptions() {
   std::cout << kHelpConfigOption
             << "  -o <dir>           Output directory for rendered images (default: current directory)\n"
             << "  --format <fmt>     Output image format: jpg or png (default: jpg)\n"
             << "  --quality <1-100>  JPEG quality (default: 95, ignored for PNG)\n"
-            << kHelpBackendOption
-            << "  --workers <N>      Number of CPU simulation worker threads (default: automatic —\n"
-            << "                     one per physical core, capped at a ceiling above which no\n"
-            << "                     machine measured ran faster; an explicit N is never capped).\n"
-            << "                     Machine-dependent, so it is a command-line switch rather than\n"
-            << "                     a config-file field: a config travels between machines and a\n"
-            << "                     worker count should not travel with it. Ignored on a GPU route\n"
-            << "                     (single engine).\n"
-            << kHelpLogAndHelpOptions;
+            << kHelpBackendOption << kHelpWorkersOption << kHelpLogAndHelpOptions;
 }
 
 void PrintRenderExamples(const char* prog_name) {
@@ -299,12 +320,62 @@ void PrintBenchmarkUsage(const char* prog_name) {
             << "  " << prog_name << " benchmark -f examples/bench_config.json --backend metal\n";
 }
 
+void PrintAnalyzeUsage(const char* prog_name) {
+  std::cout << "Usage: " << prog_name << " analyze -f <config_file> [options]\n"
+            << "\n"
+            << "Trace the scene and list the raypath chains that delivered energy into a region\n"
+            << "of the sky, most energetic first, as CSV — the same file the GUI's Raypath\n"
+            << "Analysis window exports. The config is the scene; the question asked of it is\n"
+            << "given by the options below and never read from the config. The analysis always\n"
+            << "traces on the CPU (the chain record exists on that route only).\n"
+            << "\n"
+            << "Output: the CSV goes to stdout, or to --csv <path> instead (never both). A `#`\n"
+            << "head names the region, the symmetry, the ray total and the export time; then\n"
+            << "one row per chain: Raypath, Energy (% of the total), Cumulative %, +/- (the\n"
+            << "row's 1/sqrt(count) relative noise, in %). Progress goes to stderr, one line per\n"
+            << "second. Ctrl-C ends the run early and still writes the result accumulated so far\n"
+            << "(exit 0) — which is how a scene whose ray_num is \"infinite\" is meant to be run.\n"
+            << "With --csv the file is rewritten atomically every second, so it is complete at\n"
+            << "any moment it is read.\n"
+            << "\n"
+            << "Options:\n"
+            << kHelpConfigOption
+            << "  --roi <region>     Which rays count: sky (every outgoing ray; default), frame (the\n"
+            << "                     rays that land inside one of the config's render[] frames), or\n"
+            << "                     cone (the rays within --radius of --center).\n"
+            << "  --render-id <id>   frame only: the render[] entry whose lens / view / visible /\n"
+            << "                     front / resolution define the frame (default: the first entry).\n"
+            << "  --center <alt>,<az>\n"
+            << "                     cone only (required): the cone's centre as the altitude and\n"
+            << "                     azimuth, in degrees, of the sky point — azimuth measured as the\n"
+            << "                     sun's is, so the sun sits at --center <sun_altitude>,0.\n"
+            << "  --radius <deg>     cone only (required): the cone's angular radius in degrees.\n"
+            << "  --symmetry <spec>  Merge chains that are the same path up to crystal symmetry when\n"
+            << "                     listing: any combination of P, B, D (case-insensitive) or\n"
+            << "                     `none` (default: PBD). Changes the grouping, never the totals.\n"
+            << "  --rays <N>         This run's ray budget, total across wavelengths; N may carry a\n"
+            << "                     K, M or G suffix (e.g. 20M). Default: the scene's own ray_num,\n"
+            << "                     including \"infinite\".\n"
+            << "  --seed <N>         Fix the simulation's random seed (a positive integer) so two\n"
+            << "                     runs of one question are the same run; this also sizes the pool\n"
+            << "                     to one worker (a seeded run is single-threaded by contract).\n"
+            << "                     Default: random.\n"
+            << "  --csv <path>       Write the CSV to this file instead of stdout.\n"
+            << kHelpBackendOption << kHelpWorkersOption << kHelpLogAndHelpOptions << "\n"
+            << "Examples:\n"
+            << "  " << prog_name << " analyze -f config.json\n"
+            << "  " << prog_name << " analyze -f config.json --roi cone --center 43,0 --radius 2\n"
+            << "  " << prog_name << " analyze -f config.json --roi frame --render-id 1 --csv frame.csv\n"
+            << "  " << prog_name << " analyze -f config.json --symmetry none --rays 5M --seed 7\n";
+}
+
 // Top-level `-h` (no subcommand named): the subcommand overview followed by the
 // implicit subcommand's full option list, so the help a user reaches from the
 // form they already know is complete on its own.
 void PrintTopLevelUsage(const char* prog_name) {
   std::cout << "Usage: " << prog_name << " [render] -f <config_file> [options]\n"
             << "       " << prog_name << " benchmark -f <config_file> [options]\n"
+            << "       " << prog_name << " analyze -f <config_file> [options]\n"
             << "       " << prog_name << " <subcommand> -h\n"
             << "\n"
             << "Lumice — simulate ice halos by tracing rays through ice crystals.\n"
@@ -314,13 +385,16 @@ void PrintTopLevelUsage(const char* prog_name) {
             << "                     no subcommand is given: `" << prog_name << " -f ...` is a render.\n"
             << "  benchmark          Run a throughput benchmark and print [BENCHMARK] JSON\n"
             << "                     (`" << prog_name << " benchmark -h` for its options)\n"
+            << "  analyze            List the raypath chains that light a region of the sky, as CSV\n"
+            << "                     (`" << prog_name << " analyze -h` for its options)\n"
             << "\n"
             << "Options for render (the default subcommand):\n";
   PrintRenderOptions();
   std::cout << "\n"
             << "Examples:\n";
   PrintRenderExamples(prog_name);
-  std::cout << "  " << prog_name << " benchmark -f examples/bench_config.json\n";
+  std::cout << "  " << prog_name << " benchmark -f examples/bench_config.json\n"
+            << "  " << prog_name << " analyze -f config.json --roi cone --center 43,0 --radius 2\n";
 }
 
 // Maps a --backend argument to a LUMICE_BACKEND_* id. Returns -1 for an
@@ -738,6 +812,24 @@ struct BenchmarkOptions {
   SharedOptions shared;
 };
 
+struct AnalyzeOptions {
+  SharedOptions shared;
+  int roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
+  // The three per-ROI options, kept as "was it given" so the parser can reject one the chosen
+  // ROI has no use for (an option that is accepted and ignored is the thing this CLI's option
+  // sets are designed not to have).
+  std::optional<float> center_alt_deg;
+  std::optional<float> center_az_deg;
+  std::optional<float> radius_deg;
+  std::optional<int> render_id;
+  std::uint8_t symmetry_bits = LUMICE_RAYPATH_SYMMETRY_P | LUMICE_RAYPATH_SYMMETRY_B | LUMICE_RAYPATH_SYMMETRY_D;
+  // nullopt = the scene's own budget (LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT).
+  std::optional<LUMICE_RayCount> ray_num;
+  unsigned int sim_seed = 0;       // 0 = random, as LUMICE_ServerConfig::sim_seed spells it
+  std::filesystem::path csv_path;  // empty = stdout
+  int cli_workers = 0;             // 0 = automatic, as RenderOptions::cli_workers
+};
+
 // Outcome of offering argv[i] to the option set every subcommand shares.
 enum class SharedStep {
   kNotShared,  // not one of the shared options — the subcommand's own parser decides
@@ -793,11 +885,13 @@ SharedStep ParseSharedOption(int argc, char** argv, int& i, SharedOptions& out) 
 #ifdef _WIN32
 // Re-parse file paths from the wide-char command line for full Unicode support.
 // argv[i] on Windows uses the ANSI codepage, which loses non-ASCII characters.
-// Only path arguments (-f, -o) need wide-char re-parsing; ASCII-only args
-// (the subcommand token, --format, --quality, --workers) are safe as-is.
-// `output_dir` is null for a subcommand that has no -o: the option was already
-// rejected by that subcommand's parser, so there is nothing to re-read.
-void ReparseWidePathArgs(std::filesystem::path& config_filename, std::filesystem::path* output_dir) {
+// Only path arguments (-f, -o, --csv) need wide-char re-parsing; ASCII-only args
+// (the subcommand token, --format, --quality, --workers, the analyze request) are
+// safe as-is. `output_dir` / `csv_path` are null for a subcommand that has no -o /
+// --csv: the option was already rejected by that subcommand's parser, so there is
+// nothing to re-read.
+void ReparseWidePathArgs(std::filesystem::path& config_filename, std::filesystem::path* output_dir,
+                         std::filesystem::path* csv_path) {
   int wargc = 0;
   wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
   if (!wargv) {
@@ -809,6 +903,8 @@ void ReparseWidePathArgs(std::filesystem::path& config_filename, std::filesystem
       config_filename = wargv[++i];
     } else if (output_dir && warg == L"-o" && i + 1 < wargc) {
       *output_dir = wargv[++i];
+    } else if (csv_path && warg == L"--csv" && i + 1 < wargc) {
+      *csv_path = wargv[++i];
     }
   }
   LocalFree(wargv);
@@ -833,6 +929,81 @@ bool FinishSharedOptions(SharedOptions& opts) {
     std::cerr << "Warning: --backend cuda requested but no eligible CUDA device is available; using CPU.\n";
     opts.preferred_backend = LUMICE_BACKEND_CPU;
   }
+  return true;
+}
+
+// A strictly-typed positive integer, the discipline every numeric option here follows.
+// std::stoi / stoull stop at the first non-digit WITHOUT throwing, so "3abc" would parse as 3
+// and be silently accepted; the `pos == size` check is what makes trailing garbage an error
+// rather than a value the user never typed. They also skip LEADING whitespace and accept a
+// '+'/'-' sign, so " 3" or "+3" would pass as a bare "3" — reject anything that does not start
+// with a digit up front. Returns nullopt for anything but digits-only text that fits.
+std::optional<unsigned long long> ParseStrictUnsigned(std::string_view text) {
+  if (text.empty() || !std::isdigit(static_cast<unsigned char>(text[0]))) {
+    return std::nullopt;
+  }
+  const std::string owned(text);
+  std::size_t parsed_len = 0;
+  unsigned long long value = 0;
+  try {
+    value = std::stoull(owned, &parsed_len);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (parsed_len != owned.size()) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+// A float with the same discipline (digits, an optional sign and decimal point, nothing after):
+// std::stof's "consume a prefix" behaviour is the same footgun, so the full-consumption check
+// applies. Leading whitespace is rejected as above. inf / nan spellings are rejected too — a
+// degree value is a number the user typed, not a special value.
+std::optional<float> ParseStrictFloat(std::string_view text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  const char first = text[0];
+  if (!(std::isdigit(static_cast<unsigned char>(first)) || first == '-' || first == '+' || first == '.')) {
+    return std::nullopt;
+  }
+  const std::string owned(text);
+  std::size_t parsed_len = 0;
+  float value = 0.0f;
+  try {
+    value = std::stof(owned, &parsed_len);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (parsed_len != owned.size() || !std::isfinite(value)) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+// The `--workers <N>` value at argv[i+1], for the two subcommands that size a CPU worker pool
+// (`render` and `analyze`; `benchmark` never accepts it — its worker counts are the methodology,
+// so it does not call this and reports the option as unknown). On success advances `i` past the
+// value and writes it; on failure the diagnostic is already on stderr and the caller prints its
+// usage. One function rather than a step in ParseSharedOption, so the subcommand that rejects the
+// option needs no exclusion logic — it simply never offers argv[i] here.
+bool TryParseWorkersOption(int argc, char** argv, int& i, int& out_workers) {
+  if (++i >= argc) {
+    std::cerr << "Error: --workers requires an argument\n\n";
+    return false;
+  }
+  const std::string workers_arg = argv[i];
+  const auto parsed = ParseStrictUnsigned(workers_arg);
+  if (!parsed.has_value() || *parsed > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
+    std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+    return false;
+  }
+  if (*parsed == 0) {
+    std::cerr << "Error: --workers must be a positive integer, got 0\n\n";
+    return false;
+  }
+  out_workers = static_cast<int>(*parsed);
   return true;
 }
 
@@ -893,41 +1064,7 @@ int ParseRenderOptions(int argc, char** argv, int first, void (*print_usage)(con
         return 1;
       }
     } else if (arg == "--workers") {
-      // Render is the only subcommand with --workers today, so its validation lives here rather
-      // than in ParseSharedOption. The planned `analyze` subcommand takes --workers too: when it
-      // lands, lift this branch into a shared step the way -f / --backend are, do not copy it.
-      if (++i >= argc) {
-        std::cerr << "Error: --workers requires an argument\n\n";
-        print_usage(argv[0]);
-        return 1;
-      }
-      // std::stoi stops at the first non-digit WITHOUT throwing, so "3abc" would parse as 3 and be
-      // silently accepted. The `pos == size` check is what makes a trailing-garbage argument an
-      // error rather than a value the user never typed. std::stoi also skips LEADING whitespace and
-      // accepts a leading '+'/'-' before parsing, so those two checks alone would let " 3" or "+3"
-      // through as if the user had typed a bare "3" — reject anything that doesn't start with a
-      // digit up front, since AC1 only ever wants a positive integer typed as one.
-      const std::string workers_arg = argv[i];
-      if (workers_arg.empty() || !std::isdigit(static_cast<unsigned char>(workers_arg[0]))) {
-        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
-        print_usage(argv[0]);
-        return 1;
-      }
-      std::size_t parsed_len = 0;
-      try {
-        opts.cli_workers = std::stoi(workers_arg, &parsed_len);
-      } catch (const std::exception&) {
-        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
-        print_usage(argv[0]);
-        return 1;
-      }
-      if (parsed_len != workers_arg.size()) {
-        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
-        print_usage(argv[0]);
-        return 1;
-      }
-      if (opts.cli_workers <= 0) {
-        std::cerr << "Error: --workers must be a positive integer, got " << opts.cli_workers << "\n\n";
+      if (!TryParseWorkersOption(argc, argv, i, opts.cli_workers)) {
         print_usage(argv[0]);
         return 1;
       }
@@ -939,7 +1076,7 @@ int ParseRenderOptions(int argc, char** argv, int first, void (*print_usage)(con
   }
 
 #ifdef _WIN32
-  ReparseWidePathArgs(opts.shared.config_filename, &opts.output_dir);
+  ReparseWidePathArgs(opts.shared.config_filename, &opts.output_dir, /*csv_path=*/nullptr);
 #endif
 
   if (!FinishSharedOptions(opts.shared)) {
@@ -973,11 +1110,248 @@ int ParseBenchmarkOptions(int argc, char** argv, int first, BenchmarkOptions& op
   }
 
 #ifdef _WIN32
-  ReparseWidePathArgs(opts.shared.config_filename, /*output_dir=*/nullptr);
+  ReparseWidePathArgs(opts.shared.config_filename, /*output_dir=*/nullptr, /*csv_path=*/nullptr);
 #endif
 
   if (!FinishSharedOptions(opts.shared)) {
     PrintBenchmarkUsage(argv[0]);
+    return 1;
+  }
+  return -1;
+}
+
+// `--rays <N>`: digits with an optional K / M / G suffix (case-insensitive), e.g. 20M. The
+// suffix is decimal (1000-based), as the config's ray_num is read by a human and 20M means
+// twenty million rays, not 20 * 2^20. Zero is rejected: the C API would honour it as a
+// zero-ray run, which is never what a person typed --rays for.
+std::optional<LUMICE_RayCount> ParseRayBudget(std::string_view text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  unsigned long long multiplier = 1;
+  std::string_view digits = text;
+  switch (std::tolower(static_cast<unsigned char>(text.back()))) {
+    case 'k':
+      multiplier = 1'000ull;
+      digits.remove_suffix(1);
+      break;
+    case 'm':
+      multiplier = 1'000'000ull;
+      digits.remove_suffix(1);
+      break;
+    case 'g':
+      multiplier = 1'000'000'000ull;
+      digits.remove_suffix(1);
+      break;
+    default:
+      break;
+  }
+  const auto parsed = ParseStrictUnsigned(digits);
+  if (!parsed.has_value() || *parsed == 0) {
+    return std::nullopt;
+  }
+  if (*parsed > std::numeric_limits<unsigned long long>::max() / multiplier) {
+    return std::nullopt;
+  }
+  return static_cast<LUMICE_RayCount>(*parsed * multiplier);
+}
+
+// `--symmetry <spec>`: `none`, or any combination of the letters P, B, D (case-insensitive,
+// repeats harmless), as a LUMICE_RAYPATH_SYMMETRY_* bit set. Anything else is nullopt.
+std::optional<std::uint8_t> ParseSymmetrySpec(std::string_view text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  std::string lowered(text);
+  for (char& c : lowered) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (lowered == "none") {
+    return 0;
+  }
+  std::uint8_t bits = 0;
+  for (const char c : lowered) {
+    switch (c) {
+      case 'p':
+        bits |= LUMICE_RAYPATH_SYMMETRY_P;
+        break;
+      case 'b':
+        bits |= LUMICE_RAYPATH_SYMMETRY_B;
+        break;
+      case 'd':
+        bits |= LUMICE_RAYPATH_SYMMETRY_D;
+        break;
+      default:
+        return std::nullopt;
+    }
+  }
+  return bits;
+}
+
+// Parses argv[first..) as the `analyze` option set: the shared options, --workers (the same
+// step `render` takes), and the request. The per-ROI options are checked against the ROI once
+// every token is in, so `--center` before or after `--roi cone` reads the same; each rejection
+// names the option and the ROI it conflicts with. Returns the process exit code, or -1 to
+// proceed to RunAnalyze.
+int ParseAnalyzeOptions(int argc, char** argv, int first, AnalyzeOptions& opts) {
+  bool roi_given = false;
+  for (int i = first; i < argc; i++) {
+    switch (ParseSharedOption(argc, argv, i, opts.shared)) {
+      case SharedStep::kConsumed:
+        continue;
+      case SharedStep::kHelp:
+        PrintAnalyzeUsage(argv[0]);
+        return 0;
+      case SharedStep::kError:
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      case SharedStep::kNotShared:
+        break;
+    }
+    std::string_view arg = argv[i];
+    // Every option below takes a value; one check for "the value is missing".
+    const bool takes_value = arg == "--roi" || arg == "--center" || arg == "--radius" || arg == "--render-id" ||
+                             arg == "--symmetry" || arg == "--rays" || arg == "--seed" || arg == "--csv";
+    if (takes_value && i + 1 >= argc) {
+      std::cerr << "Error: " << arg << " requires an argument\n\n";
+      PrintAnalyzeUsage(argv[0]);
+      return 1;
+    }
+    if (arg == "--workers") {
+      if (!TryParseWorkersOption(argc, argv, i, opts.cli_workers)) {
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+    } else if (arg == "--roi") {
+      const std::string_view roi = argv[++i];
+      if (roi == "sky") {
+        opts.roi_mode = LUMICE_RAYPATH_ROI_FULL_SKY;
+      } else if (roi == "frame") {
+        opts.roi_mode = LUMICE_RAYPATH_ROI_IN_FRAME;
+      } else if (roi == "cone") {
+        opts.roi_mode = LUMICE_RAYPATH_ROI_CONE;
+      } else {
+        std::cerr << "Error: --roi must be 'sky', 'frame' or 'cone', got '" << roi << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      roi_given = true;
+    } else if (arg == "--center") {
+      const std::string_view value = argv[++i];
+      const auto comma = value.find(',');
+      const auto alt = comma == std::string_view::npos ? std::nullopt : ParseStrictFloat(value.substr(0, comma));
+      const auto az = comma == std::string_view::npos ? std::nullopt : ParseStrictFloat(value.substr(comma + 1));
+      if (!alt.has_value() || !az.has_value()) {
+        std::cerr << "Error: --center must be '<altitude_deg>,<azimuth_deg>' (two numbers), got '" << value << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      if (*alt < -90.0f || *alt > 90.0f) {
+        std::cerr << "Error: --center altitude must be between -90 and 90 degrees, got " << *alt << "\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      opts.center_alt_deg = alt;
+      opts.center_az_deg = az;
+    } else if (arg == "--radius") {
+      const std::string_view value = argv[++i];
+      const auto radius = ParseStrictFloat(value);
+      if (!radius.has_value() || !(*radius > 0.0f) || *radius > 180.0f) {
+        std::cerr << "Error: --radius must be a number of degrees in (0, 180], got '" << value << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      opts.radius_deg = radius;
+    } else if (arg == "--render-id") {
+      const std::string_view value = argv[++i];
+      const auto id = ParseStrictUnsigned(value);
+      if (!id.has_value() || *id > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
+        std::cerr << "Error: --render-id requires a non-negative integer, got '" << value << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      opts.render_id = static_cast<int>(*id);
+    } else if (arg == "--symmetry") {
+      const std::string_view value = argv[++i];
+      const auto bits = ParseSymmetrySpec(value);
+      if (!bits.has_value()) {
+        std::cerr << "Error: --symmetry must be 'none' or a combination of P, B, D (e.g. PBD, PD), got '" << value
+                  << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      opts.symmetry_bits = *bits;
+    } else if (arg == "--rays") {
+      const std::string_view value = argv[++i];
+      const auto rays = ParseRayBudget(value);
+      if (!rays.has_value()) {
+        std::cerr << "Error: --rays must be a positive integer with an optional K/M/G suffix (e.g. 20M), got '" << value
+                  << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      opts.ray_num = rays;
+    } else if (arg == "--seed") {
+      const std::string_view value = argv[++i];
+      const auto seed = ParseStrictUnsigned(value);
+      if (!seed.has_value() || *seed == 0 || *seed > std::numeric_limits<unsigned int>::max()) {
+        std::cerr << "Error: --seed must be a positive integer up to " << std::numeric_limits<unsigned int>::max()
+                  << ", got '" << value << "'\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+      opts.sim_seed = static_cast<unsigned int>(*seed);
+    } else if (arg == "--csv") {
+      opts.csv_path = argv[++i];
+      if (opts.csv_path.empty()) {
+        std::cerr << "Error: --csv requires a file path\n\n";
+        PrintAnalyzeUsage(argv[0]);
+        return 1;
+      }
+    } else {
+      std::cerr << "Error: unknown option: " << arg << "\n\n";
+      PrintAnalyzeUsage(argv[0]);
+      return 1;
+    }
+  }
+
+  // The per-ROI options against the ROI. Each message says which option and which ROI, so the
+  // fix is readable off the line: a `cone` without its geometry, a geometry option under an ROI
+  // that has no centre, a frame id under an ROI that has no frame.
+  const char* roi_name = opts.roi_mode == LUMICE_RAYPATH_ROI_CONE     ? "cone" :
+                         opts.roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME ? "frame" :
+                                                                        "sky";
+  if (opts.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
+    if (!opts.center_alt_deg.has_value() || !opts.radius_deg.has_value()) {
+      std::cerr << "Error: --roi cone requires both --center <alt_deg>,<az_deg> and --radius <deg>; missing "
+                << (!opts.center_alt_deg.has_value() && !opts.radius_deg.has_value() ? "--center and --radius" :
+                    !opts.center_alt_deg.has_value()                                 ? "--center" :
+                                                                                       "--radius")
+                << "\n\n";
+      PrintAnalyzeUsage(argv[0]);
+      return 1;
+    }
+  } else {
+    if (opts.center_alt_deg.has_value() || opts.radius_deg.has_value()) {
+      std::cerr << "Error: " << (opts.center_alt_deg.has_value() ? "--center" : "--radius") << " only applies to "
+                << "--roi cone, but the ROI is '" << roi_name << "'" << (roi_given ? "" : " (the default)") << "\n\n";
+      PrintAnalyzeUsage(argv[0]);
+      return 1;
+    }
+  }
+  if (opts.roi_mode != LUMICE_RAYPATH_ROI_IN_FRAME && opts.render_id.has_value()) {
+    std::cerr << "Error: --render-id only applies to --roi frame, but the ROI is '" << roi_name << "'"
+              << (roi_given ? "" : " (the default)") << "\n\n";
+    PrintAnalyzeUsage(argv[0]);
+    return 1;
+  }
+
+#ifdef _WIN32
+  ReparseWidePathArgs(opts.shared.config_filename, /*output_dir=*/nullptr, &opts.csv_path);
+#endif
+
+  if (!FinishSharedOptions(opts.shared)) {
+    PrintAnalyzeUsage(argv[0]);
     return 1;
   }
   return -1;
@@ -1131,6 +1505,430 @@ int RunRender(const RenderOptions& opts) {
   return 0;
 }
 
+// --- analyze -------------------------------------------------------------------
+
+// Set by the SIGINT handler, read by RunAnalyze's loop. A signal handler may touch nothing but
+// a lock-free atomic (or a volatile sig_atomic_t); the static_assert is the compile-time form of
+// that rule. The flag is only ever installed by RunAnalyze — `render` keeps the default
+// disposition (an interrupted render writes nothing; that is a separate change).
+std::atomic<bool> g_analyze_stop_requested{ false };
+static_assert(std::atomic<bool>::is_always_lock_free, "the SIGINT flag must be async-signal-safe");
+
+void HandleAnalyzeSigint(int /*signal*/) {
+  g_analyze_stop_requested.store(true, std::memory_order_relaxed);
+}
+
+// `analyze` promises that stdout carries the CSV and nothing else, and the engine's log sink
+// writes to stdout (util/logger.hpp, GetSharedSink) with no C API to point it elsewhere. So for
+// the duration of the run, file descriptor 1 is made a duplicate of descriptor 2 — every line the
+// engine (or this file's own LOG_*) writes to stdout lands on stderr, formatted as it always was —
+// and the CSV is written through a duplicate of the ORIGINAL descriptor 1 taken before the swap.
+// Descriptor-level rather than stream-level on purpose: the sink holds the C `stdout` FILE*, and
+// a FILE* follows its descriptor, so this is the one place that catches every writer. Restored
+// in the destructor, so a process that goes on to write to std::cout after the run (none does
+// today) would find stdout as it was. A C API log-sink switch would make this unnecessary; that
+// is an API-surface change and not this subcommand's to make.
+class StdoutHandoff {
+ public:
+  StdoutHandoff() {
+    std::fflush(stdout);
+#ifdef _WIN32
+    saved_ = _dup(1);
+    _dup2(2, 1);
+#else
+    saved_ = dup(1);
+    dup2(2, 1);
+#endif
+  }
+  ~StdoutHandoff() {
+    std::fflush(stdout);
+    if (saved_ >= 0) {
+#ifdef _WIN32
+      _dup2(saved_, 1);
+      _close(saved_);
+#else
+      dup2(saved_, 1);
+      close(saved_);
+#endif
+    }
+  }
+  StdoutHandoff(const StdoutHandoff&) = delete;
+  StdoutHandoff& operator=(const StdoutHandoff&) = delete;
+
+  // Write `text` to the original stdout, whole. False if the descriptor could not be taken or
+  // a write failed (a closed pipe, say).
+  bool Write(const std::string& text) const {
+    if (saved_ < 0) {
+      return false;
+    }
+    const char* p = text.data();
+    std::size_t left = text.size();
+    while (left > 0) {
+#ifdef _WIN32
+      const int n = _write(saved_, p, static_cast<unsigned int>(std::min<std::size_t>(left, 1u << 30)));
+#else
+      const ssize_t n = write(saved_, p, left);
+#endif
+      if (n <= 0) {
+        return false;
+      }
+      p += n;
+      left -= static_cast<std::size_t>(n);
+    }
+    return true;
+  }
+
+ private:
+  int saved_ = -1;
+};
+
+// The LUMICE_AnnotationView of a `--roi frame` request, from the config's `render[]` entry
+// `render_id` names (the first entry when nullopt). Read through the engine's own codecs —
+// config/render_config.hpp's from_json for the lens (its enum spelling and its fov default)
+// and for the view / visible range — and mapped to LUMICE_* through server/c_api_enum_map.hpp,
+// so this CLI keeps no string table of its own; the scalars are read the way
+// config_manager.cpp's ParseRenderConfig reads them, with RenderConfig's own member defaults
+// standing in for an absent key. `resolution` is required, as it is there. On failure `error`
+// says what, and the caller exits 1 before any server exists.
+bool BuildFrameViewFromConfig(const nlohmann::json& j_cfg, std::optional<int> render_id, LUMICE_AnnotationView* out,
+                              std::string* error) {
+  const auto it = j_cfg.find("render");
+  if (it == j_cfg.end() || !it->is_array() || it->empty()) {
+    *error = "--roi frame needs a render[] entry in the config to define the frame, and this config has none";
+    return false;
+  }
+  const nlohmann::json* entry = nullptr;
+  if (render_id.has_value()) {
+    std::string seen;
+    for (const auto& e : *it) {
+      if (e.is_object() && e.contains("id")) {
+        if (e.at("id") == *render_id) {
+          entry = &e;
+          break;
+        }
+        seen += (seen.empty() ? "" : ", ") + e.at("id").dump();
+      }
+    }
+    if (entry == nullptr) {
+      *error = "--render-id " + std::to_string(*render_id) +
+               " names no render[] entry in the config (ids present: " + (seen.empty() ? std::string("none") : seen) +
+               ")";
+      return false;
+    }
+  } else {
+    entry = &it->front();
+  }
+  try {
+    const lumice::RenderConfig defaults{};
+    lumice::LensParam lens = defaults.lens_;
+    if (entry->contains("lens")) {
+      lens = entry->at("lens").get<lumice::LensParam>();
+    }
+    int lens_shift[2] = { defaults.lens_shift_[0], defaults.lens_shift_[1] };
+    if (entry->contains("lens_shift")) {
+      entry->at("lens_shift").get_to(lens_shift);
+    }
+    int resolution[2] = { 0, 0 };
+    entry->at("resolution").get_to(resolution);
+    lumice::ViewParam view = defaults.view_;
+    if (entry->contains("view")) {
+      view = entry->at("view").get<lumice::ViewParam>();
+    }
+    lumice::RenderConfig::VisibleRange visible = defaults.visible_;
+    if (entry->contains("visible")) {
+      visible = entry->at("visible").get<lumice::RenderConfig::VisibleRange>();
+    }
+    bool front = defaults.front_;
+    if (entry->contains("front")) {
+      entry->at("front").get_to(front);
+    }
+    float overlap = defaults.overlap_;
+    if (entry->contains("overlap")) {
+      overlap = std::max(0.0f, entry->at("overlap").get<float>());
+    }
+    *out = LUMICE_AnnotationView{};
+    out->width = resolution[0];
+    out->height = resolution[1];
+    out->lens_type = lumice::c_api_enum_map::MapLensTypeToCApi(lens.type_);
+    out->lens_fov = lens.fov_;
+    out->lens_shift[0] = lens_shift[0];
+    out->lens_shift[1] = lens_shift[1];
+    out->overlap = overlap;
+    out->view_azimuth = view.az_;
+    out->view_elevation = view.el_;
+    out->view_roll = view.ro_;
+    out->visible = lumice::c_api_enum_map::MapVisibleToCApi(visible);
+    out->front = front ? 1 : 0;
+  } catch (const std::exception& e) {
+    *error = std::string("the render[] entry for --roi frame could not be read: ") + e.what();
+    return false;
+  }
+  if (out->width <= 0 || out->height <= 0) {
+    *error = "the render[] entry for --roi frame has a non-positive resolution";
+    return false;
+  }
+  return true;
+}
+
+// One read of the analysis frame under `symmetry`: the frame-level info and every entry, the
+// sentinel read the GUI's RefreshAnalysisEntries makes. `present` false means the server holds
+// no analysis frame yet (the first snapshot has not landed) — not an error, just nothing to say.
+struct AnalysisRead {
+  LUMICE_RaypathAnalysisInfo info{};
+  std::vector<LUMICE_RaypathHistogramEntry> entries;
+};
+
+bool ReadAnalysisFrame(LUMICE_Server* server, std::uint8_t symmetry, AnalysisRead* out) {
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK || raw_frame == nullptr) {
+    return false;
+  }
+  lumice::ResultFramePtr frame(raw_frame);
+  out->info = LUMICE_RaypathAnalysisInfo{};
+  out->entries.clear();
+  if (LUMICE_FrameGetRaypathAnalysisInfo(frame.get(), symmetry, &out->info) != LUMICE_OK || out->info.present == 0) {
+    return false;
+  }
+  // One more slot than entries: the sentinel (count == 0) lands at [entry_count] when the frame
+  // holds exactly entry_count entries, and the read below stops at it in every case.
+  std::vector<LUMICE_RaypathHistogramEntry> raw(static_cast<size_t>(std::max(out->info.entry_count, 0)) + 1);
+  if (LUMICE_FrameGetRaypathAnalysis(frame.get(), symmetry, raw.data(), out->info.entry_count) != LUMICE_OK) {
+    return false;
+  }
+  size_t n = 0;
+  while (n < raw.size() && raw[n].count != 0) {
+    ++n;
+  }
+  raw.resize(n);
+  out->entries = std::move(raw);
+  return true;
+}
+
+std::string LocalTimeNow() {
+  const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm tm{};
+#if defined(_WIN32)
+  const bool ok = localtime_s(&tm, &now) == 0;
+#else
+  const bool ok = localtime_r(&now, &tm) != nullptr;
+#endif
+  char buf[32] = { 0 };
+  if (ok) {
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+  }
+  return buf;
+}
+
+// The CSV of one read, through the one formatter the GUI's Export CSV also uses
+// (util/raypath_analysis_display.hpp). The display radius is the request radius: the CLI has no
+// slider, so every ring is summed and cone_rings_summed reads "N / N".
+std::string AnalysisCsvText(const AnalysisRead& read, const LUMICE_RaypathAnalysisRequest& request,
+                            std::uint8_t symmetry, std::string_view exported_at) {
+  lumice::RaypathAnalysisCsvInputs in;
+  in.roi_mode = request.roi_mode;
+  std::copy(std::begin(request.cone_center), std::end(request.cone_center), std::begin(in.cone_center_dir));
+  in.cone_request_radius_rad = read.info.present ? read.info.cone_radius_rad : request.cone_radius_rad;
+  in.cone_ring_count = read.info.present ? read.info.cone_ring_count : request.cone_ring_count;
+  in.cone_display_radius_deg = in.cone_request_radius_rad * lumice::sky_direction_detail::kRad2Deg;
+  in.symmetry_bits = symmetry;
+  in.other_energy = read.info.other_energy;
+  in.other_count = read.info.other_count;
+  in.truncated_chain_count = read.info.truncated_chain_count;
+  const lumice::RaypathDisplayOrder order =
+      lumice::ComputeRaypathDisplayOrder(read.entries, in.roi_mode, in.cone_ring_count, in.cone_request_radius_rad,
+                                         in.cone_display_radius_deg, in.other_energy);
+  return lumice::BuildRaypathAnalysisCsv(read.entries, order, in, exported_at);
+}
+
+// Write `text` to `path` so that the file at `path` is complete at every instant: the bytes go
+// to a sibling temporary first and are renamed over the target, which is atomic on every
+// filesystem this CLI runs on. A reader that opens the path mid-run sees either the previous
+// complete file or the new one, never a prefix.
+bool WriteFileAtomically(const std::filesystem::path& path, const std::string& text, std::string* error) {
+  std::filesystem::path tmp = path;
+  tmp += ".tmp";
+  {
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      *error = "cannot open '" + tmp.u8string() + "' for writing";
+      return false;
+    }
+    out << text;
+    if (!out.good()) {
+      *error = "write to '" + tmp.u8string() + "' failed";
+      return false;
+    }
+  }
+  std::error_code ec;
+  std::filesystem::rename(tmp, path, ec);
+  if (ec) {
+    *error = "cannot rename '" + tmp.u8string() + "' to '" + path.u8string() + "': " + ec.message();
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  return true;
+}
+
+int RunAnalyze(const AnalyzeOptions& opts) {
+  const SharedOptions& shared = opts.shared;
+  // First thing, before any engine call or LOG_* line: from here on stdout is the CSV's alone.
+  const StdoutHandoff product_stdout;
+  // The config is read here as JSON only for what the CLI itself needs from it — the last-layer
+  // warning and, under --roi frame, the render[] entry — and every diagnostic that can be given
+  // before a server exists is given now. The engine parses the file again through
+  // LUMICE_SceneFromJsonFile, the same path `render` takes.
+  nlohmann::json config_json;
+  {
+    std::ifstream config_file(shared.config_filename);
+    if (!config_file.is_open()) {
+      std::cerr << "Error: cannot open config file: " << shared.config_filename.u8string() << "\n";
+      return 1;
+    }
+    try {
+      config_file >> config_json;
+    } catch (const nlohmann::json::parse_error& e) {
+      std::cerr << "Error: invalid JSON in config file: " << e.what() << "\n";
+      return 1;
+    }
+  }
+  WarnIfLastScatteringLayerProbNonzero(config_json);
+
+  LUMICE_RaypathAnalysisRequest request{};
+  request.roi_mode = opts.roi_mode;
+  if (opts.roi_mode == LUMICE_RAYPATH_ROI_CONE) {
+    lumice::AltAzToDir(*opts.center_alt_deg, *opts.center_az_deg, request.cone_center);
+    request.cone_radius_rad = *opts.radius_deg * lumice::sky_direction_detail::kDeg2Rad;
+    request.cone_ring_count = lumice::kRaypathAnalysisConeRingCount;
+  } else if (opts.roi_mode == LUMICE_RAYPATH_ROI_IN_FRAME) {
+    std::string error;
+    if (!BuildFrameViewFromConfig(config_json, opts.render_id, &request.frame_view, &error)) {
+      std::cerr << "Error: " << error << "\n";
+      return 1;
+    }
+  }
+  if (opts.ray_num.has_value()) {
+    request.infinite = 0;
+    request.ray_num = *opts.ray_num;
+  } else {
+    request.infinite = LUMICE_RAYPATH_RAY_BUDGET_SCENE_DEFAULT;
+  }
+
+  // A --csv target that cannot be written is found out now, not after the run: the first
+  // periodic write would report it, but a one-second run has no periodic write.
+  if (!opts.csv_path.empty()) {
+    const auto parent = opts.csv_path.parent_path();
+    if (!parent.empty() && !std::filesystem::is_directory(parent)) {
+      std::cerr << "Error: --csv directory does not exist: " << parent.u8string() << "\n";
+      return 1;
+    }
+  }
+
+  LUMICE_ServerConfig server_config{};
+  server_config.preferred_backend = shared.preferred_backend;
+  server_config.num_workers = opts.cli_workers;  // 0 = automatic (server.cpp); a seed forces 1
+  server_config.sim_seed = opts.sim_seed;
+  auto* server = LUMICE_CreateServerEx(&server_config);
+  LUMICE_SetLogLevel(server, shared.log_level);
+
+  LUMICE_Scene* raw_scene = nullptr;
+  if (auto err = LUMICE_SceneFromJsonFile(shared.config_filename.u8string().c_str(), &raw_scene); err != LUMICE_OK) {
+    std::cerr << "Error: failed to load configuration from file '" << shared.config_filename.u8string()
+              << "' (error code " << static_cast<int>(err) << ")\n";
+    LUMICE_DestroyServer(server);
+    return 1;
+  }
+  ScenePtr scene(raw_scene);
+  if (auto err = LUMICE_StartRaypathAnalysis(server, scene.get(), &request); err != LUMICE_OK) {
+    std::cerr << "Error: the analysis could not start (error code " << static_cast<int>(err) << ")\n";
+    LUMICE_DestroyServer(server);
+    return 1;
+  }
+
+  // Ctrl-C ends the run and still writes what it accumulated: the handler only raises the
+  // flag; the loop below sees it, stops the server (the frame published after
+  // LUMICE_StopServer returns carries the histogram consumed up to the stop — lumice.h v4.34)
+  // and falls through to the same final write a completed run makes. Installed after the run
+  // is started so a Ctrl-C during setup keeps the default disposition (exit, nothing written).
+  g_analyze_stop_requested.store(false, std::memory_order_relaxed);
+  std::signal(SIGINT, HandleAnalyzeSigint);
+
+  const auto start_time = std::chrono::steady_clock::now();
+  auto next_save_time = start_time + kSaveInterval;
+  AnalysisRead read;
+  bool interrupted = false;
+  // Same two clocks as RunRender: completion polled at kFinePollInterval, materialization
+  // paced at kSaveInterval. The one exit test — COMPLETED, or the flag — is the same for a
+  // finite and an "infinite" budget: the first reaches COMPLETED on its own, the second only
+  // ever leaves through the flag, and neither needs the CLI to know which it is.
+  while (true) {
+    LUMICE_SimLifecycleResult lifecycle{};
+    if (LUMICE_GetSimLifecycle(server, &lifecycle) == LUMICE_OK && lifecycle.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
+      break;
+    }
+    if (g_analyze_stop_requested.load(std::memory_order_relaxed)) {
+      interrupted = true;
+      LUMICE_StopServer(server);
+      break;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next_save_time) {
+      LUMICE_RayCount rays = 0;
+      LUMICE_GetSimRayCount(server, &rays);
+      const bool have_frame = ReadAnalysisFrame(server, opts.symmetry_bits, &read);
+      if (have_frame && !opts.csv_path.empty()) {
+        std::string error;
+        if (!WriteFileAtomically(opts.csv_path, AnalysisCsvText(read, request, opts.symmetry_bits, LocalTimeNow()),
+                                 &error)) {
+          std::cerr << "Error: " << error << "\n";
+          LUMICE_StopServer(server);
+          LUMICE_DestroyServer(server);
+          return 1;
+        }
+      }
+      const double elapsed = std::chrono::duration<double>(now - start_time).count();
+      std::uint64_t recorded = 0;
+      if (have_frame) {
+        recorded = static_cast<std::uint64_t>(read.info.other_count);
+        for (const auto& e : read.entries) {
+          recorded += static_cast<std::uint64_t>(e.count);
+        }
+      }
+      // Progress is stderr's: stdout carries the product output and nothing else.
+      std::cerr << "[analyze] " << rays << " rays traced, " << recorded << " raypaths recorded, " << std::fixed
+                << std::setprecision(1) << elapsed << " s elapsed\n";
+      next_save_time = std::chrono::steady_clock::now() + kSaveInterval;
+    }
+    std::this_thread::sleep_for(kFinePollInterval);
+  }
+  std::signal(SIGINT, SIG_DFL);
+
+  // The final materialization — the one write of a run shorter than a save interval, the
+  // last of a longer one, and the only time stdout is written to.
+  if (!ReadAnalysisFrame(server, opts.symmetry_bits, &read)) {
+    std::cerr << "Warning: the run ended before it published a result; writing an empty result\n";
+    read = AnalysisRead{};
+  }
+  const std::string csv = AnalysisCsvText(read, request, opts.symmetry_bits, LocalTimeNow());
+  int rc = 0;
+  if (opts.csv_path.empty()) {
+    if (!product_stdout.Write(csv)) {
+      std::cerr << "Error: writing the CSV to stdout failed\n";
+      rc = 1;
+    }
+  } else {
+    std::string error;
+    if (!WriteFileAtomically(opts.csv_path, csv, &error)) {
+      std::cerr << "Error: " << error << "\n";
+      rc = 1;
+    }
+  }
+  if (interrupted) {
+    std::cerr << "[analyze] interrupted; the result accumulated up to the stop has been written\n";
+  }
+  LUMICE_DestroyServer(server);
+  return rc;
+}
+
 }  // namespace
 
 
@@ -1146,6 +1944,14 @@ int main(int argc, char** argv) {
       return rc;
     }
     return RunBenchmark(opts);
+  }
+
+  if (subcommand == kSubcommandAnalyze) {
+    AnalyzeOptions opts;
+    if (int rc = ParseAnalyzeOptions(argc, argv, /*first=*/2, opts); rc >= 0) {
+      return rc;
+    }
+    return RunAnalyze(opts);
   }
 
   const bool explicit_render = subcommand == kSubcommandRender;
