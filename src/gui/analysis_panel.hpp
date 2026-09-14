@@ -28,6 +28,7 @@
 #include "gui/analysis_result.hpp"
 #include "gui/gui_state.hpp"
 #include "include/lumice.h"
+#include "util/raypath_analysis_display.hpp"
 
 struct ImVec2;
 
@@ -64,20 +65,22 @@ bool DeriveAnalysisInProgress(bool started, const PreviewSnapshot* snap);
 // replace it — that would clear the selection every frame, on a result that never changed.
 bool AdoptAnalysisPayloadIfNew(GuiState& state, const std::shared_ptr<const AnalysisPayload>& payload);
 
-// How many of a CONE result's rings lie within `radius_deg` of the centre, given the request's
-// full cone of `cone_radius_deg` split into `ring_count` equal rings: the smallest k such that
-// k rings cover the radius, clamped to [1, ring_count]. ring_count <= 0 answers 0.
-int RingsWithinRadius(float radius_deg, float cone_radius_deg, int ring_count);
-
-// Energy of the first `rings` rings of an entry (clamped to what the entry holds). Rings <= 0 is 0.
-double SumRingEnergy(const LUMICE_RaypathHistogramEntry& entry, int rings);
+// The ring arithmetic of a CONE result — how many rings a radius covers, and an entry's energy
+// over the first k of them — is util/raypath_analysis_display.hpp's, shared with the CLI so both
+// consumers sum the same rings; named here explicitly (see the .cpp for why a using-declaration
+// rather than the enclosing-namespace lookup) so the unit layer keeps calling them as this
+// window's own.
+using lumice::RingsWithinRadius;
+using lumice::SumRingEnergy;
 
 // Rebuild analysis_result's display_energy / display_order / display_cumulative_pct /
 // display_total from the payload and the slider (state.analysis.cone_radius_deg) — a CONE result
 // sums the rings inside the radius, every other mode shows `energy` as delivered; the payload's
 // other bucket enters the total whole (it is not ring-split) and closes the cumulative column.
 // Pure re-projection of data already on hand: touches no lifecycle, no dirty, no server. Called on
-// adoption, on every entry re-read, and on every slider change.
+// adoption, on every entry re-read, and on every slider change. The projection itself is
+// lumice::ComputeRaypathDisplayOrder (util/raypath_analysis_display.hpp); this copies its five
+// fields into the view.
 void RecomputeAnalysisDisplayOrder(GuiState& state);
 
 // The share of the total that the fixed "other" line shows: the other bucket's energy over
@@ -87,8 +90,10 @@ double AnalysisOtherPct(const GuiState& state);
 // The label of that line — in the header so a test can address the row. No chain formats to
 // this (a chain's text is digits, dashes, parentheses, "C<id>" and " -> "), so it can never
 // name an entry: SelectedAnalysisEntry finds nothing for it even if it were ever written into
-// analysis.selected_entry, and the row is a disabled selectable so it never is.
-inline constexpr const char* kAnalysisOtherRowLabel = "other (not recorded)";
+// analysis.selected_entry, and the row is a disabled selectable so it never is. The bytes are
+// the CSV's (util/raypath_analysis_display.hpp), so the table row and the file's last line are
+// one string.
+inline constexpr const char* kAnalysisOtherRowLabel = lumice::kRaypathAnalysisOtherRowLabel;
 
 // ---- The symmetry, and the read of the entries under it ------------------------------------------
 
@@ -285,12 +290,11 @@ bool ApplyExcludeSelectedRaypath(GuiState& state);
 // a byte-exact expectation. It is the list AS SHOWN: the rows of `analysis_result.display_order`
 // with their `display_energy` (the rings inside the radius slider in Point mode) and the
 // percentages of `display_total`, under the symmetry `entries_symmetry` says the entries were read
-// with — not a re-read of the server. A metadata head of `#` lines makes the file self-describing
-// (region, cone centre / radius / rings, symmetry, ray total, record-full count, export time), then
-// one column-header row, the rows, and the fixed "other" line when the record had one. Rows the
-// list hides (display energy 0 inside the radius) are hidden here too. `exported_at` is a parameter
-// rather than a clock read inside, so the expectation does not need to mock time. No result: the
-// head and the column header, no rows (the button is disabled then; the function still answers).
+// with — not a re-read of the server. The format is lumice::BuildRaypathAnalysisCsv's
+// (util/raypath_analysis_display.hpp), the one implementation the CLI's `analyze` also writes
+// through; this function only gathers its inputs from the view. No result: the head and the
+// column header, no rows (the button is disabled then; the function still answers) — the one
+// branch that is this window's own, since the CLI always has a result.
 std::string BuildAnalysisResultsCsv(const GuiState& state, std::string_view exported_at);
 
 // ---- Rendering -----------------------------------------------------------------------------------
