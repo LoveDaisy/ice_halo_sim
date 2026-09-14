@@ -893,6 +893,9 @@ int ParseRenderOptions(int argc, char** argv, int first, void (*print_usage)(con
         return 1;
       }
     } else if (arg == "--workers") {
+      // Render is the only subcommand with --workers today, so its validation lives here rather
+      // than in ParseSharedOption. The planned `analyze` subcommand takes --workers too: when it
+      // lands, lift this branch into a shared step the way -f / --backend are, do not copy it.
       if (++i >= argc) {
         std::cerr << "Error: --workers requires an argument\n\n";
         print_usage(argv[0]);

@@ -91,6 +91,13 @@ class TestSubcommands(LumiceTestCase):
                 f"{args}: no images found in {self.output_dir}",
             )
 
+    def test_unknown_subcommand_is_the_implicit_render(self):
+        """`Lumice foobar -f cfg` is not "unknown subcommand": argv[1] that spells no
+        subcommand is the implicit render, so `foobar` is render's unknown option."""
+        result = self.run_lumice(["foobar", "-f", "dummy.json"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown option: foobar", result.stderr)
+
     def test_benchmark_flag_is_rejected_with_migration_hint(self):
         """The retired `--benchmark` flag exits non-zero and names its replacement.
 
