@@ -155,13 +155,17 @@ class TestAnalyzeCli(LumiceTestCase):
 
     def test_frame_roi_covers_non_default_visible_and_a_defaulted_fov(self):
         """Two render[] entries the fixture does not have: `visible: full` with a `front`
-        clip on a rectangular lens, and a lens with no `fov` at all (the engine's default
-        applies — 90°, from the one function the GUI's import path also calls). Both must
-        be readable; and a `--render-id` that names neither is refused, not defaulted."""
+        clip and a non-default `lens_shift` on a rectangular lens, and a lens with no `fov`
+        at all (the engine's default applies — 90°, from the one function the GUI's import
+        path also calls). Both must be readable; and a `--render-id` that names neither is
+        refused, not defaulted. `lens_shift` is here because the frame view is read back
+        through LUMICE_SceneGetRenderer, not assembled from a hand-kept list of keys: a
+        field no such list ever named still flows through, which is the shape of the defect
+        (a scalar defaulted in two places) this reading structurally removes."""
         doc = json.loads(_CONFIG.read_text(encoding="utf-8"))
         doc["render"] = [
             {"id": 3, "lens": {"type": "rectangular", "fov": 200}, "resolution": [256, 128],
-             "view": {"elevation": 0}, "visible": "full", "front": True},
+             "lens_shift": [12, -6], "view": {"elevation": 0}, "visible": "full", "front": True},
             {"id": 4, "lens": {"type": "linear"}, "resolution": [128, 128], "view": {"elevation": 20}},
         ]
         cfg = Path(self.output_dir) / "frames.json"
